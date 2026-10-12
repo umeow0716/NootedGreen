@@ -11964,15 +11964,17 @@ bool tglRunOwnedVeboxSurfaceAdmissionStages(TglVeboxAdmissionStagesInput input,
 // Join input capture to the stage chain without publishing an intermediate
 // caller-editable input or copying opaque pass state. Enclosing feature-frame
 // scope pins surfaces/interfaces; execution is that same owner's leased view.
-template<class ChildOwner,class ExecutionOwner,class Execution,size_t ParamsN,size_t PassN,
+template<class ChildOwner,class ExecutionOwner,class Execution,class Params,class Pass,
     class Read,class Reset,class Select,class Setup,class Feature,class Sfc>
 bool tglRunCapturedSelectedVeboxAdmissionStages(ChildOwner& childOwner,ExecutionOwner& executionOwner,
-    void* child,std::array<uint8_t,ParamsN>& params,std::array<uint8_t,PassN>& pass,
+    void* child,Params& params,Pass& pass,
     const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,
     const TglVeboxAdmissionBorrowedInterfaces& expected,
     Execution& execution,Read read,Reset reset,Select select,Setup setup,Feature feature,Sfc sfc) noexcept {
-    static_assert(ParamsN>=0x139 && PassN>=0x18,"complete named admission input extents");
-    if(!child || !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return false;
+    static_assert(std::is_same_v<decltype(params.data()),uint8_t*> &&
+        std::is_same_v<decltype(pass.data()),uint8_t*>,"admission byte view ABI");
+    if(params.size()<0x139 || pass.size()<0x18 || !params.data() || !pass.data() ||
+       !child || !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return false;
     uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
     if(linked!=reinterpret_cast<uintptr_t>(execution.data())) return false;
     TglVeboxAdmissionStagesInput input;
@@ -12000,20 +12002,42 @@ bool tglRunCapturedVeboxAdmissionStages(ChildOwner& childOwner,ExecutionOwner& e
         [&](uint8_t&) noexcept -> uint32_t {return pipe;},setup,feature,sfc);
 }
 
+// Borrow original outer packets without copying opaque native state. Region
+// admission is supplied under the caller's packet lifetime lease; this view
+// neither retains memory nor authorizes a pointer on its own.
+template<size_t Extent,size_t WriteOffset=Extent>
+class TglBorrowedVeboxAdmissionPacketView {
+    uint8_t* bytes_=nullptr;
+public:
+    template<class Readable,class Writable>
+    bool bind(uintptr_t address,size_t size,Readable readable,Writable writable) noexcept {
+        bytes_=nullptr;
+        static_assert(noexcept(readable(address,Extent)) && noexcept(writable(address,size_t{1})));
+        if(!address || size<Extent || address>UINTPTR_MAX-Extent || !readable(address,Extent)) return false;
+        if constexpr(WriteOffset<Extent) {
+            if(!writable(address+WriteOffset,1)) return false;
+        }
+        bytes_=reinterpret_cast<uint8_t*>(address);return true;
+    }
+    uint8_t* data() const noexcept {return bytes_;}
+    size_t size() const noexcept {return bytes_?Extent:0;}
+    uint8_t& operator[](size_t index) const noexcept {return bytes_[index];}
+};
+
 // Named installation-time policy type for the SAME already-leased native
 // report used by the frontend frame. Do not recursively acquire execution,
 // snapshot the selected pipe before reset, or adopt caller-supplied pointers.
-template<class ChildOwner,class ExecutionOwner,size_t ParamsN,size_t PassN,
+template<class ChildOwner,class ExecutionOwner,class Params,class Pass,
     class Read,class Reset,class Select,class Setup,class Feature,class Sfc>
-struct TglOwnedVeboxAdmissionFramePlanner {
+struct TglOwnedVeboxAdmissionViewPlanner {
     ChildOwner& childOwner;ExecutionOwner& executionOwner;
     void* child;uintptr_t execution;
-    std::array<uint8_t,ParamsN>& params;std::array<uint8_t,PassN>& pass;
+    Params& params;Pass& pass;
     const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
     const TglVeboxAdmissionBorrowedInterfaces& interfaces;
     Read read;Reset reset;Select select;Setup setup;Feature feature;Sfc sfc;
     bool operator()(void* actual,void* actualParams,void* actualPass) noexcept {
-        if(!actual || actual!=child || actualParams!=&params || actualPass!=&pass ||
+        if(!actual || actual!=child || actualParams!=params.data() || actualPass!=pass.data() ||
            !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
            !executionOwner.hasExecutionLease(execution)) return false;
         bool admitted=false;
@@ -12025,6 +12049,11 @@ struct TglOwnedVeboxAdmissionFramePlanner {
         return !status && admitted;
     }
 };
+
+template<class ChildOwner,class ExecutionOwner,size_t ParamsN,size_t PassN,
+    class Read,class Reset,class Select,class Setup,class Feature,class Sfc>
+using TglOwnedVeboxAdmissionFramePlanner=TglOwnedVeboxAdmissionViewPlanner<ChildOwner,ExecutionOwner,
+    std::array<uint8_t,ParamsN>,std::array<uint8_t,PassN>,Read,Reset,Select,Setup,Feature,Sfc>;
 
 template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
     Owner& owner_;

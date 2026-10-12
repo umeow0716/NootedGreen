@@ -24022,11 +24022,27 @@ int main() {
                                         uint32_t type=0;std::memcpy(&type,source.prefix.data(),4);
                                         tglPublishVeboxSfcAdmissionFlags(data,0,type);return true;
                                     };
-                            using Plan=TglOwnedVeboxAdmissionFramePlanner<std::decay_t<decltype(owner)>,
-                                decltype(admissionExecution),std::tuple_size_v<decltype(admissionParams)>,
-                                std::tuple_size_v<decltype(admissionPass)>,decltype(read),decltype(reset),
+                            TglBorrowedVeboxAdmissionPacketView<0x139> paramsView;
+                            TglBorrowedVeboxAdmissionPacketView<0x18,8> passView;
+                            const auto paramsAddress=reinterpret_cast<uintptr_t>(admissionParams.data());
+                            const auto passAddress=reinterpret_cast<uintptr_t>(admissionPass.data());
+                            auto readable=[&](uintptr_t address,size_t size) noexcept {
+                                return (address==paramsAddress && size==0x139) ||
+                                    (address==passAddress && size==0x18);
+                            };
+                            auto writable=[&](uintptr_t address,size_t size) noexcept {
+                                return address==passAddress+8 && size==1;
+                            };
+                            assert(!paramsView.bind(paramsAddress,0x138,readable,writable) && !paramsView.data());
+                            assert(!paramsView.bind(UINTPTR_MAX-8,0x139,readable,writable) && !paramsView.data());
+                            assert(paramsView.bind(paramsAddress,admissionParams.size(),readable,writable));
+                            assert(!passView.bind(passAddress,admissionPass.size(),readable,
+                                [](uintptr_t,size_t) noexcept {return false;}) && !passView.data());
+                            assert(passView.bind(passAddress,admissionPass.size(),readable,writable));
+                            using Plan=TglOwnedVeboxAdmissionViewPlanner<std::decay_t<decltype(owner)>,
+                                decltype(admissionExecution),decltype(paramsView),decltype(passView),decltype(read),decltype(reset),
                                 decltype(select),decltype(setup),decltype(feature),decltype(sfc)>;
-                            Plan plan{owner,admissionExecution,child,execution,admissionParams,admissionPass,
+                            Plan plan{owner,admissionExecution,child,execution,paramsView,passView,
                                 source,target,interfaces,read,reset,select,setup,feature,sfc};
                             const auto selectionsBefore=admissionSelections;
                             const auto initializesBefore=admissionBackend.initializes;
