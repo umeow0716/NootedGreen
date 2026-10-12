@@ -8552,6 +8552,47 @@ static void testNativeResourceBoundary() {
                                                         });
                                                     assert(entered.status==-81 && entered.nativeEntered && readerRetention() && renderEntries==1);
                                                     assert(!EntryProducers::Resolve::get(actualChild));
+                                                    // Re-prepare with the final role, then publish selection
+                                                    // under its real resource scopes before invoking hooks.
+                                                    assert(tglWithOwnedBackedFfdiBatch(retained.ffdiBacked(),linkedInput,
+                                                        &linkedInput,static_cast<decltype(&linkedInput)>(nullptr),
+                                                        2,ffdiRequest,{8,3},0,0,[](uint8_t,uint8_t) noexcept -> int {return 0;},
+                                                        [](const auto&,const auto&,size_t,uint8_t,uint8_t) noexcept -> int {return 0;},
+                                                        {&current,&current,nullptr})==0);
+                                                    assert(retained.withPreparedSurfaceViews(linkedInput,&linkedInput,
+                                                        static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                        2,TglOwnedFfdiAllocationKind::NativeBacking,true,false,false,
+                                                        [&](const auto& ffdi,const auto& ffdn,const auto& stmm,const auto&) noexcept -> int {
+                                                            assert(retained.capturePreparedSelection(linkedInput,current,ffdi,ffdn,stmm));
+                                                            return 0;
+                                                        },static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
+                                                        {&current,&current,nullptr,nullptr})==0);
+                                                    retained.publishPreparedSelection(true);
+                                                    TglOwnedVeboxFrameRetention packetRetention;
+                                                    const auto packets=tglWithRetainedLiveVeboxPacketFrame(retained,linkedInput,&linkedInput,
+                                                        static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                        childOwner,reportOwner,renderLeases,false,false,{},read,liveSurfaceAdmission,
+                                                        unused,unused,unused,packetRetention,
+                                                        [&](auto& frame) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                                            TglOwnedVeboxCommandTransactionResult value;
+                                                            const int captureStatus=frame.capture([](const TglDiIecpInputs&) noexcept -> int {return -83;});
+                                                            assert(captureStatus==-83);
+                                                            value.status=tglWithOwnedVeboxFrameHookBindings<RetainedResolve,RetainedScope,
+                                                                RetainedScope,RetainedScope,RetainedFormatRead>(frame,childOwner,reportOwner,0,
+                                                                read,rejectPackets,rejectCsc,
+                                                                [&](void* object,const auto& hooks,auto& producer) noexcept -> int {
+                                                                    return producer.pass.withBuilder([&]() noexcept -> int {
+                                                                        using SurfaceCallback=int(*)(void*,bool,void*) noexcept;
+                                                                        return reinterpret_cast<SurfaceCallback>(hooks[7])(object,false,&surfacePacket);
+                                                                    });
+                                                                });
+                                                            return value;
+                                                        });
+                                                    // Capture now succeeds with the final allocation role.
+                                                    // Packet composition still rejects absent inactive STMM;
+                                                    // do not manufacture backing or claim positive emission.
+                                                    assert(packets.status==5 && liveAdmissions==0 && !packetRetention());
+                                                    assert(!EntryProducers::Resolve::get(actualChild));
                                                     childOwner.renderImage=0;childOwner.renderHooks.fill(0);
                                                     reportBackend.bytes=savedReport;
                                                 }
