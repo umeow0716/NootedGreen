@@ -14211,6 +14211,21 @@ int main() {
                     assert(!lifetime.publish(creatorAddress,readObject,writeObject,admitObject));vptr--;
                     assert(lifetime.publish(creatorAddress,readObject,writeObject,admitObject));
                     assert(vptr==stable && writes==1 && lifetime.requiresRetention());
+                    auto publishedRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                        if(address==creatorAddress && size==8) return readObject(address,bytes,size);
+                        const auto start=stable-16;
+                        if(address>=start && address-start<=48 && size<=48-(address-start)) {
+                            std::memcpy(bytes,reinterpret_cast<const void*>(address),size);return true;
+                        }
+                        return creatorRead(address,bytes,size);
+                    };
+                    TglNativeCreatedVeboxRendererView publishedView;
+                    assert(!publishedView.resolve(image,creatorAddress,publishedRead,creatorAdmit,qualify,creatorExecutable));
+                    assert(publishedView.resolveOwned(image,creatorAddress,lifetime,publishedRead,
+                        creatorAdmit,qualify,creatorExecutable) && publishedView.creator==creatorAddress);
+                    TglOwnedVphalLifetimeTable unrelated;
+                    assert(!publishedView.resolveOwned(image,creatorAddress,unrelated,publishedRead,
+                        creatorAdmit,qualify,creatorExecutable));
                     struct VphalChildren {
                         bool allow=false,detached=false,destroyed=false;
                         bool canDetach(void* object,uint64_t generation,int) noexcept {
@@ -14256,6 +14271,8 @@ int main() {
                     assert(!destruction.recover(lifetime,[](uintptr_t) noexcept {return true;},remove,invokeDestructor));
                     assert(writes==2 && vptr==lifetime.source());
                     assert(!lifetime.requiresRetention() && !lifetime.canDetach(readObject,admitObject));
+                    assert(!publishedView.resolveOwned(image,creatorAddress,lifetime,publishedRead,
+                        creatorAdmit,qualify,creatorExecutable));
                     assert(!lifetime.publish(creatorAddress,readObject,writeObject,admitObject));
                     // A write that mutates memory but reports failure cannot
                     // authorize native destruction or release of table storage.
