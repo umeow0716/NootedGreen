@@ -3102,9 +3102,11 @@ int tglPublishOwnedDndi(Owner& owner,uintptr_t child,uintptr_t callbackSource,
         });
 }
 
-// Borrowed MHW argument from creator1e66ef -> renderer Allocate. The image,
-// interface, OS and heap leases must outlive every child using this snapshot.
-// This authenticates interface identity/presence, NOT heap contents or commands.
+// MHW identity must be qualified separately. Creator1e66ef passes creator50/60
+// to derived Allocate1b1bc0, but that implementation only saves those arguments;
+// it does not establish either as MHW. Renderer2cd0 is OS1a8's capability value,
+// not a MHW pointer. Interface/OS/heap leases outlive every snapshot consumer;
+// identity admission alone does not authenticate heap contents or commands.
 struct alignas(8) TglOwnedVeboxStateStorage {
     std::array<uint8_t,0x30> prefix{};
     std::array<uint8_t,0x148> resource{};
