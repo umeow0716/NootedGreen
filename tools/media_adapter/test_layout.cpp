@@ -7208,6 +7208,22 @@ static void testNativeResourceBoundary() {
                         std::memcpy(child.data()+0x1b0,&sourceLink,8);
                         assert(tglRunCapturedVeboxAllocation(owner,childOwner,execution,actual,
                             reinterpret_cast<uintptr_t>(execution.bytes.data()),s,allocation)==31 && allocationCalls==1);
+                        unsigned rejectedWrites=0;
+                        const uintptr_t capturedReport=reinterpret_cast<uintptr_t>(execution.bytes.data());
+                        const auto brokenExecution=tglWithCapturedVeboxCommandTransaction(
+                            owner,childOwner,execution,actual,capturedReport,s,
+                            [&](int32_t& remaining) noexcept -> int {
+                                remaining=128;
+                                const uintptr_t zero=0;
+                                std::memcpy(child.data()+0x88,&zero,8);
+                                return 0;
+                            },[&](int,int32_t) noexcept -> bool {++rejectedWrites;return true;});
+                        assert(brokenExecution.status==5 && brokenExecution.builderStatus==0 &&
+                            brokenExecution.acquired && !brokenExecution.writtenBack && !rejectedWrites);
+                        TglOwnedVeboxFrameRetention brokenRetention;
+                        brokenRetention.observe(brokenExecution);
+                        assert(brokenRetention());
+                        std::memcpy(child.data()+0x88,&capturedReport,8);
                         assert(tglRunCapturedVeboxAllocation(owner,childOwner,execution,actual,
                             reinterpret_cast<uintptr_t>(execution.bytes.data()),s,
                             [&](void*,uintptr_t,const auto&) noexcept -> int {
