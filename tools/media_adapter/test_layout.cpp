@@ -21292,12 +21292,27 @@ int main() {
                                             std::array<const void*,2> acquiredGeometry{};
                                             TglSfcMhwBinding commandBinding;
                                             assert(commandBinding.resolve(base,frontendRead,qualifyMhw,executableMhw));
+                                            TglNativeSfcOutputUsageBinding outputUsage;
+                                            unsigned usageCalls=0;
+                                            assert(outputUsage.resolve(os,base,
+                                                [&](uintptr_t address,void* output,size_t size) noexcept {
+                                                    if(address==os+0x128 && size==8) {
+                                                        const uintptr_t entry=base+0x659b0;std::memcpy(output,&entry,8);return true;
+                                                    }
+                                                    const std::array<uint8_t,20> anchor{0x55,0x48,0x89,0xe5,0x48,0x89,
+                                                        0x7d,0xf8,0x48,0x89,0x75,0xf0,0x89,0x55,0xec,0x89,0x4d,0xe8,0x5d,0xc3};
+                                                    if(address!=base+0x659b0 || size!=anchor.size()) return false;
+                                                    std::memcpy(output,anchor.data(),size);return true;
+                                                },qualifyMhw,[&](uintptr_t address,size_t size) noexcept {
+                                                    return address==base+0x659b0 && size==20;
+                                                }));
                                             auto commandRead=[&](uintptr_t address,void* output,size_t size) noexcept {
                                                 if(size==8 && (address==os || address==os+0x1b0)) {
                                                     const uintptr_t value=address==os?0x90000:base+0x62ee0;
                                                     std::memcpy(output,&value,8);return true;
                                                 }
-                                                return frontendRead(address,output,size);
+                                                if(frontendRead(address,output,size)) return true;
+                                                return read(address,output,size);
                                             };
                                             struct PairedCommandInvoke {
                                                 uintptr_t expectedObject;void* expectedCommand;unsigned failureAt=0,calls=0;
@@ -21326,7 +21341,13 @@ int main() {
                                                         const int bound=tglPrepareOwnedVpLeasedSurfaceState(commandInputs[index],packet,
                                                             *leasedOutputs[index],*leasedAvs[index],*leasedIef[index],leasedSfd[index],
                                                             prefix.packet,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,
-                                                            [](auto&) noexcept {return 0;}); // Recording metadata query only.
+                                                            [](auto& output) noexcept {
+                                                                // Explicit recording metadata, not a native producer.
+                                                                const uint32_t pitch=960,format=0x15,uv=960*540;
+                                                                std::memcpy(output.prefix.data()+0xe0,&pitch,4);
+                                                                std::memcpy(output.prefix.data()+0x130,&format,4);
+                                                                std::memcpy(output.prefix.data()+0x100,&uv,4);return 0;
+                                                            });
                                                         if(bound) return bound;
                                                         ++states;return 0;
                                                     },[&](void* child,const auto& snapshot,auto& owner) noexcept -> int {
@@ -21422,11 +21443,17 @@ int main() {
                                                                                         assert(outputResource==reinterpret_cast<uintptr_t>(leasedOutputs[index]->resource.data()));
                                                                                         assert(avsResource==reinterpret_cast<uintptr_t>(leasedAvs[index]->resource.data()));
                                                                                         assert(iefResource==reinterpret_cast<uintptr_t>(leasedIef[index]->resource.data()));
+                                                                                        auto usageInvoke=[&](uintptr_t entry,uintptr_t context,const void* resource,
+                                                                                            uint32_t type,uint32_t enabled) noexcept {
+                                                                                            assert(entry==base+0x659b0 && context==os && type==6 && enabled==1);
+                                                                                            assert(resource==leasedOutputs[index]->resource.data() && leasedAvs[index] && leasedIef[index]);
+                                                                                            assert(commandInvoke.calls==usageCalls*7);++usageCalls;
+                                                                                        };
                                                                                         const int built=index?
-                                                                                                    tglSendOwnedVeboxSfcPreparedCommands(frame.children().second().owner(),commandParents[index],
-                                                                                                        commandBinding,&command,commandInvoke,ready,*leasedOutputs[index],1,0,1,0,commandRead,platform):
-                                                                                                    tglSendOwnedVeboxSfcPreparedCommands(frame.children().first().owner(),commandParents[index],
-                                                                                                        commandBinding,&command,commandInvoke,ready,*leasedOutputs[index],1,0,1,0,commandRead,platform);
+                                                                                                    tglSendOwnedVeboxSfcNativeOutputCommands(frame.children().second().owner(),commandParents[index],
+                                                                                                        commandBinding,&command,commandInvoke,outputUsage,ready,*leasedOutputs[index],0x4000,1,0,1,0,commandRead,platform,usageInvoke):
+                                                                                                    tglSendOwnedVeboxSfcNativeOutputCommands(frame.children().first().owner(),commandParents[index],
+                                                                                                        commandBinding,&command,commandInvoke,outputUsage,ready,*leasedOutputs[index],0x4000,1,0,1,0,commandRead,platform,usageInvoke);
                                                                                         assert(built==(scenario>0?-17:0));
                                                                                         if(!built) ++emissions;return built;
                                                                                     });
@@ -21527,6 +21554,7 @@ int main() {
                                             assert(states==preparedCount && avsProduced==preparedCount && iefProduced==preparedCount);
                                             assert(emissions==(scenario>0?0U:2U));
                                             assert(commandInvoke.calls==(scenario>0?unsigned(scenario):14U));
+                                            assert(usageCalls==preparedCount);
                                             assert(recordedFirst.lines().tryReset() && recordedFirst.sfd().tryReset());
                                             assert(recordedSecond.lines().tryReset() && recordedSecond.sfd().tryReset());
                                             assert(!lineNative.live);
