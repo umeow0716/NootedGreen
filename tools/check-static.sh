@@ -2,7 +2,7 @@
 # Run from the repository root. No hardware access, VM startup or installation.
 set -eu
 compiler="${CXX:-clang++}"
-task_output="$(mktemp -d /tmp/ngreen-static.XXXXXX)"
+task_output="$(mktemp -d "${TMPDIR:-/tmp}/ngreen-static.XXXXXX")"
 printf 'Diagnostic directory: %s\n' "$task_output"
 failed=0
 # Native-host CPU-only tests; no driver load or GPU access. The dedicated
