@@ -15778,6 +15778,17 @@ int main() {
                         prefix,denied,false,false,false,TglOwnedSfcCompressionMode::Disabled,query,
                         [&](auto&) noexcept -> int {++consumers;return 0;})==5);
                     assert(queries==3 && consumers==2 && native.live==3);
+                    const auto savedState=commands.state;
+                    assert(tglWithOwnedVpResourceBoundState(commands,state,storage.resources(),output,
+                        prefix,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,
+                        [&](auto& target) noexcept {
+                            ++queries;target.prefix[0xf0]=0x5a;return 89;
+                        },[&](auto&) noexcept -> int {++consumers;return 0;})==89);
+                    // Query owns its metadata mutation; no command/state is published on failure.
+                    assert(commands.state==savedState && output.prefix[0xf0]==0x5a);
+                    assert(queries==4 && consumers==2 && !state.hasParametersLease());
+                    assert(storage.resources().withCommandResources(input,scaled,
+                        [](const auto&,const auto&,const auto*) noexcept {return 0;})==0);
                 } else assert(!native.live && native.releases==failure);
             }
             assert(!native.live && native.releases==(failure==99?3:failure));
