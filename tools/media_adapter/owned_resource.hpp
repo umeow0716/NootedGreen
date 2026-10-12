@@ -12408,6 +12408,17 @@ bool tglPrepareQualifiedOwnedVpIefCommandParameters(TglOwnedSfcCommandParameters
     if(enabled && !tglReadQualifiedOwnedIefTables(tables,image,read,qualify)) return false;
     return tglPrepareOwnedVpIefCommandParameters(parameters,frame,tables);
 }
+// Commit qualified IEF data to the live owned state only after all image
+// reads/shape checks succeed. Reject coefficient pointers borrowed by CSC.
+template<class Read,class Qualify>
+bool tglPrepareQualifiedOwnedVpIefPackets(TglOwnedSfcStateParametersPacket& state,
+    std::array<uint8_t,64>& ief,const TglOwnedVpFramePreparation& frame,
+    uintptr_t image,Read read,Qualify qualify) noexcept {
+    TglOwnedSfcCommandParameters candidate;
+    candidate.state=state;candidate.ief=ief;
+    if(!tglPrepareQualifiedOwnedVpIefCommandParameters(candidate,frame,image,read,qualify)) return false;
+    state=candidate.state;ief=candidate.ief;return true;
+}
 // VP98 prepares IEF before VPa0 publishes CSC pointers. Keep the actual
 // command consumer inside the coefficient scope instead of returning borrowed
 // pointers from an isolated callback. This is CPU composition, not submission.

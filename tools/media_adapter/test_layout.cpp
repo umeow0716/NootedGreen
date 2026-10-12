@@ -21160,7 +21160,28 @@ int main() {
                                                         const size_t index=child==first.bytes.data()?0:1;
                                                         TglOwnedSfcCommandParameters parameters;
                                                         std::memcpy(parameters.state.data(),statePacket,parameters.state.size());
-                                                        assert(tglPrepareOwnedVpIefCommandParameters(parameters,snapshot,TglOwnedIefTables{}));
+                                                        unsigned imageReads=0;
+                                                        auto imageRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                                            constexpr uintptr_t base=0x100000+0x741e50;
+                                                            assert(address>=base && address<base+0x500 &&
+                                                                (address-base)%0x100==0 && size==0x100);
+                                                            std::memset(output,0,size);++imageReads;return true; // Authenticated-image reader fixture.
+                                                        };
+                                                        const auto before=parameters.state;
+                                                        assert(!tglPrepareQualifiedOwnedVpIefPackets(parameters.state,parameters.ief,snapshot,
+                                                            0x100000,imageRead,[](uintptr_t) noexcept {return false;}));
+                                                        assert(parameters.state==before && imageReads==0);
+                                                        unsigned deniedReads=0;
+                                                        auto incompleteRead=[&](uintptr_t,void* output,size_t size) noexcept {
+                                                            std::memset(output,0xa5,size);return ++deniedReads<3;
+                                                        };
+                                                        const auto beforeIef=parameters.ief;
+                                                        assert(!tglPrepareQualifiedOwnedVpIefPackets(parameters.state,parameters.ief,snapshot,
+                                                            0x100000,incompleteRead,[](uintptr_t) noexcept {return true;}));
+                                                        assert(deniedReads==3 && parameters.state==before && parameters.ief==beforeIef);
+                                                        assert(tglPrepareQualifiedOwnedVpIefPackets(parameters.state,parameters.ief,snapshot,
+                                                            0x100000,imageRead,[](uintptr_t image) noexcept {return image==0x100000;}));
+                                                        assert(imageReads==5);
                                                         std::memcpy(statePacket,parameters.state.data(),parameters.state.size());
                                                         iefPackets[index]=parameters.ief;
                                                         ++iefProduced;
@@ -21218,7 +21239,10 @@ int main() {
                                                             std::memcpy(static_cast<uint8_t*>(parent)+0x80,&created,8);
                                                         }
                                                         for(size_t i=0;i<2;++i) {
-                                                            void* child=i?b:a;const auto& entries=i?eb:ea;
+                                                            void* child=i?b:a;
+                                                            uintptr_t addressPoint=0;std::memcpy(&addressPoint,child,8);
+                                                            assert(addressPoint==(i?tableB.addressPoint():tableA.addressPoint()));
+                                                            const auto& entries=*reinterpret_cast<const TglOwnedVpEntrySet*>(addressPoint);
                                                             entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
                                                             entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x4000));
                                                             int result=entries.setup(child,reinterpret_cast<void*>(0x1000),
