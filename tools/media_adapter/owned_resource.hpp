@@ -18315,6 +18315,29 @@ public:
     bool destructionQuarantined() const noexcept {
         return state_ && state_->destruction.phase()==TglOwnedVphalDestructionState::Phase::Quarantined;
     }
+    // Producer access, not a GPU/frame admission. Caller uses the process
+    // router's initialization reservation, before native RendererInitialize.
+    // Never keep the storage/view reference outside this retained scope.
+    template<class ExclusiveLease,class CreatorAdmit,class Qualify,class Executable,class Use>
+    int withCreatorStorage(const ExclusiveLease& lease,CreatorAdmit admit,Qualify qualify,
+        Executable executable,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<Storage&>(),std::declval<const TglNativeCreatedVeboxRendererView&>())) &&
+            std::is_same_v<decltype(use(std::declval<Storage&>(),
+                std::declval<const TglNativeCreatedVeboxRendererView&>())),int>);
+        if(!state_ || lease.get()!=this || !lease.exclusive() || !state_->storage ||
+            state_->destruction.phase()!=TglOwnedVphalDestructionState::Phase::Idle ||
+            !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
+            !state_->boundPhysicalOs()) return 5;
+        TglNativeCreatedVeboxRendererView created;
+        using Publication=TglOwnedVphalLifetimeTable::Publication;
+        const auto publication=state_->table.publication();
+        const bool resolved=publication==Publication::Unpublished?
+            created.resolve(state_->image,state_->object,state_->read,admit,qualify,executable):
+            publication==Publication::Published && created.resolveOwned(state_->image,state_->object,
+                state_->table,state_->read,admit,qualify,executable);
+        if(!resolved || created.renderer!=state_->renderer) return 5;
+        return use(*state_->storage,static_cast<const TglNativeCreatedVeboxRendererView&>(created));
+    }
 };
 
 // Single composition used by a registry-resolved VPHAL destructor callback.
@@ -18433,6 +18456,9 @@ public:
         }
         ~ExclusiveOwnerLease() noexcept {reset();}
         Owner* get() const noexcept {return owner_;}
+        bool exclusive() const noexcept {
+            return owner_ && pins_ && pins_->load(std::memory_order_acquire)==SIZE_MAX;
+        }
     };
     ExclusiveOwnerLease pinExclusive(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
         if(!context || gate_.test_and_set(std::memory_order_acquire)) return {};
@@ -18658,6 +18684,13 @@ public:
     static typename Registry::ExclusiveOwnerLease pin(uintptr_t object) noexcept {
         if(faulted()) return {};
         return owners_.pinExclusiveObject(object,Policy::admit);
+    }
+    static typename Registry::ExclusiveOwnerLease pinForInitialization(uintptr_t object) noexcept {
+        auto lease=pin(object);
+        if(!lease.get() || gate_.test_and_set(std::memory_order_acquire)) return {};
+        Unlock unlock;
+        if(faulted() || queued(object)) return {};
+        return lease;
     }
     static void unresolved(uintptr_t object,Kind kind) noexcept {
         static_assert(noexcept(Policy::unresolved(object,kind,false)));

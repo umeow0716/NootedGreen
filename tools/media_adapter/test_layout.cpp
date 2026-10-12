@@ -14440,7 +14440,13 @@ int main() {
                         unsigned ownedNativeCalls=0;
                         uintptr_t actualRenderer=r;bool rendererReadable=true;
                         uintptr_t embeddedOs=0x91048;
+                        const TglOwnedVphalLifetimeTable* activeOwnerTable=nullptr;
                         auto ownerRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                            const auto point=activeOwnerTable?activeOwnerTable->addressPoint():0;
+                            if(point && address>=point-16 && address-(point-16)<=48 &&
+                                size<=48-(address-(point-16))) {
+                                std::memcpy(bytes,reinterpret_cast<const void*>(address),size);return true;
+                            }
                             if(address==creatorAddress+0x68 && size==8) {
                                 if(!rendererReadable) return false;
                                 std::memcpy(bytes,&actualRenderer,8);return true;
@@ -14474,6 +14480,7 @@ int main() {
                         auto* owner=Owner::create(image,0x90000,ticket.generation,creatorAddress,r,
                             dependency,ownedStorage,ownerRead,ownerWrite,admitObject,0,ownedNative);
                         assert(owner && !ownedStorage && !dependency.live());
+                        activeOwnerTable=&owner->lifetime();
                         assert(owner->context()==creatorAddress && !owner->nativeDestructionComplete());
                         auto ownerExecutable=[&](uintptr_t address,size_t size) noexcept {
                             return execLifetime(address,size) || creatorExecutable(address,size);
@@ -14506,10 +14513,27 @@ int main() {
                         using OwnerRouter=TglOwnedVphalProcessRouter<Owner,OwnerRoutingPolicy,1>;
                         OwnerRoutingPolicy::identity()={image,0x90000,uintptr_t(ticket.generation),creatorAddress};
                         assert(OwnerRouter::adopt(image,0x90000,ticket.generation,owner));
+                        unsigned producerCalls=0;
+                        auto producer=[&](RendererStorage& storage,const TglNativeCreatedVeboxRendererView& view) noexcept -> int {
+                            assert(&storage.children()==&children && view.creator==creatorAddress && view.renderer==r);
+                            assert(view.originalChildren[2]==0x12345678);++producerCalls;return 31;
+                        };
+                        {
+                            auto initialization=OwnerRouter::pinForInitialization(creatorAddress);
+                            assert(initialization.get()==owner && initialization.exclusive());
+                            assert(owner->withCreatorStorage(initialization,creatorAdmit,qualify,ownerExecutable,producer)==31);
+                            actualRenderer+=8;
+                            assert(owner->withCreatorStorage(initialization,creatorAdmit,qualify,ownerExecutable,producer)==5);
+                            actualRenderer-=8;
+                            decltype(initialization) empty;
+                            assert(owner->withCreatorStorage(empty,creatorAdmit,qualify,ownerExecutable,producer)==5);
+                        }
+                        assert(producerCalls==1);
                         {
                             auto framePin=OwnerRouter::pinFrame(image,0x90000,ticket.generation,creatorAddress);
                             assert(framePin.get()==owner);
                             OwnerRouter::Callbacks::deletingDestroy(reinterpret_cast<void*>(creatorAddress));
+                            assert(!OwnerRouter::pinForInitialization(creatorAddress).get());
                             assert(!OwnerRouter::resumePending(creatorAddress,[](uintptr_t,auto) noexcept {return true;}));
                             assert(!backingReleased && !ownedNativeCalls);
                         }
@@ -14517,6 +14541,7 @@ int main() {
                         assert(!OwnerRouter::resumePending(creatorAddress,[](uintptr_t,auto) noexcept {return false;}));
                         assert(!owner->destructionQuarantined());
                         {auto reservation=OwnerRouter::pin(creatorAddress);assert(reservation.get()==owner);}
+                        assert(!OwnerRouter::pinForInitialization(creatorAddress).get()); // pending alone blocks new producers
                         assert(!OwnerRouter::resumePending(creatorAddress,[](uintptr_t,auto) noexcept {return true;}));
                         assert(!backingReleased && !ownedNativeCalls);
                         assert(!OwnerRouter::pinFrame(image,0x90000,ticket.generation,creatorAddress).get());
@@ -14539,6 +14564,7 @@ int main() {
                             })); // explicit single-thread CPU retirement certificate
                         assert(OwnerRouter::reconcileSuccessfulRemoval(image,0x90000,ticket.generation,removedOwner,
                             [](Owner& candidate) noexcept -> int {return candidate.nativeDestructionComplete()?0:5;})==0);
+                        activeOwnerTable=nullptr;
                         assert(physicalOwners.destroy(ticket,image,0x90000,
                             [](uintptr_t object) noexcept -> int {assert(object==0x90000);return 0;})==0);
                     }
