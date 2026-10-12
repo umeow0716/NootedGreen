@@ -10327,33 +10327,50 @@ int tglWithOwnedVpPreparedFrame(TglOwnedVpSfcCallerStorage& storage,
 // The caller retains all descriptor/image leases for the complete call and
 // supplies an authenticated settings view; this is not a published VP entry.
 // State receives the SAME geometry snapshot used to prepare the frame.
-template<bool RetainPrepare=false,class Read,class Invoke,class Use>
-int tglWithOwnedVpAcquiredFrameEntry(TglOwnedVpSfcCallerStorage& storage,
+template<class Acquire> struct TglOwnedVpFrameAcquisitionContext {
+    void* child;
+    std::array<uintptr_t,5> expected;
+    Acquire& acquireFrame;
+    bool called=false,valid=false;
+    bool owns(void* value) const noexcept {return value==child;}
+    void prepare(void* conditional,void* parameters,void* source,
+        void* target,void* settings) noexcept {
+        const std::array<uintptr_t,5> actual{
+            reinterpret_cast<uintptr_t>(conditional),reinterpret_cast<uintptr_t>(parameters),
+            reinterpret_cast<uintptr_t>(source),reinterpret_cast<uintptr_t>(target),
+            reinterpret_cast<uintptr_t>(settings)};
+        if(called || actual!=expected) {valid=false;called=true;return;}
+        called=true;valid=acquireFrame();
+    }
+};
+
+template<class Read,class Use>
+int tglWithOwnedVpFrameAcquisitionContext(TglOwnedVpSfcCallerStorage& storage,
     uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
     uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
-    Read read,Invoke invoke,Use use) noexcept {
+    Read read,Use use) noexcept {
     TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
     uintptr_t sourceA8=0;
     auto acquire=[&]() noexcept {
         return tglReadOwnedVpFramePreparation(source,target,mhw,settings,
             conditionalSource!=0,read,original,frame,sourceA8,&geometry);
     };
-    struct FrameContext {
-        void* child;
-        std::array<uintptr_t,5> expected;
-        decltype(acquire)& acquireFrame;
-        bool called=false,valid=false;
-        bool owns(void* value) const noexcept {return value==child;}
-        void prepare(void* conditional,void* parameters,void* source,
-            void* target,void* settings) noexcept {
-            const std::array<uintptr_t,5> actual{
-                reinterpret_cast<uintptr_t>(conditional),reinterpret_cast<uintptr_t>(parameters),
-                reinterpret_cast<uintptr_t>(source),reinterpret_cast<uintptr_t>(target),
-                reinterpret_cast<uintptr_t>(settings)};
-            if(called || actual!=expected) {valid=false;called=true;return;}
-            called=true;valid=acquireFrame();
-        }
-    } context{storage.bytes.data(),{conditionalSource,parameters,source,target,settings},acquire};
+    TglOwnedVpFrameAcquisitionContext<decltype(acquire)> context{
+        storage.bytes.data(),{conditionalSource,parameters,source,target,settings},acquire};
+    static_assert(noexcept(use(context,frame,geometry,sourceA8)),"VP acquisition context ABI");
+    const int result=use(context,frame,geometry,sourceA8);
+    return result?result:(context.called && context.valid?0:5);
+}
+
+template<bool RetainPrepare=false,class Read,class Invoke,class Use>
+int tglWithOwnedVpAcquiredFrameEntry(TglOwnedVpSfcCallerStorage& storage,
+    uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
+    uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
+    Read read,Invoke invoke,Use use) noexcept {
+    return tglWithOwnedVpFrameAcquisitionContext(storage,source,target,mhw,settings,
+        conditionalSource,parameters,original,read,
+        [&](auto& context,auto& frame,auto& geometry,uintptr_t sourceA8) noexcept -> int {
+    using FrameContext=std::remove_reference_t<decltype(context)>;
     {
         // The callback performs acquisition once under the caller's leases.
         // Legacy consumers finish acquisition here. Catalogue assembly keeps
@@ -10378,6 +10395,7 @@ int tglWithOwnedVpAcquiredFrameEntry(TglOwnedVpSfcCallerStorage& storage,
         if(!context.called || !context.valid) return 5;
         return use(frame,geometry,sourceA8);
     }
+    });
 }
 template<class Read,class Use>
 int tglWithOwnedVpAcquiredFrame(TglOwnedVpSfcCallerStorage& storage,
