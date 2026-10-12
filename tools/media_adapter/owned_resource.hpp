@@ -18765,6 +18765,20 @@ public:
         return std::array<Surface*,4>{&ffdi_[0],&ffdi_[1],&ffdi_[2],&ffdi_[3]};
     }
     auto ffdnBacked() noexcept {return std::array<Surface*,2>{&ffdn_[0],&ffdn_[1]};}
+    // Producer-time access to retained outputs. Never reuse a pending frame;
+    // reference validity comes from admitted report, not snapshot existence.
+    template<class Owner,class Use,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+    int withPreparedFfdnViews(Owner& input,const TglOwnedSurfaceStorage& source,
+        Owner* previous,const TglOwnedSurfaceStorage* previousView,bool referenceValid,
+        Use use,Parameters* parameters=nullptr) noexcept {
+        if(auxiliary_.retention()() || !input.hasSurfaceLease(source)) return 5;
+        uint32_t format=0;std::memcpy(&format,source.prefix.data()+0x130,4);
+        if(format==0x3d)
+            return tglWithPreparedFfdnHistoryViews(ffdnBacked(),input,source,previous,previousView,
+                referenceValid,history_,historySnapshot_,use,parameters);
+        return tglWithPreparedFfdnHistoryViews(ffdnDescriptors_,input,source,previous,previousView,
+            referenceValid,history_,historySnapshot_,use,parameters);
+    }
     // binding is read from child+ba8 under captured child/report admission.
     // The existing captured FFDN producer rechecks that exact binding before
     // reading compression. Do not infer which owner it names from new format.

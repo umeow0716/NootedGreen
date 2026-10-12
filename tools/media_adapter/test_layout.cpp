@@ -8351,6 +8351,33 @@ static void testNativeResourceBoundary() {
                                         assert(linkedInput.withSurface([&](const auto& current) noexcept {
                                             TglNativeVeboxSurfaceFrameStorage<FrameStmmApi> ownedFrame(
                                                 TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{});
+                                            {
+                                                FrameStatisticsFixture borrowFixture;
+                                                TglNativeResourceBinding binding{reinterpret_cast<uintptr_t>(&borrowFixture),
+                                                    reinterpret_cast<uintptr_t>(FrameStatisticsFixture::allocate),
+                                                    reinterpret_cast<uintptr_t>(FrameStatisticsFixture::release)};
+                                                TglNativeVeboxSurfaceFrameStorage<FrameStmmApi> retained(binding,4096,TglNativeBufferFillBinding{});
+                                                bool reference=false;uint8_t flag=0,mode=0;
+                                                assert(tglPrepareOwnedBackedFfdnPair(retained.ffdnBacked(),linkedInput,
+                                                    static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                    TglOwnedFfdnCompressionSelection{},reference,false,flag,mode,
+                                                    [](const auto&) noexcept {},TglOwnedFfdnNoFinish{},
+                                                    {&current,nullptr,nullptr})==0);
+                                                const auto allocations=borrowFixture.allocations;
+                                                assert(retained.withPreparedFfdnViews(linkedInput,current,
+                                                    static_cast<decltype(&linkedInput)>(nullptr),nullptr,false,
+                                                    [&](const auto& views) noexcept -> int {
+                                                        assert(!views.previous && !views.history && views.outputs[0] && views.outputs[1]);
+                                                        assert(retained.ffdnBacked()[0]->hasSurfaceLease(*views.outputs[0]));
+                                                        return 31;
+                                                    })==31);
+                                                assert(borrowFixture.allocations==allocations);
+                                                retained.auxiliary().retention().observe(
+                                                    TglOwnedVeboxCommandTransactionResult{31,31,true,false});
+                                                assert(retained.withPreparedFfdnViews(linkedInput,current,
+                                                    static_cast<decltype(&linkedInput)>(nullptr),nullptr,false,
+                                                    [](const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                            }
                                             ownedFrame.auxiliary().retention().observe(
                                                 TglOwnedVeboxCommandTransactionResult{31,31,true,false});
                                             auto deniedStage=[](auto&&...) noexcept -> int {assert(false);return 5;};
