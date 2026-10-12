@@ -22363,11 +22363,20 @@ int main() {
                                 }
                                 return false;
                             };
-                            // Lifecycle hooks below use the actual retained child owners;
-                            // remaining producer addresses are still nonexecuted fixtures.
+                            // Use the actual query/factory callbacks as well as retained
+                            // lifecycle owners; state/resource producers remain fixtures.
+                            struct FrontendFormatRead {
+                                bool operator()(uintptr_t address,void* output,size_t size) const noexcept {
+                                    if(!address || !output || size!=sizeof(uint32_t)) return false;
+                                    std::memcpy(output,reinterpret_cast<const void*>(address),size);
+                                    return true;
+                                }
+                            };
                             std::array<uintptr_t,20> hooks{};
                             for(size_t i=0;i<hooks.size();++i) hooks[i]=0x3000+i*16;
-                            hooks[15]=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported);
+                            hooks=tglBindOwnedVeboxQueryHooks<FrontendFormatRead>(hooks);
+                            hooks[19]=reinterpret_cast<uintptr_t>(
+                                &TglOwnedVpFactoryCallback<TglOwnedVpFactoryContext>::create);
                             std::array<std::array<uintptr_t,20>,2> pairHooks{hooks,hooks};
                             using ChildOwner=std::remove_reference_t<decltype(frame.children().first().owner())>;
                             using ChildLifetime=TglOwnedVeboxLifetimeContext<ChildOwner>;
@@ -22396,6 +22405,12 @@ int main() {
                             assert(frame.children().installPrivateVtables(pairHooks,tableRead,
                                 [](uintptr_t image) noexcept {return image==base;},
                                 [](uintptr_t,size_t) noexcept {return true;}));
+                            for(size_t index=0;index<2;++index) {
+                                auto& child=index?frame.children().second().owner():frame.children().first().owner();
+                                assert(child.matchesPrivateVtableHooks(pairHooks[index]));
+                                assert(reinterpret_cast<void*(*)(void*) noexcept>(pairHooks[index][19])(
+                                    child.constructedBase())==nullptr);
+                            }
                             {
                                 // Two actual CPU graphs/table leases; native stage
                                 // and non-factory VP entries remain fixtures.
