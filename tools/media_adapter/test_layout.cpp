@@ -60,6 +60,13 @@ struct TestVeboxChildLease {
     bool hasPrivateChildLease(uintptr_t p) const noexcept {
         return busy && reinterpret_cast<uintptr_t>(child)==p;
     }
+    // This allocation-only fixture never installs a producer vtable.
+    bool matchesPrivateVtableHooks(const std::array<uintptr_t,20>&) const noexcept {
+        return false;
+    }
+    bool hasPrivateChildImageLease(uintptr_t,uintptr_t) const noexcept {return false;}
+    template<class Execution> int setupKernelScratch(Execution&,int32_t) noexcept {return 5;}
+    bool publishCsc(const TglCscCoefficients&) noexcept {return false;}
     template<class Invoke> int withPrivateChild(Invoke invoke) noexcept {
         if(busy || !child) return 5;
         busy=true;const int result=invoke(child);busy=false;return result;
@@ -7654,6 +7661,7 @@ static void testNativeResourceBoundary() {
                 {
                     struct ReportBackend {
                         std::array<uint8_t,0xd48> bytes{};
+                        int commitDndi(uintptr_t,const TglOwnedDndiState&) noexcept {return 5;}
                         uintptr_t create() noexcept {return reinterpret_cast<uintptr_t>(bytes.data());}
                         int initialize(uintptr_t) noexcept {bytes.fill(0);return 0;}
                         bool validate(uintptr_t p) noexcept {return p==reinterpret_cast<uintptr_t>(bytes.data());}
@@ -8450,6 +8458,38 @@ static void testNativeResourceBoundary() {
                                                             });return value;
                                                         });
                                                     assert(result.status==-80 && !readerRetention());
+                                                    // Instantiate the complete retained entry even on its
+                                                    // pre-native missing-target rejection path. This checks
+                                                    // the real hook catalogue/owner APIs, not header parsing.
+                                                    struct RetainedAuxiliary {
+                                                        bool owns(void*) const noexcept {return false;}
+                                                        void destroy(bool) noexcept {}
+                                                        bool admit(void*,void*) noexcept {return false;}
+                                                        int allocate() noexcept {return 31;}
+                                                        void freeResources() noexcept {}
+                                                    };
+                                                    using RetainedScope=TglOwnedVeboxScopedContext<RetainedAuxiliary>;
+                                                    struct RetainedResolve {
+                                                        RetainedAuxiliary* operator()(void* object) const noexcept {
+                                                            return RetainedScope::get(object);
+                                                        }
+                                                    };
+                                                    struct RetainedFormatRead {
+                                                        bool operator()(uintptr_t,void*,size_t) const noexcept {return false;}
+                                                    };
+                                                    auto rejectPackets=[](auto&&...) noexcept -> bool {return false;};
+                                                    auto rejectCsc=[](auto&&...) noexcept -> int {return 31;};
+                                                    unsigned renderEntries=0;
+                                                    const auto missingTarget=tglWithRetainedVeboxFrameNativeRender<
+                                                        RetainedResolve,RetainedScope,RetainedScope,RetainedScope,RetainedFormatRead>(
+                                                        retained,linkedInput,linkedInput,static_cast<decltype(&linkedInput)>(nullptr),
+                                                        static_cast<decltype(&linkedInput)>(nullptr),childOwner,reportOwner,
+                                                        leases,false,false,{},0,read,unused,unused,unused,unused,
+                                                        rejectPackets,rejectCsc,TglVeboxRenderBinding{},nullptr,readerRetention,
+                                                        static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
+                                                        [&](uintptr_t,void*,void*,void*) noexcept -> int {++renderEntries;return 0;});
+                                                    assert(missingTarget.status==5 && !missingTarget.nativeEntered &&
+                                                        !readerRetention() && renderEntries==0);
                                                     reportBackend.bytes=savedReport;
                                                 }
                                                 retained.publishPreparedSelection(false);
