@@ -21153,6 +21153,7 @@ int main() {
                                             TglNativeVpCompressionBinding compressionBinding;
                                             const TglOwnedVpEntrySet* catalogues[2]{};
                                             void* commandParents[2]{};
+                                            std::array<TglOwnedSurfaceStorage*,2> leasedOutputs{};
                                             TglSfcMhwBinding commandBinding;
                                             assert(commandBinding.resolve(base,frontendRead,qualifyMhw,executableMhw));
                                             auto commandRead=[&](uintptr_t address,void* output,size_t size) noexcept {
@@ -21180,6 +21181,7 @@ int main() {
                                                     secondGraph,second,secondLines.resources(),args,read,modeRetire,releaseCpu,
                                                     [&](void* child,const auto& snapshot,const auto& geometry,auto& packet) noexcept -> int {
                                                         assert(snapshot.regions.scale.scaling && !packet.hasParametersLease());
+                                                        assert(leasedOutputs[child==first.bytes.data()?0:1]);
                                                         TglOwnedVpChromaStatePrefix prefix;
                                                         if(!tglPrepareOwnedVpStatePrefix(snapshot,geometry,false,false,prefix) ||
                                                            !packet.prepare(prefix.packet,{},false,false,false,
@@ -21271,22 +21273,12 @@ int main() {
                                                                                         assert(tglWithOwnedSfcLiveCommandInputs(inputs,packet,inputs.state.size(),iefPackets[index],
                                                                                             [](const auto&) noexcept -> int {assert(false);return 0;})==5);
                                                                                         auto platform=[](auto&) noexcept -> int {return 0;}; // Descriptor producer fixture.
-                                                                                        const auto transaction=frame.withNativeCommandFrame(roles,0,0,
-                                                                                            reinterpret_cast<uintptr_t>(commandParents[index]),0x1100,
-                                                                                            frontendCreatorView.renderHal,0x3300,
-                                                                                            [&](auto& sourceOwner,auto& targetOwner,auto&,auto& leases) noexcept {
-                                                                                                assert(leases.target && sourceOwner.hasSurfaceLease(leases.source) &&
-                                                                                                    targetOwner.hasSurfaceLease(*leases.target));
-                                                                                                const int status=index?
+                                                                                        assert(leasedOutputs[index]);
+                                                                                        const int built=index?
                                                                                                     tglSendOwnedVeboxSfcPreparedCommands(frame.children().second().owner(),commandParents[index],
-                                                                                                        commandBinding,&command,commandInvoke,ready,*leases.target,1,0,1,0,commandRead,platform):
+                                                                                                        commandBinding,&command,commandInvoke,ready,*leasedOutputs[index],1,0,1,0,commandRead,platform):
                                                                                                     tglSendOwnedVeboxSfcPreparedCommands(frame.children().first().owner(),commandParents[index],
-                                                                                                        commandBinding,&command,commandInvoke,ready,*leases.target,1,0,1,0,commandRead,platform);
-                                                                                                // CPU recording only: no command acquisition/writeback/submission.
-                                                                                                return TglOwnedVeboxCommandTransactionResult{status,0,false,false};
-                                                                                            });
-                                                                                        assert(!transaction.acquired && !transaction.writtenBack);
-                                                                                        const int built=transaction.status;
+                                                                                                        commandBinding,&command,commandInvoke,ready,*leasedOutputs[index],1,0,1,0,commandRead,platform);
                                                                                         assert(built==(scenario>0?-17:0));
                                                                                         if(!built) ++emissions;return built;
                                                                                     });
@@ -21332,11 +21324,21 @@ int main() {
                                                             const auto& entries=*reinterpret_cast<const TglOwnedVpEntrySet*>(addressPoint);
                                                             entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
                                                             entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x4000));
-                                                            int result=entries.setup(child,reinterpret_cast<void*>(0x1000),
-                                                                reinterpret_cast<void*>(0x2000),data+i);
-                                                            if(result) return result;
-                                                            result=entries.send(child,data+i,&command);
-                                                            if(result) return result;
+                                                            const auto transaction=frame.withNativeCommandFrame(roles,0,0,
+                                                                reinterpret_cast<uintptr_t>(commandParents[i]),0x1100,
+                                                                frontendCreatorView.renderHal,0x3300,
+                                                                [&](auto& sourceOwner,auto& targetOwner,auto&,auto& leases) noexcept {
+                                                                    assert(leases.target && sourceOwner.hasSurfaceLease(leases.source) &&
+                                                                        targetOwner.hasSurfaceLease(*leases.target) && !leasedOutputs[i]);
+                                                                    leasedOutputs[i]=leases.target;
+                                                                    int status=entries.setup(child,reinterpret_cast<void*>(0x1000),
+                                                                        reinterpret_cast<void*>(0x2000),data+i);
+                                                                    if(!status) status=entries.send(child,data+i,&command);
+                                                                    leasedOutputs[i]=nullptr;
+                                                                    return TglOwnedVeboxCommandTransactionResult{status,0,false,false};
+                                                                });
+                                                            assert(!transaction.acquired && !transaction.writtenBack && !leasedOutputs[i]);
+                                                            if(transaction.status) return transaction.status;
                                                         }
                                                         return expected;
                                                         });
