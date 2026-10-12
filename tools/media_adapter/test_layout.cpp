@@ -8539,7 +8539,29 @@ static void testNativeResourceBoundary() {
                                                                         return view.matches(input.di)?0:5;
                                                                     });
                                                                     if(result.status) return result;
-                                                                    result.status=live.state(input.di,&liveState);
+                                                                    auto rejectStack=[](uintptr_t,size_t,uintptr_t,size_t) noexcept {return false;};
+                                                                    auto unusedCsc=[](TglCscCoefficients&,uint32_t,uint32_t,uint32_t) noexcept {
+                                                                        assert(false);return false;
+                                                                    };
+                                                                    using LiveProducers=typename CapturedTypes::template Producers<
+                                                                        decltype(rejectStack),decltype(unusedCsc)>;
+                                                                    using LiveResolve=typename LiveProducers::Resolve;
+                                                                    assert(!LiveResolve::get(actualChild));
+                                                                    result.status=tglWithOwnedVeboxFrameProducers(live,childOwner,reportOwner,
+                                                                        uintptr_t{0},stateRead,rejectStack,unusedCsc,
+                                                                        [&](void* object,auto& producer) noexcept -> int {
+                                                                            static_assert(std::is_same_v<typename LiveProducers::Context,
+                                                                                std::remove_reference_t<decltype(producer)>>);
+                                                                            assert(LiveResolve::get(object)==&producer);
+                                                                            // State publication only: do not claim a complete
+                                                                            // builder/DI gate or authorize command submission.
+                                                                            assert(producer.pass.begin());
+                                                                            const int status=TglOwnedVeboxProducerCallbacks<LiveResolve>::state(
+                                                                                object,input.di,&liveState);
+                                                                            producer.pass.close();
+                                                                            return status;
+                                                                        });
+                                                                    assert(!LiveResolve::get(actualChild));
                                                                     assert(result.status==0);
                                                                     const int diStatus=live.diIecp(input.di,&liveDi);
                                                                     assert(diStatus==(input.iecp?5:0));
