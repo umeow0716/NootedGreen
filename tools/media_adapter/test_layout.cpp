@@ -20540,12 +20540,26 @@ int main() {
             int32_t status=77;
             unsigned calls=0;
             int32_t result=0;
+            uintptr_t veboxInterface=0x4000,veboxHeap=0x5000;
+            TglVeboxHardwareBinding veboxMhw{veboxInterface,os,veboxHeap};
+            bool corruptVebox=false;
+            auto veboxRead=[&](uintptr_t p,void* out,size_t n) {
+                uintptr_t value=0;
+                if(p==os+0x8c && n==4) {uint32_t mode=0;std::memcpy(out,&mode,4);return true;}
+                if(n!=8) return false;
+                if(p==veboxInterface) value=base+0x759520;
+                else if(p==veboxInterface+8) value=base+0x3eae0;
+                else if(p==veboxInterface+0x18) value=os;
+                else if(p==veboxInterface+0x20) value=veboxHeap;
+                else return false;
+                std::memcpy(out,&value,8);return true;
+            };
             auto ctor=[&](uintptr_t entry,void *storage,void *nativeOs,void *nativeMhw,
                 void *nativeSfc,void *renderHal,void *history,void *performance,
                 const void *cache,int32_t *out) {
                 assert(entry==base+0x12d4e0 && storage==child.data());
                 assert(nativeOs==reinterpret_cast<void*>(os) && nativeSfc==owner.get());
-                assert(!nativeMhw && renderHal==reinterpret_cast<void*>(0x3000) &&
+                assert(nativeMhw==reinterpret_cast<void*>(veboxInterface) && renderHal==reinterpret_cast<void*>(0x3000) &&
                        !history && !performance && !cache);
                 const auto destroys=invoke.destroys;
                 owner.reset();
@@ -20554,11 +20568,12 @@ int main() {
                 bool nested=false;
                 assert(owner.withObject([&](void*){nested=true;return 0;})==5 && !nested);
                 ++calls;*out=result;
+                if(corruptVebox) ++veboxHeap;
             };
             auto construct=[&](size_t capacity,void* hal=reinterpret_cast<void*>(0x3000)) {
-                return tglConstructOwnedVeboxBaseWithSfc(baseBinding,child.data(),capacity,
-                    owner,reinterpret_cast<void*>(os),nullptr,hal,nullptr,nullptr,nullptr,
-                    status,ctor);
+                return tglConstructOwnedVeboxBaseWithSfcAndMhw(baseBinding,child.data(),capacity,
+                    owner,reinterpret_cast<void*>(os),veboxMhw,hal,nullptr,nullptr,nullptr,
+                    status,veboxRead,[&](uintptr_t image){return image==base;},ctor);
             };
             assert(construct(child.size())==TglOwnedBaseConstruction::NotCalled && calls==0 && status==77);
             assert(owner.initialize(lifetime,mhw,os,read));
@@ -20571,8 +20586,14 @@ int main() {
             })==0);
             result=31;
             assert(construct(child.size())==TglOwnedBaseConstruction::ConstructedFailure && calls==2 && status==31);
+            result=0;corruptVebox=true;
+            assert(construct(child.size())==TglOwnedBaseConstruction::ConstructedFailure && calls==3 && status==5);
+            corruptVebox=false;--veboxHeap;
+            ++veboxMhw.os;
+            assert(construct(child.size())==TglOwnedBaseConstruction::NotCalled && calls==3);
+            --veboxMhw.os;
             ++baseBinding.image;
-            assert(construct(child.size())==TglOwnedBaseConstruction::NotCalled && calls==2);
+            assert(construct(child.size())==TglOwnedBaseConstruction::NotCalled && calls==3);
         }
     }
     {

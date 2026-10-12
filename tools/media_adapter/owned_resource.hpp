@@ -3695,12 +3695,12 @@ enum class TglOwnedBaseConstruction { NotCalled, ConstructedSuccess, Constructed
 // argument (stored at child+68). This is NOT publication or derived wiring.
 // Any Constructed* result obliges the owner to run base teardown, including
 // a nonzero native status; NotCalled must not trigger a native destructor.
-template<class SfcInvoker,class Construct>
-TglOwnedBaseConstruction tglConstructOwnedVeboxBaseWithSfc(
+template<class SfcInvoker,class Read,class Qualify,class Construct>
+TglOwnedBaseConstruction tglConstructOwnedVeboxBaseWithSfcAndMhw(
     const TglVeboxLifetimeBinding &binding,void *privateStorage,size_t capacity,
-    TglOwnedSfcMhw<SfcInvoker> &sfc,void *os,void *mhw,void *renderHal,
+    TglOwnedSfcMhw<SfcInvoker> &sfc,void *os,const TglVeboxHardwareBinding &mhw,void *renderHal,
     void *history,void *performanceData,const void *cacheControl,
-    int32_t &nativeStatus,Construct construct) {
+    int32_t &nativeStatus,Read read,Qualify qualify,Construct construct) {
     if(!binding.image || binding.image>UINTPTR_MAX-0x12de30 ||
        binding.construct!=binding.image+0x12d4e0 ||
        binding.destroy!=binding.image+0x12de30 ||
@@ -3708,9 +3708,48 @@ TglOwnedBaseConstruction tglConstructOwnedVeboxBaseWithSfc(
        // at 1264f3/126502, before reporting constructor status.
        !renderHal || !privateStorage || (reinterpret_cast<uintptr_t>(privateStorage)&7) ||
        capacity<0x1bc0 || !sfc.get() || sfc.image()!=binding.image ||
-       sfc.os()!=reinterpret_cast<uintptr_t>(os)) return TglOwnedBaseConstruction::NotCalled;
+       sfc.os()!=reinterpret_cast<uintptr_t>(os) ||
+       mhw.os!=reinterpret_cast<uintptr_t>(os)) return TglOwnedBaseConstruction::NotCalled;
+    // The same enclosing owner must pin MHW storage/heap across this call.
+    // A NULL/fixture MHW is not a complete native child dependency.
+    const auto interface=mhw.interface,heap=mhw.heap;
+    TglVeboxHardwareBinding admitted;
+    auto sameMhw=[&] {
+        return mhw.interface==interface && mhw.heap==heap &&
+            admitted.resolve(interface,reinterpret_cast<uintptr_t>(os),binding.image,read,qualify) &&
+            admitted.heap==heap;
+    };
+    if(!sameMhw()) return TglOwnedBaseConstruction::NotCalled;
     // Keep the borrowed child+68 dependency alive across the native call.
     // A raw get() alone permits reentrant reset/reinitialization of its owner.
+    bool called=false;
+    sfc.withObject([&](void* nativeSfc) {
+        if(!sameMhw()) return 5;
+        called=true;
+        construct(binding.construct,privateStorage,os,reinterpret_cast<void*>(interface),nativeSfc,renderHal,history,
+                  performanceData,cacheControl,&nativeStatus);
+        if(!sameMhw() && nativeStatus==0) nativeStatus=5;
+        return 0;
+    });
+    if(!called) return TglOwnedBaseConstruction::NotCalled;
+    return nativeStatus==0?TglOwnedBaseConstruction::ConstructedSuccess:
+                           TglOwnedBaseConstruction::ConstructedFailure;
+}
+
+// Existing partial-base construction remains usable for offline assembly.
+// Raw MHW argument does NOT establish complete dependency qualification;
+// complete renderer composition must use WithSfcAndMhw above.
+template<class SfcInvoker,class Construct>
+TglOwnedBaseConstruction tglConstructOwnedVeboxBaseWithSfc(
+    const TglVeboxLifetimeBinding &binding,void *privateStorage,size_t capacity,
+    TglOwnedSfcMhw<SfcInvoker> &sfc,void *os,void *mhw,void *renderHal,
+    void *history,void *performanceData,const void *cacheControl,
+    int32_t &nativeStatus,Construct construct) {
+    if(!binding.image || binding.image>UINTPTR_MAX-0x12de30 ||
+       binding.construct!=binding.image+0x12d4e0 || binding.destroy!=binding.image+0x12de30 ||
+       !renderHal || !privateStorage || (reinterpret_cast<uintptr_t>(privateStorage)&7) ||
+       capacity<0x1bc0 || !sfc.get() || sfc.image()!=binding.image ||
+       sfc.os()!=reinterpret_cast<uintptr_t>(os)) return TglOwnedBaseConstruction::NotCalled;
     bool called=false;
     sfc.withObject([&](void* nativeSfc) {
         called=true;
