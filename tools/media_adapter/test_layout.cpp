@@ -9,6 +9,25 @@
 #include <memory>
 
 // Presence-test functions only; never used as renderer producers or published.
+struct TestPairedVpResourceLines {
+    TglOwnedVpSfcCallerStorage* vp=nullptr;
+    unsigned allocations=0,releases=0;int status=0;
+    bool boundToVp(const TglOwnedVpSfcCallerStorage& value) const noexcept {return vp==&value;}
+    int ensure(uint32_t input,uint32_t scaled) noexcept {
+        assert(input==1080 && scaled==720);++allocations;return status;
+    }
+    template<class Use> int withReleaseReservation(Use use) noexcept {
+        return use([&]() noexcept {++releases;});
+    }
+};
+struct TestPairedVpResourceState {
+    std::array<uint8_t,0x50> bytes{};
+    template<class Use> int withPublishedVpParameters(TglOwnedVpSfcCallerStorage&,Use use) noexcept {
+        const uint32_t input=1080,scaled=720;
+        std::memcpy(bytes.data()+0x30,&input,4);std::memcpy(bytes.data()+0x4c,&scaled,4);
+        return use(bytes.data());
+    }
+};
 template<class Signature> struct TestVpPresenceStub;
 template<class R,class... Args> struct TestVpPresenceStub<R(*)(Args...) noexcept> {
     static R invoke(Args...) noexcept {if constexpr(!std::is_void_v<R>) return R{};}
@@ -13689,6 +13708,23 @@ static void testRetainedVeboxFrames() {
 }
 
 int main() {
+    {
+        TglOwnedVpSfcCallerStorage first,second;
+        TestPairedVpResourceLines a{&first},b{&second};
+        TestPairedVpResourceState sa,sb;unsigned admissions=0;
+        auto retire=[&]() noexcept -> int {++admissions;return 0;};
+        assert(tglWithOwnedVpPairedResourceEntries(first,a,sa,second,b,sb,retire,
+            [&](void* x,void* y,auto allocate,auto release) noexcept -> int {
+                assert(allocate(x)==0 && a.allocations==1 && !b.allocations);
+                b.status=31;assert(allocate(y)==31 && b.allocations==1);
+                assert(allocate(nullptr)==5);
+                release(y);assert(b.releases==1 && !a.releases);
+                release(x);return 0;
+            })==0);
+        assert(a.releases==1 && b.releases==1 && admissions==2);
+        assert(tglWithOwnedVpPairedResourceEntries(first,a,sa,second,a,sb,retire,
+            [](void*,void*,auto,auto) noexcept -> int {assert(false);return 0;})==5);
+    }
     {
         struct Context {unsigned value;};struct Domain {};
         using Scope=TglOwnedScopedContext<Context,Domain>;

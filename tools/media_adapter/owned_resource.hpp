@@ -16953,6 +16953,27 @@ int tglWithOwnedVpResourceEntries(TglOwnedVpSfcCallerStorage& vp,Lines& lines,St
     return result?result:context.releaseResult();
 }
 
+// Explicit two-owner resource scope; native callback signatures stay identical.
+template<class Lines,class State,class Retire,class Use>
+int tglWithOwnedVpPairedResourceEntries(TglOwnedVpSfcCallerStorage& first,Lines& firstLines,State& firstState,
+    TglOwnedVpSfcCallerStorage& second,Lines& secondLines,State& secondState,
+    Retire& retire,Use use,const TglOwnedVeboxFrameRetention* retention=nullptr) noexcept {
+    if(&first==&second || &firstLines==&secondLines || &firstState==&secondState ||
+        !firstLines.boundToVp(first) || !secondLines.boundToVp(second)) return 5;
+    using Context=TglOwnedVpResourceContext<Lines,State,Retire>;
+    using Resolve=TglOwnedVpSfcResolve<Context>;
+    using Allocate=TglOwnedVpLineAllocationCallback<Resolve>;
+    using Release=TglOwnedVpSfcCallbacks<Resolve>;
+    Context firstContext(first,firstLines,firstState,retire,retention);
+    Context secondContext(second,secondLines,secondState,retire,retention);
+    void* a=first.bytes.data();void* b=second.bytes.data();
+    typename TglOwnedVpSfcScopedContext<Context>::Pair scope(a,firstContext,b,secondContext);
+    if(!scope.bound()) return 5;
+    static_assert(noexcept(use(a,b,&Allocate::allocate,&Release::freeResources)),"paired resource consumer ABI");
+    const int result=use(a,b,&Allocate::allocate,&Release::freeResources);
+    return result?result:(firstContext.releaseResult()?firstContext.releaseResult():secondContext.releaseResult());
+}
+
 // One owned child, with both admission and allocation/free entries alive only
 // during the consumer. This is not a published vtable or GPU retirement proof.
 template<class Read,class Lines,class State,class Retire,class Use>
