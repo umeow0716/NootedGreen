@@ -3572,6 +3572,119 @@ struct TglVeboxHardwareBinding {
 // Retain the complete native allocation/image/OS via the context owner registry
 // until retirement; a constructor-time identity check is not a persistent pin.
 
+struct TglNativeVeboxMhwAllocationBinding {
+    uintptr_t image=0,create=0,remove=0;
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t base,Read read,Qualify qualify,Executable executable) {
+        *this={};
+        constexpr std::array<uint8_t,16> factory{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+            0x48,0x8b,0x35,0x29,0xed,0x59,0,0x48};
+        constexpr std::array<uint8_t,16> deletion{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+            0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8};
+        auto f=factory,d=deletion;
+        if(!base || base>UINTPTR_MAX-0x759530 || !qualify(base) ||
+           !executable(base+0x1b52f0,16) || !executable(base+0x132bb0,16) ||
+           !read(base+0x1b52f0,f.data(),16) || f!=factory ||
+           !read(base+0x132bb0,d.data(),16) || d!=deletion) return false;
+        image=base;create=base+0x1b52f0;remove=base+0x132bb0;return true;
+    }
+};
+struct TglNativeVeboxMhwAllocationInvoker {
+    uintptr_t create(uintptr_t entry,uintptr_t os) noexcept {
+        using Fn=void*(*)(uintptr_t*);
+        return reinterpret_cast<uintptr_t>(reinterpret_cast<Fn>(entry)(&os));
+    }
+    uint32_t heap(uintptr_t entry,uintptr_t object) noexcept {
+        using Fn=uint32_t(*)(void*);
+        return reinterpret_cast<Fn>(entry)(reinterpret_cast<void*>(object));
+    }
+    void remove(uintptr_t entry,uintptr_t& object) noexcept {
+        using Fn=void(*)(uintptr_t*);
+        reinterpret_cast<Fn>(entry)(&object);
+    }
+};
+// Retained by the context registry, which must quarantine rather than destroy
+// an owner with a live allocation/lease. No destructor-side native deletion:
+// unproven GPU retirement must never become a free through stack unwinding.
+template<class Invoke=TglNativeVeboxMhwAllocationInvoker> class TglNativeVeboxMhwOwner {
+    TglNativeVeboxMhwAllocationBinding allocation_{};
+    TglVeboxHardwareBinding hardware_{};
+    Invoke& invoke_;
+    uintptr_t object_=0,os_=0;
+    uint64_t generation_=0;
+    bool busy_=false,pinned_=false,ready_=false;
+    struct Unlock {bool& flag;~Unlock(){flag=false;}};
+public:
+    explicit TglNativeVeboxMhwOwner(Invoke& invoke):invoke_(invoke){}
+    TglNativeVeboxMhwOwner(const TglNativeVeboxMhwOwner&)=delete;
+    TglNativeVeboxMhwOwner& operator=(const TglNativeVeboxMhwOwner&)=delete;
+    bool empty() const noexcept {return !object_;}
+    uint64_t generation() const noexcept {return generation_;}
+    template<class Read,class Qualify,class Executable>
+    uint32_t initialize(const TglNativeVeboxMhwAllocationBinding& binding,uintptr_t os,
+                        Read read,Qualify qualify,Executable executable) {
+        if(busy_ || pinned_ || object_ || !os || generation_==UINT64_MAX) return 5;
+        TglNativeVeboxMhwAllocationBinding verified;
+        if(!verified.resolve(binding.image,read,qualify,executable) ||
+           verified.create!=binding.create || verified.remove!=binding.remove) return 5;
+        busy_=true;Unlock unlock{busy_};
+        allocation_=verified;os_=os;++generation_;
+        object_=invoke_.create(allocation_.create,os);
+        if(!object_) {allocation_={};os_=0;return 5;}
+        const auto result=hardware_.initializeHeap(object_,os,allocation_.image,read,qualify,
+            executable,[&](uintptr_t entry,uintptr_t object){return invoke_.heap(entry,object);});
+        ready_=result==0;
+        return result; // even failure retains factory provenance for explicit teardown
+    }
+    class DependencyLease {
+        TglNativeVeboxMhwOwner* owner_=nullptr;
+        uint64_t generation_=0;
+    public:
+        explicit DependencyLease(TglNativeVeboxMhwOwner& owner) noexcept {
+            if(owner.busy_ || owner.pinned_ || !owner.ready_) return;
+            owner.pinned_=true;owner_=&owner;generation_=owner.generation_;
+        }
+        DependencyLease(const DependencyLease&)=delete;
+        DependencyLease& operator=(const DependencyLease&)=delete;
+        ~DependencyLease(){if(owner_) owner_->pinned_=false;}
+        const TglVeboxHardwareBinding* binding() const noexcept {
+            return owner_ && owner_->pinned_ && owner_->ready_ &&
+                owner_->generation_==generation_ ? &owner_->hardware_:nullptr;
+        }
+    };
+    template<class Read,class Qualify,class Executable,class Retired>
+    uint32_t retire(Read read,Qualify qualify,Executable executable,Retired retired) {
+        if(busy_ || pinned_ || !object_) return 5;
+        busy_=true;Unlock unlock{busy_};
+        uintptr_t vt=0,actualOs=0,heap=0,deleting=0;
+        const auto image=allocation_.image;
+        if(object_>UINTPTR_MAX-0x28 || !qualify(image) ||
+           !read(object_,&vt,8) || vt!=image+0x759520 ||
+           !read(object_+0x18,&actualOs,8) || actualOs!=os_ ||
+           !read(object_+0x20,&heap,8) ||
+           !read(image+0x759528,&deleting,8) || deleting!=image+0x179d10 ||
+           !retired(object_,os_,heap,generation_)) return 5;
+        uintptr_t afterVt=0,afterOs=0,afterHeap=0;
+        if(!read(object_,&afterVt,8) || afterVt!=vt ||
+           !read(object_+0x18,&afterOs,8) || afterOs!=actualOs ||
+           !read(object_+0x20,&afterHeap,8) || afterHeap!=heap) return 5;
+        if(heap) {
+            TglVeboxHardwareBinding current;
+            if(!current.resolve(object_,os_,image,read,qualify) || current.heap!=heap) return 5;
+            const auto result=current.releaseRetiredHeap(image,read,qualify,executable,
+                [&](uintptr_t object,uintptr_t os,uintptr_t h){return object==object_ && os==os_ && h==heap;},
+                [&](uintptr_t entry,uintptr_t object){return invoke_.heap(entry,object);});
+            if(result) return result;
+        }
+        ready_=false;hardware_={};
+        invoke_.remove(allocation_.remove,object_);
+        if(object_) return 5;
+        allocation_={};os_=0;return 0;
+    }
+};
+
 // Complete native G12 MHW lifetime for externally owned, stable storage.
 // Enclosing owner retains storage/OS/image and serializes all operations;
 // no native factory accounting/deleting destructor is used for this storage.

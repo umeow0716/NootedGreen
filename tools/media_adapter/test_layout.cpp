@@ -3531,6 +3531,59 @@ static void testVeboxHardwareBinding() {
         result=31;assert(release()==31 && releases==1 && b.heap==heap);
         result=0;assert(release()==0 && releases==2 && !b.interface && !heap);
         assert(release()==5 && releases==2);
+        {
+            std::array<uint8_t,16> factory{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+                0x48,0x8b,0x35,0x29,0xed,0x59,0,0x48};
+            std::array<uint8_t,16> deletion{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+                0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8};
+            uintptr_t deleting=image+0x179d10;
+            auto ownerRead=[&](uintptr_t p,void* out,size_t n) {
+                if(p==image+0x1b52f0 && n==16) {std::memcpy(out,factory.data(),n);return true;}
+                if(p==image+0x132bb0 && n==16) {std::memcpy(out,deletion.data(),n);return true;}
+                if(p==image+0x759528 && n==8) {std::memcpy(out,&deleting,n);return true;}
+                return initRead(p,out,n) || cleanupRead(p,out,n);
+            };
+            struct Native {
+                uintptr_t& backingHeap;unsigned creates=0,initializes=0,cleanups=0,removes=0;
+                uint32_t result=0;
+                uintptr_t create(uintptr_t entry,uintptr_t ownerOs) {
+                    assert(entry==image+0x1b52f0 && ownerOs==os);++creates;backingHeap=0;return mhw;}
+                uint32_t heapCall(uintptr_t entry,uintptr_t object) {
+                    assert(object==mhw);
+                    if(entry==image+0xff290) {++initializes;if(!result) backingHeap=0x4000;return result;}
+                    assert(entry==image+0xff550);++cleanups;backingHeap=0;return 0;
+                }
+                uint32_t heap(uintptr_t entry,uintptr_t object) {return heapCall(entry,object);}
+                void remove(uintptr_t entry,uintptr_t& object) {
+                    assert(entry==image+0x132bb0 && object==mhw && !backingHeap);
+                    ++removes;object=0;}
+            } native{heap};
+            TglNativeVeboxMhwAllocationBinding allocation;
+            assert(allocation.resolve(image,ownerRead,qualify,[](uintptr_t,size_t){return true;}));
+            TglNativeVeboxMhwOwner owner(native);
+            auto initializeOwner=[&] {return owner.initialize(allocation,os,ownerRead,qualify,
+                [](uintptr_t,size_t){return true;});};
+            bool approved=false;
+            auto retireOwner=[&] {return owner.retire(ownerRead,qualify,
+                [](uintptr_t,size_t){return true;},
+                [&](uintptr_t object,uintptr_t ownerOs,uintptr_t,uint64_t generation) {
+                    assert(object==mhw && ownerOs==os && generation==owner.generation());return approved;});};
+            assert(initializeOwner()==0 && native.creates==1 && !owner.empty());
+            assert(initializeOwner()==5 && native.creates==1);
+            assert(retireOwner()==5 && !native.cleanups && !native.removes);
+            approved=true;
+            {
+                typename decltype(owner)::DependencyLease lease(owner);
+                assert(lease.binding() && lease.binding()->heap==0x4000);
+                assert(retireOwner()==5 && !native.cleanups);
+                typename decltype(owner)::DependencyLease duplicate(owner);
+                assert(!duplicate.binding());
+            }
+            assert(retireOwner()==0 && owner.empty() && native.cleanups==1 && native.removes==1);
+            native.result=31;
+            assert(initializeOwner()==31 && !owner.empty());
+            assert(retireOwner()==0 && native.cleanups==1 && native.removes==2);
+        }
         heap=0x4000;assert(resolve());
     }
     auto empty = [&] { assert(!b.interface && !b.os && !b.heap); };
