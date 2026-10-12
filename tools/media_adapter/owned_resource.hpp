@@ -19234,6 +19234,60 @@ int tglRunRetainedDiIecpFrameInput(TglNativeVeboxSurfaceFrameStorage<Api>& stora
         });
 }
 
+// Retained reader holds owners, not allocation-continuation stack views.
+// Construction does not read selection/report; producer invocation does.
+template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+    class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+struct TglRetainedVeboxLiveInputReader {
+    TglNativeVeboxSurfaceFrameStorage<Api>& storage;
+    Owner& sourceOwner;Owner* targetOwner;Owner* secondaryOwner;Owner* previousOwner;
+    ChildOwner& childOwner;ExecutionOwner& executionOwner;
+    void* child;uintptr_t execution;const TglOwnedSurfaceStorage& source;
+    Read read;bool alignDi64;std::array<uint32_t,11> controls;Parameters* parameters=nullptr;
+    template<class Consume> int operator()(Consume consume) noexcept {
+        return tglRunRetainedDiIecpFrameInput(storage,sourceOwner,targetOwner,secondaryOwner,previousOwner,
+            childOwner,executionOwner,child,execution,source,read,alignDi64,controls,consume,parameters);
+    }
+};
+template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+    class SurfaceAdmit,class DiAdmit,class Register,class Control,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+struct TglRetainedVeboxLiveFrameTypes {
+    using Capture=TglRetainedVeboxLiveInputReader<Api,Owner,ChildOwner,ExecutionOwner,Read,Parameters>;
+    using Frame=TglOwnedVeboxLivePacketContext<Capture,Read,SurfaceAdmit,DiAdmit,Register,Control>;
+    template<class PacketAdmit,class ProduceCsc>
+    using Producers=TglOwnedVeboxFrameProducerTypes<Frame,ChildOwner,ExecutionOwner,Read,PacketAdmit,ProduceCsc>;
+};
+// Install/use this same catalogue before native Render. Allocation publishes
+// its selection first; native preparation then invokes these live producers.
+template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+    class SurfaceAdmit,class DiAdmit,class Register,class Control,class Consume,
+    class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+TglOwnedVeboxCommandTransactionResult tglWithRetainedLiveVeboxPacketFrame(
+    TglNativeVeboxSurfaceFrameStorage<Api>& storage,Owner& sourceOwner,Owner* targetOwner,
+    Owner* secondaryOwner,Owner* previousOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    TglOwnedVeboxPacketLeases leases,bool disableTemporalDenoise,bool alignDi64,
+    const std::array<uint32_t,11>& controls,Read read,SurfaceAdmit admitSurface,DiAdmit admitDi,
+    Register registerResource,Control control,TglOwnedVeboxFrameRetention& retention,
+    Consume consume,Parameters* parameters=nullptr) noexcept {
+    TglOwnedVeboxCommandTransactionResult result;
+    if(retention() || bool(targetOwner)!=bool(leases.target) ||
+       (targetOwner && targetOwner->surfaceBinding()!=leases.target)) return result;
+    result.status=tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+        reinterpret_cast<void*>(leases.child),leases.execution,leases.source,
+        [&](void* child,uintptr_t execution,const auto&) noexcept -> int {
+            using Types=TglRetainedVeboxLiveFrameTypes<Api,Owner,ChildOwner,ExecutionOwner,Read,
+                SurfaceAdmit,DiAdmit,Register,Control,Parameters>;
+            typename Types::Capture capture{storage,sourceOwner,targetOwner,secondaryOwner,previousOwner,
+                childOwner,executionOwner,child,execution,leases.source,read,alignDi64,controls,parameters};
+            typename Types::Frame frame{{},leases,disableTemporalDenoise,capture,read,
+                admitSurface,admitDi,registerResource,control};
+            static_assert(noexcept(consume(frame)) &&
+                std::is_same_v<decltype(consume(frame)),TglOwnedVeboxCommandTransactionResult>);
+            result=consume(frame);retention.observe(result);return result.status;
+        });
+    return result;
+}
+
 // Named borrowed reader: hook installation and runtime resolution must use
 // the same capture type. No report is read until the producer invokes it.
 template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read>

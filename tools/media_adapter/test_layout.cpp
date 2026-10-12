@@ -8430,6 +8430,26 @@ static void testNativeResourceBoundary() {
                                                             assert(live.ffdi[0] && live.ffdi[1] && live.ffdn[0] && live.statistics);
                                                             assert(retained.ffdiBacked()[0]->hasSurfaceLease(*live.ffdi[0]));return -79;
                                                         })==-79);
+                                                    TglOwnedSurfaceInputs surfacePacket;TglOwnedVeboxStateStorage statePacket;
+                                                    TglOwnedDiIecpPacket diPacket;TglOwnedVeboxFrameRetention readerRetention;
+                                                    TglOwnedVeboxPacketLeases leases{reinterpret_cast<uintptr_t>(actualChild),report,0,0,
+                                                        linkedStorage,nullptr,surfacePacket,statePacket,diPacket};
+                                                    auto unused=[](auto&&...) noexcept {assert(false);return false;};
+                                                    using Types=TglRetainedVeboxLiveFrameTypes<FrameStmmApi,decltype(linkedInput),
+                                                        std::decay_t<decltype(childOwner)>,std::decay_t<decltype(reportOwner)>,decltype(read),
+                                                        decltype(unused),decltype(unused),decltype(unused),decltype(unused)>;
+                                                    auto result=tglWithRetainedLiveVeboxPacketFrame(retained,linkedInput,
+                                                        static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                        static_cast<decltype(&linkedInput)>(nullptr),childOwner,reportOwner,leases,false,false,{},
+                                                        read,unused,unused,unused,unused,readerRetention,
+                                                        [&](auto& frame) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                                            static_assert(std::is_same_v<std::decay_t<decltype(frame)>,typename Types::Frame>);
+                                                            TglOwnedVeboxCommandTransactionResult value;
+                                                            value.status=frame.capture([&](const auto& live) noexcept -> int {
+                                                                assert(live.ffdi[0] && live.ffdn[0] && live.statistics);return -80;
+                                                            });return value;
+                                                        });
+                                                    assert(result.status==-80 && !readerRetention());
                                                     reportBackend.bytes=savedReport;
                                                 }
                                                 retained.publishPreparedSelection(false);
