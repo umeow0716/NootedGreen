@@ -1705,6 +1705,7 @@ static void testTrackedCpuOwner() {
             bool requestKernel=false;
             bool foreignCommandPackets=false;
             bool wholeRender=false;
+            bool wholeProducerFailure=false;
             unsigned wholeRenderCalls=0;
             TglOwnedVeboxStateStorage foreignCommandState{};
             auto makeActualConsumer=[&](TglOwnedVeboxFrameRetention& retained) noexcept {
@@ -1733,6 +1734,15 @@ static void testTrackedCpuOwner() {
                     [&](uintptr_t entry,void* object,void* argument,void*) noexcept -> int {
                         ++wholeRenderCalls;assert(entry==renderBinding.entry && !argument);
                         auto* producer=ActualProducers::Resolve::get(object);assert(producer);
+                        if(wholeProducerFailure) {
+                            using Csc=void(*)(void*,void*,void*) noexcept;
+                            using Di=int(*)(void*,bool,void*) noexcept;
+                            // Native129ca0 ignores void producer results, then
+                            // checks slot70 before subsequent commands. Exercise
+                            // those installed callbacks, not a manual latch edit.
+                            reinterpret_cast<Csc>(child.installed[14])(object,&foreign,&target);
+                            return reinterpret_cast<Di>(child.installed[6])(object,false,&di);
+                        }
                         return producer->pass.gate([]() noexcept {return 0;});
                     });
                 return tglRunImageBoundVeboxPacketFrame<AuxiliaryResolve,
@@ -1843,6 +1853,15 @@ static void testTrackedCpuOwner() {
                 !whole.writtenBack && wholeRetention() && wholeRenderCalls==1);
             const auto pendingWhole=wholeConsumer(consistentFrame);
             assert(pendingWhole.status==5 && !pendingWhole.nativeEntered && wholeRenderCalls==1);
+            wholeProducerFailure=true;
+            TglOwnedVeboxFrameRetention failedProducerRetention;
+            auto failedProducerConsumer=makeActualConsumer(failedProducerRetention);
+            const auto failedProducer=failedProducerConsumer(consistentFrame);
+            assert(failedProducer.status==5 && failedProducer.nativeEntered &&
+                failedProducerRetention() && wholeRenderCalls==2);
+            assert(registrations==3 && surfaceAdmissions==4 &&
+                cscValidations==1 && cscInvocations==1);
+            wholeProducerFailure=false;
             assert(!ActualProducers::Resolve::get(nativeChild));
             wholeRender=false;
             // State backing is not this producer's property: even a partial
