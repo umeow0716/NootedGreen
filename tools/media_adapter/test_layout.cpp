@@ -23400,6 +23400,24 @@ int main() {
                                 },cscRecording);
                             assert(qualifiedCscFrame.status==-90 && !qualifiedCscFrame.requiresRetention() &&
                                 cscCalls==1 && cscQueries==1 && packetGathers==1);
+                            unsigned retainedCreatorUses=0;
+                            const auto retainedCreatorFrame=frame.withNativeOwnedVpCreatorRetainedPacketFrame(0,roles,0,0,
+                                executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
+                                false,false,{},creatorFrameRead,rejectPacket,rejectPacket,
+                                [&](auto& owner,void* child,void*,auto&,auto&,auto&,auto&,auto&,auto& live,auto&,auto&,
+                                    auto& sourceRole,auto& targetRole) noexcept {
+                                    ++retainedCreatorUses;
+                                    assert(&live.capture.sourceOwner==&sourceRole && live.capture.targetOwner==&targetRole);
+                                    assert(&live.capture.storage==&frame.backing().command().backing() &&
+                                        &live.capture.childOwner==&owner && live.capture.child==child);
+                                    // No +58 allocation has published a selection here.
+                                    // Real retained capture must reject, never use the
+                                    // older direct-input recording fixture as a fallback.
+                                    const int status=live.withInput([](const auto&) noexcept -> int {assert(false);return 0;});
+                                    return TglOwnedVeboxCommandTransactionResult{status,status,false,false};
+                                });
+                            assert(retainedCreatorFrame.status==5 && retainedCreatorUses==1 &&
+                                !retainedCreatorFrame.requiresRetention() && packetGathers==1);
                             admitDiControl=false;
                             const auto rejectedCreatorFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,

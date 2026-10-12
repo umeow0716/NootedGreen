@@ -22440,6 +22440,34 @@ public:
         result.status=status;
         return result;
     }
+    // Runtime retained-reader specialization of the creator live-frame entry.
+    // No selection/report read at construction and no second frontend lease.
+    // The allocation callback must publish into command().backing() before
+    // native preparation/build invokes this reader. Optional temporal roles
+    // must already be held by the caller for the entire synchronous consume.
+    template<class ExecutionOwner,class NativeRead,class Qualify,class Executable,class Read,
+        class SurfaceAdmit,class DiAdmit,class Consume,class Parameters=TglOwnedFfdnNoDenoiseBorrow,
+        class CscInvoke=TglNativeCscInvoker>
+    TglOwnedVeboxCommandTransactionResult withNativeOwnedVpCreatorRetainedPacketFrame(
+        size_t childIndex,const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        ExecutionOwner& executionOwner,const TglNativeVphalMhwView& view,uintptr_t sku,
+        NativeRead nativeRead,Qualify qualify,Executable executable,bool disableTemporalDenoise,
+        bool alignDi64,const std::array<uint32_t,11>& controls,Read read,
+        SurfaceAdmit admitSurface,DiAdmit admitDi,Consume consume,
+        TglHeldOwnedSurfaceRole* secondary=nullptr,TglHeldOwnedSurfaceRole* previous=nullptr,
+        Parameters* parameters=nullptr,CscInvoke cscInvoke={}) noexcept {
+        auto capture=[&](auto& owner,void* child,void*,auto&,auto&,auto&,auto&,auto&,auto& packets,
+            TglHeldOwnedSurfaceRole& sourceRole,TglHeldOwnedSurfaceRole& targetRole) noexcept {
+            using Reader=TglRetainedVeboxLiveInputReader<Api,TglHeldOwnedSurfaceRole,
+                std::decay_t<decltype(owner)>,ExecutionOwner,Read,Parameters>;
+            return Reader{backing_.command().backing(),sourceRole,&targetRole,secondary,previous,
+                owner,executionOwner,child,packets.execution,packets.source,read,alignDi64,controls,parameters};
+        };
+        return withNativeOwnedVpCreatorLivePacketFrame(childIndex,roles,sourceIndex,targetIndex,
+            executionOwner,view,sku,nativeRead,qualify,executable,capture,disableTemporalDenoise,
+            read,admitSurface,admitDi,consume,cscInvoke);
+    }
+
     // Whole retained native Render entry, not a separate builder or submit.
     // Caller must already provide complete native/owned producer dispatch
     // scopes. Exact12c9d0 does not consume RSI/argument1; forward it unchanged
