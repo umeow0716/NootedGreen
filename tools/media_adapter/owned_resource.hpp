@@ -19939,7 +19939,7 @@ public:
     template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker>
     TglOwnedBaseConstruction initializeChildFromCreator(size_t index,const TglNativeVphalMhwView& view,
         const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
-        void* history,void* performance,const void* cache,int32_t& status,
+        const void* cache,int32_t& status,
         Read read,Qualify qualify,Executable executable,Construct construct={}) {
         const auto* retained=mhwLease_.binding();
         TglVeboxHardwareBinding hardware;
@@ -19953,6 +19953,13 @@ public:
             !sfc.validateConstructedObject(object,view.os,read))
             return TglOwnedBaseConstruction::NotCalled;
         auto& child=index?children_.second():children_.first();
+        // Native ICL1fcf10->1fd250 supplies ADDRESSES of embedded renderer
+        // history (8f8/904) and performance slot2ce8, not their nullable values.
+        // Exact TGL132d70 initializes the same fields; child12d4e0 stores
+        // history at90 and passes the performance address to base126480.
+        if(view.renderer.renderer>UINTPTR_MAX-0x2cf0) return TglOwnedBaseConstruction::NotCalled;
+        auto* history=reinterpret_cast<void*>(view.renderer.renderer+(index?0x904:0x8f8));
+        auto* performance=reinterpret_cast<void*>(view.renderer.renderer+0x2ce8);
         return child.initializeQualified(binding,lifetime,sfc,reinterpret_cast<void*>(view.os),hardware,
             reinterpret_cast<void*>(view.renderHal),history,performance,cache,status,read,qualify,
             construct,object,&sharedSfcGate_);
