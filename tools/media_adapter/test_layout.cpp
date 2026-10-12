@@ -12323,8 +12323,23 @@ static void testRetainedVeboxFrames() {
         assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==1);
         removed.contexts={0x4000,0x5000};
         {
+            assert(!owners.pinExclusive(0x1000,0x2000,6,0x4000).get());
+            auto exclusive=owners.pinExclusive(0x1000,0x2000,7,0x4000);
+            assert(exclusive.get()==first);
+            auto held=std::move(exclusive);assert(!exclusive.get() && held.get()==first);
+            assert(!owners.pin(0x1000,0x2000,7,0x4000).get());
+            assert(!owners.pinExclusive(0x1000,0x2000,7,0x4000).get());
+            assert(owners.withOwner(0x1000,0x2000,7,0x4000,use)==5 && uses==1);
+            assert(owners.prepareRemoval(0x1000,0x2000,7,removed,prepare)==5 && !preparations);
+            assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==1);
+            // gate_ is not held across the callback: another owner is usable.
+            auto other=owners.pinExclusive(0x1000,0x2000,7,0x5000);assert(other.get()==second);
+            held={};assert(!held.get());
+        }
+        {
             auto lease=owners.pin(0x1000,0x2000,7,0x4000);
             assert(lease.get()==first && !owners.pin(0x1000,0x2000,6,0x4000).get());
+            assert(!owners.pinExclusive(0x1000,0x2000,7,0x4000).get());
             auto retained=std::move(lease);assert(!lease.get() && retained.get()==first);
             assert(owners.prepareRemoval(0x1000,0x2000,7,removed,prepare)==5 && !preparations);
             assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==1);
@@ -14151,8 +14166,9 @@ int main() {
                     assert(!destruction.request(lifetime,creatorAddress+8,
                         TglOwnedVphalDestructionState::Kind::DeletingDestroy,remove,invokeDestructor));
                     assert(destruction.phase()==TglOwnedVphalDestructionState::Phase::Idle);
-                    assert(!destruction.request(lifetime,creatorAddress,
-                        TglOwnedVphalDestructionState::Kind::DeletingDestroy,remove,invokeDestructor));
+                    assert(!tglDispatchOwnedVphalDestruction(lifetime,destruction,children,creatorAddress,
+                        TglOwnedVphalDestructionState::Kind::DeletingDestroy,reinterpret_cast<void*>(0x30000),7,
+                        readObject,orderedWrite,admitObject,0,invokeDestructor));
                     assert(destruction.phase()==TglOwnedVphalDestructionState::Phase::Quarantined &&
                         destruction.requiresRetention() && !nativeDestructors && writes==1);
                     children.allow=true;

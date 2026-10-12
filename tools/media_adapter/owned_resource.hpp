@@ -17897,6 +17897,22 @@ int tglPrepareOwnedContextRemoval(Table& table,Children& children,
     return table.detach(read,write,tableAdmit)?0:5;
 }
 
+// Single composition used by a registry-resolved VPHAL destructor callback.
+// Caller holds an exclusive owner lease (not the registry mutation lock), and
+// supplies the concrete frame/fence retirement admission to both detach gates.
+// A false result retains the whole owner; native callers receive no invented
+// success result and no counted-delete retry is performed here.
+template<class Children,class Read,class Write,class TableAdmit,class ChildAdmit,class Native>
+bool tglDispatchOwnedVphalDestruction(TglOwnedVphalLifetimeTable& table,
+    TglOwnedVphalDestructionState& state,Children& children,uintptr_t object,
+    TglOwnedVphalDestructionState::Kind kind,void* renderer,uint64_t generation,
+    Read read,Write write,TableAdmit tableAdmit,ChildAdmit childAdmit,Native native) noexcept {
+    return state.request(table,object,kind,[&]() noexcept {
+        return tglPrepareOwnedContextRemoval(table,children,renderer,generation,
+            read,write,tableAdmit,childAdmit);
+    },native);
+}
+
 struct TglNativePhysicalCallbackBinding {
     uintptr_t image=0,initialize=0,destroy=0;
     template<class Read,class Qualify,class Executable>
@@ -17975,6 +17991,41 @@ public:
         ~ContextLease() noexcept {reset();}
         Owner* get() const noexcept {return owner_;}
     };
+    // Exclusive callback lease keeps the owner alive WITHOUT holding gate_
+    // across native code. SIZE_MAX is reserved; ordinary frame pins and removal
+    // cannot enter until the callback drops this lease. Same physical-generation
+    // scope is still required; this is not native/GPU retirement authority.
+    class ExclusiveOwnerLease {
+        friend class TglOwnedContextOwnerRegistry;
+        Owner* owner_=nullptr;std::atomic<size_t>* pins_=nullptr;
+        ExclusiveOwnerLease(Owner* owner,std::atomic<size_t>& pins) noexcept:owner_(owner),pins_(&pins) {}
+        void reset() noexcept {if(pins_) pins_->store(0,std::memory_order_release);owner_=nullptr;pins_=nullptr;}
+    public:
+        ExclusiveOwnerLease()=default;
+        ExclusiveOwnerLease(const ExclusiveOwnerLease&)=delete;
+        ExclusiveOwnerLease& operator=(const ExclusiveOwnerLease&)=delete;
+        ExclusiveOwnerLease(ExclusiveOwnerLease&& other) noexcept:owner_(other.owner_),pins_(other.pins_) {
+            other.owner_=nullptr;other.pins_=nullptr;
+        }
+        ExclusiveOwnerLease& operator=(ExclusiveOwnerLease&& other) noexcept {
+            if(this!=&other) {reset();owner_=other.owner_;pins_=other.pins_;other.owner_=nullptr;other.pins_=nullptr;}
+            return *this;
+        }
+        ~ExclusiveOwnerLease() noexcept {reset();}
+        Owner* get() const noexcept {return owner_;}
+    };
+    ExclusiveOwnerLease pinExclusive(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
+        if(!context || gate_.test_and_set(std::memory_order_acquire)) return {};
+        Unlock unlock{gate_};
+        for(size_t i=0;i<Capacity;++i) {
+            auto& e=entries_[i];
+            if(!matches(e,image,physical,generation) || e.context!=context || e.quarantined ||
+                contextPins_[i].load(std::memory_order_acquire)) continue;
+            contextPins_[i].store(SIZE_MAX,std::memory_order_release);
+            return ExclusiveOwnerLease(e.owner,contextPins_[i]);
+        }
+        return {};
+    }
     TglOwnedContextOwnerRegistry() noexcept {
         for(auto& pins:contextPins_) pins.store(0,std::memory_order_relaxed);
     }
@@ -17990,7 +18041,7 @@ public:
             auto& e=entries_[i];
             if(!matches(e,image,physical,generation) || e.context!=context || e.quarantined) continue;
             const auto count=contextPins_[i].load(std::memory_order_acquire);
-            if(count==SIZE_MAX) return {};
+            if(count>=SIZE_MAX-1) return {}; // never manufacture the exclusive sentinel
             contextPins_[i].fetch_add(1,std::memory_order_relaxed);
             return ContextLease(e.owner,contextPins_[i]);
         }
@@ -18016,8 +18067,11 @@ public:
             std::is_same_v<decltype(use(std::declval<Owner&>())),int>);
         if(!context || gate_.test_and_set(std::memory_order_acquire)) return 5;
         Unlock unlock{gate_};
-        for(auto& e:entries_) if(matches(e,image,physical,generation) && e.context==context)
-            return e.quarantined?5:use(*e.owner);
+        for(size_t i=0;i<Capacity;++i) {
+            auto& e=entries_[i];
+            if(matches(e,image,physical,generation) && e.context==context)
+                return (e.quarantined || contextPins_[i].load(std::memory_order_acquire)==SIZE_MAX)?5:use(*e.owner);
+        }
         return 5;
     }
     bool quarantine(uintptr_t image,uintptr_t physical,uint64_t generation) noexcept {
