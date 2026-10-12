@@ -11943,10 +11943,14 @@ bool tglReadLeasedVeboxAdmissionInputs(TglVeboxAdmissionStagesInput& output,
 // Qualified callbacks own reset/optional VP reset, history setup, platform
 // feature query, native170 and complete VP28+flag publication respectively.
 // All frame/report/parameter owners must remain leased across this call.
-template<class Execution,class Pass,class Reset,class Select,class Setup,class Query,class Feature,class Sfc>
+struct TglVeboxAdmissionDirectScope {
+    template<class Run> bool operator()(Run run) const noexcept {return run();}
+};
+template<class Execution,class Pass,class Reset,class Select,class Setup,class Query,class Feature,class Sfc,
+    class Scope=TglVeboxAdmissionDirectScope>
 bool tglRunSelectedVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& input,
     Execution& execution,Pass& pass,
-    Reset reset,Select select,Setup setup,Query query,Feature feature,Sfc sfc) noexcept {
+    Reset reset,Select select,Setup setup,Query query,Feature feature,Sfc sfc,Scope scope={}) noexcept {
     static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xd2d && TglAdmissionPassExtent<Pass>::value>=9,"complete admission field extents");
     static_assert(noexcept(reset()) && std::is_same_v<decltype(reset()),bool>,"checked reset ABI");
     static_assert(noexcept(select(tglAdmissionPassFlags(pass))) &&
@@ -11960,6 +11964,12 @@ bool tglRunSelectedVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& inpu
     if(tglPrepareVeboxAdmissionPrefix(input.prefix,pass)!=TglVeboxAdmissionPrefixResult::Continue)
         return false;
     if(!reset()) return false;
+    // Acquire VP/resource scopes only AFTER reset. The continuation must run
+    // exactly once and cannot turn a rejected stage into successful admission.
+    bool invoked=false,repeated=false,accepted=false;
+    auto continueAdmission=[&]() noexcept -> bool {
+    if(invoked) {repeated=true;return false;}
+    invoked=true;
     // ICL PRIMARY68 at1fbaec..1fbb08 observes reset and updates pass08.
     // This is an OWNED policy callback, NEVER TGL BASE68: that slot is
     // int setupKernel(this,index) and must retain its producer binding.
@@ -11981,7 +11991,13 @@ bool tglRunSelectedVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& inpu
         if(!sfc(execution)) return false;
         admitted=true;
     }
-    return tglVeboxAdmissionResult(input.prefix.params138,tglAdmissionPassFlags(pass),admitted);
+    accepted=tglVeboxAdmissionResult(input.prefix.params138,tglAdmissionPassFlags(pass),admitted);
+    return accepted;
+    };
+    static_assert(noexcept(scope(continueAdmission)) &&
+        std::is_same_v<decltype(scope(continueAdmission)),bool>,"checked synchronous admission scope ABI");
+    const bool scoped=scope(continueAdmission);
+    return scoped && invoked && !repeated && accepted;
 }
 // Snapshot-only CPU entry retained for callers that already selected a pipe.
 // Complete policy uses the selected entry above, not a precomputed snapshot.
@@ -12015,12 +12031,14 @@ bool tglRunOwnedVeboxSurfaceAdmissionStages(TglVeboxAdmissionStagesInput input,
 // caller-editable input or copying opaque pass state. Enclosing feature-frame
 // scope pins surfaces/interfaces; execution is that same owner's leased view.
 template<class ChildOwner,class ExecutionOwner,class Execution,class Params,class Pass,
-    class Read,class Reset,class Select,class Setup,class Feature,class Sfc>
+    class Read,class Reset,class Select,class Setup,class Feature,class Sfc,
+    class Scope=TglVeboxAdmissionDirectScope>
 bool tglRunCapturedSelectedVeboxAdmissionStages(ChildOwner& childOwner,ExecutionOwner& executionOwner,
     void* child,Params& params,Pass& pass,
     const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,
     const TglVeboxAdmissionBorrowedInterfaces& expected,
-    Execution& execution,Read read,Reset reset,Select select,Setup setup,Feature feature,Sfc sfc) noexcept {
+    Execution& execution,Read read,Reset reset,Select select,Setup setup,Feature feature,Sfc sfc,
+    Scope scope={}) noexcept {
     static_assert(std::is_same_v<decltype(params.data()),uint8_t*> &&
         std::is_same_v<decltype(pass.data()),uint8_t*>,"admission byte view ABI");
     if(params.size()<0x139 || pass.size()<0x18 || !params.data() || !pass.data() ||
@@ -12034,7 +12052,7 @@ bool tglRunCapturedSelectedVeboxAdmissionStages(ChildOwner& childOwner,Execution
     TglVeboxAdmissionPassByte flags(pass[8]);
     uint32_t format=0;std::memcpy(&format,source.prefix.data()+0x130,4);
     return tglRunSelectedVeboxAdmissionStages(input,execution,flags,reset,select,setup,
-        [&]() noexcept {return tglVeboxFormatSupported(format);},feature,sfc);
+        [&]() noexcept {return tglVeboxFormatSupported(format);},feature,sfc,scope);
 }
 // Snapshot compatibility entry for CPU fixtures; complete platform policy
 // uses the selected entry so owned selection observes reset and live flags;
@@ -12191,7 +12209,8 @@ struct TglOwnedVeboxAdmissionResetStage {
 };
 
 template<class ChildOwner,class ExecutionOwner,class Params,class Pass,
-    class Read,class Reset,class Select,class Setup,class Feature,class Sfc>
+    class Read,class Reset,class Select,class Setup,class Feature,class Sfc,
+    class Scope=TglVeboxAdmissionDirectScope>
 struct TglOwnedVeboxAdmissionViewPlanner {
     ChildOwner& childOwner;ExecutionOwner& executionOwner;
     void* child;uintptr_t execution;
@@ -12199,6 +12218,7 @@ struct TglOwnedVeboxAdmissionViewPlanner {
     const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
     const TglVeboxAdmissionBorrowedInterfaces& interfaces;
     Read read;Reset reset;Select select;Setup setup;Feature feature;Sfc sfc;
+    Scope scope{};
     bool operator()(void* actual,void* actualParams,void* actualPass) noexcept {
         if(!actual || actual!=child || actualParams!=params.data() || actualPass!=pass.data() ||
            !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
@@ -12206,7 +12226,7 @@ struct TglOwnedVeboxAdmissionViewPlanner {
         bool admitted=false;
         const int status=executionOwner.withLeasedAdmissionBytes(execution,[&](auto& bytes) noexcept -> int {
             admitted=tglRunCapturedSelectedVeboxAdmissionStages(childOwner,executionOwner,
-                child,params,pass,source,target,interfaces,bytes,read,reset,select,setup,feature,sfc);
+                child,params,pass,source,target,interfaces,bytes,read,reset,select,setup,feature,sfc,scope);
             return 0;
         });
         return !status && admitted;
@@ -12214,9 +12234,10 @@ struct TglOwnedVeboxAdmissionViewPlanner {
 };
 
 template<class ChildOwner,class ExecutionOwner,size_t ParamsN,size_t PassN,
-    class Read,class Reset,class Select,class Setup,class Feature,class Sfc>
+    class Read,class Reset,class Select,class Setup,class Feature,class Sfc,
+    class Scope=TglVeboxAdmissionDirectScope>
 using TglOwnedVeboxAdmissionFramePlanner=TglOwnedVeboxAdmissionViewPlanner<ChildOwner,ExecutionOwner,
-    std::array<uint8_t,ParamsN>,std::array<uint8_t,PassN>,Read,Reset,Select,Setup,Feature,Sfc>;
+    std::array<uint8_t,ParamsN>,std::array<uint8_t,PassN>,Read,Reset,Select,Setup,Feature,Sfc,Scope>;
 
 template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
     Owner& owner_;

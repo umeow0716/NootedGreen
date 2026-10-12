@@ -22228,6 +22228,32 @@ int main() {
                                     assert(paired.withVpResources(1,[&](auto& graph,auto&,auto&) noexcept {
                                         assert(graph.generation()==passGeneration+1);return 0;
                                     })==0);
+                                    for(unsigned scopeCase=0;scopeCase<3;++scopeCase) {
+                                        TglVeboxAdmissionStagesInput input;
+                                        input.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
+                                        std::array<uint8_t,0xd48> admissionReport{};
+                                        uint8_t flags=0;TglVeboxAdmissionPassByte admissionPass(flags);
+                                        unsigned selections=0,features=0,scopes=0;
+                                        const bool admitted=tglRunSelectedVeboxAdmissionStages(input,admissionReport,
+                                            admissionPass,resetPass,
+                                            [&](uint8_t&) noexcept -> uint32_t {++selections;return 1;},
+                                            [](auto&) noexcept {},[]() noexcept {return true;},
+                                            [&](auto&) noexcept {++features;},[](auto&) noexcept {return true;},
+                                            [&](auto run) noexcept -> bool {
+                                                bool accepted=false;
+                                                const int status=paired.withVpResources(1,[&](auto&,auto&,auto&) noexcept {
+                                                    ++scopes;
+                                                    assert(!resetPass()); // reset is outside this borrow
+                                                    if(scopeCase==1) return 0; // cannot skip stages
+                                                    accepted=run();
+                                                    if(scopeCase==2) assert(!run()); // cannot replay
+                                                    return 0;
+                                                });
+                                                return !status && (scopeCase==1 || accepted);
+                                            });
+                                        assert(admitted==(scopeCase==0) && scopes==1);
+                                        assert(selections==(scopeCase==1?0u:1u) && features==selections);
+                                    }
                                     assert(paired.initializeVp(1,nativeSfc,os,creatorView->renderHal,
                                         parentSfcAddress,parentSfcRead,0,0)==5);
                                     assert(!paired.vpBound(2) && paired.withVpResources(2,
