@@ -23610,7 +23610,7 @@ int main() {
                                 std::memcpy(source.prefix.data()+0xdc,&admissionHeight,4);
                                 unsigned admissionResets=0,admissionConsumes=0;
                                 bool fixtureDependencies=false;
-                                auto admitFrame=[&](auto& owner,void* child,auto&,auto&,auto&,auto& packets,
+                                auto admitFrame=[&](auto& owner,void* child,auto& sourceOwner,auto&,auto&,auto& packets,
                                     auto& backing,auto enterResources) noexcept -> bool {
                                     std::array<uint8_t,0x139> params{};params[0x138]=1;
                                     std::array<uint8_t,0x18> pass{};
@@ -23656,12 +23656,31 @@ int main() {
                                     TglOwnedVeboxAdmissionResetStage<std::decay_t<decltype(owner)>,
                                         std::decay_t<decltype(executionLease)>,decltype(resetVp)> reset{
                                         owner,executionLease,child,packets.execution,resetVp};
+                                    std::array<uint8_t,11> history{};history[0]=1;
+                                    const uint32_t initialMode=1;
+                                    std::memcpy(history.data()+4,&initialMode,4);
+                                    uintptr_t savedHistory=0;
+                                    std::memcpy(&savedHistory,bytes+0x90,8);
+                                    const uintptr_t historyAddress=reinterpret_cast<uintptr_t>(history.data());
+                                    std::memcpy(bytes+0x90,&historyAddress,8);
+                                    auto historyReadable=[&](uintptr_t address,size_t size) noexcept {
+                                        return address==historyAddress && size==history.size();
+                                    };
+                                    auto historyWritable=[&](uintptr_t address,size_t size) noexcept {
+                                        return address==historyAddress+4 && size==5;
+                                    };
+                                    TglOwnedVeboxHistoryAdmissionStage<std::decay_t<decltype(owner)>,
+                                        std::decay_t<decltype(executionLease)>,std::decay_t<decltype(sourceOwner)>,
+                                        decltype(historyReadable),decltype(historyWritable)> historyStage{
+                                        owner,executionLease,sourceOwner,child,packets.execution,
+                                        packets.source,historyReadable,historyWritable};
                                     const int status=executionLease.withLeasedAdmissionBytes(packets.execution,[&](auto& reportBytes) noexcept {
                                         return tglRunCapturedSelectedVeboxAdmissionStages(owner,executionLease,child,
                                             params,pass,packets.source,*packets.target,interfaces,reportBytes,readInput,reset,
-                                            [](uint8_t&) noexcept -> uint32_t {return 1;},[](auto&) noexcept {},
+                                            [](uint8_t&) noexcept -> uint32_t {return 1;},historyStage,
                                             [](auto&) noexcept {},[](auto&) noexcept {return true;},enterResources)?0:5;
                                     });
+                                    std::memcpy(bytes+0x90,&savedHistory,8);
                                     std::memcpy(bytes+0x18,savedDependencies.data(),savedDependencies.size());
                                     return status==0;
                                 };
