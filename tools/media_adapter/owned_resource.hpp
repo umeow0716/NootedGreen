@@ -6404,6 +6404,9 @@ public:
         // owns only the148 resource: callers must not publish requested width
         // as effective surface width without capturing native's output params.
         // Its unsupported type/format branches are descriptor-only, not backing.
+        // Exact TGL OS+218 (63d80) is also a constant-success no-op, not a
+        // surface metadata query. Neither allocation nor that callback proves
+        // pitch/plane offsets ready for the output-state consumer.
         const int status=allocate_(context_, params.data(), storage.data());
         // Caller-owned per-allocation output, never backend-global state shared
         // between resources. Failure preserves it, even if native changed params.
