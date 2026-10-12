@@ -19423,7 +19423,18 @@ int main() {
                         putNative(nativeCreator,0,base+0x75bb58);putNative(nativeCreator,0x68,rendererAddress);
                         putNative(nativeRenderer,0,base+0x75bba0);putNative(nativeRenderer,0x920,0x9876);
                         putNative(nativeRenderer,0x2cc0,0x3000);putNative(nativeRenderer,0x2cc8,os);
+                        TglOwnedVphalLifetimeTable parentLifetime;
                         auto borrowedRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                            if(address==base+0x75bb48 && bytes==48) {
+                                const std::array<uintptr_t,6> table{0,base+0x75bb78,base+0x1c8e80,
+                                    base+0x1c8ea0,base+0x133cb0,base+0x1e6610};
+                                std::memcpy(out,table.data(),bytes);return true;
+                            }
+                            const auto point=parentLifetime.addressPoint();
+                            if(point && address>=point-16 && address-(point-16)<=48 &&
+                                bytes<=48-(address-(point-16))) {
+                                std::memcpy(out,reinterpret_cast<const void*>(address),bytes);return true;
+                            }
                             for(const auto region:{std::pair<uintptr_t,size_t>{creatorAddress,nativeCreator.size()},
                                 {rendererAddress,nativeRenderer.size()}}) {
                                 if(address>=region.first && address-region.first<=region.second &&
@@ -19442,6 +19453,15 @@ int main() {
                             return (address==creatorAddress && bytes==nativeCreator.size()) ||
                                 (address==rendererAddress && bytes<=nativeRenderer.size());
                         };
+                        auto writeParent=[&](uintptr_t address,uintptr_t value) noexcept {
+                            if(address!=creatorAddress) return false;
+                            putNative(nativeCreator,0,value);return true;
+                        };
+                        assert(parentLifetime.build(base,0xf000,0xf100,borrowedRead,qualifyMhw,executableMhw,
+                            [](uintptr_t address,size_t size) noexcept {
+                                return size==1 && (address==0xf000 || address==0xf100);
+                            }));
+                        assert(parentLifetime.publish(creatorAddress,borrowedRead,writeParent,borrowedAdmit));
                         struct NativeParentOwner {
                             uintptr_t value;unsigned& deaths;
                             uintptr_t context() const noexcept {return value;}
@@ -19481,8 +19501,8 @@ int main() {
                             std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
                         const auto r=frames.run(ticket,[&](auto& frame) noexcept {
                             auto parentPin=parents.pin(base,0x8000,1,parentAddress);
-                            assert(!frame.retainedMhw() && frame.retainBorrowedMhw(std::move(parentPin),
-                                base,parentAddress,creatorAddress,borrowedRead,borrowedAdmit,qualifyMhw,executableMhw,
+                            assert(!frame.retainedMhw() && frame.retainBorrowedMhwOwned(std::move(parentPin),
+                                base,parentAddress,creatorAddress,parentLifetime,borrowedRead,borrowedAdmit,qualifyMhw,executableMhw,
                                 [&](const auto& owner,const auto& view) noexcept {
                                     return owner.context()==view.parent && view.os==os && view.hardware.interface==0x6000;
                                 }));
@@ -19512,7 +19532,10 @@ int main() {
                                 assert(entry==base+0x12d4e0 && nativeOs==reinterpret_cast<void*>(os));
                                 assert(nativeMhw==reinterpret_cast<void*>(0x6000));
                                 const auto table=base+0x757c98;
-                                std::memcpy(object,&table,8);std::memcpy(static_cast<uint8_t*>(object)+0x10,&os,8);*out=0;
+                                const uintptr_t noConfiguration=0;
+                                std::memcpy(object,&table,8);
+                                std::memcpy(static_cast<uint8_t*>(object)+8,&noConfiguration,8);
+                                std::memcpy(static_cast<uint8_t*>(object)+0x10,&os,8);*out=0;
                             };
                             int32_t status=77;
                             for(size_t child=0;child<2;++child)
@@ -19569,6 +19592,14 @@ int main() {
                             assert(frame.children().first().owner().installPrivateVtable(hooks,tableRead,
                                 [](uintptr_t image) noexcept {return image==base;},
                                 [](uintptr_t,size_t) noexcept {return true;}));
+                            assert(frame.children().second().owner().installPrivateVtable(hooks,tableRead,
+                                [](uintptr_t image) noexcept {return image==base;},
+                                [](uintptr_t,size_t) noexcept {return true;}));
+                            assert(frame.children().publishFromCreatorOwned(base,creatorAddress,1,parentLifetime,
+                                borrowedRead,borrowedAdmit,qualifyMhw,executableMhw,
+                                [&](uintptr_t address,uint64_t generation,uintptr_t) noexcept {
+                                    return address==rendererAddress && generation==1;
+                                },[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
                             // CPU admission fixture only; no native image/resource entry is executed.
                             struct VpBinding {
                                 uintptr_t image=base;
@@ -19680,12 +19711,16 @@ int main() {
                         assert(prepareCalls==1 && ho.borrowed && !parentDeaths);
                         assert(frames.retirePrepared(ticket,[&](const auto&,bool pending,const auto&) noexcept {
                             assert(pending);retirementQualified=true;return 0;
-                        },[&](auto&,bool pending,const auto& result) noexcept {
+                        },[&](auto& frame,bool pending,const auto& result) noexcept {
                             ++prepareCalls;
                             assert(pending && result.acquired && !result.writtenBack);
                             assert(ho.borrowed && frameDn.live==1 && refs[1]==3);
                             assert(!cleaned[0] && !cleaned[1] && vpCpu.live && vpAvsCpu.live);
-                            return 0; // This fixture has no published child links.
+                            auto admitDetach=[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;};
+                            assert(frame.children().detach(nativeRenderer.data(),1,admitDetach));
+                            assert(frame.children().destroyDetached(nativeRenderer.data(),1));
+                            assert(parentLifetime.detach(borrowedRead,writeParent,borrowedAdmit));
+                            return 0;
                         })==0); // CPU certificate fixture only
                         assert(prepareCalls==2);
                         assert(!so.borrowed && !to.borrowed && !ho.borrowed && !frameDn.live && !refs[1] && !refs[5]);
