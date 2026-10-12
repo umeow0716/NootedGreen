@@ -8505,6 +8505,30 @@ static void testNativeResourceBoundary() {
                                                             assert(mismatched.status==5 && !mismatched.requiresRetention() &&
                                                                 !rejectedConsumers && !registrations && !retention());
                                                             assert(std::memcmp(&statePacket,&preservedPacket,sizeof(statePacket))==0);
+                                                            TglOwnedVeboxFrameRetention liveInputRetention;
+                                                            unsigned liveInputReads=0;
+                                                            auto liveConsumer=tglMakeCapturedVeboxAllocationCommandConsumer<true>(linkedInput,childOwner,reportOwner,
+                                                                packetLeases,false,false,input.controls,
+                                                                stateRead,surfaceAdmit,admitted,registration,control,liveInputRetention,
+                                                                [&](auto& live) noexcept {
+                                                                    assert(liveInputReads==0 && !liveInputRetention());
+                                                                    TglOwnedVeboxCommandTransactionResult result;
+                                                                    result.status=live.withInput([&](auto& view) noexcept -> int {
+                                                                        ++liveInputReads;
+                                                                        assert(view.input.current==&linkedStorage &&
+                                                                            view.input.target==packetLeases.target &&
+                                                                            view.input.pipe==input.pipe && view.input.di==input.di &&
+                                                                            view.input.controls==input.controls);
+                                                                        return view.matches(input.di)?0:5;
+                                                                    });
+                                                                    return result;
+                                                                });
+                                                            assert(liveInputReads==0);
+                                                            const auto liveCaptured=liveConsumer(actualChild,report,linkedStorage,
+                                                                ffdi,ffdn,stmm,statisticsShell.resource,statisticsLayout,statisticsShell);
+                                                            assert(liveCaptured.status==0 && liveInputReads==1 &&
+                                                                !liveCaptured.requiresRetention() && !liveInputRetention());
+                                                            assert(std::memcmp(&statePacket,&preservedPacket,sizeof(statePacket))==0);
                                                             auto commandConsumer=tglMakeCapturedVeboxAllocationCommandConsumer(linkedInput,childOwner,reportOwner,
                                                                 packetLeases,false,false,input.controls,
                                                                 stateRead,surfaceAdmit,admitted,registration,control,retention,[&](auto& packets) noexcept {

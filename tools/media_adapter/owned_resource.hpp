@@ -15679,7 +15679,9 @@ struct TglOwnedVeboxLivePacketContext {
     }
     int state(bool di,void* packet) noexcept {
         if(packet!=&leases.state) return 5;
-        return withInput([&](auto& view) noexcept {return view.state(di,packet);});
+        if(leases.target && admitDi(*leases.target)!=0) return 5;
+        const int result=withInput([&](auto& view) noexcept {return view.state(di,packet);});
+        return leases.target && admitDi(*leases.target)!=0 ? 5 : result;
     }
     int diIecp(bool di,void* packet) noexcept {
         if(packet!=&leases.diIecp) return 5;
@@ -18717,6 +18719,41 @@ int tglRunCapturedDiIecpFrameInput(SourceOwner& sourceOwner,ChildOwner& childOwn
         });
 }
 
+// Deferred live reader while the allocation-stage resource groups are still
+// owned by the caller. It only composes existing admission/input capture and
+// packet publication; it neither allocates nor normalizes nor calls slot118.
+// Whole Render supplies native preparation before invoking these producers.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
+    class SurfaceAdmit,class DiAdmit,class Register,class Control,class Consume>
+TglOwnedVeboxCommandTransactionResult tglWithCapturedLiveVeboxPacketFrame(
+    SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    TglOwnedVeboxPacketLeases leases,const TglOwnedFfdiTailViews& ffdi,
+    const TglOwnedFfdnTailViews& ffdn,const TglOwnedStmmTailViews& stmm,
+    const TglOwnedSurfaceStorage& statistics,bool disableTemporalDenoise,bool alignDi64,
+    const std::array<uint32_t,11>& controls,Read read,SurfaceAdmit admitSurface,
+    DiAdmit admitDi,Register registerResource,Control control,
+    TglOwnedVeboxFrameRetention& retention,Consume consume) noexcept {
+    TglOwnedVeboxCommandTransactionResult result;
+    if(retention() || ffdi.inputs[0]!=&leases.source || ffdi.inputs[1]!=leases.target)
+        return result;
+    result.status=tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+        reinterpret_cast<void*>(leases.child),leases.execution,leases.source,
+        [&](void* child,uintptr_t execution,const auto&) noexcept -> int {
+            auto capture=[&](auto use) noexcept -> int {
+                return tglRunCapturedDiIecpFrameInput(sourceOwner,childOwner,executionOwner,
+                    child,execution,leases.source,ffdi,ffdn,stmm,statistics,read,alignDi64,controls,use);
+            };
+            TglOwnedVeboxLivePacketContext<decltype(capture),Read,SurfaceAdmit,DiAdmit,Register,Control>
+                frame{{},leases,disableTemporalDenoise,capture,read,admitSurface,admitDi,registerResource,control};
+            static_assert(noexcept(consume(frame)) &&
+                std::is_same_v<decltype(consume(frame)),TglOwnedVeboxCommandTransactionResult>);
+            result=consume(frame);
+            retention.observe(result); // before any resource/input continuation unwinds
+            return result.status;
+        });
+    return result;
+}
+
 // State normalization intentionally writes source/target chroma siting. Supply
 // the actual mutable shells owned by the caller, never const-cast borrowed
 // frame views or copy their resource descriptors into a temporary surface.
@@ -20580,7 +20617,7 @@ TglOwnedVeboxCommandTransactionResult tglRunCapturedVeboxFrameCommand(
 // Leases are borrowed from the enclosing retained Frame, not retained by this
 // callable. Never store it past that Frame or replace the captured identities
 // with a later frame's shells. Consume may be the native transaction consumer.
-template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
+template<bool LiveInput=false,class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
     class SurfaceAdmit,class DiAdmit,class Register,class Control,class Consume>
 auto tglMakeCapturedVeboxAllocationCommandConsumer(
     SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
@@ -20596,9 +20633,17 @@ auto tglMakeCapturedVeboxAllocationCommandConsumer(
         (void)statistics;(void)statisticsLayout;
         if(reinterpret_cast<uintptr_t>(child)!=leases.child || execution!=leases.execution ||
             &source!=&leases.source) return TglOwnedVeboxCommandTransactionResult{};
-        return tglRunCapturedVeboxFrameCommand(sourceOwner,childOwner,executionOwner,
-            leases,ffdi,ffdn,stmm,statisticsSurface,disableTemporalDenoise,alignDi64,
-            controls,read,admitSurface,admitDi,registerResource,control,retention,consume);
+        if constexpr(LiveInput) {
+            // Whole Render owns preparation. Defer report reads and state
+            // publication to its producer callbacks while these groups live.
+            return tglWithCapturedLiveVeboxPacketFrame(sourceOwner,childOwner,executionOwner,
+                leases,ffdi,ffdn,stmm,statisticsSurface,disableTemporalDenoise,alignDi64,
+                controls,read,admitSurface,admitDi,registerResource,control,retention,consume);
+        } else {
+            return tglRunCapturedVeboxFrameCommand(sourceOwner,childOwner,executionOwner,
+                leases,ffdi,ffdn,stmm,statisticsSurface,disableTemporalDenoise,alignDi64,
+                controls,read,admitSurface,admitDi,registerResource,control,retention,consume);
+        }
     };
 }
 
