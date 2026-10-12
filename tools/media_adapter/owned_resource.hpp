@@ -2010,9 +2010,9 @@ private:
         auto* owner=lease.get();
         if(!owner) {Resolve::unresolved(address,kind);return;}
         static_assert(noexcept(owner->requestDestruction(kind)) &&
-            noexcept(Resolve::retained(*owner,kind)) &&
+            noexcept(Resolve::retained(lease,kind)) &&
             std::is_same_v<decltype(owner->requestDestruction(kind)),bool>);
-        if(!owner->requestDestruction(kind)) Resolve::retained(*owner,kind);
+        if(!owner->requestDestruction(kind)) Resolve::retained(lease,kind);
     }
 public:
     static void destroy(void* object) noexcept {
@@ -18300,6 +18300,22 @@ public:
         }
         if(!lease.get() || !admit(image,physical,generation,context)) return {};
         return lease;
+    }
+    // Only the SAME registry's still-exclusive callback lease may quarantine
+    // an individual owner. Do not drop the reservation before marking it:
+    // no ordinary frame/native callback may reenter partially cleaned state.
+    // False is NOT permission to resume: routing policy must retain the
+    // recorded request and close admission until quarantine is established.
+    bool quarantineExclusive(const ExclusiveOwnerLease& lease) noexcept {
+        if(!lease.get() || gate_.test_and_set(std::memory_order_acquire)) return false;
+        Unlock unlock{gate_};
+        for(size_t i=0;i<Capacity;++i) {
+            auto& e=entries_[i];
+            if(e.owner!=lease.owner_ || lease.pins_!=&contextPins_[i] ||
+                contextPins_[i].load(std::memory_order_acquire)!=SIZE_MAX) continue;
+            e.quarantined=true;return true;
+        }
+        return false;
     }
     TglOwnedContextOwnerRegistry() noexcept {
         for(auto& pins:contextPins_) pins.store(0,std::memory_order_relaxed);

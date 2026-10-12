@@ -12333,7 +12333,8 @@ static void testRetainedVeboxFrames() {
                         }):Registry::ExclusiveOwnerLease{};
                 }
                 static void unresolved(uintptr_t,TglOwnedVphalDestructionState::Kind) noexcept {++misses();}
-                static void retained(ContextOwner& owner,TglOwnedVphalDestructionState::Kind kind) noexcept {
+                static void retained(Registry::ExclusiveOwnerLease& lease,TglOwnedVphalDestructionState::Kind kind) noexcept {
+                    auto& owner=*lease.get();
                     assert(owner.lastKind==kind);++retentions();
                     // The route still holds the exclusive lease while reporting.
                     assert(!registry()->pin(0x1000,0x2000,7,owner.context()).get());
@@ -12370,6 +12371,62 @@ static void testRetainedVeboxFrames() {
             assert(Routing::pending().pending(0x6000,kind) && !Routing::pending().faulted());
             assert(owners.pinExclusive(0x1000,0x2000,7,0x4000).get()==first);
             second->allowDestructor=true;Routing::registry()=nullptr;
+        }
+        {
+            using Registry=TglOwnedContextOwnerRegistry<ContextOwner,2>;
+            Registry quarantinedOwners,foreignOwners;unsigned quarantinedDeaths=0;
+            auto* failed=new ContextOwner{0x7000,quarantinedDeaths};failed->allowDestructor=false;
+            assert(quarantinedOwners.adopt(0x1000,0x2000,9,failed));
+            struct FailedRouting {
+                static Registry*& registry() noexcept {static Registry* value=nullptr;return value;}
+                static TglOwnedVphalPendingDestruction<1>& pending() noexcept {
+                    static TglOwnedVphalPendingDestruction<1> value;return value;
+                }
+                static bool record(uintptr_t object,TglOwnedVphalDestructionState::Kind kind) noexcept {
+                    return pending().record(object,kind);
+                }
+                static Registry::ExclusiveOwnerLease pin(uintptr_t object) noexcept {
+                    return registry()->pinExclusiveObject(object,
+                        [](uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
+                            return image==0x1000 && physical==0x2000 && generation==9 && context==0x7000;
+                        });
+                }
+                static void unresolved(uintptr_t,TglOwnedVphalDestructionState::Kind) noexcept {}
+                static void retained(Registry::ExclusiveOwnerLease& lease,TglOwnedVphalDestructionState::Kind) noexcept {
+                    assert(lease.get() && registry()->quarantineExclusive(lease));
+                }
+            };
+            FailedRouting::registry()=&quarantinedOwners;
+            Registry::ExclusiveOwnerLease empty;
+            assert(!quarantinedOwners.quarantineExclusive(empty));
+            {
+                auto lease=quarantinedOwners.pinExclusive(0x1000,0x2000,9,0x7000);
+                assert(lease.get()==failed && !foreignOwners.quarantineExclusive(lease));
+            }
+            using FailedHooks=TglOwnedVphalDestructorCallbacks<FailedRouting>;
+            FailedHooks::deletingDestroy(reinterpret_cast<void*>(0x7000));
+            assert(failed->destructorRequests==1 && !quarantinedDeaths);
+            assert(!quarantinedOwners.pin(0x1000,0x2000,9,0x7000).get());
+            assert(!quarantinedOwners.pinExclusive(0x1000,0x2000,9,0x7000).get());
+            FailedHooks::deletingDestroy(reinterpret_cast<void*>(0x7000));
+            assert(failed->destructorRequests==1); // quarantine prevents another native attempt
+            auto kind=TglOwnedVphalDestructionState::Kind::Destroy;
+            assert(FailedRouting::pending().pending(0x7000,kind) &&
+                kind==TglOwnedVphalDestructionState::Kind::DeletingDestroy);
+            TglNativeRemovedContextBatch<1> removed;
+            removed.valid=true;removed.count=1;removed.contexts[0]=0x7000;
+            assert(quarantinedOwners.reconcileSuccessfulRemoval(0x1000,0x2000,9,removed,
+                [](ContextOwner&) noexcept {return 31;})==31 && !quarantinedDeaths);
+            assert(quarantinedOwners.reconcileSuccessfulRemoval(0x1000,0x2000,9,removed,
+                [](ContextOwner& owner) noexcept {
+                    const auto deleting=TglOwnedVphalDestructionState::Kind::DeletingDestroy;
+                    return FailedRouting::pending().eraseRetired(owner.context(),deleting,
+                        [](uintptr_t object,auto kind) noexcept {
+                            return object==0x7000 && kind==TglOwnedVphalDestructionState::Kind::DeletingDestroy;
+                        })?0:5;
+                })==0 && quarantinedDeaths==1);
+            // CPU-only fixture authority above: NOT a native/GPU completion proof.
+            FailedRouting::registry()=nullptr;
         }
         {
             using Kind=TglOwnedVphalDestructionState::Kind;
