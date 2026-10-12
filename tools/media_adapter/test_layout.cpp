@@ -1,6 +1,5 @@
 #include <array>
 #include <cassert>
-#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
@@ -21121,7 +21120,8 @@ int main() {
                                             {0x1000,0x2000,0x3000,0x4000,0,0x7000,{},data},
                                             {0x1000,0x2000,0x3000,0x4000,0,0x8000,{},data+1}}};
                                         auto releaseCpu=[](void*) noexcept {assert(false);};
-                                        for(int expected:{0,-31}) {
+                                        for(int scenario:{0,-31,1,2,3,4,5,6,7}) {
+                                            const int expected=scenario>0?-17:scenario;
                                             unsigned states=0,emissions=0,avsProduced=0,iefProduced=0;
                                             std::array<TglOwnedVpChromaStatePrefix,2> statePrefixes{};
                                             std::array<TglOwnedSfcAvsTables,2> avsTables{};
@@ -21151,10 +21151,10 @@ int main() {
                                                 return frontendRead(address,output,size);
                                             };
                                             struct PairedCommandInvoke {
-                                                uintptr_t expectedObject;void* expectedCommand;unsigned calls=0;
+                                                uintptr_t expectedObject;void* expectedCommand;unsigned failureAt=0,calls=0;
                                                 int parameters(uintptr_t entry,void* object,void* command,const void* input) noexcept {
                                                     assert(entry && reinterpret_cast<uintptr_t>(object)==expectedObject && command==expectedCommand && input);
-                                                    ++calls;return 0;
+                                                    ++calls;return calls==failureAt?-17:0;
                                                 }
                                                 int state(uintptr_t entry,void* object,void* command,const void* input,const void* output) noexcept {
                                                     assert(output);return parameters(entry,object,command,input);
@@ -21162,7 +21162,7 @@ int main() {
                                                 int frame(uintptr_t entry,void* object,void* command,uint8_t mode) noexcept {
                                                     assert(mode==1);return parameters(entry,object,command,&mode);
                                                 }
-                                            } commandInvoke{frontendSfc,&command};
+                                            } commandInvoke{frontendSfc,&command,scenario>0?unsigned(scenario):0};
                                             assert(firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
                                                 return tglWithOwnedVpPairedAcquiredFrameCore(firstGraph,first,firstLines.resources(),
                                                     secondGraph,second,secondLines.resources(),args,read,modeRetire,releaseCpu,
@@ -21265,7 +21265,7 @@ int main() {
                                                                                                 commandBinding,&command,commandInvoke,ready,output,1,0,1,0,commandRead,platform):
                                                                                             tglSendOwnedVeboxSfcPreparedCommands(frame.children().first().owner(),commandParents[index],
                                                                                                 commandBinding,&command,commandInvoke,ready,output,1,0,1,0,commandRead,platform);
-                                                                                        if(built) std::fprintf(stderr,"paired native command bridge result=%d calls=%u child=%zu\n",built,commandInvoke.calls,index);
+                                                                                        assert(built==(scenario>0?-17:0));
                                                                                         if(!built) ++emissions;return built;
                                                                                     });
                                                                                 assert(inputs.state==savedState && inputs.ief==savedIef && !inputs.filtersInUse);
@@ -21331,8 +21331,10 @@ int main() {
                                                         });
                                                     });
                                             })==expected);
-                                            assert(states==2 && emissions==2 && avsProduced==2 && iefProduced==2);
-                                            assert(commandInvoke.calls==14);
+                                            const unsigned preparedCount=scenario>0?1:2;
+                                            assert(states==preparedCount && avsProduced==preparedCount && iefProduced==preparedCount);
+                                            assert(emissions==(scenario>0?0U:2U));
+                                            assert(commandInvoke.calls==(scenario>0?unsigned(scenario):14U));
                                         }
                                     }
                                     for(int expected:{0,-31}) {
