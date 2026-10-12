@@ -608,6 +608,10 @@ struct TglSfcMhwBinding {
             callback==image+(osFlags[1]?0x3e6a0:0x3eae0) &&
             widthAlign==16 && heightAlign==4 && bytes[0x40]==1;
     }
+    // Native168390 consumes state90/98/a0/e0 through object+8. The admitted
+    // 3e6a0/3eae0 callbacks perform OS+248 registration and address/patch-list
+    // work (including OS+260/+268); the caller must NOT duplicate registration.
+    // This code-path proof is neither command acquisition nor GPU completion.
     // State168443..168470 calls OS+1b0 and rejects a NULL result. Exact
     // initializer6603a/66041 binds62ee0;62ee0..62f24 returns *(OS)+15ce4
     // or NULL for a missing context. Authenticate without invoking the callback.
