@@ -22375,11 +22375,14 @@ int main() {
                             using ChildLifetimeResolve=TglOwnedVeboxScopedLifetimeResolve<ChildLifetime>;
                             ChildLifetime firstLifetime(frame.children().first().owner());
                             ChildLifetime secondLifetime(frame.children().second().owner());
+                            typename ChildLifetimeScope::Pair lifecyclePair(
+                                frame.children().first().owner().constructedBase(),firstLifetime,
+                                frame.children().second().owner().constructedBase(),secondLifetime);
+                            assert(lifecyclePair.bound());
                             for(size_t index=0;index<2;++index) {
                                 auto& child=index?frame.children().second().owner():frame.children().first().owner();
                                 auto& lifetimeContext=index?secondLifetime:firstLifetime;
-                                ChildLifetimeScope scope(child.constructedBase(),lifetimeContext);
-                                assert(scope.bound());
+                                assert(ChildLifetimeScope::get(child.constructedBase())==&lifetimeContext);
                                 pairHooks[index][0]=pairHooks[index][1]=0;
                                 assert(tglBindOwnedVeboxLifetimeHooks<ChildLifetimeResolve>(child.constructedBase(),pairHooks[index]));
                             }
@@ -22466,7 +22469,7 @@ int main() {
                                 auto& child=index?frame.children().second().owner():frame.children().first().owner();
                                 auto& lifetimeContext=index?secondLifetime:firstLifetime;
                                 void* object=child.constructedBase();
-                                ChildLifetimeScope scope(object,lifetimeContext);assert(scope.bound());
+                                assert(ChildLifetimeScope::get(object)==&lifetimeContext);
                                 reinterpret_cast<void(*)(void*) noexcept>(pairHooks[index][1])(object);
                                 assert(lifetimeContext.status()==5 && child.constructedBase()==object);
                             }
@@ -23321,6 +23324,7 @@ int main() {
                                 auto&,auto&,auto&,auto& live,auto& csc,auto& admitDndi,
                                 auto& sourceRole,auto& targetRole) noexcept {
                                 ++creatorFrameUses;
+                                assert(ChildLifetimeResolve{}(child)==&firstLifetime && firstLifetime.owns(child));
                                 static_assert(std::is_same_v<std::decay_t<decltype(admitDndi)>,TglNativeDndiStackAdmission>);
                                 assert(!admitDndi(0,0x30,0,0x24));
                                 // This service fixture supplies no CSC anchors: the real
@@ -23402,6 +23406,7 @@ int main() {
                                     auto& sourceRole,auto& targetRole) noexcept {
                                     assert(sourceRole.hasSurfaceLease(live.leases.source) &&
                                         targetRole.hasSurfaceLease(*live.leases.target));
+                                    assert(ChildLifetimeResolve{}(child)==&firstLifetime && firstLifetime.owns(child));
                                     assert(!admitDndi(0,0x30,0,0x24));
                                     std::array<uint8_t,0x3c> saved{};
                                     std::memcpy(saved.data(),static_cast<uint8_t*>(child)+0xa0,saved.size());
@@ -23438,6 +23443,7 @@ int main() {
                                 [&](auto& owner,void* child,void*,auto&,auto&,auto&,auto&,auto&,auto& live,auto&,auto&,
                                     auto& sourceRole,auto& targetRole) noexcept {
                                     ++retainedCreatorUses;
+                                    assert(ChildLifetimeResolve{}(child)==&firstLifetime && firstLifetime.owns(child));
                                     assert(&live.capture.sourceOwner==&sourceRole && live.capture.targetOwner==&targetRole);
                                     assert(&live.capture.storage==&frame.backing().command().backing() &&
                                         &live.capture.childOwner==&owner && live.capture.child==child);
