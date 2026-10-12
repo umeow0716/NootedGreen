@@ -10917,6 +10917,10 @@ static void testVpSfcCpuGraph() {
     assert(dispatch.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
     assert(graph.withLeasedFlatDispatch(lifetimeChild,dispatch,never)==5);
     assert(graph.withView(false,[&](void* child) noexcept {
+        auto* bytes=static_cast<uint8_t*>(child);
+        constexpr auto flag=TglOwnedVpSfcCallerStorage::NativeAdmissionFlagOffset;
+        const uint8_t previousFlag=bytes[flag];
+        const uint8_t previousAdjacent=bytes[flag+1];
         assert(graph.withLeasedFlatDispatch(&binding,dispatch,never)==5);
         assert(graph.withLeasedFlatDispatch(child,emptyDispatch,never)==5);
         assert(graph.withLeasedFlatDispatch(child,dispatch,[&](void* admitted) noexcept {
@@ -10926,8 +10930,13 @@ static void testVpSfcCpuGraph() {
             assert(address==dispatch.addressPoint());
             std::memcpy(&entry,reinterpret_cast<const void*>(address+0x18),8);
             assert(reinterpret_cast<int(*)(void*,void*,void*,void*) noexcept>(entry)(child,nullptr,nullptr,nullptr)==0);
+            // Model only native126cb0's proven one-byte data write, not a
+            // successful native initialization or callable producer proof.
+            bytes[flag]=1;
             return 31;
         })==31);
+        assert(bytes[flag]==1 && bytes[flag+1]==previousAdjacent);
+        bytes[flag]=previousFlag;
         uintptr_t restored=1;std::memcpy(&restored,child,8);assert(!restored);
         assert(graph.withLeasedFlatDispatch(child,dispatch,[](void* admitted) noexcept {
             const uintptr_t zero=0;std::memcpy(admitted,&zero,8);return 0;

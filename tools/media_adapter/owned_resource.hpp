@@ -162,6 +162,10 @@ template<class Context> struct TglOwnedVpSfcResolve {
 // not a native TGL constructor, complete object size, or callable vtable.
 // Keep this private/unpublished until every VP callback and owner is bound.
 struct alignas(8) TglOwnedVpSfcCallerStorage {
+    // Exact native126cb0 stores (SIL & 1) at the VP interface+8 during
+    // child126740 initialization. Admission reads that same byte; it is
+    // writable owned data, not a second vptr or allocation counter.
+    static constexpr size_t NativeAdmissionFlagOffset=0x8;
     // Donor factory1fc790 allocates9d8; ctor1fcaa0 constructs this interface
     // at object+8. Factory1fc773 applies primary vtable[-18]=8 (793fc0).
     // Success1fc809 increments829ff8; that is native allocation accounting,
@@ -347,7 +351,7 @@ public:
     TglOwnedVpAdmissionContext& operator=(const TglOwnedVpAdmissionContext&)=delete;
     bool owns(void* child) const noexcept {return child==storage_.bytes.data();}
     bool eligible(void* first,void* second,void*) noexcept {
-        return tglReadOwnedVpAdmission(storage_.bytes[8],reinterpret_cast<uintptr_t>(first),
+        return tglReadOwnedVpAdmission(storage_.bytes[TglOwnedVpSfcCallerStorage::NativeAdmissionFlagOffset],reinterpret_cast<uintptr_t>(first),
             reinterpret_cast<uintptr_t>(second),read_);
     }
     bool pair(void* first,void* second,void* third) noexcept {
