@@ -21245,6 +21245,32 @@ int main() {
                                             unsigned states=0,emissions=0,avsProduced=0,iefProduced=0;
                                             std::array<TglOwnedVpChromaStatePrefix,2> statePrefixes{};
                                             bool prefixesPrepared=false;
+                                            struct LineNative {
+                                                unsigned live=0;
+                                                static int allocate(void* context,const void*,void* resource) noexcept {
+                                                    auto& self=*static_cast<LineNative*>(context);
+                                                    const uintptr_t token=++self.live;
+                                                    std::memcpy(static_cast<uint8_t*>(resource)+0x20,&token,8);return 0;
+                                                }
+                                                static void release(void* context,void* resource) noexcept {
+                                                    auto& self=*static_cast<LineNative*>(context);assert(self.live);
+                                                    --self.live;std::memset(resource,0,0x148);
+                                                }
+                                            } lineNative;
+                                            const TglNativeResourceBinding recordedLines{
+                                                reinterpret_cast<uintptr_t>(&lineNative),
+                                                reinterpret_cast<uintptr_t>(&LineNative::allocate),
+                                                reinterpret_cast<uintptr_t>(&LineNative::release)};
+                                            // The frame's fake image entries are never called. These
+                                            // recording owners use the SAME already-constructed VP shells.
+                                            TglNativeVpLineResourceStorage recordedFirst(recordedLines,4096,
+                                                *reinterpret_cast<TglOwnedSurfaceStorage*>(first.bytes.data()+0x3c8),
+                                                *reinterpret_cast<TglOwnedSurfaceStorage*>(first.bytes.data()+0x670));
+                                            TglNativeVpLineResourceStorage recordedSecond(recordedLines,4096,
+                                                *reinterpret_cast<TglOwnedSurfaceStorage*>(second.bytes.data()+0x3c8),
+                                                *reinterpret_cast<TglOwnedSurfaceStorage*>(second.bytes.data()+0x670));
+                                            std::array<const TglOwnedSurfaceStorage*,2> leasedAvs{},leasedIef{};
+                                            std::array<const std::array<uint8_t,0x148>*,2> leasedSfd{};
                                             std::array<TglOwnedSfcAvsTables,2> avsTables{};
                                             std::array<TglOwnedSfcCommandParameters,2> commandInputs;
                                             TglNativeSineBinding sineBinding;
@@ -21294,9 +21320,14 @@ int main() {
                                                         assert(leasedOutputs[child==first.bytes.data()?0:1]);
                                                         assert(acquiredGeometry[child==first.bytes.data()?0:1]==&geometry);
                                                         assert(prefixesPrepared);
-                                                        const auto& prefix=statePrefixes[child==first.bytes.data()?0:1];
-                                                        if(!packet.prepare(prefix.packet,{},false,false,false,
-                                                               TglOwnedSfcCompressionMode::Disabled)) return 5;
+                                                        const size_t index=child==first.bytes.data()?0:1;
+                                                        const auto& prefix=statePrefixes[index];
+                                                        assert(leasedAvs[index] && leasedIef[index]);
+                                                        const int bound=tglPrepareOwnedVpLeasedSurfaceState(commandInputs[index],packet,
+                                                            *leasedOutputs[index],*leasedAvs[index],*leasedIef[index],leasedSfd[index],
+                                                            prefix.packet,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,
+                                                            [](auto&) noexcept {return 0;}); // Recording metadata query only.
+                                                        if(bound) return bound;
                                                         ++states;return 0;
                                                     },[&](void* child,const auto& snapshot,auto& owner) noexcept -> int {
                                                         const size_t index=child==first.bytes.data()?0:1;
@@ -21384,6 +21415,13 @@ int main() {
                                                                                             [](const auto&) noexcept -> int {assert(false);return 0;})==5);
                                                                                         auto platform=[](auto&) noexcept -> int {return 0;}; // Descriptor producer fixture.
                                                                                         assert(leasedOutputs[index]);
+                                                                                        uintptr_t outputResource=0,avsResource=0,iefResource=0;
+                                                                                        std::memcpy(&outputResource,ready.state.data()+0x90,8);
+                                                                                        std::memcpy(&avsResource,ready.state.data()+0x98,8);
+                                                                                        std::memcpy(&iefResource,ready.state.data()+0xa0,8);
+                                                                                        assert(outputResource==reinterpret_cast<uintptr_t>(leasedOutputs[index]->resource.data()));
+                                                                                        assert(avsResource==reinterpret_cast<uintptr_t>(leasedAvs[index]->resource.data()));
+                                                                                        assert(iefResource==reinterpret_cast<uintptr_t>(leasedIef[index]->resource.data()));
                                                                                         const int built=index?
                                                                                                     tglSendOwnedVeboxSfcPreparedCommands(frame.children().second().owner(),commandParents[index],
                                                                                                         commandBinding,&command,commandInvoke,ready,*leasedOutputs[index],1,0,1,0,commandRead,platform):
@@ -21449,9 +21487,21 @@ int main() {
                                                                     assert(leases.target && sourceOwner.hasSurfaceLease(leases.source) &&
                                                                         targetOwner.hasSurfaceLease(*leases.target) && !leasedOutputs[i]);
                                                                     leasedOutputs[i]=leases.target;
-                                                                    int status=entries.setup(child,reinterpret_cast<void*>(0x1000),
-                                                                        reinterpret_cast<void*>(0x2000),data+i);
-                                                                    if(!status) status=entries.send(child,data+i,&command);
+                                                                    auto& lines=i?recordedSecond:recordedFirst;
+                                                                    uint32_t input=0,scaled=0;
+                                                                    std::memcpy(&input,statePrefixes[i].packet.data()+0x30,4);
+                                                                    std::memcpy(&scaled,statePrefixes[i].packet.data()+0x4c,4);
+                                                                    int status=lines.resources().ensure(input,scaled);
+                                                                    if(!status) status=lines.resources().withCommandResources(input,scaled,
+                                                                        [&](const auto& avs,const auto& ief,const auto* sfd) noexcept -> int {
+                                                                            leasedAvs[i]=&avs;leasedIef[i]=&ief;leasedSfd[i]=sfd;
+                                                                            assert(!lines.lines().tryReset() && !lines.sfd().tryReset());
+                                                                            int result=entries.setup(child,reinterpret_cast<void*>(0x1000),
+                                                                                reinterpret_cast<void*>(0x2000),data+i);
+                                                                            if(!result) result=entries.send(child,data+i,&command);
+                                                                            leasedAvs[i]=nullptr;leasedIef[i]=nullptr;leasedSfd[i]=nullptr;
+                                                                            return result;
+                                                                        });
                                                                     leasedOutputs[i]=nullptr;
                                                                     return TglOwnedVeboxCommandTransactionResult{status,0,false,false};
                                                                 });
@@ -21477,6 +21527,9 @@ int main() {
                                             assert(states==preparedCount && avsProduced==preparedCount && iefProduced==preparedCount);
                                             assert(emissions==(scenario>0?0U:2U));
                                             assert(commandInvoke.calls==(scenario>0?unsigned(scenario):14U));
+                                            assert(recordedFirst.lines().tryReset() && recordedFirst.sfd().tryReset());
+                                            assert(recordedSecond.lines().tryReset() && recordedSecond.sfd().tryReset());
+                                            assert(!lineNative.live);
                                         }
                                     }
                                     for(int expected:{0,-31}) {
