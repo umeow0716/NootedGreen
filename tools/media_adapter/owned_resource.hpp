@@ -14759,7 +14759,8 @@ int tglRunCapturedFfdnFrameTail(std::array<TglOwnedDescriptorOnlySurface,2>& des
     const std::array<TargetOwner*,2>& backed,PriorOwner& prior,Owner& input,Owner* previous,
     TglOwnedDescriptorOnlySurface& history,ChildOwner& childOwner,ExecutionOwner& reportOwner,
     void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,
-    TglOwnedFfdiCompressionSelection ffdi,Read read,Rectangle rectangle,Stmm stmm,Statistics statistics) noexcept {
+    TglOwnedFfdiCompressionSelection ffdi,Read read,Rectangle rectangle,Stmm stmm,Statistics statistics,
+    TglOwnedFfdnHistoryRecorder historyRecorder={}) noexcept {
     return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
         [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
             auto tail=[&](const TglOwnedFfdnTailViews& views) noexcept -> int {
@@ -14820,7 +14821,7 @@ int tglRunCapturedFfdnFrameTail(std::array<TglOwnedDescriptorOnlySurface,2>& des
                 childOwner,reportOwner,c,e,s,ffdi,read,
                 [&](const auto& inputs,const auto& a,const auto& b,const auto* copied) noexcept -> int {
                     return tail({{&a,&b},inputs[1],copied});
-                });
+                },historyRecorder);
         });
 }
 struct TglOwnedFfdiTailViews {
@@ -14844,7 +14845,7 @@ int tglRunCapturedVeboxSurfaceFrame(std::array<TglOwnedDescriptorOnlySurface,Cou
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
     ParameterKind parameterKind,Supports supports,Rectangle rectangle,Stmm stmm,Statistics statistics,
-    Unwind unwind={},Keep keep={}) noexcept {
+    Unwind unwind={},Keep keep={},TglOwnedFfdnHistoryRecorder historyRecorder={}) noexcept {
     static_assert(Count>0 && Count<=4,"FFDi frame view capacity");
     if(keep()) return 5; // never mutate/reuse an already pending frame
     return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
@@ -14873,9 +14874,9 @@ int tglRunCapturedVeboxSurfaceFrame(std::array<TglOwnedDescriptorOnlySurface,Cou
                         return statistics(active,execution,surface,ffdi,ffdn,stmmViews);
                     };
                     return tglRunCapturedFfdnFrameTail<true>(ffdnDescriptors,ffdnBacked,prior,input,previous,history,
-                        childOwner,reportOwner,c,e,s,selection,read,bind(rectangle),scopedStmm,scopedStatistics);
+                        childOwner,reportOwner,c,e,s,selection,read,bind(rectangle),scopedStmm,scopedStatistics,historyRecorder);
                 } else return tglRunCapturedFfdnFrameTail(ffdnDescriptors,ffdnBacked,prior,input,previous,history,
-                    childOwner,reportOwner,c,e,s,selection,read,bind(rectangle),bind(stmm),bind(statistics));
+                    childOwner,reportOwner,c,e,s,selection,read,bind(rectangle),bind(stmm),bind(statistics),historyRecorder);
             };
             const int status=tglRunCapturedFfdiFrame(ffdiDescriptors,ffdiBacked,input,executionSurface,secondary,
                 childOwner,reportOwner,c,e,s,read,sfcFormat,sfcColor,parameterKind,supports,
@@ -18645,6 +18646,9 @@ template<class Api> class TglNativeVeboxSurfaceFrameStorage {
     std::array<TglOwnedDescriptorOnlySurface,4> ffdiDescriptors_;
     std::array<TglOwnedDescriptorOnlySurface,2> ffdnDescriptors_;
     TglOwnedDescriptorOnlySurface history_;
+    // Metadata only; original previous owner must still be leased at use.
+    // This does not extend backing lifetime or certify GPU completion.
+    TglOwnedFfdnHistorySnapshot historySnapshot_;
     bool priorBusy_=false;
 public:
     template<class... Args>
@@ -18660,6 +18664,7 @@ public:
     auto& ffdiDescriptors() noexcept {return ffdiDescriptors_;}
     auto& ffdnDescriptors() noexcept {return ffdnDescriptors_;}
     auto& history() noexcept {return history_;}
+    auto& historySnapshot() noexcept {return historySnapshot_;}
     auto ffdiBacked() noexcept {
         return std::array<Surface*,4>{&ffdi_[0],&ffdi_[1],&ffdi_[2],&ffdi_[3]};
     }
@@ -18737,7 +18742,8 @@ int tglRunNativeVeboxSurfaceFrame(TglNativeVeboxSurfaceFrameStorage<Api>& storag
     return tglRunCapturedVeboxSurfaceFrame<true>(storage.ffdiDescriptors(),storage.ffdiBacked(),
         storage.ffdnDescriptors(),storage.ffdnBacked(),prior,storage.history(),
         input,executionSurface,secondary,previous,childOwner,reportOwner,child,report,
-        source,read,sfcFormat,sfcColor,parameterKind,supports,rectangle,stmm,statistics,unwind,keep);
+        source,read,sfcFormat,sfcColor,parameterKind,supports,rectangle,stmm,statistics,unwind,keep,
+        TglOwnedFfdnHistoryRecorder{&storage.historySnapshot()});
 }
 
 // Standalone statistics tail: preceding FFDi/FFDN/STMM scopes remain owned by
