@@ -2602,6 +2602,13 @@ struct TglOwnedVeboxVtable {
         }
         if (candidate[0] != image+0x12e240 || candidate[1] != image+0x12e250 ||
             candidate[0x40/8] != image+0x12e9c0 || candidate[0x48/8] != image+0x12ea30 ||
+            // Native12c010 -> +118 performs +e8, +110, +120 before VP40.
+            // E8 assigns the MHW heap and consumes native helper1bb8;
+            // 110/120 are proven native no-ops, not missing owned producers.
+            // Preserve this exact preparation/submit chain, not arbitrary code.
+            candidate[0xe8/8] != image+0x1296e0 || candidate[0x110/8] != image+0x1295b0 ||
+            candidate[0x118/8] != image+0x12b5f0 || candidate[0x120/8] != image+0x1296d0 ||
+            candidate[0x148/8] != image+0x12a230 ||
             // Submit12a5dc/12a61b retains these post-writeback callbacks.
             // Exact TGL150=12a730 and158=8f380 are int(this) no-ops, not
             // discard, resource cleanup or completion. Do not admit another
