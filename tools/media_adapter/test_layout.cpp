@@ -21048,6 +21048,68 @@ int main() {
                                         })==expected);
                                         assert(stateCount==2 && avsCount==2 && filterCount==2 && emitCount==2);
                                     }
+                                    {
+                                        std::array<uint8_t,0x298> source{},target{};
+                                        std::array<uint8_t,0x1c> mhw{};
+                                        std::array<uint8_t,0x68> settings{};
+                                        auto put=[](auto& bytes,size_t offset,auto value) noexcept {
+                                            std::memcpy(bytes.data()+offset,&value,sizeof(value));
+                                        };
+                                        const std::array<float,8> rectangles{0,0,1920,1080,0,0,960,540};
+                                        std::memcpy(source.data()+0x30,rectangles.data(),sizeof(rectangles));
+                                        const TglOwnedVpDestinationRect rect{0,0,960,540};
+                                        std::memcpy(target.data()+0x40,&rect,16);
+                                        put(source,0,uint32_t(3));put(target,0,uint32_t(3));
+                                        put(source,0xd8,uint32_t(1920));put(source,0xdc,uint32_t(1080));
+                                        put(source,0x58,1920.0f);put(source,0x5c,1080.0f);
+                                        put(source,0x130,uint32_t(0x19));put(source,0x120,uint32_t(0x31));
+                                        put(target,0xd8,uint32_t(960));put(target,0xdc,uint32_t(540));
+                                        put(target,0x130,uint32_t(0x15));
+                                        put(mhw,0x18,uint16_t(16));put(mhw,0x1a,uint16_t(8));
+                                        auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+                                            auto span=[&](uintptr_t base,const auto& bytes) noexcept {
+                                                if(address<base || address-base>bytes.size() ||
+                                                    size>bytes.size()-(address-base)) return false;
+                                                std::memcpy(out,bytes.data()+address-base,size);return true;
+                                            };
+                                            return span(0x1000,source) || span(0x2000,target) ||
+                                                span(0x3000,mhw) || span(0x4000,settings);
+                                        };
+                                        int data[2]{},command=0;
+                                        const std::array<TglOwnedVpFrameAcquisitionArguments,2> args{{
+                                            {0x1000,0x2000,0x3000,0x4000,0,0x7000,{},data},
+                                            {0x1000,0x2000,0x3000,0x4000,0,0x8000,{},data+1}}};
+                                        auto releaseCpu=[](void*) noexcept {assert(false);};
+                                        for(int expected:{0,-31}) {
+                                            unsigned states=0,emissions=0;
+                                            assert(firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
+                                                return tglWithOwnedVpPairedAcquiredFrameCore(firstGraph,first,firstLines.resources(),
+                                                    secondGraph,second,secondLines.resources(),args,read,modeRetire,releaseCpu,
+                                                    [&](void*,const auto& snapshot,auto& packet) noexcept -> int {
+                                                        assert(snapshot.regions.scale.scaling && !packet.hasParametersLease());
+                                                        ++states;return 0;
+                                                    },[](void*,const auto&,auto&) noexcept -> int {return 0;},
+                                                    [](void*,const auto&) noexcept {},
+                                                    [&](void*,void*,void*) noexcept -> int {++emissions;return 0;},
+                                                    [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
+                                                        constexpr uint32_t remaining=(1U<<20)|(1U<<21)|(1U<<24)|(1U<<25)|(1U<<26);
+                                                        assert(ea.missingMask()==remaining && eb.missingMask()==remaining);
+                                                        for(size_t i=0;i<2;++i) {
+                                                            void* child=i?b:a;const auto& entries=i?eb:ea;
+                                                            entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                                            entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x4000));
+                                                            int result=entries.setup(child,reinterpret_cast<void*>(0x1000),
+                                                                reinterpret_cast<void*>(0x2000),data+i);
+                                                            if(result) return result;
+                                                            result=entries.send(child,data+i,&command);
+                                                            if(result) return result;
+                                                        }
+                                                        return expected;
+                                                    });
+                                            })==expected);
+                                            assert(states==2 && emissions==2);
+                                        }
+                                    }
                                     for(int expected:{0,-31}) {
                                         assert(firstGraph.withPairedAssemblyView(secondGraph,false,modeRead,
                                             firstLines.resources(),secondLines.resources(),modeRetire,

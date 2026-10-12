@@ -17260,6 +17260,50 @@ int tglWithOwnedVpPairedPreparedFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerS
         });
 }
 
+struct TglOwnedVpFrameAcquisitionArguments {
+    uintptr_t source,target,mhw,settings,conditionalSource,parameters;
+    TglOwnedVpModeState original;
+    void* renderData;
+};
+template<class Graph,class Lines,class Read,class Retire,class Release,
+    class State,class Avs,class Ief,class Emit,class Use>
+int tglWithOwnedVpPairedAcquiredFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerStorage& first,Lines& firstLines,
+    Graph& secondGraph,TglOwnedVpSfcCallerStorage& second,Lines& secondLines,
+    const std::array<TglOwnedVpFrameAcquisitionArguments,2>& args,
+    Read& read,Retire& retire,Release& release,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+    return tglWithOwnedVpFrameAcquisitionContext(first,args[0].source,args[0].target,args[0].mhw,
+        args[0].settings,args[0].conditionalSource,args[0].parameters,args[0].original,read,
+        [&](auto& ca,const auto& fa,const auto&,uintptr_t ra) noexcept -> int {
+            return tglWithOwnedVpFrameAcquisitionContext(second,args[1].source,args[1].target,args[1].mhw,
+                args[1].settings,args[1].conditionalSource,args[1].parameters,args[1].original,read,
+                [&](auto& cb,const auto& fb,const auto&,uintptr_t rb) noexcept -> int {
+                    const std::array<TglOwnedVpEntrySet,2> empty{};
+                    return tglWithOwnedVpPairedFrameEntries(ca,cb,empty,
+                        [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
+                            const std::array<void*,2> objects{a,b};
+                            const std::array<TglOwnedVpEntrySet,2> acquired{ea,eb};
+                            for(size_t i=0;i<2;++i) acquired[i].prepare(objects[i],
+                                reinterpret_cast<void*>(args[i].conditionalSource),reinterpret_cast<void*>(args[i].parameters),
+                                reinterpret_cast<void*>(args[i].source),reinterpret_cast<void*>(args[i].target),
+                                reinterpret_cast<void*>(args[i].settings));
+                            if(!ca.valid || !cb.valid) return 5;
+                            const std::array<TglOwnedVpPreparedFrameArguments,2> prepared{{
+                                {fa,args[0].source,args[0].target,args[0].settings,args[0].parameters,
+                                    args[0].conditionalSource,ra,args[0].renderData},
+                                {fb,args[1].source,args[1].target,args[1].settings,args[1].parameters,
+                                    args[1].conditionalSource,rb,args[1].renderData}}};
+                            return tglWithOwnedVpPairedPreparedFrameCore(firstGraph,first,firstLines,
+                                secondGraph,second,secondLines,prepared,read,retire,release,state,avs,ief,emit,
+                                [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
+                                    auto firstEntries=xe,secondEntries=ye;
+                                    if(!firstEntries.appendDisjoint(ea) || !secondEntries.appendDisjoint(eb)) return 5;
+                                    return use(x,firstEntries,y,secondEntries);
+                                });
+                        });
+                });
+        });
+}
+
 // CPU construction-to-lifetime transition. Construct must invoke the owned
 template<class Lifetime,class Use>
 int tglWithOwnedVpPairedLifetimeAssemblyEntries(void* first,Lifetime& firstLifetime,
