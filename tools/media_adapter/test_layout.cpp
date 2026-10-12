@@ -2996,7 +2996,7 @@ static void testNativeCscBinding() {
         {child,vt},{vt+0x48,image+0x12ea30},{vt+0x90,0x4000},{vt+0x1b8,0x5000},
         {child+0x88,0x6000},{0x6000,image+0x757e90},{0x6d38,0x7000},
         {0x6d40,0x8000},{0x7000,image+0x757f78},{0x8000,image+0x757fb8},{0x9000,0xb}}};
-    auto read = [&](uintptr_t p, void* out, size_t n) {
+    auto read = [&](uintptr_t p, void* out, size_t n) noexcept {
         if (p == image+0x12cfc0 && n == 16) { std::memcpy(out,code.data(),n); return true; }
         for (const auto& entry : memory) if (p == entry.first && n <= 8) {
             std::memcpy(out,&entry.second,n); return true;
@@ -3005,13 +3005,23 @@ static void testNativeCscBinding() {
         return false;
     };
     bool identity = true, rx = true;
-    auto qualify = [&](uintptr_t p) { return identity && p == image; };
-    auto executable = [&](uintptr_t, size_t) { return rx; };
+    auto qualify = [&](uintptr_t p) noexcept { return identity && p == image; };
+    auto executable = [&](uintptr_t, size_t) noexcept { return rx; };
     TglTwoPassCscBinding binding;
     assert(binding.resolve(image,read,qualify,executable));
     unsigned calls = 0; bool nativeResult = false, needed = true;
-    auto invoke = [&](uintptr_t e,uintptr_t c,uintptr_t s,uintptr_t t) {
+    struct OwnerFixture {
+        uintptr_t child,image,table,generic=0x4000,support=0x5000;bool leased=true;
+        bool describePrivateCscLease(uintptr_t c,uintptr_t i,uintptr_t& v,uintptr_t& g,uintptr_t& s) noexcept {
+            if(!leased || c!=child || i!=image) return false;
+            v=table;g=generic;s=support;return true;
+        }
+    } owner{child,image,vt};
+    bool loseLease=false,replaceTable=false;
+    auto invoke = [&](uintptr_t e,uintptr_t c,uintptr_t s,uintptr_t t) noexcept {
         assert(e == image+0x12cfc0 && c == child && s == 0x9000 && t == 0xa000);
+        if(loseLease) owner.leased=false;
+        if(replaceTable) owner.table+=0x10;
         ++calls; return nativeResult;
     };
     auto query = [&] {
@@ -3035,6 +3045,24 @@ static void testNativeCscBinding() {
     assert(!tglQueryNativeTwoPassCsc(binding,child,0x9000,UINTPTR_MAX-2,
         vt,0x4000,0x5000,needed,read,qualify,executable,invoke) && needed && calls == 2);
     assert(!binding.resolve(0,read,qualify,executable) && !binding.image && !binding.entry);
+    assert(binding.resolve(image,read,qualify,executable));
+    TglLeasedNativeTwoPassCscQuery leased(owner,binding,child,read,qualify,executable,invoke);
+    calls=0;needed=true;nativeResult=false;
+    assert(leased(0x9000,0xa000,needed) && !needed && calls==1);
+    nativeResult=true;
+    assert(leased(0x9000,0xa000,needed) && needed && calls==2);
+    owner.leased=false;needed=false;
+    assert(!leased(0x9000,0xa000,needed) && !needed && calls==2);
+    owner.leased=true;owner.generic++;
+    assert(!leased(0x9000,0xa000,needed) && !needed && calls==2);
+    owner.generic--;code[0]=0;
+    assert(!leased(0x9000,0xa000,needed) && !needed && calls==2);
+    code[0]=0x55;loseLease=true;
+    assert(!leased(0x9000,0xa000,needed) && !needed && calls==3);
+    owner.leased=true;loseLease=false;replaceTable=true;
+    assert(!leased(0x9000,0xa000,needed) && !needed && calls==4);
+    owner.table=vt;replaceTable=false;
+    assert(leased(0x9000,0xa000,needed) && needed && calls==5);
 }
 
 static void testLeasedGen12PlatformPolicy() {
@@ -20104,14 +20132,26 @@ int main() {
                 assert(owner.installPrivateVtableWithQueries<DeniedFormatRead>(
                     unbound,tableRead,qualify,executable));
                 GenerationAllocation currentAllocation(owner,generationAllocate,lifecycleChild);
+                uintptr_t cscTable=11,cscGeneric=22,cscSupport=33;
+                assert(!owner.describePrivateCscLease(reinterpret_cast<uintptr_t>(lifecycleChild),base,
+                    cscTable,cscGeneric,cscSupport) && cscTable==11 && cscGeneric==22 && cscSupport==33);
                 assert(owner.withPrivateChild([&](void* child) noexcept {
                     assert(owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)));
+                    assert(!owner.describePrivateCscLease(reinterpret_cast<uintptr_t>(child),base+1,
+                        cscTable,cscGeneric,cscSupport) && cscTable==11 && cscGeneric==22 && cscSupport==33);
+                    assert(owner.describePrivateCscLease(reinterpret_cast<uintptr_t>(child),base,
+                        cscTable,cscGeneric,cscSupport));
+                    uintptr_t actualTable=0;std::memcpy(&actualTable,child,8);
+                    assert(cscTable==actualTable && cscGeneric &&
+                        cscSupport==reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported));
                     assert(!staleAllocation.owns(child) && staleAllocation.allocate()==5);
                     assert(generationAllocationCalls==1);
                     assert(currentAllocation.owns(child) && currentAllocation.allocate()==0);
                     return 0;
                 })==0);
                 assert(generationAllocationCalls==2);
+                assert(!owner.describePrivateCscLease(reinterpret_cast<uintptr_t>(lifecycleChild),base,
+                    cscTable,cscGeneric,cscSupport));
                 owner.reset();assert(!cpu.live && eventCount==8);
                 assert((std::array<unsigned,4>{events[4],events[5],events[6],events[7]}==
                     std::array<unsigned,4>{1,2,3,4}));

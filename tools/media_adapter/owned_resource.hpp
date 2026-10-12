@@ -2569,6 +2569,55 @@ bool tglQueryNativeTwoPassCsc(const TglTwoPassCscBinding& binding,
     return true;
 }
 
+// Used only after tglQueryNativeTwoPassCsc authenticates code/table/execution.
+struct TglNativeTwoPassCscInvoke {
+    bool operator()(uintptr_t entry,uintptr_t child,uintptr_t source,uintptr_t target) const noexcept {
+        using Entry=bool(*)(void*,void*,void*);
+        return reinterpret_cast<Entry>(entry)(reinterpret_cast<void*>(child),
+            reinterpret_cast<void*>(source),reinterpret_cast<void*>(target));
+    }
+};
+// The owner supplies trusted table/hook addresses from its own storage, not
+// from a native object's untrusted vptr. Keep the same private child/image
+// lease throughout the native call; lost/replaced leases invalidate its result.
+template<class Owner,class Read,class Qualify,class Executable,class Invoke>
+class TglLeasedNativeTwoPassCscQuery {
+    Owner& owner_;const TglTwoPassCscBinding binding_;uintptr_t child_;
+    Read& read_;Qualify& qualify_;Executable& executable_;Invoke& invoke_;
+public:
+    TglLeasedNativeTwoPassCscQuery(Owner& owner,const TglTwoPassCscBinding& binding,uintptr_t child,
+        Read& read,Qualify& qualify,Executable& executable,Invoke& invoke) noexcept:
+        owner_(owner),binding_(binding),child_(child),read_(read),qualify_(qualify),
+        executable_(executable),invoke_(invoke){}
+    bool operator()(uintptr_t source,uintptr_t target,bool& needed) noexcept {
+        static_assert(noexcept(owner_.describePrivateCscLease(child_,binding_.image,
+            std::declval<uintptr_t&>(),std::declval<uintptr_t&>(),std::declval<uintptr_t&>())) &&
+            noexcept(read_(uintptr_t{},nullptr,size_t{})) && noexcept(qualify_(uintptr_t{})) &&
+            noexcept(executable_(uintptr_t{},size_t{})) &&
+            noexcept(invoke_(uintptr_t{},uintptr_t{},uintptr_t{},uintptr_t{})),"native CSC lease ABI");
+        static_assert(std::is_same_v<decltype(read_(uintptr_t{},nullptr,size_t{})),bool> &&
+            std::is_same_v<decltype(owner_.describePrivateCscLease(child_,binding_.image,
+                std::declval<uintptr_t&>(),std::declval<uintptr_t&>(),std::declval<uintptr_t&>())),bool> &&
+            std::is_same_v<decltype(qualify_(uintptr_t{})),bool> &&
+            std::is_same_v<decltype(executable_(uintptr_t{},size_t{})),bool> &&
+            std::is_same_v<decltype(invoke_(uintptr_t{},uintptr_t{},uintptr_t{},uintptr_t{})),bool>,
+            "native CSC predicates must not interpret error status as true");
+        uintptr_t table=0,generic=0,support=0;
+        if(!owner_.describePrivateCscLease(child_,binding_.image,table,generic,support)) return false;
+        bool candidate=true;
+        const bool success=tglQueryNativeTwoPassCsc(binding_,child_,source,target,table,generic,support,candidate,
+            [&](uintptr_t p,void* out,size_t n) noexcept {return read_(p,out,n);},
+            [&](uintptr_t p) noexcept {return qualify_(p);},
+            [&](uintptr_t p,size_t n) noexcept {return executable_(p,n);},
+            [&](uintptr_t e,uintptr_t c,uintptr_t s,uintptr_t t) noexcept {return invoke_(e,c,s,t);});
+        uintptr_t currentTable=0,currentGeneric=0,currentSupport=0;
+        if(!success || !owner_.describePrivateCscLease(child_,binding_.image,
+            currentTable,currentGeneric,currentSupport) || currentTable!=table ||
+            currentGeneric!=generic || currentSupport!=support) return false;
+        needed=candidate;return true;
+    }
+};
+
 enum class TglVeboxMode0Allocation { Required, Reuse };
 // Native12bf00: owned-prefix data comparison only. Callers retain both surface
 // leases; equality is NOT proof that their native backing or GPU work retired.
@@ -4144,6 +4193,16 @@ public:
     }
     bool hasPrivateChildImageLease(uintptr_t expected,uintptr_t image) const noexcept {
         return image && image_==image && hasPrivateChildLease(expected);
+    }
+    bool describePrivateCscLease(uintptr_t child,uintptr_t image,
+        uintptr_t& table,uintptr_t& generic,uintptr_t& support) const noexcept {
+        if(!hasPrivateChildImageLease(child,image)) return false;
+        const auto candidateTable=table_.addressPoint();
+        const auto candidateGeneric=table_.entries[0x90/8];
+        const auto candidateSupport=table_.entries[0x1b8/8];
+        if(!candidateTable || !candidateGeneric ||
+           candidateSupport!=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported)) return false;
+        table=candidateTable;generic=candidateGeneric;support=candidateSupport;return true;
     }
     // Parent CPU lease and native SFC reservation cover the same command
     // sequence. Never expose a persistent backend or transfer SFC ownership.
