@@ -14782,12 +14782,11 @@ struct TglOwnedFfdnTailViews {
     const TglOwnedSurfaceStorage* previous{};
     const TglOwnedSurfaceStorage* history{};
 };
-// Producer-time descriptor branch. Both original owners are already leased;
+// Producer-time descriptor/backed branches. Original owners are already leased;
 // do not recreate outputs or infer reference validity from snapshot presence.
 // DN parameter borrowing and asynchronous retention remain outer duties.
-template<class Owner,class Use>
-int tglWithPreparedDescriptorFfdnHistoryViews(
-    std::array<TglOwnedDescriptorOnlySurface,2>& targets,Owner& input,
+template<class Targets,class Owner,class Use>
+int tglWithPreparedFfdnHistoryViews(Targets&& targets,Owner& input,
     const TglOwnedSurfaceStorage& source,Owner* previous,
     const TglOwnedSurfaceStorage* previousView,bool referenceValid,
     TglOwnedDescriptorOnlySurface& history,TglOwnedFfdnHistorySnapshot& snapshot,
@@ -14795,16 +14794,30 @@ int tglWithPreparedDescriptorFfdnHistoryViews(
     if((previous==nullptr)!=(previousView==nullptr) ||
        (previous && !previous->hasSurfaceLease(*previousView)) ||
        (referenceValid && !previous)) return 5;
-    return tglWithPreparedDescriptorFfdnPair(targets,input,source,
-        [&](const auto& a,const auto& b) noexcept -> int {
+    auto borrowed=[&](const auto& a,const auto& b) noexcept -> int {
             auto consume=[&](const TglOwnedSurfaceStorage* copied) noexcept -> int {
+                static_assert(noexcept(use(TglOwnedFfdnTailViews{})) &&
+                    std::is_same_v<decltype(use(TglOwnedFfdnTailViews{})),int>);
                 const int result=use(TglOwnedFfdnTailViews{{&a,&b},previousView,copied});
                 return previous && !previous->hasSurfaceLease(*previousView)?5:result;
             };
             if(!referenceValid) return consume(nullptr);
             return history.withBorrowedHistorySnapshotScope(snapshot,*previous,*previousView,
                 [&](const auto& copied) noexcept -> int {return consume(&copied);});
-        });
+        };
+    if constexpr(std::is_pointer_v<typename std::decay_t<Targets>::value_type>)
+        return tglWithPreparedBackedFfdnPair(targets,input,source,borrowed);
+    else return tglWithPreparedDescriptorFfdnPair(targets,input,source,borrowed);
+}
+template<class Owner,class Use>
+int tglWithPreparedDescriptorFfdnHistoryViews(
+    std::array<TglOwnedDescriptorOnlySurface,2>& targets,Owner& input,
+    const TglOwnedSurfaceStorage& source,Owner* previous,
+    const TglOwnedSurfaceStorage* previousView,bool referenceValid,
+    TglOwnedDescriptorOnlySurface& history,TglOwnedFfdnHistorySnapshot& snapshot,
+    Use use) noexcept {
+    return tglWithPreparedFfdnHistoryViews(targets,input,source,previous,previousView,
+        referenceValid,history,snapshot,use);
 }
 struct TglOwnedStmmTailViews {std::array<const TglOwnedSurfaceStorage*,2> surfaces{};};
 template<bool ScopedStmm=false,class TargetOwner,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,

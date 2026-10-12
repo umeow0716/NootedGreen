@@ -8064,6 +8064,7 @@ static void testNativeResourceBoundary() {
                                         reportBackend.bytes[8]=1;reportBackend.bytes[0x13]=1;
                                         reportBackend.bytes[0xb]=1;
                                         unsigned finished=0;
+                                        TglOwnedFfdnHistorySnapshot backedHistory;
                                         auto runHistory=[&]() noexcept -> int {
                                             int result=5;
                                             assert(linkedInput.withSurface([&](const auto& current) noexcept {
@@ -8078,13 +8079,25 @@ static void testNativeResourceBoundary() {
                                                         assert(previous.hasSurfaceLease(*views.previous));
                                                         assert(targetA.hasSurfaceLease(*views.outputs[0]) && targetB.hasSurfaceLease(*views.outputs[1]));
                                                         assert(reportBackend.bytes[8]==1);return -59;
-                                                    });
+                                                    },TglOwnedFfdnHistoryRecorder{&backedHistory});
                                             }));
                                             return result;
                                         };
                                         assert(runHistory()==-59 && finished==1);
                                         const auto beforeBackedBorrow=backingBackend.allocations;
                                         assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                            assert(previous.withSurface([&](const auto& priorView) noexcept {
+                                                assert(tglWithPreparedFfdnHistoryViews(std::array{&targetA,&targetB},
+                                                    linkedInput,current,&previous,&priorView,true,historyShell,backedHistory,
+                                                    [&](const auto& views) noexcept -> int {
+                                                        assert(targetA.hasSurfaceLease(*views.outputs[0]) &&
+                                                            targetB.hasSurfaceLease(*views.outputs[1]));
+                                                        assert(views.previous==&priorView &&
+                                                            views.history==historyShell.surfaceBinding());
+                                                        assert(std::memcmp(views.history->resource.data(),priorView.resource.data(),
+                                                            priorView.resource.size())==0);return -72;
+                                                    })==-72);
+                                            }));
                                             assert(tglWithPreparedBackedFfdnPair(std::array{&targetA,&targetB},
                                                 linkedInput,current,[&](const auto& a,const auto& b) noexcept -> int {
                                                     assert(targetA.hasSurfaceLease(a) && targetB.hasSurfaceLease(b));
