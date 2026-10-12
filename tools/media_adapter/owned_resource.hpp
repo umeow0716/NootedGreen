@@ -22707,10 +22707,35 @@ public:
     TglOwnedVeboxCommandTransactionResult withNativeOwnedVpCommandFrame(size_t childIndex,
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         ExecutionOwner& executionOwner,uintptr_t renderHal,uintptr_t sku,Read read,Consume consume) noexcept {
+        return withPreparedNativeOwnedVpCommandFrame(childIndex,roles,sourceIndex,targetIndex,
+            executionOwner,renderHal,sku,read,
+            [](auto&,void*,auto&,auto&,auto&,auto&,auto&) noexcept -> int {return 0;},consume);
+    }
+    // Retain original child/report/surface/DN owners through preparation and
+    // consumption, but acquire VP resource borrow only after checked prepare.
+    // Prepare is CPU-only: check prerequisites before reset; no GPU/native
+    // Render entry whose retention would require a command result is allowed.
+    template<class ExecutionOwner,class Read,class Prepare,class Consume>
+    TglOwnedVeboxCommandTransactionResult withPreparedNativeOwnedVpCommandFrame(size_t childIndex,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        ExecutionOwner& executionOwner,uintptr_t renderHal,uintptr_t sku,Read read,
+        Prepare prepare,Consume consume) noexcept {
         if(!backing_.vpBound(childIndex)) return {};
         return withNativeOwnedChildCommandFrame(childIndex,roles,sourceIndex,targetIndex,
             executionOwner,renderHal,sku,read,
             [&](auto& owner,void* child,auto& source,auto& target,auto& parameters,auto& packets) noexcept {
+                static_assert(noexcept(prepare(owner,child,source,target,parameters,packets,backing_)) &&
+                    std::is_same_v<decltype(prepare(owner,child,source,target,parameters,packets,backing_)),int>);
+                const uintptr_t expectedExecution=packets.execution;
+                const auto* expectedTarget=packets.target;
+                const int prepared=prepare(owner,child,source,target,parameters,packets,backing_);
+                if(prepared) {TglOwnedVeboxCommandTransactionResult failed;failed.status=prepared;return failed;}
+                if(packets.child!=reinterpret_cast<uintptr_t>(child) || packets.execution!=expectedExecution ||
+                    packets.target!=expectedTarget || !expectedTarget ||
+                    !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
+                    !executionOwner.hasExecutionLease(expectedExecution) ||
+                    !source.hasSurfaceLease(packets.source) || !target.hasSurfaceLease(*expectedTarget))
+                    return TglOwnedVeboxCommandTransactionResult{};
                 return withLeasedVpCommandResources(childIndex,owner,child,source,target,parameters,packets,consume);
             });
     }

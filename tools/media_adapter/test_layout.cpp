@@ -23571,6 +23571,39 @@ int main() {
                                 });
                             assert(missingPair.status==5 && !missingPair.requiresRetention());
                             unsigned creatorFrameUses=0;
+                            {
+                                unsigned preparations=0,consumptions=0;
+                                uint64_t preparedGeneration=0;
+                                auto consumePrepared=[&](auto& owner,void* child,void* vp,auto& graph,
+                                    auto&,auto&,auto&,auto&,auto& packets) noexcept {
+                                    ++consumptions;
+                                    assert(owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) &&
+                                        graph.ownsStorage(vp) && graph.generation()==preparedGeneration+1 &&
+                                        executionLease.hasExecutionLease(packets.execution));
+                                    TglOwnedVeboxCommandTransactionResult result;result.status=-92;return result;
+                                };
+                                const auto rejected=frame.withPreparedNativeOwnedVpCommandFrame(0,roles,0,0,
+                                    executionLease,0x2200,0x3300,readReportHelper,
+                                    [&](auto&,void*,auto&,auto&,auto&,auto&,auto&) noexcept -> int {
+                                        ++preparations;return 31;
+                                    },consumePrepared);
+                                assert(rejected.status==31 && preparations==1 && !consumptions);
+                                const auto prepared=frame.withPreparedNativeOwnedVpCommandFrame(0,roles,0,0,
+                                    executionLease,0x2200,0x3300,readReportHelper,
+                                    [&](auto& owner,void* child,auto&,auto&,auto&,auto&,auto& backing) noexcept -> int {
+                                        ++preparations;void* vp=nullptr;
+                                        if(backing.withVpResources(0,[&](auto& graph,auto& storage,auto&) noexcept {
+                                            vp=storage.bytes.data();preparedGeneration=graph.generation();return 0;
+                                        })) return 5;
+                                        auto retire=[]() noexcept -> int {return 0;}; // unsubmitted CPU fixture only
+                                        TglOwnedVeboxPersistentVpAdmissionReset<std::decay_t<decltype(owner)>,
+                                            std::decay_t<decltype(backing)>,decltype(retire)> reset{
+                                            owner,backing,0,child,vp,retire};
+                                        return owner.withLeasedBorrowedVpCpuView(child,vp,
+                                            [&](void*,void*) noexcept -> int {return reset()?0:5;});
+                                    },consumePrepared);
+                                assert(prepared.status==-92 && preparations==2 && consumptions==1);
+                            }
                             unsigned creatorRoleCaptures=0;
                             auto captureCreator=[&](auto& owner,void* child,void* vp,auto& graph,auto& lines,
                                 auto& source,auto& target,auto& dn,auto& packets,auto& sourceRole,auto& targetRole) noexcept {
