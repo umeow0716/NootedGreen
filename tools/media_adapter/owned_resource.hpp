@@ -3663,6 +3663,9 @@ public:
         busy_=true;Unlock unlock{busy_};
         uintptr_t vt=0,actualOs=0,heap=0,deleting=0;
         const auto image=allocation_.image;
+        TglNativeVeboxMhwAllocationBinding verified;
+        if(!verified.resolve(image,read,qualify,executable) ||
+            verified.create!=allocation_.create || verified.remove!=allocation_.remove) return 5;
         if(object_>UINTPTR_MAX-0x28 || !qualify(image) ||
            !read(object_,&vt,8) || vt!=image+0x759520 ||
            !read(object_+0x18,&actualOs,8) || actualOs!=os_ ||

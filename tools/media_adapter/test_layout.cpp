@@ -3572,6 +3572,9 @@ static void testVeboxHardwareBinding() {
             assert(initializeOwner()==5 && native.creates==1);
             assert(retireOwner()==5 && !native.cleanups && !native.removes);
             approved=true;
+            deletion[0]=0;
+            assert(retireOwner()==5 && !native.cleanups && !native.removes);
+            deletion[0]=0x55;
             {
                 typename decltype(owner)::DependencyLease lease;
                 assert(!lease.binding() && lease.acquire(owner));
@@ -3585,6 +3588,46 @@ static void testVeboxHardwareBinding() {
             native.result=31;
             assert(initializeOwner()==31 && !owner.empty());
             assert(retireOwner()==0 && native.cleanups==1 && native.removes==2);
+            {
+                struct ContextMhw {
+                    TglNativeVeboxMhwOwner<Native> mhwOwner;
+                    explicit ContextMhw(Native& invoke) noexcept:mhwOwner(invoke) {}
+                    uintptr_t context() const noexcept {return 0x8000;}
+                    ~ContextMhw() noexcept {assert(mhwOwner.empty());}
+                };
+                native.result=0;
+                auto* contextOwner=new ContextMhw(native);
+                assert(contextOwner->mhwOwner.initialize(allocation,os,ownerRead,qualify,
+                    [](uintptr_t,size_t){return true;})==0);
+                TglOwnedContextOwnerRegistry<ContextMhw,1> contexts;
+                assert(contexts.adopt(image,0x9000,1,contextOwner));
+                TglNativeRemovedContextBatch<1> removed;
+                removed.valid=true;removed.count=1;removed.contexts[0]=0x8000;
+                unsigned retirementCalls=0;
+                auto releaseMhw=[&](ContextMhw& context) noexcept -> int {
+                    ++retirementCalls;
+                    if(context.mhwOwner.empty()) return 0;
+                    return int(context.mhwOwner.retire(ownerRead,qualify,[](uintptr_t,size_t){return true;},
+                        [&](uintptr_t,uintptr_t,uintptr_t,uint64_t){return approved;}));
+                };
+                {
+                    auto pin=contexts.pin(image,0x9000,1,0x8000);
+                    assert(pin.get()==contextOwner);
+                    assert(contexts.reconcileSuccessfulRemoval(image,0x9000,1,removed,releaseMhw)==5 && !retirementCalls);
+                }
+                {
+                    typename TglNativeVeboxMhwOwner<Native>::DependencyLease dependency(contextOwner->mhwOwner);
+                    assert(dependency.binding());
+                    assert(contexts.reconcileSuccessfulRemoval(image,0x9000,1,removed,releaseMhw)==5 && retirementCalls==1);
+                    assert(!contexts.pin(image,0x9000,1,0x8000).get());
+                }
+                approved=false;
+                assert(contexts.reconcileSuccessfulRemoval(image,0x9000,1,removed,releaseMhw)==5 && retirementCalls==2);
+                assert(contexts.reconcileSuccessfulRemoval(image,0x9000,1,removed)==5);
+                approved=true;
+                assert(contexts.reconcileSuccessfulRemoval(image,0x9000,1,removed,releaseMhw)==0 && retirementCalls==3);
+                assert(native.cleanups==2 && native.removes==3);
+            }
         }
         heap=0x4000;assert(resolve());
     }
