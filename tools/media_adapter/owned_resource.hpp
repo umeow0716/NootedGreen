@@ -1545,6 +1545,7 @@ template<class Backend> class TglTrackedCpuOwner {
     uintptr_t storage = 0;
     size_t extent = 0;
     bool borrowed = false;
+    const uint8_t* nativeReleaseSlot_=nullptr;
 public:
     explicit TglTrackedCpuOwner(Backend& b) : backend(b) {}
     TglTrackedCpuOwner(const TglTrackedCpuOwner&) = delete;
@@ -1563,6 +1564,11 @@ public:
     }
     uintptr_t get() const { return storage; }
     size_t size() const { return extent; }
+    bool hasNativeReleaseSlot(const uint8_t* slot) const noexcept {
+        if(!borrowed || !slot || slot!=nativeReleaseSlot_) return false;
+        uintptr_t published=0;std::memcpy(&published,slot,sizeof(published));
+        return !published || published==storage;
+    }
     // Non-consuming synchronous borrow. No native release/ownership transfer
     // is permitted; reset, reallocation and consuming-slot entry stay blocked.
     template<class Use>
@@ -1589,22 +1595,22 @@ public:
         // Still block recursive allocation and reject unexpected publication.
         if(!storage) {
             if(extent) return false;
-            borrowed=true;
+            borrowed=true;nativeReleaseSlot_=slot;
             use();
             uintptr_t observed=0;std::memcpy(&observed,slot,sizeof(observed));
             std::memcpy(slot,&previous,sizeof(previous));
-            borrowed=false;
+            nativeReleaseSlot_=nullptr;borrowed=false;
             return observed==0;
         }
         const auto published=storage;
-        borrowed=true;
+        borrowed=true;nativeReleaseSlot_=slot;
         std::memcpy(slot,&published,sizeof(published));
         use();
         uintptr_t observed=0;std::memcpy(&observed,slot,sizeof(observed));
         // Detach the borrowed field even on an unexpected native mutation.
         std::memcpy(slot,&previous,sizeof(previous));
         if(!observed) { storage=0;extent=0; }
-        borrowed=false;
+        nativeReleaseSlot_=nullptr;borrowed=false;
         return !observed || observed==published;
     }
 };
@@ -3390,6 +3396,7 @@ template<class Backend> class TglExecutionOwner {
     Backend& backend;
     uintptr_t object = 0;
     bool leased_=false,admissionBytesBusy_=false,admissionResetAttempted_=false,borrowed_=false,featureBusy_=false;
+    const void* featureTarget_=nullptr;
     int admissionError_=0;
 public:
     explicit TglExecutionOwner(Backend& b) noexcept : backend(b) {}
@@ -3484,17 +3491,22 @@ public:
     // Share the existing execution lease without recursively acquiring it.
     // Native170's report60 target borrow must not outlive the source/target
     // frame. This lock is separate from admission's live byte-view lock.
+    bool hasLeasedFeatureReport(uintptr_t expected,const void* target) const noexcept {
+        if(!featureBusy_ || !target || featureTarget_!=target || !hasExecutionLease(expected)) return false;
+        uintptr_t published=0;std::memcpy(&published,reinterpret_cast<const void*>(object+0x60),8);
+        return !published || published==reinterpret_cast<uintptr_t>(target);
+    }
     template<class Use> int withLeasedFeatureReport(uintptr_t expected,const void* target,Use use) noexcept {
         static_assert(noexcept(use()) && std::is_same_v<decltype(use()),int>,"feature report status ABI");
         if(featureBusy_ || !target || !hasExecutionLease(expected)) return 5;
         auto* field=reinterpret_cast<uint8_t*>(object)+0x60;
         uintptr_t previous=0;std::memcpy(&previous,field,8);
         if(previous) return 5;
-        featureBusy_=true;
+        featureBusy_=true;featureTarget_=target;
         struct Detach {
-            uint8_t* field;bool& busy;
-            ~Detach(){const uintptr_t zero=0;std::memcpy(field,&zero,8);busy=false;}
-        } detach{field,featureBusy_};
+            uint8_t* field;bool& busy;const void*& target;
+            ~Detach(){const uintptr_t zero=0;std::memcpy(field,&zero,8);target=nullptr;busy=false;}
+        } detach{field,featureBusy_,featureTarget_};
         const int status=use();
         uintptr_t observed=0;std::memcpy(&observed,field,8);
         if(observed && observed!=reinterpret_cast<uintptr_t>(target)) return 5;
@@ -5175,6 +5187,12 @@ public:
     }
     bool hasPrivateChildImageLease(uintptr_t expected,uintptr_t image) const noexcept {
         return image && image_==image && hasPrivateChildLease(expected);
+    }
+    bool hasPrivateFeaturePreparationLease(uintptr_t expected,uintptr_t image) const noexcept {
+        if(!hasPrivateChildImageLease(expected,image) || image>UINTPTR_MAX-0x12aba0 ||
+           table_.entries[0x170/8]!=image+0x12aba0) return false;
+        uintptr_t installed=0;std::memcpy(&installed,reinterpret_cast<const void*>(expected),8);
+        return installed==table_.addressPoint();
     }
     bool describePrivateCscLease(uintptr_t child,uintptr_t image,
         uintptr_t& table,uintptr_t& generic,uintptr_t& support) const noexcept {
@@ -11670,6 +11688,31 @@ bool tglUpdateOwnedVeboxHistory(Owner& owner,void* child,
 // surface owner unlocks. This is not permission for asynchronous GPU submission.
 // Callback supplies the qualified native/owned stages; this scope alone is
 // neither complete admission nor authorization to call an incomplete vtable.
+template<class SourceOwner,class TargetOwner,class ChildOwner,class ExecutionOwner,class Parameters,
+    class Read,class Qualify,class Executable,class Invoke=TglNativeVeboxFeaturePreparationInvoker>
+int tglInvokePreboundVeboxFeaturePreparation(const TglVeboxFeatureBinding& binding,
+    SourceOwner& sourceOwner,TargetOwner& targetOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,Parameters& parameters,void* child,uintptr_t execution,
+    const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,
+    Read read,Qualify qualify,Executable executable,Invoke invoke={}) noexcept {
+    static_assert(noexcept(invoke(uintptr_t{},nullptr,source,target)) &&
+        std::is_same_v<decltype(invoke(uintptr_t{},nullptr,source,target)),void>,"native170 void ABI");
+    const auto leased=[&]() noexcept {
+        return child && sourceOwner.hasSurfaceLease(source) && targetOwner.hasSurfaceLease(target) &&
+            childOwner.hasPrivateFeaturePreparationLease(reinterpret_cast<uintptr_t>(child),binding.image) &&
+            executionOwner.hasLeasedFeatureReport(execution,&target) &&
+            parameters.hasNativeReleaseSlot(source.prefix.data()+0x90);
+    };
+    if(!leased()) return 5;
+    uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
+    if(linked!=execution) return 5;
+    TglVeboxFeatureBinding current;
+    if(!current.resolve(binding.image,read,qualify,executable) || current.entry!=binding.entry) return 5;
+    invoke(binding.entry,child,source,target);
+    std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
+    return linked==execution && leased()?0:5;
+}
+
 template<class SourceOwner,class TargetOwner,class ChildOwner,class ExecutionOwner,class Invoke>
 int tglRunCapturedVeboxFeature(SourceOwner& sourceOwner,TargetOwner& targetOwner,
     ChildOwner& childOwner,ExecutionOwner& executionOwner,void* child,uintptr_t execution,

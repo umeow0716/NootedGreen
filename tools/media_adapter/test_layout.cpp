@@ -23420,9 +23420,14 @@ int main() {
                                 bool matrix(uintptr_t,uint32_t,uint32_t,float*) const noexcept {assert(false);return false;}
                             };
                             auto useCreatorFrame=[&](auto& owner,void* child,void* vp,auto& graph,auto&,
-                                auto&,auto&,auto&,auto& live,auto& csc,auto& admitDndi,
+                                auto& sourceOwner,auto& targetOwner,auto& parameters,auto& live,auto& csc,auto& admitDndi,
                                 auto& sourceRole,auto& targetRole) noexcept {
                                 ++creatorFrameUses;
+                                assert(executionLease.hasLeasedFeatureReport(live.leases.execution,live.leases.target));
+                                assert(!executionLease.hasLeasedFeatureReport(live.leases.execution+8,live.leases.target));
+                                assert(!executionLease.hasLeasedFeatureReport(live.leases.execution,&owner));
+                                assert(parameters.hasNativeReleaseSlot(live.leases.source.prefix.data()+0x90));
+                                assert(!parameters.hasNativeReleaseSlot(live.leases.source.prefix.data()+0x88));
                                 assert(ChildLifetimeResolve{}(child)==&firstLifetime && firstLifetime.owns(child));
                                 static_assert(std::is_same_v<std::decay_t<decltype(admitDndi)>,TglNativeDndiStackAdmission>);
                                 assert(!admitDndi(0,0x30,0,0x24));
@@ -23456,6 +23461,42 @@ int main() {
                                 assert(!originalTarget);
                                 const auto targetAddress=reinterpret_cast<uintptr_t>(live.leases.target);
                                 std::memcpy(executionBackend.bytes.data()+0x60,&targetAddress,8);
+                                assert(executionLease.hasLeasedFeatureReport(live.leases.execution,live.leases.target));
+                                bool featureCode=true;unsigned featureInvocations=0;
+                                auto featureRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                    constexpr std::array<uint8_t,16> anchor{
+                                        0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x50,
+                                        0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+                                    if(address==base+0x12aba0 && size==anchor.size()) {
+                                        if(!featureCode) return false;
+                                        std::memcpy(output,anchor.data(),size);return true;
+                                    }
+                                    if(address==base+0x757c98+0x170 && size==8) {
+                                        const uintptr_t entry=base+0x12aba0;
+                                        std::memcpy(output,&entry,8);return true;
+                                    }
+                                    return false;
+                                };
+                                auto featureExecutable=[](uintptr_t entry,size_t size) noexcept {
+                                    return entry==base+0x12aba0 && size==16;
+                                };
+                                TglVeboxFeatureBinding feature;
+                                assert(feature.resolve(base,featureRead,qualifyMhw,featureExecutable));
+                                auto invokeFeature=[&](uintptr_t entry,void* object,const auto& input,const auto& output) noexcept {
+                                    ++featureInvocations;
+                                    assert(entry==base+0x12aba0 && object==child && &input==&live.leases.source &&
+                                        &output==live.leases.target);
+                                };
+                                auto prepareFeature=[&]() noexcept {
+                                    return tglInvokePreboundVeboxFeaturePreparation(feature,sourceOwner,targetOwner,owner,
+                                        executionLease,parameters,child,live.leases.execution,live.leases.source,
+                                        *live.leases.target,featureRead,qualifyMhw,featureExecutable,invokeFeature);
+                                };
+                                assert(prepareFeature()==0 && featureInvocations==1);
+                                featureCode=false;
+                                assert(prepareFeature()==5 && featureInvocations==1);
+                                featureCode=true;feature.entry++;
+                                assert(prepareFeature()==5 && featureInvocations==1);feature.entry--;
                                 bool enabled=true;childBytes[0x1ba9]=2;
                                 assert(live.control.policy(live.leases.source,0,false,enabled)==0 && !enabled);
                                 childBytes[0x1ba9]=1;
@@ -23475,6 +23516,7 @@ int main() {
                             uintptr_t detachedTarget=1;
                             std::memcpy(&detachedTarget,executionBackend.bytes.data()+0x60,8);
                             assert(!detachedTarget);
+                            assert(!executionLease.hasLeasedFeatureReport(report,&source));
                             bool admitCscAnchors=true;
                             auto qualifiedCreatorRead=[&](uintptr_t address,void* output,size_t size) noexcept {
                                 constexpr std::array<uint8_t,15> prologue{
@@ -23576,11 +23618,13 @@ int main() {
                             const auto foreignReport=frame.withNativeOwnedVpCreatorRetainedPacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
                                 false,false,{},creatorFrameRead,rejectPacket,rejectPacket,
-                                [&](auto&,void*,void*,auto&,auto&,auto&,auto&,auto&,auto&,auto&,auto&,
+                                [&](auto&,void*,void*,auto&,auto&,auto&,auto&,auto&,auto& live,auto&,auto&,
                                     auto&,auto&) noexcept {
                                     ++foreignReportUses;
+                                    assert(executionLease.hasLeasedFeatureReport(live.leases.execution,live.leases.target));
                                     const uintptr_t foreign=1;
                                     std::memcpy(executionBackend.bytes.data()+0x60,&foreign,8);
+                                    assert(!executionLease.hasLeasedFeatureReport(live.leases.execution,live.leases.target));
                                     return TglOwnedVeboxCommandTransactionResult{-91,-91,false,false};
                                 });
                             std::memcpy(&detachedTarget,executionBackend.bytes.data()+0x60,8);
