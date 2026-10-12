@@ -12640,6 +12640,10 @@ int tglWithOwnedVpResourceEntries(TglOwnedVpSfcCallerStorage&,Lines&,State&,Reti
 template<class Read,class Lines,class State,class Retire,class Use>
 int tglWithOwnedVpAssemblyEntries(TglOwnedVpSfcCallerStorage&,Read&,Lines&,State&,Retire&,Use,
     const TglOwnedVeboxFrameRetention* =nullptr) noexcept;
+template<class Read,class Lines,class State,class Retire,class Use>
+int tglWithOwnedVpPairedAssemblyEntries(TglOwnedVpSfcCallerStorage&,Lines&,State&,
+    TglOwnedVpSfcCallerStorage&,Lines&,State&,Read&,Retire&,Use,
+    const TglOwnedVeboxFrameRetention* =nullptr) noexcept;
 template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedVpSfcCallerStorage storage_;
     TglOwnedSfcStateParameters<StateBackend> state_;
@@ -12940,6 +12944,26 @@ public:
     }
     // Expose the qualified admission/resource subset as typed slots on the
     // same child. Other slots remain NULL; this is not a publishable vtable.
+    template<class Read,class Lines,class Retire,class Use>
+    int withPairedAssemblyView(TglOwnedVpSfcCpuGraph& other,bool avsEnabled,
+        Read& read,Lines& firstLines,Lines& secondLines,Retire& retire,Use use) noexcept {
+        if(this==&other || retention_!=other.retention_) return 5;
+        return withView(avsEnabled,[&](void* first) noexcept {
+            return other.withView(avsEnabled,[&](void* second) noexcept {
+                return state_.withPublishedVpParameters(storage_,[&](const uint8_t*) noexcept {
+                    return other.state_.withPublishedVpParameters(other.storage_,[&](const uint8_t*) noexcept {
+                        return tglWithOwnedVpPairedAssemblyEntries(storage_,firstLines,state_,
+                            other.storage_,secondLines,other.state_,read,retire,
+                            [&](void* a,const auto& ae,void* b,const auto& be) noexcept -> int {
+                                if(a!=first || b!=second) return 5;
+                                static_assert(noexcept(use(a,ae,b,be)),"paired graph assembly consumer ABI");
+                                return use(a,ae,b,be);
+                            },retention_);
+                    });
+                });
+            });
+        });
+    }
     template<class Read,class Lines,class Retire,class Use>
     int withLeasedAssemblyEntries(void* child,Read& read,Lines& lines,Retire& retire,Use use) noexcept {
         if(!ready_ || !busy_ || child!=storage_.bytes.data()) return 5;
@@ -17020,7 +17044,7 @@ int tglWithOwnedVpPairedResourceEntries(TglOwnedVpSfcCallerStorage& first,Lines&
 template<class Read,class Lines,class State,class Retire,class Use>
 int tglWithOwnedVpPairedAssemblyEntries(TglOwnedVpSfcCallerStorage& first,Lines& firstLines,State& firstState,
     TglOwnedVpSfcCallerStorage& second,Lines& secondLines,State& secondState,
-    Read& read,Retire& retire,Use use,const TglOwnedVeboxFrameRetention* retention=nullptr) noexcept {
+    Read& read,Retire& retire,Use use,const TglOwnedVeboxFrameRetention* retention) noexcept {
     return tglWithOwnedVpPairedResourceEntries(first,firstLines,firstState,second,secondLines,secondState,retire,
         [&](void* a,void* b,auto allocate,auto release) noexcept -> int {
             return tglWithOwnedVpPairedAdmissionEntries(first,second,read,

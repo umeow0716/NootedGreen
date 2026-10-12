@@ -20755,6 +20755,38 @@ int main() {
                                     })==0);
                             }
                             assert(modeObjects[0] && modeObjects[1] && modeObjects[0]!=modeObjects[1]);
+                            assert(frame.backing().withVpResources(0,[&](auto& firstGraph,auto& first,auto& firstLines) noexcept {
+                                return frame.backing().withVpResources(1,[&](auto& secondGraph,auto& second,auto& secondLines) noexcept {
+                                    for(int expected:{0,-31}) {
+                                        assert(firstGraph.withPairedAssemblyView(secondGraph,false,modeRead,
+                                            firstLines.resources(),secondLines.resources(),modeRetire,
+                                            [&](void* a,const auto& ae,void* b,const auto& be) noexcept -> int {
+                                                assert(a==modeObjects[0] && b==modeObjects[1]);
+                                                uintptr_t firstState=0,secondState=0;
+                                                std::memcpy(&firstState,first.bytes.data()+0x938,8);
+                                                std::memcpy(&secondState,second.bytes.data()+0x938,8);
+                                                assert(firstState && secondState && firstState!=secondState);
+                                                assert(!firstGraph.tryReset() && !secondGraph.tryReset());
+                                                assert(ae.allocate && be.allocate && ae.freeResources && be.freeResources);
+                                                std::array<TglOwnedVpEntrySet,2> baseEntries{ae,be};
+                                                return tglWithOwnedVpPairedModeAssembly(first,second,
+                                                    {0x1000,0x1000},{0x2000,0x2000},{0x3000,0x3000},modeRead,baseEntries,
+                                                    [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
+                                                        xe.sampleMode(x,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                                        ye.sampleMode(y,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                                        xe.formatMode(x,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                                                        ye.formatMode(y,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                                                        return expected;
+                                                    });
+                                            })==expected);
+                                        uintptr_t firstState=1,secondState=1;
+                                        std::memcpy(&firstState,first.bytes.data()+0x938,8);
+                                        std::memcpy(&secondState,second.bytes.data()+0x938,8);
+                                        assert(!firstState && !secondState);
+                                    }
+                                    return 0;
+                                });
+                            })==0);
                             assert(frame.backing().withVpResources(0,[&](auto&,auto& first,auto&) noexcept {
                                 return frame.backing().withVpResources(1,[&](auto&,auto& second,auto&) noexcept {
                                     std::array<TglOwnedVpEntrySet,2> baseEntries{};
