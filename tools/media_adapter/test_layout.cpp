@@ -19505,6 +19505,33 @@ int main() {
                         };
                         assert(allocation.resolve(base,allocationRead,qualify,executable));
                         int allocationArgument1=0,allocationArgument2=0;
+                        unsigned initCalls=0,initConsumers=0;
+                        for(int status : {0,31}) {
+                            assert(owner.withInitializedVp(allocation,graph,child,dispatch,
+                                &allocationArgument1,&allocationArgument2,
+                                [&](void* parent) noexcept {
+                                    ++initConsumers;
+                                    uintptr_t link=0;std::memcpy(&link,static_cast<uint8_t*>(parent)+0x80,8);
+                                    assert(link==reinterpret_cast<uintptr_t>(child));
+                                    return -17;
+                                },[&](uintptr_t entry,void* parent,void* request,void* metadata) noexcept {
+                                    ++initCalls;
+                                    assert(entry==base+0x126740 && request==&allocationArgument1 &&
+                                        metadata==&allocationArgument2);
+                                    uintptr_t table=0,factory=0;std::memcpy(&table,parent,8);
+                                    std::memcpy(&factory,reinterpret_cast<void*>(table+0x1e0),8);
+                                    void* created=reinterpret_cast<void*(*)(void*) noexcept>(factory)(parent);
+                                    assert(created==child);
+                                    std::memcpy(static_cast<uint8_t*>(parent)+0x80,&created,8);
+                                    return status;
+                                })==(status ? status : -17));
+                            uintptr_t link=1;std::memcpy(&link,cpu.bytes.data()+0x80,8);assert(!link);
+                        }
+                        assert(initCalls==2 && initConsumers==1);
+                        assert(owner.withInitializedVp(allocation,graph,child,dispatch,
+                            &allocationArgument1,&allocationArgument2,
+                            [](void*) noexcept -> int {assert(false);return 0;},
+                            [](uintptr_t,void*,void*,void*) noexcept -> int {return 0;})==5);
                         auto neverAllocate=[](uintptr_t,void*,void*,void*) noexcept -> int {assert(false);return 0;};
                         assert(tglInvokeLeasedVeboxAllocate(allocation,owner,owner.constructedBase(),
                             &allocationArgument1,&allocationArgument2,neverAllocate)==5);

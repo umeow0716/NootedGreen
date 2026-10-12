@@ -4070,6 +4070,26 @@ public:
                 return result ? result : intact ? 0 : 5;
             });
     }
+    // Keep native initialization AND its synchronous consumer inside the same
+    // VP factory/table lease. A successful init is not GPU completion and does
+    // not transfer parent80 ownership. The enclosing renderer retains metadata.
+    template<class VpOwner,class Table,class Use,class Invoke=TglNativeVeboxStageInvoker>
+    int withInitializedVp(const TglVeboxAllocateBinding& binding,VpOwner& vp,
+        void* child,const Table& table,void* request,void* metadata,Use use,Invoke invoke={}) noexcept {
+        static_assert(noexcept(use(nullptr)),"initialized VP consumer ABI");
+        if(!request || !metadata || binding.image!=image_ ||
+           binding.entry!=image_+0x126740) return 5;
+        return withVpFactoryVtableDispatch(vp,child,table,[&](void* parent) noexcept {
+            const int result=tglInvokeLeasedVeboxAllocate(binding,*this,parent,request,metadata,invoke);
+            if(result) return result;
+            uintptr_t linked=0;
+            std::memcpy(&linked,static_cast<uint8_t*>(parent)+0x80,8);
+            // Factory postvalidation alone happens after use(); reject a
+            // successful native call that did not publish this VP BEFORE use.
+            if(linked!=reinterpret_cast<uintptr_t>(child)) return 5;
+            return use(parent);
+        });
+    }
     // Parent80 is borrowed only while the graph's admission/resource entries
     // are live. Restore it before either owner can enter native teardown.
     template<class VpOwner,class Read,class Lines,class Retire,class Use>
