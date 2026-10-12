@@ -19573,10 +19573,26 @@ int main() {
                             TglNativeResourceBinding borrowedResources;
                             assert(!frame.resolveBorrowedResources(borrowedResources,resourceRead,qualifyMhw,executableMhw));
                             assert(borrowedResources.resolveFromBorrowedVphal(preparedMhw,resourceRead,qualifyMhw,executableMhw));
-                            assert(!frame.retainedMhw() && frame.retainPreparedBorrowedMhw(std::move(preparedMhw)));
+                            assert(frame.backing().matchesResourceEnvironment(environment));
+                            for(size_t field=0;field<6;++field) {
+                                auto changed=environment;
+                                if(field==0) ++changed.resources.context;
+                                if(field==1) ++changed.resources.allocate;
+                                if(field==2) ++changed.resources.release;
+                                if(field==3) changed.pageSize*=2;
+                                if(field==4) ++changed.fill.context;
+                                if(field==5) ++changed.fill.entry;
+                                assert(!frame.backing().matchesResourceEnvironment(changed));
+                            }
+                            allowPageImport=false;
+                            assert(!frame.retainPreparedBorrowedMhw(std::move(preparedMhw),resourceRead,qualifyMhw,executableMhw));
+                            assert(preparedMhw.binding() && !frame.retainedMhw() && removeParent()==5);
+                            allowPageImport=true;
+                            assert(!frame.retainedMhw() && frame.retainPreparedBorrowedMhw(std::move(preparedMhw),
+                                resourceRead,qualifyMhw,executableMhw));
                             assert(!preparedMhw.binding() && !preparedMhw.view() &&
                                 frame.retainedMhw()->interface==0x6000 && removeParent()==5);
-                            assert(!frame.retainPreparedBorrowedMhw(std::move(preparedMhw)));
+                            assert(!frame.retainPreparedBorrowedMhw(std::move(preparedMhw),resourceRead,qualifyMhw,executableMhw));
                             assert(frame.resolveBorrowedResources(borrowedResources,resourceRead,qualifyMhw,executableMhw));
                             assert(borrowedResources.context==os && borrowedResources.allocate==base+0x63720 &&
                                 borrowedResources.release==base+0x63c00);

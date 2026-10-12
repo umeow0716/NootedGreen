@@ -19150,6 +19150,7 @@ template<class Api,class Invoker=TglNativeTrackedCpuInvoker>
 class TglNativeVeboxVpFrameBacking {
     const TglNativeResourceBinding resources_;
     const uint64_t pageSize_;
+    const TglNativeBufferFillBinding fill_;
     TglNativeVeboxCommandFrameStorage<Api> command_;
     TglNativeVpBackingStorage<Invoker> vp_;
 public:
@@ -19158,12 +19159,18 @@ public:
         Executable executable,const TglNativeResourceBinding& resources,
         uint64_t pageSize,const TglNativeBufferFillBinding& fill,Invoker invoke,
         Args&&... args)
-        :resources_(resources),pageSize_(pageSize),
+        :resources_(resources),pageSize_(pageSize),fill_(fill),
          command_(resources,pageSize,fill,std::forward<Args>(args)...),
          vp_(image,read,qualify,executable,command_.backing().auxiliary().retention(),invoke) {}
     TglNativeVeboxVpFrameBacking(const TglNativeVeboxVpFrameBacking&)=delete;
     TglNativeVeboxVpFrameBacking& operator=(const TglNativeVeboxVpFrameBacking&)=delete;
     auto& command() noexcept {return command_;}
+    bool matchesResourceEnvironment(const TglNativeVphalResourceEnvironment& environment) const noexcept {
+        return resources_.context && resources_.allocate && resources_.release && pageSize_ && fill_.entry &&
+            resources_.context==environment.resources.context &&
+            resources_.allocate==environment.resources.allocate && resources_.release==environment.resources.release &&
+            pageSize_==environment.pageSize && fill_.context==environment.fill.context && fill_.entry==environment.fill.entry;
+    }
     // Caller holds this physical/context generation lease through destruction.
     // Resolving these borrowed addresses does not itself retain native objects.
     template<class Binding,class Read,class Admit>
@@ -19349,9 +19356,14 @@ public:
     auto& backing() noexcept {return backing_;}
     auto& children() noexcept {return children_;}
     bool surfacesReady() const noexcept {return source_.storage() && target_.storage();}
-    bool retainPreparedBorrowedMhw(MhwDependency&& dependency) noexcept {
+    template<class Read,class Qualify,class Executable>
+    bool retainPreparedBorrowedMhw(MhwDependency&& dependency,Read read,
+        Qualify qualify,Executable executable) noexcept {
         if(backing_.retention()() || children_.first().owner().constructedBase() ||
             children_.second().owner().constructedBase()) return false;
+        TglNativeVphalResourceEnvironment environment;
+        if(!environment.resolve(dependency,read,qualify,executable) ||
+           !backing_.matchesResourceEnvironment(environment)) return false;
         return mhwLease_.transferFrom(std::move(dependency));
     }
     template<class Read,class Qualify,class Executable>
