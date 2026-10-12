@@ -15457,6 +15457,9 @@ public:
     // Zeroing scratch cannot substitute for those resource/context effects.
     // Requires resource/heap/command leases; binding code is not admission to
     // GPU execution. Native138 is invoked once and its exact result preserved.
+    // 129ca0 invokes child80->VP+48 only when execution+a0c==1, after the
+    // MHW+18/+20 calls and before MHW+28. The paired VP CPU catalogue exercise
+    // is NOT permission to acquire/submit independently for both VP objects.
     template<class Read,class Invoke=TglNativeVeboxBuilderInvoker>
     int call(TglOwnedVeboxPacketLeases& leases,TglOwnedVeboxBuilderScratch& scratch,
         Read read,Invoke invoke=Invoke{}) const noexcept {
