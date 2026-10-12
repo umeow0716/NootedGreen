@@ -3954,13 +3954,11 @@ public:
     TglOwnedVeboxBaseOwner(const TglOwnedVeboxBaseOwner&)=delete;
     TglOwnedVeboxBaseOwner& operator=(const TglOwnedVeboxBaseOwner&)=delete;
     ~TglOwnedVeboxBaseOwner(){reset();}
-    template<class Read,class Construct>
-    TglOwnedBaseConstruction initialize(const TglVeboxLifetimeBinding& binding,
+private:
+    template<class Read,class Build>
+    TglOwnedBaseConstruction initializeDependencies(const TglVeboxLifetimeBinding& binding,
         const TglSfcLifetimeBinding& sfcLifetime,const TglSfcMhwBinding& sfcBinding,
-        void* os,void* mhw,void* renderHal,void* history,void* performance,
-        const void* cache,int32_t& status,Read read,Construct construct) {
-        static_assert(noexcept(construct(uintptr_t{},nullptr,nullptr,nullptr,nullptr,
-            nullptr,nullptr,nullptr,nullptr,&status)),"constructor reports native status");
+        void* os,Read read,Build build) {
         if(busy_ || publishedRenderer_ || allocationGeneration_==UINT64_MAX) return TglOwnedBaseConstruction::NotCalled;
         reset();busy_=true;
         if(binding.image!=sfcLifetime.image ||
@@ -3969,15 +3967,42 @@ public:
         }
         if(!storage_.allocate(0x1bc0)){busy_=false;reset();return TglOwnedBaseConstruction::NotCalled;}
         ++allocationGeneration_;
-        const auto result=tglConstructOwnedVeboxBaseWithSfc(binding,
-            reinterpret_cast<void*>(storage_.get()),storage_.size(),sfc_,os,mhw,
-            renderHal,history,performance,cache,status,construct);
+        const auto result=build(reinterpret_cast<void*>(storage_.get()),storage_.size(),sfc_);
         if(result==TglOwnedBaseConstruction::NotCalled){busy_=false;reset();return result;}
         constructed_=true;destructor_=binding.destroy;image_=binding.image;
         ready_=result==TglOwnedBaseConstruction::ConstructedSuccess;
         busy_=false;
         if(!ready_) reset();
         return result;
+    }
+public:
+    template<class Read,class Construct>
+    TglOwnedBaseConstruction initialize(const TglVeboxLifetimeBinding& binding,
+        const TglSfcLifetimeBinding& sfcLifetime,const TglSfcMhwBinding& sfcBinding,
+        void* os,void* mhw,void* renderHal,void* history,void* performance,
+        const void* cache,int32_t& status,Read read,Construct construct) {
+        static_assert(noexcept(construct(uintptr_t{},nullptr,nullptr,nullptr,nullptr,
+            nullptr,nullptr,nullptr,nullptr,&status)),"constructor reports native status");
+        return initializeDependencies(binding,sfcLifetime,sfcBinding,os,read,
+            [&](void* storage,size_t size,auto& sfc) {
+                return tglConstructOwnedVeboxBaseWithSfc(binding,storage,size,sfc,os,mhw,
+                    renderHal,history,performance,cache,status,construct);
+            });
+    }
+    // Same owner/unwind machinery, but admit the real initialized MHW dependency.
+    // Its enclosing owner/image lease must outlive this base owner, not just ctor.
+    template<class Read,class Qualify,class Construct>
+    TglOwnedBaseConstruction initializeQualified(const TglVeboxLifetimeBinding& binding,
+        const TglSfcLifetimeBinding& sfcLifetime,const TglSfcMhwBinding& sfcBinding,
+        void* os,const TglVeboxHardwareBinding& mhw,void* renderHal,void* history,
+        void* performance,const void* cache,int32_t& status,Read read,Qualify qualify,Construct construct) {
+        static_assert(noexcept(construct(uintptr_t{},nullptr,nullptr,nullptr,nullptr,
+            nullptr,nullptr,nullptr,nullptr,&status)),"constructor reports native status");
+        return initializeDependencies(binding,sfcLifetime,sfcBinding,os,read,
+            [&](void* storage,size_t size,auto& sfc) {
+                return tglConstructOwnedVeboxBaseWithSfcAndMhw(binding,storage,size,sfc,os,mhw,
+                    renderHal,history,performance,cache,status,read,qualify,construct);
+            });
     }
     void* constructedBase() const noexcept {
         return ready_ ? reinterpret_cast<void*>(storage_.get()) : nullptr;
@@ -4502,6 +4527,15 @@ public:
         if(!bound() || binding.image!=image_) return TglOwnedBaseConstruction::NotCalled;
         return owner_.initialize(binding,lifetime,sfc,os,mhw,renderHal,history,
             performance,cache,status,read,construct);
+    }
+    template<class Read,class Qualify,class Construct=TglNativeVeboxConstructorInvoker>
+    TglOwnedBaseConstruction initializeQualified(const TglVeboxLifetimeBinding& binding,
+        const TglSfcLifetimeBinding& lifetime,const TglSfcMhwBinding& sfc,
+        void* os,const TglVeboxHardwareBinding& mhw,void* renderHal,void* history,
+        void* performance,const void* cache,int32_t& status,Read read,Qualify qualify,Construct construct={}) {
+        if(!bound() || binding.image!=image_) return TglOwnedBaseConstruction::NotCalled;
+        return owner_.initializeQualified(binding,lifetime,sfc,os,mhw,renderHal,history,
+            performance,cache,status,read,qualify,construct);
     }
 };
 

@@ -20592,6 +20592,44 @@ int main() {
             ++veboxMhw.os;
             assert(construct(child.size())==TglOwnedBaseConstruction::NotCalled && calls==3);
             --veboxMhw.os;
+            {
+                struct Cpu {
+                    alignas(8) std::array<uint8_t,0x1bc0> bytes{};
+                    unsigned allocations=0,releases=0;
+                    uintptr_t allocate(size_t n) {assert(n==bytes.size());++allocations;
+                        return reinterpret_cast<uintptr_t>(bytes.data());}
+                    void release(uintptr_t p) noexcept {assert(p==reinterpret_cast<uintptr_t>(bytes.data()));++releases;}
+                } cpu;
+                unsigned cleanups=0,destroys=0,nativeCalls=0;
+                auto cleanup=[&](void* p) noexcept {assert(p==cpu.bytes.data());++cleanups;};
+                auto destroy=[&](uintptr_t entry,void* p) noexcept {
+                    assert(entry==base+0x12de30 && p==cpu.bytes.data());++destroys;};
+                TglOwnedVeboxBaseOwner owned(cpu,invoke,cleanup,destroy);
+                auto combinedRead=[&](uintptr_t p,void* out,size_t n) {
+                    return veboxRead(p,out,n) || read(p,out,n);
+                };
+                auto native=[&](uintptr_t entry,void* p,void*,void* nativeMhw,void*,
+                    void*,void*,void*,const void*,int32_t* out) noexcept {
+                    assert(entry==base+0x12d4e0 && p==cpu.bytes.data() &&
+                        nativeMhw==reinterpret_cast<void*>(veboxInterface));
+                    ++nativeCalls;*out=result;
+                };
+                auto initialize=[&] {return owned.initializeQualified(baseBinding,lifetime,mhw,
+                    reinterpret_cast<void*>(os),veboxMhw,reinterpret_cast<void*>(0x3000),
+                    nullptr,nullptr,nullptr,status,combinedRead,
+                    [&](uintptr_t image){return image==base;},native);};
+                result=31;
+                assert(initialize()==TglOwnedBaseConstruction::ConstructedFailure && nativeCalls==1);
+                assert(!owned.constructedBase() && cleanups==1 && destroys==1 && cpu.releases==1);
+                result=0;
+                assert(initialize()==TglOwnedBaseConstruction::ConstructedSuccess && nativeCalls==2);
+                assert(owned.constructedBase()==cpu.bytes.data());
+                owned.reset();assert(cleanups==2 && destroys==2 && cpu.releases==2);
+                ++veboxMhw.os;
+                assert(initialize()==TglOwnedBaseConstruction::NotCalled && nativeCalls==2);
+                assert(cleanups==2 && destroys==2 && cpu.releases==3);
+                --veboxMhw.os;
+            }
             ++baseBinding.image;
             assert(construct(child.size())==TglOwnedBaseConstruction::NotCalled && calls==3);
         }
