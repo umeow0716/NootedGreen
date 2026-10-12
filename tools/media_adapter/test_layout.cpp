@@ -20474,6 +20474,59 @@ int main() {
                             assert(frame.children().installPrivateVtables(pairHooks,tableRead,
                                 [](uintptr_t image) noexcept {return image==base;},
                                 [](uintptr_t,size_t) noexcept {return true;}));
+                            {
+                                // Two actual CPU graphs/table leases; native stage
+                                // and non-factory VP entries remain fixtures.
+                                struct PairCpu {
+                                    alignas(8) std::array<uint8_t,0xc00> bytes{};bool live=false;
+                                    uintptr_t allocate(size_t size) noexcept {
+                                        assert(!live && size<=bytes.size());live=true;
+                                        return reinterpret_cast<uintptr_t>(bytes.data());
+                                    }
+                                    void release(uintptr_t value) noexcept {
+                                        assert(live && value==reinterpret_cast<uintptr_t>(bytes.data()));live=false;
+                                    }
+                                } state0,avs0,state1,avs1;
+                                TglOwnedVpSfcCpuGraph<PairCpu,PairCpu> graph0(state0,avs0),graph1(state1,avs1);
+                                TglSfcMhwBinding nativeSfc;
+                                assert(nativeSfc.resolve(base,frontendRead,qualifyMhw,executableMhw));
+                                assert(graph0.initialize(os,frontendCreatorView.renderHal,frontendSfc,
+                                    nativeSfc,frontendRead,0,0));
+                                assert(graph1.initialize(os,frontendCreatorView.renderHal,frontendSfc,
+                                    nativeSfc,frontendRead,0,0));
+                                TglOwnedVpFlatDispatchTable table0,table1;
+                                assert(table0.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
+                                assert(table1.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
+                                for(int nativeStatus:{-31,0}) assert(graph0.withView(false,[&](void* firstVp) noexcept {
+                                    return graph1.withView(false,[&](void* secondVp) noexcept {
+                                        assert(firstVp!=secondVp);
+                                        return frame.children().withPairedVpFactories(graph0,firstVp,table0,
+                                            graph1,secondVp,table1,[&](void* firstParent,void* secondParent) noexcept -> int {
+                                                assert(firstParent!=secondParent);
+                                                for(size_t index=0;index<2;++index) {
+                                                    void* parent=index?secondParent:firstParent;
+                                                    uintptr_t table=0,entry=0;
+                                                    std::memcpy(&table,parent,8);
+                                                    std::memcpy(&entry,reinterpret_cast<void*>(table+0x1e0),8);
+                                                    void* created=reinterpret_cast<void*(*)(void*) noexcept>(entry)(parent);
+                                                    assert(created==(index?secondVp:firstVp));
+                                                    std::memcpy(static_cast<uint8_t*>(parent)+0x80,&created,8);
+                                                }
+                                                return nativeStatus;
+                                            });
+                                    });
+                                })==nativeStatus);
+                                assert(frame.children().first().owner().matchesPrivateVtableHooks(pairHooks[0]) &&
+                                    frame.children().second().owner().matchesPrivateVtableHooks(pairHooks[1]));
+                                for(size_t index=0;index<2;++index) {
+                                    auto& owner=index?frame.children().second().owner():frame.children().first().owner();
+                                    uintptr_t link=1;
+                                    std::memcpy(&link,static_cast<uint8_t*>(owner.constructedBase())+0x80,8);
+                                    assert(!link);
+                                }
+                                graph0.reset();graph1.reset();
+                                assert(!state0.live && !avs0.live && !state1.live && !avs1.live);
+                            }
                             assert(frame.children().publishFromCreatorOwned(base,creatorAddress,1,parentLifetime,
                                 borrowedRead,borrowedAdmit,qualifyMhw,executableMhw,
                                 [&](uintptr_t address,uint64_t generation,uintptr_t) noexcept {

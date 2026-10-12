@@ -182,6 +182,18 @@ public:
     bool bound() const noexcept {return bound_;}
     bool valid() const noexcept {return bound_ && valid_;}
     bool called(size_t index) const noexcept {return bound_ && index<2 && called_[index];}
+    bool matches(void* parent,void* child) const noexcept {
+        if(!valid() || active_!=this || tglOwnedVpFactoryPairActive!=this) return false;
+        for(size_t index=0;index<2;++index)
+            if(parents_[index]==parent && children_[index]==child) return true;
+        return false;
+    }
+    bool matchesPublication(void* parent,void* child,uintptr_t observed) const noexcept {
+        if(!matches(parent,child)) return false;
+        for(size_t index=0;index<2;++index)
+            if(parents_[index]==parent) return observed==(called_[index]?reinterpret_cast<uintptr_t>(child):0);
+        return false;
+    }
     static uintptr_t callbackAddress() noexcept {return reinterpret_cast<uintptr_t>(&create);}
 };
 struct TglOwnedVpFactoryContextDomain {};
@@ -5031,6 +5043,36 @@ public:
                 return result ? result : intact ? 0 : 5;
             });
     }
+    // Pair caller already holds BOTH VP flat-table/graph leases and child
+    // leases. Install only our owned slot; never call either init separately.
+    template<class Admit,class Use>
+    int withLeasedPairVpFactorySlot(TglOwnedVpFactoryPairScope<Admit>& scope,
+        void* vp,Use use) noexcept {
+        void* parent=constructedBase();
+        static_assert(noexcept(use(parent)) && std::is_same_v<decltype(use(parent)),int>);
+        if(!hasPrivateChildLease(reinterpret_cast<uintptr_t>(parent)) || !scope.matches(parent,vp)) return 5;
+        const auto p=reinterpret_cast<uintptr_t>(parent),c=reinterpret_cast<uintptr_t>(vp);
+        if(p>UINTPTR_MAX-0x1bc0 || c>UINTPTR_MAX-0x9d0 ||
+           (p<c+0x9d0 && c<p+0x1bc0)) return 5;
+        auto* link=static_cast<uint8_t*>(parent)+0x80;
+        uintptr_t previousLink=0;std::memcpy(&previousLink,link,8);
+        if(previousLink) return 5;
+        uintptr_t vptr=0;std::memcpy(&vptr,parent,8);
+        if(vptr!=table_.addressPoint()) return 5;
+        auto& slot=table_.entries[0x1e0/8];
+        const auto previous=slot;
+        const auto installed=scope.callbackAddress();slot=installed;
+        const int result=use(parent);
+        uintptr_t observed=0;std::memcpy(&observed,parent,8);
+        uintptr_t observedLink=0;std::memcpy(&observedLink,link,8);
+        const bool intact=observed==vptr && slot==installed &&
+            scope.matchesPublication(parent,vp,observedLink);
+        // Native accounting must never see our borrowed graph after its
+        // private table/state leases end, including partial native failure.
+        std::memcpy(link,&previousLink,8);
+        slot=previous;
+        return result?result:intact?0:5;
+    }
     // Keep native initialization AND its synchronous consumer inside the same
     // VP factory/table lease. A successful init is not GPU completion and does
     // not transfer parent80 ownership. The enclosing renderer retains metadata.
@@ -5270,6 +5312,35 @@ public:
     bool bound() const noexcept {return first_.bound() && second_.bound();}
     auto& first() noexcept {return first_;}
     auto& second() noexcept {return second_;}
+    // Caller encloses this in both concrete VP graph/state leases. Keep both
+    // actual flat tables and parent leases through ONE native renderer call.
+    template<class FirstVp,class SecondVp,class FirstTable,class SecondTable,class Use>
+    int withPairedVpFactories(FirstVp& firstVp,void* firstObject,const FirstTable& firstTable,
+        SecondVp& secondVp,void* secondObject,const SecondTable& secondTable,Use use) noexcept {
+        return first_.owner().withPrivateChild([&](void* firstParent) noexcept {
+            return second_.owner().withPrivateChild([&](void* secondParent) noexcept {
+                return firstVp.withLeasedFlatDispatch(firstObject,firstTable,[&](void* firstChild) noexcept {
+                    return secondVp.withLeasedFlatDispatch(secondObject,secondTable,[&](void* secondChild) noexcept {
+                        auto admit=[&](void* parent,void* child) noexcept {
+                            return (parent==firstParent && child==firstChild &&
+                                    first_.owner().hasPrivateChildLease(reinterpret_cast<uintptr_t>(parent))) ||
+                                   (parent==secondParent && child==secondChild &&
+                                    second_.owner().hasPrivateChildLease(reinterpret_cast<uintptr_t>(parent)));
+                        };
+                        TglOwnedVpFactoryPairScope scope({firstParent,secondParent},{firstChild,secondChild},admit);
+                        if(!scope.bound()) return 5;
+                        return first_.owner().withLeasedPairVpFactorySlot(scope,firstChild,[&](void*) noexcept {
+                            return second_.owner().withLeasedPairVpFactorySlot(scope,secondChild,[&](void*) noexcept {
+                                static_assert(noexcept(use(firstParent,secondParent)) &&
+                                    std::is_same_v<decltype(use(firstParent,secondParent)),int>);
+                                return use(firstParent,secondParent);
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    }
     // Install both concrete catalogues before renderer publication. A later
     // install failure may leave the FIRST private table owned by this storage;
     // it does not publish either child or grant native teardown permission.
