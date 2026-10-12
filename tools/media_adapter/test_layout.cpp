@@ -20623,6 +20623,13 @@ int main() {
                             assert(frame.initializeVpFromCreator(1,frontendCreatorView,
                                 frontendRead,qualifyMhw,executableMhw)==0);
                             assert(frontendVp1.live && frontendAvs1.live && vpCpu.live && vpAvsCpu.live);
+                            auto modeRetire=[]() noexcept -> int {assert(false);return 5;};
+                            for(size_t index:{size_t{0},size_t{1},size_t{2}}) {
+                                assert(frame.backing().withVpModeAssemblyView(index,false,frontendRead,modeRetire,
+                                    0,0,0,[](void*,const TglOwnedVpEntrySet&) noexcept -> int {
+                                        assert(false);return 0;
+                                    })==5);
+                            }
                             TglOwnedVpFlatDispatchTable persistentTable0,persistentTable1;
                             assert(persistentTable0.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
                             assert(persistentTable1.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));

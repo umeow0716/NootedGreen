@@ -19792,9 +19792,15 @@ public:
         return vp_.withAssemblyView(avsEnabled,read,retire,use);
     }
     template<class Read,class Retire,class Use>
+    int withVpModeAssemblyView(size_t index,bool avsEnabled,Read& read,Retire& retire,
+        uintptr_t source,uintptr_t target,uintptr_t settings,Use use) noexcept {
+        auto* vp=selectVp(index);
+        return vp?vp->withModeAssemblyView(avsEnabled,read,retire,source,target,settings,use):5;
+    }
+    template<class Read,class Retire,class Use>
     int withVpModeAssemblyView(bool avsEnabled,Read& read,Retire& retire,
         uintptr_t source,uintptr_t target,uintptr_t settings,Use use) noexcept {
-        return vp_.withModeAssemblyView(avsEnabled,read,retire,source,target,settings,use);
+        return withVpModeAssemblyView(0,avsEnabled,read,retire,source,target,settings,use);
     }
     auto& retention() noexcept {return command_.backing().auxiliary().retention();}
 };
