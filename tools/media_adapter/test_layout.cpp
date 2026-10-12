@@ -22088,13 +22088,17 @@ int main() {
                             // Full owned report extent: DI policy also reads
                             // d28, beyond the older feature-only a10 fixture.
                             std::array<uint8_t,0xd48> bytes{};
-                            unsigned destroyed=0;
+                            unsigned destroyed=0,scratchCalls=0;
                             uintptr_t create() noexcept {assert(false);return 0;}
                             int initialize(uintptr_t object) noexcept {return validate(object)?0:5;}
                             bool validate(uintptr_t object) const noexcept {
                                 return object==reinterpret_cast<uintptr_t>(bytes.data());
                             }
                             void destroy(uintptr_t object) noexcept {assert(validate(object));++destroyed;}
+                            int clearKernelScratch(uintptr_t object,void* child,size_t extent,int32_t index) noexcept {
+                                assert(validate(object));++scratchCalls;
+                                return tglClearOwnedVeboxKernelScratch(child,extent,bytes.data(),bytes.size(),index);
+                            }
                         } executionBackend;
                         TglExecutionOwner<RecordingExecutionBackend> executionLease(executionBackend);
                         const uintptr_t report=reinterpret_cast<uintptr_t>(executionBackend.bytes.data());
@@ -23312,6 +23316,66 @@ int main() {
                                 capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame,DeniedCreatorCsc{});
                             assert(creatorFrame.status==-87 && !creatorFrame.requiresRetention() &&
                                 creatorFrameUses==1 && packetGathers==1);
+                            bool admitCscAnchors=true;
+                            auto qualifiedCreatorRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                constexpr std::array<uint8_t,15> prologue{
+                                    0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x80,0,0,0,0x48,0x8d,0x45,0xc0};
+                                constexpr std::array<uint8_t,5> call{0xe8,0x53,0x6e,0,0};
+                                constexpr std::array<uint8_t,35> matrix{
+                                    0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,0x89,0x7d,0xfc,
+                                    0x89,0x75,0xf8,0x48,0x89,0x55,0xf0,0xc6,0x45,0xef,0,
+                                    0x8b,0x7d,0xfc,0xbe,0xff,0xff,0xff,0xff,0xe8,0xfd,0xe9,0xff,0xff};
+                                if(admitCscAnchors) {
+                                    if(address==base+0x4dac0 && size==prologue.size()) {std::memcpy(output,prologue.data(),size);return true;}
+                                    if(address==base+0x4daf8 && size==call.size()) {std::memcpy(output,call.data(),size);return true;}
+                                    if(address==base+0x54950 && size==matrix.size()) {std::memcpy(output,matrix.data(),size);return true;}
+                                }
+                                return creatorFrameRead(address,output,size);
+                            };
+                            unsigned cscCalls=0,cscQueries=0;
+                            struct CreatorCscRecording {
+                                uintptr_t image;unsigned& calls;unsigned& queries;
+                                void coefficients(uintptr_t entry,uint32_t from,uint32_t to,float* matrix,float* in,float* out) noexcept {
+                                    assert(entry==image+0x4dac0 && from==1 && to==2);++calls;
+                                    for(unsigned i=0;i<9;++i) matrix[i]=float(i);
+                                    for(unsigned i=0;i<3;++i) {in[i]=float(i+10);out[i]=float(i+20);}
+                                }
+                                bool matrix(uintptr_t entry,uint32_t from,uint32_t to,float*) noexcept {
+                                    assert(entry==image+0x54950 && from==1 && to==2);++queries;return true;
+                                }
+                            } cscRecording{base,cscCalls,cscQueries};
+                            const auto qualifiedCscFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
+                                executionLease,frontendCreatorView,0x3300,qualifiedCreatorRead,qualifyMhw,executableMhw,
+                                capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,
+                                [&](auto& owner,void* child,void*,auto&,auto&,auto&,auto&,auto&,auto&,auto& csc) noexcept {
+                                    std::array<uint8_t,0x3c> saved{};
+                                    std::memcpy(saved.data(),static_cast<uint8_t*>(child)+0xa0,saved.size());
+                                    std::array<uint8_t,0x90> savedSearch{};
+                                    std::array<uint8_t,0x58> savedKernel{};
+                                    std::memcpy(savedSearch.data(),static_cast<uint8_t*>(child)+0x118,savedSearch.size());
+                                    std::memcpy(savedKernel.data(),executionBackend.bytes.data()+0xa50+3*0x58,savedKernel.size());
+                                    const auto scratchCalls=executionBackend.scratchCalls;
+                                    assert(owner.setupKernelScratch(executionLease,3)==31 && executionBackend.scratchCalls==scratchCalls+1);
+                                    for(size_t i=0;i<savedSearch.size();++i) assert(static_cast<uint8_t*>(child)[0x118+i]==0);
+                                    for(size_t i=0;i<savedKernel.size();++i) assert(executionBackend.bytes[0xa50+3*0x58+i]==0);
+                                    // Native unsupported31 is intentional, not kernel/GPU success.
+                                    std::memcpy(static_cast<uint8_t*>(child)+0x118,savedSearch.data(),savedSearch.size());
+                                    std::memcpy(executionBackend.bytes.data()+0xa50+3*0x58,savedKernel.data(),savedKernel.size());
+                                    TglCscCoefficients coefficients{};
+                                    assert(csc(coefficients,1,2,0x19) && cscCalls==1 && cscQueries==1);
+                                    assert(owner.publishCsc(coefficients));
+                                    assert(std::memcmp(static_cast<uint8_t*>(child)+0xa0,coefficients.matrix.data(),0x24)==0);
+                                    assert(std::memcmp(static_cast<uint8_t*>(child)+0xc4,coefficients.inputOffsets.data(),0xc)==0);
+                                    assert(std::memcmp(static_cast<uint8_t*>(child)+0xd0,coefficients.outputOffsets.data(),0xc)==0);
+                                    const auto complete=coefficients;admitCscAnchors=false;
+                                    assert(!csc(coefficients,1,2,0x19) && cscCalls==1 && cscQueries==1);
+                                    assert(coefficients.matrix==complete.matrix && coefficients.inputOffsets==complete.inputOffsets &&
+                                        coefficients.outputOffsets==complete.outputOffsets);
+                                    std::memcpy(static_cast<uint8_t*>(child)+0xa0,saved.data(),saved.size());
+                                    return TglOwnedVeboxCommandTransactionResult{-90,-90,false,false};
+                                },cscRecording);
+                            assert(qualifiedCscFrame.status==-90 && !qualifiedCscFrame.requiresRetention() &&
+                                cscCalls==1 && cscQueries==1 && packetGathers==1);
                             admitDiControl=false;
                             const auto rejectedCreatorFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
