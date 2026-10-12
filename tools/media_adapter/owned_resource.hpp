@@ -5473,6 +5473,48 @@ struct alignas(8) TglOwnedSurfaceStorage {
 static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
 static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+// Gen12 DDI extensions are owned sidecars, NOT extra bytes in the native
+// 0x2a8 shell or aliases for source+a8's legacy CSC/conversion parameters.
+// Unknown is intentionally distinct from an explicitly absent feature. The
+// request producer must supply these records under the same frame leases;
+// constructing a record alone does not authenticate native request contents.
+enum class TglOwnedFeaturePresence : uint8_t { Unknown, Absent, Present };
+struct TglOwnedGen12SurfaceFeatures {
+    const TglOwnedSurfaceStorage* surface=nullptr;
+    const TglVeboxPipeAcquisition* frame=nullptr;
+    TglOwnedFeaturePresence lut=TglOwnedFeaturePresence::Unknown;
+    TglOwnedFeaturePresence hdr=TglOwnedFeaturePresence::Unknown;
+};
+// Gen12 selection consumes source LUT presence and either surface's HDR
+// presence only. Preserve outputs on every failure and poison acquisition so
+// an unknown/foreign/stale record cannot silently select a valid pipe mode.
+template<class SourceOwner,class TargetOwner>
+bool tglAcquireLeasedGen12PipeFeatures(bool& rejectLut,bool& hdr,
+    SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,
+    const TglOwnedGen12SurfaceFeatures& sourceFeatures,
+    TargetOwner& targetOwner,const TglOwnedSurfaceStorage& target,
+    const TglOwnedGen12SurfaceFeatures& targetFeatures,
+    TglVeboxPipeAcquisition& frame) noexcept {
+    static_assert(noexcept(sourceOwner.hasSurfaceLease(source)) &&
+        noexcept(targetOwner.hasSurfaceLease(target)) &&
+        std::is_same_v<decltype(sourceOwner.hasSurfaceLease(source)),bool> &&
+        std::is_same_v<decltype(targetOwner.hasSurfaceLease(target)),bool>,"Gen12 feature surface leases");
+    if(!frame.healthy()) return false;
+    auto known=[](TglOwnedFeaturePresence p) noexcept {
+        return p==TglOwnedFeaturePresence::Absent || p==TglOwnedFeaturePresence::Present;
+    };
+    if(sourceFeatures.surface!=&source || targetFeatures.surface!=&target ||
+       sourceFeatures.frame!=&frame || targetFeatures.frame!=&frame ||
+       !sourceOwner.hasSurfaceLease(source) || !targetOwner.hasSurfaceLease(target) ||
+       !known(sourceFeatures.lut) || !known(sourceFeatures.hdr) || !known(targetFeatures.hdr)) {
+        frame.fail();return false;
+    }
+    uint32_t format=0;std::memcpy(&format,target.prefix.data()+0x130,4);
+    const bool candidate=tglRejectGen12LutOutput(sourceFeatures.lut==TglOwnedFeaturePresence::Present,format);
+    const bool candidateHdr=sourceFeatures.hdr==TglOwnedFeaturePresence::Present ||
+        targetFeatures.hdr==TglOwnedFeaturePresence::Present;
+    rejectLut=candidate;hdr=candidateHdr;return true;
+}
 // Concrete statistics producer:52bf0 maps format130/widthd8/heightdc and
 // copies source50..5f to info2c..3b. Native170ef0 consumes info34/38 as
 // floats directly (not right-left/bottom-top). Reuse the proven converter

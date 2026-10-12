@@ -309,6 +309,51 @@ static void testTrackedCpuOwner() {
         }
     }
     {
+        using Presence=TglOwnedFeaturePresence;
+        struct Owner {
+            const TglOwnedSurfaceStorage* leased=nullptr;bool allow=true;
+            bool hasSurfaceLease(const TglOwnedSurfaceStorage& s) noexcept {return allow && leased==&s;}
+        };
+        TglOwnedSurfaceStorage source{},target{},foreign{};
+        for(uint32_t format : {0x19u,0x52u,0x53u})
+        for(bool lut : {false,true}) for(bool sourceHdr : {false,true}) for(bool targetHdr : {false,true}) {
+            TglVeboxPipeAcquisition frame;
+            Owner sourceOwner{&source},targetOwner{&target};
+            TglOwnedGen12SurfaceFeatures a{&source,&frame,lut?Presence::Present:Presence::Absent,
+                sourceHdr?Presence::Present:Presence::Absent};
+            // Target LUT is not consumed by this Gen12 output-pipe gate.
+            TglOwnedGen12SurfaceFeatures b{&target,&frame,Presence::Unknown,
+                targetHdr?Presence::Present:Presence::Absent};
+            std::memcpy(target.prefix.data()+0x130,&format,4);
+            bool rejected=false,hdr=false;
+            assert(tglAcquireLeasedGen12PipeFeatures(rejected,hdr,sourceOwner,source,a,targetOwner,target,b,frame));
+            assert(rejected==(lut && format!=0x19) && hdr==(sourceHdr || targetHdr) && frame.healthy());
+        }
+        for(unsigned scenario=0;scenario<10;++scenario) {
+            TglVeboxPipeAcquisition frame,foreignFrame;
+            Owner sourceOwner{&source},targetOwner{&target};
+            TglOwnedGen12SurfaceFeatures a{&source,&frame,Presence::Absent,Presence::Absent};
+            TglOwnedGen12SurfaceFeatures b{&target,&frame,Presence::Unknown,Presence::Absent};
+            if(scenario==0) a.lut=Presence::Unknown;
+            if(scenario==1) a.hdr=Presence::Unknown;
+            if(scenario==2) b.hdr=Presence::Unknown;
+            if(scenario==3) a.surface=&foreign;
+            if(scenario==4) b.surface=&source;
+            if(scenario==5) a.frame=&foreignFrame;
+            if(scenario==6) b.frame=&foreignFrame;
+            if(scenario==7) sourceOwner.allow=false;
+            if(scenario==8) targetOwner.allow=false;
+            if(scenario==9) a.lut=static_cast<Presence>(0xff);
+            bool rejected=true,hdr=true;
+            assert(!tglAcquireLeasedGen12PipeFeatures(rejected,hdr,sourceOwner,source,a,targetOwner,target,b,frame));
+            assert(rejected && hdr && !frame.healthy());
+            a={&source,&frame,Presence::Absent,Presence::Absent};b={&target,&frame,Presence::Absent,Presence::Absent};
+            sourceOwner.allow=targetOwner.allow=true;
+            assert(!tglAcquireLeasedGen12PipeFeatures(rejected,hdr,sourceOwner,source,a,targetOwner,target,b,frame));
+            assert(rejected && hdr); // poisoned frame cannot be repaired and reused
+        }
+    }
+    {
         TglOwnedSurfaceStorage source{};
         uint32_t mode=1,height=1081,format=0x19;unsigned reads=0;bool allow=true;
         uintptr_t params=0x1000;
