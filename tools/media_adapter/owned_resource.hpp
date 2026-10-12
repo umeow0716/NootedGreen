@@ -5515,6 +5515,113 @@ bool tglAcquireLeasedGen12PipeFeatures(bool& rejectLut,bool& hdr,
         targetFeatures.hdr==TglOwnedFeaturePresence::Present;
     rejectLut=candidate;hdr=candidateHdr;return true;
 }
+// Concrete non-SFC portion of the Gen12 platform policy. Use through
+// tglSelectOwnedVpOutputPipe: that scope supplies the real VP extent callback.
+// An unscoped SFC dispatch fails explicitly instead of manufacturing pipe0.
+// Query must perform the authenticated tglQueryNativeTwoPassCsc operation;
+// FastFill must enclose the real temporary-rectangle/decompression transaction.
+// All request/child/image/metadata leases outlive this synchronous policy.
+template<class Read,class ChildOwner,class SourceOwner,class TargetOwner,
+    class Query,class FastFill>
+class TglLeasedGen12VeboxOutputPolicy {
+    Read& read_;ChildOwner& childOwner_;SourceOwner& sourceOwner_;TargetOwner& targetOwner_;
+    uintptr_t image_,child_,parameters_,vp_,di_,colorFill_;
+    const TglOwnedSurfaceStorage& source_;const TglOwnedSurfaceStorage& target_;
+    const uint8_t& compNeeded_;
+    const TglOwnedGen12SurfaceFeatures sourceFeatures_,targetFeatures_;
+    TglVeboxPipeAcquisition& frame_;
+    Query& query_;FastFill& fastFill_;
+    TglVeboxPipeReadGate<Read> gate_;
+    bool featuresReady_=false,lutRejected_=false,hdrPresent_=false;
+    bool features() noexcept {
+        if(!healthy()) return false;
+        if(!featuresReady_) featuresReady_=tglAcquireLeasedGen12PipeFeatures(lutRejected_,hdrPresent_,
+            sourceOwner_,source_,sourceFeatures_,targetOwner_,target_,targetFeatures_,frame_);
+        return featuresReady_;
+    }
+    bool query(bool& needed) noexcept {
+        static_assert(noexcept(query_(uintptr_t{},uintptr_t{},needed)) &&
+            std::is_same_v<decltype(query_(uintptr_t{},uintptr_t{},needed)),bool>,"qualified CSC query ABI");
+        if(!healthy()) return false;
+        if(!query_(reinterpret_cast<uintptr_t>(&source_),reinterpret_cast<uintptr_t>(&target_),needed)) {
+            frame_.fail();return false;
+        }
+        return healthy();
+    }
+public:
+    TglLeasedGen12VeboxOutputPolicy(Read& read,ChildOwner& childOwner,uintptr_t image,uintptr_t child,
+        uintptr_t parameters,uintptr_t vp,uintptr_t leasedDi,uintptr_t leasedColorFill,
+        SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,
+        const TglOwnedGen12SurfaceFeatures& sourceFeatures,
+        TargetOwner& targetOwner,const TglOwnedSurfaceStorage& target,
+        const TglOwnedGen12SurfaceFeatures& targetFeatures,const uint8_t& compNeeded,
+        TglVeboxPipeAcquisition& frame,Query& query,FastFill& fastFill) noexcept:
+        read_(read),childOwner_(childOwner),sourceOwner_(sourceOwner),targetOwner_(targetOwner),
+        image_(image),child_(child),parameters_(parameters),vp_(vp),di_(leasedDi),colorFill_(leasedColorFill),
+        source_(source),target_(target),compNeeded_(compNeeded),sourceFeatures_(sourceFeatures),
+        targetFeatures_(targetFeatures),frame_(frame),query_(query),fastFill_(fastFill),gate_(read_,frame_) {
+        uintptr_t sourcePointer=0,targetPointer=0;
+        if(!image_ || !parameters_ || parameters_>UINTPTR_MAX-0xf7 || !child_ || child_>UINTPTR_MAX-0x1b9f ||
+           !healthy() || !gate_(parameters_+8,&sourcePointer,8) ||
+           !gate_(parameters_+0x98,&targetPointer,8) ||
+           sourcePointer!=reinterpret_cast<uintptr_t>(&source_) ||
+           targetPointer!=reinterpret_cast<uintptr_t>(&target_)) frame_.fail();
+    }
+    bool healthy() const noexcept {
+        static_assert(noexcept(childOwner_.hasPrivateChildImageLease(child_,image_)) &&
+            std::is_same_v<decltype(childOwner_.hasPrivateChildImageLease(child_,image_)),bool> &&
+            noexcept(sourceOwner_.hasSurfaceLease(source_)) && noexcept(targetOwner_.hasSurfaceLease(target_)),
+            "platform policy leases must not throw");
+        if(!frame_.healthy()) return false;
+        if(!childOwner_.hasPrivateChildImageLease(child_,image_) ||
+           !sourceOwner_.hasSurfaceLease(source_) || !targetOwner_.hasSurfaceLease(target_)) {
+            frame_.fail();return false;
+        }
+        return true;
+    }
+    bool bypass() noexcept {
+        return healthy() && tglCompositionBypassFromLiveFlag(parameters_,
+            reinterpret_cast<uintptr_t>(&source_),compNeeded_,gate_);
+    }
+    bool rejectDi() noexcept {
+        bool rejected=false;
+        return healthy() && tglRejectLeasedGen12DiOutput(rejected,source_,di_,frame_,gate_) && rejected;
+    }
+    bool rejectLut() noexcept {return features() && lutRejected_;}
+    bool direct() noexcept {
+        uint32_t enabled=0;
+        auto directRead=[&](uintptr_t address,void* output,size_t bytes) noexcept {
+            if(!gate_(address,output,bytes)) return false;
+            if(address==parameters_+0xf0 && bytes==8) {
+                uintptr_t alpha=0;std::memcpy(&alpha,output,8);
+                if(alpha && alpha>UINTPTR_MAX-7) {frame_.fail();return false;}
+            }
+            return true;
+        };
+        return healthy() && gate_(child_+0x1b9c,&enabled,4) &&
+            tglDirectVeboxFeasible(parameters_,reinterpret_cast<uintptr_t>(&source_),
+                reinterpret_cast<uintptr_t>(&target_),enabled,directRead,
+                [&](uintptr_t,uintptr_t,bool& needed) noexcept {return query(needed);});
+    }
+    bool twoPass() noexcept {bool needed=true;return query(needed) && needed;}
+    bool sfcAvailable() noexcept {
+        uintptr_t actual=0;
+        if(!healthy() || !gate_(child_+0x80,&actual,8)) return false;
+        if(actual && (!vp_ || actual!=vp_)) {frame_.fail();return false;}
+        return actual!=0;
+    }
+    bool hdr() noexcept {return features() && hdrPresent_;}
+    uint32_t sfc() noexcept {frame_.fail();return UINT32_MAX;}
+    bool fastFill() noexcept {
+        uintptr_t actual=0;
+        if(!healthy() || !gate_(parameters_+0xe0,&actual,8)) return false;
+        if(actual!=colorFill_) {frame_.fail();return false;}
+        if(!actual) return false;
+        static_assert(noexcept(fastFill_(*this)) &&
+            std::is_same_v<decltype(fastFill_(*this)),bool>,"qualified fast-fill transaction ABI");
+        return fastFill_(*this) && healthy();
+    }
+};
 // Concrete statistics producer:52bf0 maps format130/widthd8/heightdc and
 // copies source50..5f to info2c..3b. Native170ef0 consumes info34/38 as
 // floats directly (not right-left/bottom-top). Reuse the proven converter
