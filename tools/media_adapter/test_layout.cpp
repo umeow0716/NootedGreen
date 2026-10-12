@@ -1,5 +1,6 @@
 #include <array>
 #include <cassert>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
@@ -21139,6 +21140,29 @@ int main() {
                                             TglOwnedVpPlatformDispatchContext* platformPhases[2]{};
                                             TglNativeVpCompressionBinding compressionBinding;
                                             const TglOwnedVpEntrySet* catalogues[2]{};
+                                            void* commandParents[2]{};
+                                            TglSfcMhwBinding commandBinding;
+                                            assert(commandBinding.resolve(base,frontendRead,qualifyMhw,executableMhw));
+                                            auto commandRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                                if(size==8 && (address==os || address==os+0x1b0)) {
+                                                    const uintptr_t value=address==os?0x90000:base+0x62ee0;
+                                                    std::memcpy(output,&value,8);return true;
+                                                }
+                                                return frontendRead(address,output,size);
+                                            };
+                                            struct PairedCommandInvoke {
+                                                uintptr_t expectedObject;void* expectedCommand;unsigned calls=0;
+                                                int parameters(uintptr_t entry,void* object,void* command,const void* input) noexcept {
+                                                    assert(entry && reinterpret_cast<uintptr_t>(object)==expectedObject && command==expectedCommand && input);
+                                                    ++calls;return 0;
+                                                }
+                                                int state(uintptr_t entry,void* object,void* command,const void* input,const void* output) noexcept {
+                                                    assert(output);return parameters(entry,object,command,input);
+                                                }
+                                                int frame(uintptr_t entry,void* object,void* command,uint8_t mode) noexcept {
+                                                    assert(mode==1);return parameters(entry,object,command,&mode);
+                                                }
+                                            } commandInvoke{frontendSfc,&command};
                                             assert(firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
                                                 return tglWithOwnedVpPairedAcquiredFrameCore(firstGraph,first,firstLines.resources(),
                                                     secondGraph,second,secondLines.resources(),args,read,modeRetire,releaseCpu,
@@ -21234,7 +21258,15 @@ int main() {
                                                                                         assert(ready.y.coefficients==avsTables[index].packedY && ready.uv.coefficients==avsTables[index].packedUv);
                                                                                         assert(tglWithOwnedSfcLiveCommandInputs(inputs,packet,inputs.state.size(),iefPackets[index],
                                                                                             [](const auto&) noexcept -> int {assert(false);return 0;})==5);
-                                                                                        ++emissions;return 0;
+                                                                                        TglOwnedSurfaceStorage output;
+                                                                                        auto platform=[](auto&) noexcept -> int {return 0;}; // Descriptor producer fixture.
+                                                                                        const int built=index?
+                                                                                            tglSendOwnedVeboxSfcPreparedCommands(frame.children().second().owner(),commandParents[index],
+                                                                                                commandBinding,&command,commandInvoke,ready,output,1,0,1,0,commandRead,platform):
+                                                                                            tglSendOwnedVeboxSfcPreparedCommands(frame.children().first().owner(),commandParents[index],
+                                                                                                commandBinding,&command,commandInvoke,ready,output,1,0,1,0,commandRead,platform);
+                                                                                        if(built) std::fprintf(stderr,"paired native command bridge result=%d calls=%u child=%zu\n",built,commandInvoke.calls,index);
+                                                                                        if(!built) ++emissions;return built;
                                                                                     });
                                                                                 assert(inputs.state==savedState && inputs.ief==savedIef && !inputs.filtersInUse);
                                                                                 return consumed;
@@ -21261,6 +21293,7 @@ int main() {
                                                         const int joined=frame.children().template withPairedVpFactories<true>(firstGraph,a,tableA,
                                                             secondGraph,b,tableB,[&](void* parent0,void* parent1) noexcept -> int {
                                                         publishedParents[0]=parent0;publishedParents[1]=parent1;
+                                                        commandParents[0]=parent0;commandParents[1]=parent1;
                                                         assert(firstGraph.withReservedFlatDispatch(a,tableA,[](void*) noexcept -> int {assert(false);return 0;})==5);
                                                         for(size_t i=0;i<2;++i) {
                                                             void* parent=publishedParents[i];uintptr_t vtable=0,factory=0;
@@ -21299,6 +21332,7 @@ int main() {
                                                     });
                                             })==expected);
                                             assert(states==2 && emissions==2 && avsProduced==2 && iefProduced==2);
+                                            assert(commandInvoke.calls==14);
                                         }
                                     }
                                     for(int expected:{0,-31}) {
