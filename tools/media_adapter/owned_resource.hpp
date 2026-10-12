@@ -3225,11 +3225,14 @@ struct TglVeboxRenderBinding {
 template<class Owner,class Invoke=TglNativeVeboxStageInvoker>
 int tglInvokeLeasedVeboxRender(const TglVeboxRenderBinding& binding,Owner& owner,
     void* child,void* argument1,void* argument2,Invoke invoke={}) noexcept {
+    // Exact12c9d0..12ce18 stores incoming RSI at stack-10 but never reloads
+    // it. Only RDX pair+10/+18 supplies source/target. Preserve unused RSI
+    // verbatim (including null), not a fabricated context ownership gate.
     static_assert(noexcept(invoke(uintptr_t{},nullptr,nullptr,nullptr)) &&
         std::is_same_v<decltype(invoke(uintptr_t{},nullptr,nullptr,nullptr)),int>,
         "native Render status ABI");
     if(!binding.image || binding.image>UINTPTR_MAX-0x12c9e4 ||
-       binding.entry!=binding.image+0x12c9d0 || !child || !argument1 || !argument2 ||
+       binding.entry!=binding.image+0x12c9d0 || !child || !argument2 ||
        !owner.hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(child),binding.image)) return 5;
     return invoke(binding.entry,child,argument1,argument2);
 }
@@ -21456,14 +21459,14 @@ public:
     }
     // Whole retained native Render entry, not a separate builder or submit.
     // Caller must already provide complete native/owned producer dispatch
-    // scopes and qualified argument1/context. The frame pins original
+    // scopes. Exact12c9d0 does not consume RSI/argument1; forward it unchanged
+    // without inventing a nonnull context requirement. The frame pins original
     // surfaces, DN, child-owned report and VP throughout the native call.
     template<class ExecutionOwner,class Read,class Invoke=TglNativeVeboxStageInvoker>
     TglOwnedVeboxCommandTransactionResult renderNativeOwnedVpFrame(
         const TglVeboxRenderBinding& binding,const TglNativeOuterSurfaceRoles& roles,
         size_t childIndex,size_t sourceIndex,size_t targetIndex,ExecutionOwner& executionOwner,
         void* argument1,uintptr_t renderHal,uintptr_t sku,Read read,Invoke invoke={}) noexcept {
-        if(!argument1) return {};
         return withNativeOwnedVpCommandFrame(childIndex,roles,sourceIndex,targetIndex,
             executionOwner,renderHal,sku,read,
             [&](auto& owner,void* child,void*,auto&,auto&,auto& sourceOwner,auto& targetOwner,

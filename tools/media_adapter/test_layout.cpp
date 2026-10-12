@@ -4129,7 +4129,7 @@ static void testVeboxRenderBinding() {
     };
     assert(tglInvokeLeasedVeboxRender(binding,owner,&child,&arg1,&arg2,invoke)==5 && !calls);
     assert(owner.withPrivateChild([&](void* c) noexcept {
-        assert(tglInvokeLeasedVeboxRender(binding,owner,c,nullptr,&arg2,invoke)==5 && !calls);
+        assert(tglInvokeLeasedVeboxRender(binding,owner,c,&arg1,nullptr,invoke)==5 && !calls);
         owner.image=image+0x1000;
         assert(tglInvokeLeasedVeboxRender(binding,owner,c,&arg1,&arg2,invoke)==5 && !calls);
         owner.image=image;
@@ -8930,13 +8930,13 @@ static void testNativeResourceBoundary() {
                         assert(first.hasSurfaceLease(*reinterpret_cast<const TglOwnedSurfaceStorage*>(target)));
                         ++renderCalls;return -17;
                     };
-                    assert(pair.render(renderBinding,childLease,&childLease.child,nullptr,nativeRender)==5 && !renderCalls);
+                    assert(pair.render(renderBinding,childLease,nullptr,nullptr,nativeRender)==5 && !renderCalls);
                     assert(pair.render(renderBinding,childLease,&childLease.child,&argument,nativeRender)==-17 && renderCalls==1);
                     assert(pair.withSurfaces([&](const auto& source,const auto& target) noexcept -> int {
                         unsigned wholeCalls=0;
                         for(int status:{0,31}) {
                             auto wholeNative=[&](uintptr_t entry,void* child,void* arg,void* descriptor) noexcept -> int {
-                                assert(entry==renderBinding.entry && child==&childLease.child && arg==&argument);
+                                assert(entry==renderBinding.entry && child==&childLease.child && !arg);
                                 uintptr_t s=0,t=0;
                                 std::memcpy(&s,static_cast<uint8_t*>(descriptor)+0x10,8);
                                 std::memcpy(&t,static_cast<uint8_t*>(descriptor)+0x18,8);
@@ -8944,10 +8944,10 @@ static void testNativeResourceBoundary() {
                                 ++wholeCalls;return status;
                             };
                             const auto denied=tglRunLeasedVeboxSurfaceRender(renderBinding,childLease,
-                                &childLease.child,nullptr,input,source,first,target,wholeNative);
+                                nullptr,nullptr,input,source,first,target,wholeNative);
                             assert(denied.status==5 && !denied.requiresRetention());
                             const auto result=tglRunLeasedVeboxSurfaceRender(renderBinding,childLease,
-                                &childLease.child,&argument,input,source,first,target,wholeNative);
+                                &childLease.child,nullptr,input,source,first,target,wholeNative);
                             assert(result.status==status && result.nativeEntered &&
                                 !result.acquired && !result.writtenBack && result.requiresRetention());
                             TglOwnedVeboxFrameRetention pending;pending.observe(result);assert(pending());
