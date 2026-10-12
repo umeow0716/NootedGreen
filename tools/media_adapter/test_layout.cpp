@@ -22148,26 +22148,26 @@ int main() {
                                                 parentSfcRead,qualifyMhw,executableMhw)==0);
                                         } else {
                                             unsigned prepared=0;
-                                            assert(paired.initializeVpPrepared(index,nativeSfc,os,creatorView->renderHal,
-                                                parentSfcAddress,parentSfcRead,0,0,[&](auto&) noexcept -> int {
+                                            assert(pairedStorage.initializeVpFromCreatorPrepared(index,*creatorView,
+                                                parentSfcRead,qualifyMhw,executableMhw,[&](auto&) noexcept -> int {
                                                     ++prepared;return 31;
                                                 })==31);
                                             assert(prepared==1 && !paired.vpBound(index) && !state1.live && !avs1.live);
                                             prepared=0;
-                                            assert(paired.initializeVpPrepared(index,nativeSfc,os,creatorView->renderHal,
-                                                parentSfcAddress,parentSfcRead,0,0,[&](auto& graph) noexcept -> int {
+                                            assert(pairedStorage.initializeVpFromCreatorPrepared(index,*creatorView,
+                                                parentSfcRead,qualifyMhw,executableMhw,[&](auto& graph) noexcept -> int {
                                                     ++prepared;
                                                     assert(!paired.vpBound(index));
-                                                    assert(paired.initializeVpPrepared(index,nativeSfc,os,
-                                                        creatorView->renderHal,parentSfcAddress,parentSfcRead,0,0,
+                                                    assert(pairedStorage.initializeVpFromCreatorPrepared(index,*creatorView,
+                                                        parentSfcRead,qualifyMhw,executableMhw,
                                                         [](auto&) noexcept -> int {assert(false);return 0;})==5);
                                                     return graph.withPassInitializationEntry([](void* child,auto entry) noexcept {
                                                         entry(child);return 0;
                                                     });
                                                 })==0);
                                             assert(prepared==1);
-                                            assert(paired.initializeVpPrepared(index,nativeSfc,os,creatorView->renderHal,
-                                                parentSfcAddress,parentSfcRead,0,0,
+                                            assert(pairedStorage.initializeVpFromCreatorPrepared(index,*creatorView,
+                                                parentSfcRead,qualifyMhw,executableMhw,
                                                 [](auto&) noexcept -> int {assert(false);return 0;})==5);
                                         }
                                         assert(paired.vpBound(index));

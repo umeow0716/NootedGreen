@@ -22150,6 +22150,12 @@ public:
     template<class Read,class Qualify,class Executable>
     int initializeVpFromCreator(size_t index,const TglNativeVphalMhwView& view,
         Read read,Qualify qualify,Executable executable) {
+        return initializeVpFromCreatorPrepared(index,view,read,qualify,executable,
+            [](auto&) noexcept -> int {return 0;});
+    }
+    template<class Read,class Qualify,class Executable,class Prepare>
+    int initializeVpFromCreatorPrepared(size_t index,const TglNativeVphalMhwView& view,
+        Read read,Qualify qualify,Executable executable,Prepare prepare) {
         TglVeboxHardwareBinding hardware;
         TglSfcMhwBinding sfc;
         uintptr_t object=0;
@@ -22159,7 +22165,7 @@ public:
             !sfc.validateConstructedObject(object,view.os,read)) return 5;
         // Donor1dd150 initializes VP918/9c8 to zero. Native TGL12c010
         // supplies dispatch values later; creator has no authenticated frame.
-        return backing_.initializeVp(index,sfc,view.os,view.renderHal,object,read,0,0);
+        return backing_.initializeVpPrepared(index,sfc,view.os,view.renderHal,object,read,0,0,prepare);
     }
     // Source-free creator handoff; enclosing owner holds physical/image and
     // exclusive VPHAL admission through initialization AND eventual teardown.
@@ -22454,6 +22460,12 @@ public:
     template<class Read,class Qualify,class Executable>
     int initializeVpFromCreator(size_t index,const TglNativeVphalMhwView& view,
         Read read,Qualify qualify,Executable executable) {
+        return initializeVpFromCreatorPrepared(index,view,read,qualify,executable,
+            [](auto&) noexcept -> int {return 0;});
+    }
+    template<class Read,class Qualify,class Executable,class Prepare>
+    int initializeVpFromCreatorPrepared(size_t index,const TglNativeVphalMhwView& view,
+        Read read,Qualify qualify,Executable executable,Prepare prepare) {
         const auto* retained=mhwLease_.binding();
         TglVeboxHardwareBinding hardware;
         TglSfcMhwBinding sfc;
@@ -22463,7 +22475,7 @@ public:
             !read(view.parent+0x60,&object,8) || !object || object==hardware.interface ||
             !sfc.resolve(view.renderer.image,read,qualify,executable) ||
             !sfc.validateConstructedObject(object,view.os,read)) return 5;
-        return backing_.initializeVp(index,sfc,view.os,view.renderHal,object,read,0,0);
+        return backing_.initializeVpPrepared(index,sfc,view.os,view.renderHal,object,read,0,0,prepare);
     }
     // Scalar-only request (no nested request38 payload). Publish through the
     // existing native-release slot only after this exact tracked allocation
