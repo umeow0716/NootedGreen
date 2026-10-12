@@ -8659,6 +8659,74 @@ static void testNativeResourceBoundary() {
                                                         [&](const TglDiIecpInputs&) noexcept -> int {++deniedConsumers;return 0;})==5);
                                                     assert(!deniedConsumers);
                                                     reportBackend.bytes[0xb]=0;
+                                                    // Full CPU packet pass with explicit RenderHal/SKU
+                                                    // provenance; no native registration/GPU submission.
+                                                    std::array<uint8_t,0x80> halBytes{};
+                                                    std::array<uint8_t,0x6c> skuBytes{};
+                                                    const uintptr_t hal=reinterpret_cast<uintptr_t>(halBytes.data());
+                                                    const uintptr_t sku=reinterpret_cast<uintptr_t>(skuBytes.data());
+                                                    std::array<uint8_t,16> oldParents{};
+                                                    std::memcpy(oldParents.data(),child.data()+0x18,16);
+                                                    std::memcpy(child.data()+0x18,&hal,8);std::memcpy(child.data()+0x20,&sku,8);
+                                                    std::memcpy(halBytes.data()+0x78,&sku,8);
+                                                    auto fullRead=[&](uintptr_t p,void* out,size_t n) noexcept -> bool {
+                                                        if(read(p,out,n)) return true;
+                                                        if(p>=hal && p-hal<=halBytes.size() && n<=halBytes.size()-(p-hal)) {
+                                                            std::memcpy(out,halBytes.data()+(p-hal),n);return true;
+                                                        }
+                                                        if(p>=sku && p-sku<=skuBytes.size() && n<=skuBytes.size()-(p-sku)) {
+                                                            std::memcpy(out,skuBytes.data()+(p-sku),n);return true;
+                                                        }
+                                                        return false;
+                                                    };
+                                                    unsigned registrations=0;
+                                                    auto admitResource=[](const TglOwnedSurfaceStorage&) noexcept -> int {return 0;};
+                                                    auto registerResource=[&](const auto&,bool,bool) noexcept -> int {++registrations;return 0;};
+                                                    auto resourceControl=[](const auto&,uint32_t&,size_t,bool) noexcept -> int {return 0;};
+                                                    using FullTypes=TglRetainedVeboxLiveFrameTypes<FrameStmmApi,decltype(linkedInput),
+                                                        std::decay_t<decltype(childOwner)>,std::decay_t<decltype(reportOwner)>,decltype(fullRead),
+                                                        decltype(liveSurfaceAdmission),decltype(admitResource),decltype(registerResource),decltype(resourceControl)>;
+                                                    using FullProducers=typename FullTypes::template Producers<decltype(rejectPackets),decltype(rejectCsc)>;
+                                                    assert((tglBuildOwnedVeboxCompleteHooks<RetainedResolve,RetainedScope,RetainedScope,
+                                                        typename FullProducers::Resolve,RetainedScope,RetainedFormatRead>(actualChild,childOwner.renderHooks)));
+                                                    auto fullLeases=renderLeases;fullLeases.renderHal=hal;fullLeases.sku=sku;
+                                                    TglOwnedVeboxFrameRetention fullRetention;
+                                                    const auto runFullPass=[&]() noexcept {
+                                                        return tglWithRetainedLiveVeboxPacketFrame(retained,linkedInput,&linkedInput,
+                                                        static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                        childOwner,reportOwner,fullLeases,false,false,{},fullRead,liveSurfaceAdmission,
+                                                        admitResource,registerResource,resourceControl,fullRetention,
+                                                        [&](auto& frame) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                                            TglOwnedVeboxCommandTransactionResult value;
+                                                            value.status=tglWithOwnedVeboxFrameHookBindings<RetainedResolve,RetainedScope,
+                                                                RetainedScope,RetainedScope,RetainedFormatRead>(frame,childOwner,reportOwner,0,
+                                                                fullRead,rejectPackets,rejectCsc,
+                                                                [&](void* object,const auto& hooks,auto& producer) noexcept -> int {
+                                                                    return producer.pass.withBuilder([&]() noexcept -> int {
+                                                                        using Callback=int(*)(void*,bool,void*) noexcept;
+                                                                        int status=reinterpret_cast<Callback>(hooks[7])(object,false,&surfacePacket);
+                                                                        if(status) return status;
+                                                                        status=reinterpret_cast<Callback>(hooks[18])(object,false,&statePacket);
+                                                                        if(status) return status;
+                                                                        return reinterpret_cast<Callback>(hooks[6])(object,false,&diPacket);
+                                                                    });
+                                                                });return value;
+                                                        });
+                                                    };
+                                                    const auto fullPass=runFullPass();
+                                                    assert(fullPass.status==0 && registrations>=2 && !fullRetention());
+                                                    assert(!FullProducers::Resolve::get(actualChild));
+                                                    const auto registeredBeforeStale=registrations;
+                                                    std::array<uint8_t,0x188> stateBeforeStale{};
+                                                    std::memcpy(stateBeforeStale.data(),statePacket.data(),stateBeforeStale.size());
+                                                    const uintptr_t absentSku=0;
+                                                    std::memcpy(halBytes.data()+0x78,&absentSku,8);
+                                                    const auto staleState=runFullPass();
+                                                    assert(staleState.status==5 && registrations==registeredBeforeStale && !fullRetention());
+                                                    assert(std::memcmp(stateBeforeStale.data(),statePacket.data(),stateBeforeStale.size())==0);
+                                                    assert(!FullProducers::Resolve::get(actualChild));
+                                                    std::memcpy(halBytes.data()+0x78,&sku,8);
+                                                    std::memcpy(child.data()+0x18,oldParents.data(),16);
                                                     assert(borrowFixture.allocations==packetAllocations && borrowFixture.fills==packetFills);
                                                     assert(!EntryProducers::Resolve::get(actualChild));
                                                     childOwner.renderImage=0;childOwner.renderHooks.fill(0);
