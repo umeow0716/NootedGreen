@@ -21576,15 +21576,10 @@ int main() {
                                                         const size_t index=child==first.bytes.data()?0:1;
                                                         const auto& prefix=statePrefixes[index];
                                                         assert(leasedAvs[index] && leasedIef[index]);
-                                                        const int bound=tglPrepareOwnedVpLeasedSurfaceState(commandInputs[index],packet,
+                                                        const int bound=tglPrepareOwnedVpLeasedNv12State(commandInputs[index],packet,
                                                             *leasedOutputs[index],*leasedAvs[index],*leasedIef[index],leasedSfd[index],
                                                             prefix.packet,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,
-                                                            [&](auto& output) noexcept {
-                                                                const auto result=tglPrepareLeasedOwnedNv12Metadata(
-                                                                    outputOwners[index],output,layoutApi,layoutSink);
-                                                                assert(result.ready());
-                                                                return result.ready()?0:5;
-                                                            });
+                                                            outputOwners[index],layoutApi,layoutSink);
                                                         assert(bound==0);
                                                         if(bound) return bound;
                                                         ++states;return 0;

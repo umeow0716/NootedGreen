@@ -17997,6 +17997,24 @@ int tglPrepareOwnedVpLeasedSurfaceState(TglOwnedSfcCommandParameters& parameters
     std::memcpy(parameters.state.data(),state.data(),parameters.state.size());
     return 0;
 }
+// Concrete NV12 query-to-command-state composition. The original output owner
+// and IOSurface API stay borrowed throughout metadata capture and packet
+// production; callers cannot substitute a presence-only query for this path.
+// AVS/IEF/SFD leases and eventual GPU retirement still belong to the frame.
+template<class CpuBackend,class Owner,class Api,class Quarantine>
+int tglPrepareOwnedVpLeasedNv12State(TglOwnedSfcCommandParameters& parameters,
+    TglOwnedSfcStateParameters<CpuBackend>& state,TglOwnedSurfaceStorage& output,
+    const TglOwnedSurfaceStorage& avs,const TglOwnedSurfaceStorage& ief,
+    const std::array<uint8_t,0x148>* sfd,const std::array<uint8_t,0xb8>& prefix,
+    TglOwnedSfcGen12Tail tail,bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,
+    TglOwnedSfcCompressionMode compressionMode,Owner& owner,Api& api,Quarantine& quarantine) noexcept {
+    if(!owner.hasSurfaceLease(output)) return 5;
+    return tglPrepareOwnedVpLeasedSurfaceState(parameters,state,output,avs,ief,sfd,prefix,
+        tail,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode,
+        [&](auto& original) noexcept -> int {
+            return tglPrepareLeasedOwnedNv12Metadata(owner,original,api,quarantine).ready()?0:5;
+        });
+}
 // Setup-to-send scope: output is already leased by the frame. Allocate once,
 // pin the line owners, prepare state, then allow AVS/IEF production and send.
 // Do not hold the state parameter lease while those producers update it.
