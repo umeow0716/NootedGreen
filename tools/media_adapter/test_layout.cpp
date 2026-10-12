@@ -13715,17 +13715,27 @@ int main() {
         auto filter=[&]() noexcept {++filters;};
         auto produce=[&]() noexcept -> int {++produced;return 0;};
         auto consume=[&](void*,void*) noexcept -> int {++consumed;return 0;};
+        auto otherState=[&]() noexcept -> int {++states;return 0;};
+        auto otherFilter=[&]() noexcept {++filters;};
+        auto otherProduce=[&]() noexcept -> int {++produced;return 0;};
+        auto otherConsume=[&](void*,void*) noexcept -> int {++consumed;return 0;};
         using P=TglOwnedVpPreparedProducerContext<decltype(state),decltype(filter)>;
         using S=TglOwnedVpPreparedSetupContext<decltype(produce),decltype(consume)>;
         P p0{children,data,source,target,state,filter};
-        P p1{children+1,data+1,source+1,target+1,state,filter};
+        TglOwnedVpPreparedProducerContext<decltype(otherState),decltype(otherFilter)>
+            p1{children+1,data+1,source+1,target+1,otherState,otherFilter};
         S s0{children,source,target,data,produce,consume};
-        S s1{children+1,source+1,target+1,data+1,produce,consume};
+        TglOwnedVpPreparedSetupContext<decltype(otherProduce),decltype(otherConsume)>
+            s1{children+1,source+1,target+1,data+1,otherProduce,otherConsume};
         std::array<TglOwnedVpEntrySet,2> base{};
         decltype(base) saved{};
         assert(tglWithOwnedVpPairedPreparedEntries(p0,s0,p1,s1,base,
             [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
                 saved={ea,eb};
+                assert(tglWithOwnedVpPairedPreparedEntries(p0,s0,p1,s1,base,
+                    [](void*,const auto&,void*,const auto&) noexcept -> int {
+                        assert(false);return 0;
+                    })==5);
                 assert(ea.state(a,data,source,target)==5); // phase not admitted
                 p0.active=p1.active=true;
                 assert(eb.state(b,data+1,source+1,target+1)==0);
@@ -17908,6 +17918,50 @@ int main() {
                     });
             })==0);
             assert(peerStages==3 && peerEmissions==1);
+            unsigned pairedState=0,pairedAvs=0,pairedFilters=0,pairedEmit=0;
+            void* pairedChildren[2]{};
+            auto makeState=[&](void*,const auto&,auto& packet) noexcept -> int {
+                assert(!packet.hasParametersLease());++pairedState;return 0;
+            };
+            auto makeAvs=[&](void*,const auto&,auto&) noexcept -> int {++pairedAvs;return 0;};
+            auto makeFilters=[&](void* child,const auto&) noexcept {
+                uintptr_t address=0;std::memcpy(&address,static_cast<uint8_t*>(child)+0x938,8);
+                assert(child==pairedChildren[0] || child==pairedChildren[1]);
+                assert(address==reinterpret_cast<uintptr_t>(child==pairedChildren[0]?
+                    stateCpu.bytes.data():peerState.bytes.data()));
+                ++pairedFilters;
+            };
+            auto emitPair=[&](void* child,void* d,void* c) noexcept -> int {
+                assert(d==&data && c==&command);
+                uintptr_t address=0;std::memcpy(&address,static_cast<uint8_t*>(child)+0x938,8);
+                assert(child==pairedChildren[0] || child==pairedChildren[1]);
+                assert(address==reinterpret_cast<uintptr_t>(child==pairedChildren[0]?
+                    stateCpu.bytes.data():peerState.bytes.data()));
+                ++pairedEmit;return 0;
+            };
+            assert(graph.withPairedProducerReservation(peerGraph,[&](void* a,void* b) noexcept -> int {
+                pairedChildren[0]=a;pairedChildren[1]=b;
+                return graph.withLeasedPreparedContexts(callbackPrepared,
+                    0x6000,0x4000,0x2000,reference,&source,&data,
+                    makeState,makeAvs,makeFilters,emitPair,[&](auto& p0,auto& s0) noexcept -> int {
+                        return peerGraph.withLeasedPreparedContexts(callbackPrepared,
+                            0x6000,0x4000,0x2000,reference,&source,&data,
+                            makeState,makeAvs,makeFilters,emitPair,[&](auto& p1,auto& s1) noexcept -> int {
+                                const std::array<TglOwnedVpEntrySet,2> base{};
+                                return tglWithOwnedVpPairedPreparedEntries(p0,s0,p1,s1,base,
+                                    [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
+                                        assert(a!=b && !graph.tryReset() && !peerGraph.tryReset());
+                                        int result=eb.setup(b,&source,reinterpret_cast<void*>(0x2000),&data);
+                                        if(result) return result;
+                                        result=ea.setup(a,&source,reinterpret_cast<void*>(0x2000),&data);
+                                        if(result) return result;
+                                        result=ea.send(a,&data,&command);
+                                        return result?result:eb.send(b,&data,&command);
+                                    });
+                            });
+                    });
+            })==0);
+            assert(pairedState==2 && pairedAvs==2 && pairedFilters==2 && pairedEmit==2);
             peerGraph.reset();assert(!peerState.live && !peerAvs.live);
             // Acquire the native-shaped descriptors through +28 first; all
             // later callbacks use that single frozen geometry snapshot.

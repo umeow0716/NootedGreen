@@ -12687,25 +12687,58 @@ template<class Produce,class Consume> struct TglOwnedVpPreparedSetupContext {
     }
 };
 
+struct TglOwnedVpPreparedProducerView {
+    void* child;void* context;
+    int(*stateCall)(void*,void*,void*,void*) noexcept;
+    void(*filtersCall)(void*,void*,void*) noexcept;
+    template<class Context> explicit TglOwnedVpPreparedProducerView(Context& value) noexcept
+        :child(value.child),context(&value),
+        stateCall([](void* c,void* d,void* s,void* t) noexcept -> int {
+            return static_cast<Context*>(c)->state(d,s,t);
+        }),filtersCall([](void* c,void* p,void* s) noexcept {
+            static_cast<Context*>(c)->filters(p,s);
+        }) {}
+    bool owns(void* value) const noexcept {return child==value;}
+    int state(void* d,void* s,void* t) noexcept {return stateCall(context,d,s,t);}
+    void filters(void* p,void* s) noexcept {filtersCall(context,p,s);}
+};
+struct TglOwnedVpPreparedSetupView {
+    void* child;void* context;
+    int(*setupCall)(void*,void*,void*,void*) noexcept;
+    int(*sendCall)(void*,void*,void*) noexcept;
+    template<class Context> explicit TglOwnedVpPreparedSetupView(Context& value) noexcept
+        :child(value.child),context(&value),
+        setupCall([](void* c,void* s,void* t,void* d) noexcept -> int {
+            return static_cast<Context*>(c)->setup(s,t,d);
+        }),sendCall([](void* c,void* d,void* command) noexcept -> int {
+            return static_cast<Context*>(c)->send(d,command);
+        }) {}
+    bool owns(void* value) const noexcept {return child==value;}
+    int setup(void* s,void* t,void* d) noexcept {return setupCall(context,s,t,d);}
+    int send(void* d,void* command) noexcept {return sendCall(context,d,command);}
+};
+
 // Both dispatch domains remain live for the whole native consumer call.
 // Contexts borrow the caller's producers; this does not acquire state leases
 // prematurely or supply missing platform/resource entries.
-template<class Producer,class Setup,class Use>
+template<class Producer,class Setup,class OtherProducer,class OtherSetup,class Use>
 int tglWithOwnedVpPairedPreparedEntries(Producer& firstProducer,Setup& firstSetup,
-    Producer& secondProducer,Setup& secondSetup,
+    OtherProducer& secondProducer,OtherSetup& secondSetup,
     const std::array<TglOwnedVpEntrySet,2>& base,Use use) noexcept {
     void* first=firstProducer.child;void* second=secondProducer.child;
     if(!first || !second || first==second || firstSetup.child!=first ||
         secondSetup.child!=second) return 5;
-    typename TglOwnedVpSfcScopedContext<Producer>::Pair producers(
-        first,firstProducer,second,secondProducer);
+    TglOwnedVpPreparedProducerView p0(firstProducer),p1(secondProducer);
+    TglOwnedVpPreparedSetupView s0(firstSetup),s1(secondSetup);
+    typename TglOwnedVpSfcScopedContext<TglOwnedVpPreparedProducerView>::Pair producers(
+        first,p0,second,p1);
     if(!producers.bound()) return 5;
-    typename TglOwnedVpSfcScopedContext<Setup>::Pair setups(
-        first,firstSetup,second,secondSetup);
+    typename TglOwnedVpSfcScopedContext<TglOwnedVpPreparedSetupView>::Pair setups(
+        first,s0,second,s1);
     if(!setups.bound()) return 5;
     auto entries=base;
-    using ProducerResolve=TglOwnedVpSfcResolve<Producer>;
-    using SetupResolve=TglOwnedVpSfcResolve<Setup>;
+    using ProducerResolve=TglOwnedVpSfcResolve<TglOwnedVpPreparedProducerView>;
+    using SetupResolve=TglOwnedVpSfcResolve<TglOwnedVpPreparedSetupView>;
     if(!tglBindOwnedVpProducerEntries<ProducerResolve>(first,entries[0]) ||
         !tglBindOwnedVpProducerEntries<ProducerResolve>(second,entries[1]) ||
         !tglBindOwnedVpSetupSendEntries<SetupResolve>(first,entries[0]) ||
