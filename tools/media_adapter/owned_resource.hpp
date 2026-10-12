@@ -190,11 +190,36 @@ struct alignas(8) TglOwnedVpSfcCallerStorage {
         return true;
     }
     void setCallerFields(uint32_t channel,uintptr_t performance) noexcept {
+        // Native TGL12c2b7/12c2e1 call these setters during the conditional
+        // VP dispatch (caller+a0c==1), after caller virtual118 succeeds.
+        // Channel comes from that caller+1bac; performance is *(caller+8),
+        // if caller+8 is nonnull. This is NOT the renderer+2ce8 slot ADDRESS
+        // passed to VEBOX constructors. Creator admission alone cannot
+        // authenticate either value; the concrete frame producer must do so.
         std::memcpy(bytes.data()+0x918,&channel,4);
         std::memcpy(bytes.data()+0x9c8,&performance,8);
     }
 };
 static_assert(sizeof(TglOwnedVpSfcCallerStorage)==0x9d0);
+// Exact TGL12c291..12c2e6 dispatch setters. Admission must hold the current
+// caller/VP exclusive frame lease and establish native virtual118 success;
+// readable memory alone is not admission. Read everything before publication.
+template<class Read,class Admit>
+bool tglBindVpNativeCallerFields(TglOwnedVpSfcCallerStorage& storage,
+    uintptr_t caller,Read read,Admit admit) {
+    if(!caller || caller>UINTPTR_MAX-0x1bb0 || !admit(caller,storage)) return false;
+    uint32_t mode=0,channel=0;uintptr_t performanceSlot=0,performance=0;
+    if(!read(caller+0xa0c,&mode,4) || mode!=1 ||
+       !read(caller+0x1bac,&channel,4) ||
+       !read(caller+8,&performanceSlot,8)) return false;
+    if(performanceSlot && (performanceSlot>UINTPTR_MAX-8 ||
+       !read(performanceSlot,&performance,8))) return false;
+    std::memcpy(storage.bytes.data()+0x918,&channel,4);
+    // Native skips the setter for a missing container, but DOES write zero
+    // when the existing container holds a null pointer. Preserve both cases.
+    if(performanceSlot) std::memcpy(storage.bytes.data()+0x9c8,&performance,8);
+    return true;
+}
 // Exact1dece6/1decf4/1decff/1ded0a borrowed publications from slot28.
 // Input leases and the AVS header lease must enclose this entire scope; this
 // does not initialize remaining VP state or permit references to escape.

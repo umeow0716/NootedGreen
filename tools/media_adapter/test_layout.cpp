@@ -13652,6 +13652,40 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        TglOwnedVpSfcCallerStorage vp;
+        std::array<uint8_t,0x1bb0> caller{};
+        uintptr_t performance=0x1234;
+        const auto address=reinterpret_cast<uintptr_t>(caller.data());
+        uintptr_t slot=reinterpret_cast<uintptr_t>(&performance);
+        uint32_t mode=1,channel=7;
+        std::memcpy(caller.data()+0xa0c,&mode,4);
+        std::memcpy(caller.data()+0x1bac,&channel,4);
+        std::memcpy(caller.data()+8,&slot,8);
+        bool deny=false,failSlot=false;
+        auto admit=[&](uintptr_t p,const auto& s){return !deny && p==address && &s==&vp;};
+        auto read=[&](uintptr_t p,void* out,size_t n){
+            if(p==slot && n==8) {if(failSlot)return false;std::memcpy(out,&performance,8);return true;}
+            if(p<address || p-address>caller.size() || n>caller.size()-(p-address))return false;
+            std::memcpy(out,caller.data()+(p-address),n);return true;
+        };
+        auto field=[&](){uintptr_t value=0;std::memcpy(&value,vp.bytes.data()+0x9c8,8);return value;};
+        assert(tglBindVpNativeCallerFields(vp,address,read,admit));
+        assert(field()==performance);
+        uint32_t actual=0;std::memcpy(&actual,vp.bytes.data()+0x918,4);assert(actual==7);
+        const auto before=vp.bytes;failSlot=true;
+        assert(!tglBindVpNativeCallerFields(vp,address,read,admit) && vp.bytes==before);
+        failSlot=false;deny=true;
+        assert(!tglBindVpNativeCallerFields(vp,address,read,admit) && vp.bytes==before);
+        deny=false;mode=0;std::memcpy(caller.data()+0xa0c,&mode,4);
+        assert(!tglBindVpNativeCallerFields(vp,address,read,admit) && vp.bytes==before);
+        mode=1;std::memcpy(caller.data()+0xa0c,&mode,4);
+        uintptr_t missing=0;std::memcpy(caller.data()+8,&missing,8);
+        assert(tglBindVpNativeCallerFields(vp,address,read,admit) && field()==performance);
+        std::memcpy(caller.data()+8,&slot,8);performance=0;
+        assert(tglBindVpNativeCallerFields(vp,address,read,admit) && field()==0);
+        assert(!tglBindVpNativeCallerFields(vp,UINTPTR_MAX-4,read,admit));
+    }
+    {
         struct EmptyDnBackend {
             unsigned allocations=0,releases=0;
             uintptr_t allocate(size_t) noexcept {++allocations;return 0;}
