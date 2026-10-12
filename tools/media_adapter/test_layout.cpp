@@ -16572,6 +16572,31 @@ int main() {
                 assert(packet==beforeConflict);
             }
             packet=before;
+            TglOwnedVpSfcCallerStorage peerVp;
+            auto peerPacket=before;
+            const std::array<TglOwnedVpEntrySet,2> bases{base,base};
+            const std::array<uintptr_t,2> pairSettings{settingsAddress,settingsAddress};
+            assert(tglWithOwnedVpPairedPlatformCompressionAssembly(vp,surface,packet,
+                peerVp,surface,peerPacket,pairSettings,binding,inputRead,invoke,bases,
+                [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
+                    assert(a!=b && ea.compressionFormat==base.compressionFormat &&
+                        eb.compressionFormat==base.compressionFormat);
+                    ea.platformPacket(a,nullptr,packet.data());
+                    assert(peerPacket==before);
+                    eb.platformPacket(b,nullptr,peerPacket.data());
+                    assert(ea.compression(a,nullptr,&surface,packet.data())==5);
+                    assert(eb.compression(b,nullptr,&surface,peerPacket.data())==5);
+                    expired=eb;return -31;
+                })==-31);
+            for(size_t i=0;i<packet.size();++i) {
+                assert(packet[i]==((i>=4 && i<8)?0:before[i]));
+                assert(peerPacket[i]==packet[i]);
+            }
+            assert(expired.compression(peerVp.bytes.data(),settings.data(),&surface,peerPacket.data())==5);
+            assert(tglWithOwnedVpPairedPlatformCompressionAssembly(vp,surface,packet,
+                peerVp,surface,packet,pairSettings,binding,inputRead,invoke,bases,
+                [](void*,const auto&,void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+            packet=before;
         }
         Context context(vp,surface,packet,settingsAddress,binding,inputRead,invoke);
         struct Reentry {

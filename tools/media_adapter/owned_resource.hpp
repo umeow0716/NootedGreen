@@ -10672,6 +10672,50 @@ int tglWithOwnedVpPlatformCompressionAssembly(TglOwnedVpSfcCallerStorage& vp,
     static_assert(noexcept(use(child,combined)),"VP platform/compression assembly ABI");
     return use(child,combined);
 }
+template<class Surface,size_t PacketBytes,class Read,class Invoke,class Use>
+int tglWithOwnedVpPairedPlatformCompressionAssembly(
+    TglOwnedVpSfcCallerStorage& first,const Surface& firstOutput,std::array<uint8_t,PacketBytes>& firstPacket,
+    TglOwnedVpSfcCallerStorage& second,const Surface& secondOutput,std::array<uint8_t,PacketBytes>& secondPacket,
+    const std::array<uintptr_t,2>& settings,const TglNativeVpCompressionBinding& binding,
+    Read read,Invoke invoke,const std::array<TglOwnedVpEntrySet,2>& base,Use use) noexcept {
+    const std::array<uintptr_t,6> starts{
+        reinterpret_cast<uintptr_t>(first.bytes.data()),reinterpret_cast<uintptr_t>(second.bytes.data()),
+        reinterpret_cast<uintptr_t>(firstPacket.data()),reinterpret_cast<uintptr_t>(secondPacket.data()),
+        reinterpret_cast<uintptr_t>(tglOwnedSfcSurfaceBytes(firstOutput)),
+        reinterpret_cast<uintptr_t>(tglOwnedSfcSurfaceBytes(secondOutput))};
+    const std::array<size_t,6> sizes{first.bytes.size(),second.bytes.size(),PacketBytes,PacketBytes,0x2a8,0x2a8};
+    for(size_t i=0;i<starts.size();++i) {
+        if(!starts[i] || starts[i]>UINTPTR_MAX-sizes[i]) return 5;
+        for(size_t j=0;j<i;++j) {
+            if(j>=4) continue; // outputs are read-only and may be shared
+            if(starts[i]<starts[j]+sizes[j] && starts[j]<starts[i]+sizes[i]) return 5;
+        }
+    }
+    for(const auto& entries:base)
+        if(entries.platformSetup || entries.platformPacket || entries.platformSend || entries.compression) return 5;
+    using Platform=TglOwnedVpPlatformPacketContext;
+    using Compression=TglOwnedVpCompressionContext<Surface,Read,Invoke,PacketBytes>;
+    Platform p0(first,firstPacket),p1(second,secondPacket);
+    Compression c0(first,firstOutput,firstPacket,settings[0],binding,read,invoke);
+    Compression c1(second,secondOutput,secondPacket,settings[1],binding,read,invoke);
+    void* a=first.bytes.data();void* b=second.bytes.data();
+    typename TglOwnedVpSfcScopedContext<Platform>::Pair platforms(a,p0,b,p1);
+    typename TglOwnedVpSfcScopedContext<Compression>::Pair compressions(a,c0,b,c1);
+    if(!platforms.bound() || !compressions.bound()) return 5;
+    using PR=TglOwnedVpSfcResolve<Platform>;
+    using CR=TglOwnedVpSfcResolve<Compression>;
+    auto combined=base;
+    for(size_t i=0;i<2;++i) {
+        void* child=i?b:a;
+        TglOwnedVpEntrySet additions;
+        if(!tglBindOwnedVpPlatformAdmissionEntries<PR>(child,additions) ||
+            !tglBindOwnedVpPlatformPacketEntry<PR>(child,additions) ||
+            !tglBindOwnedVpCompressionEntry<CR>(child,additions) ||
+            !combined[i].appendDisjoint(additions)) return 5;
+    }
+    static_assert(noexcept(use(a,combined[0],b,combined[1])),"paired platform/compression ABI");
+    return use(a,combined[0],b,combined[1]);
+}
 struct TglOwnedSfcGeometryInput {
     uint32_t inputFormat=0,outputFormat=0,inputFrameMode=0,rotation=0;
     uint32_t inputHeight=0,inputWidth=0,outputHeight=0,outputWidth=0;
