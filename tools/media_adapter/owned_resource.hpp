@@ -2700,6 +2700,10 @@ struct TglOwnedVeboxVtable {
             // 110/120 are proven native no-ops, not missing owned producers.
             // Preserve this exact preparation/submit chain, not arbitrary code.
             candidate[0xe8/8] != image+0x1296e0 || candidate[0x110/8] != image+0x1295b0 ||
+            // E8 conditionally enters F0, which invokes the owned DNDI slot.
+            // An arbitrary executable replacement would bypass that exact
+            // native stack/producer contract despite a qualified E8 entry.
+            candidate[0xf0/8] != image+0x1284f0 ||
             candidate[0x118/8] != image+0x12b5f0 || candidate[0x120/8] != image+0x1296d0 ||
             candidate[0x148/8] != image+0x12a230 ||
             // Submit12a5dc/12a61b retains these post-writeback callbacks.
