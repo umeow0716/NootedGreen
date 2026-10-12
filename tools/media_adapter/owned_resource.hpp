@@ -22354,16 +22354,23 @@ public:
     // is retained, then borrow them for the entire synchronous live frame.
     // Policy is read at producer use through these same owned frame leases.
     template<class ExecutionOwner,class NativeRead,class Qualify,class Executable,
-        class CaptureFactory,class Read,class SurfaceAdmit,class DiAdmit,class Consume>
+        class CaptureFactory,class Read,class SurfaceAdmit,class DiAdmit,class Consume,
+        class CscInvoke=TglNativeCscInvoker>
     TglOwnedVeboxCommandTransactionResult withNativeOwnedVpCreatorLivePacketFrame(
         size_t childIndex,const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         ExecutionOwner& executionOwner,const TglNativeVphalMhwView& view,uintptr_t sku,
         NativeRead nativeRead,Qualify qualify,Executable executable,CaptureFactory makeCapture,
-        bool disableTemporalDenoise,Read read,SurfaceAdmit admitSurface,DiAdmit admitDi,Consume consume) noexcept {
+        bool disableTemporalDenoise,Read read,SurfaceAdmit admitSurface,DiAdmit admitDi,Consume consume,
+        CscInvoke cscInvoke={}) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
         const int status=withCreatorDiIecpServices(view,nativeRead,qualify,executable,
             [&](const TglNativeDiIecpServices& services) noexcept -> int {
                 TglNativeDiIecpRegistration registration{services};
+                // Same creator/image lease as the native MHW services. The
+                // existing producer revalidates exact code on EACH use; no
+                // unqualified external CSC callback or copied image lifetime.
+                TglOwnedCscProducer<NativeRead,Qualify,Executable,CscInvoke> csc{
+                    view.renderer.image,nativeRead,qualify,executable,cscInvoke};
                 result=withNativeOwnedVpCommandFrame(childIndex,roles,sourceIndex,targetIndex,
                     executionOwner,view.renderHal,sku,nativeRead,
                     [&](auto& owner,void* child,void* vp,auto& graph,auto& lines,
@@ -22375,7 +22382,7 @@ public:
                         TglOwnedVeboxLivePacketContext<decltype(capture),Read,SurfaceAdmit,DiAdmit,
                             decltype(registration),decltype(control)> live{
                             {},packets,disableTemporalDenoise,capture,read,admitSurface,admitDi,registration,control};
-                        return consume(owner,child,vp,graph,lines,source,target,dn,live);
+                        return consume(owner,child,vp,graph,lines,source,target,dn,live,csc);
                     });
                 return result.status;
             });

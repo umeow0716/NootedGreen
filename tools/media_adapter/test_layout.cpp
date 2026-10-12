@@ -23259,9 +23259,17 @@ int main() {
                                 return readReportHelper(address,output,size) || diServiceRead(address,output,size);
                             };
                             unsigned creatorFrameUses=0;
+                            struct DeniedCreatorCsc {
+                                void coefficients(uintptr_t,uint32_t,uint32_t,float*,float*,float*) const noexcept {assert(false);}
+                                bool matrix(uintptr_t,uint32_t,uint32_t,float*) const noexcept {assert(false);return false;}
+                            };
                             auto useCreatorFrame=[&](auto& owner,void* child,void* vp,auto& graph,auto&,
-                                auto& sourceOwner,auto& targetOwner,auto&,auto& live) noexcept {
+                                auto& sourceOwner,auto& targetOwner,auto&,auto& live,auto& csc) noexcept {
                                 ++creatorFrameUses;
+                                // This service fixture supplies no CSC anchors: the real
+                                // producer must reject before calling any native entry.
+                                TglCscCoefficients coefficients{};
+                                assert(!csc(coefficients,1,2,0x19));
                                 assert(owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) &&
                                     graph.ownsStorage(vp) && removeParent()==5 && !parentDeaths);
                                 // Actual heterogeneous frontend source/target,
@@ -23301,13 +23309,13 @@ int main() {
                             };
                             const auto creatorFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
-                                capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame);
+                                capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame,DeniedCreatorCsc{});
                             assert(creatorFrame.status==-87 && !creatorFrame.requiresRetention() &&
                                 creatorFrameUses==1 && packetGathers==1);
                             admitDiControl=false;
                             const auto rejectedCreatorFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
-                                capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame);
+                                capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame,DeniedCreatorCsc{});
                             assert(rejectedCreatorFrame.status==5 && !rejectedCreatorFrame.requiresRetention() &&
                                 creatorFrameUses==1 && packetGathers==1);
                             admitDiControl=true;packetGathers=0;
