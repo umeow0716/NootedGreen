@@ -5332,13 +5332,17 @@ public:
     auto& second() noexcept {return second_;}
     // Caller encloses this in both concrete VP graph/state leases. Keep both
     // actual flat tables and parent leases through ONE native renderer call.
-    template<class FirstVp,class SecondVp,class FirstTable,class SecondTable,class Use>
+    template<bool Reserved=false,class FirstVp,class SecondVp,class FirstTable,class SecondTable,class Use>
     int withPairedVpFactories(FirstVp& firstVp,void* firstObject,const FirstTable& firstTable,
         SecondVp& secondVp,void* secondObject,const SecondTable& secondTable,Use use) noexcept {
+        auto dispatch=[](auto& graph,void* object,const auto& table,auto consumer) noexcept -> int {
+            if constexpr(Reserved) return graph.withReservedFlatDispatch(object,table,consumer);
+            else return graph.withLeasedFlatDispatch(object,table,consumer);
+        };
         return first_.owner().withPrivateChild([&](void* firstParent) noexcept {
             return second_.owner().withPrivateChild([&](void* secondParent) noexcept {
-                return firstVp.withLeasedFlatDispatch(firstObject,firstTable,[&](void* firstChild) noexcept {
-                    return secondVp.withLeasedFlatDispatch(secondObject,secondTable,[&](void* secondChild) noexcept {
+                return dispatch(firstVp,firstObject,firstTable,[&](void* firstChild) noexcept {
+                    return dispatch(secondVp,secondObject,secondTable,[&](void* secondChild) noexcept {
                         auto admit=[&](void* parent,void* child) noexcept {
                             return (parent==firstParent && child==firstChild &&
                                     first_.owner().hasPrivateChildLease(reinterpret_cast<uintptr_t>(parent))) ||

@@ -21172,9 +21172,19 @@ int main() {
                                                         TglOwnedVpFlatDispatchTable tableA,tableB;
                                                         auto executable=[](uintptr_t p,size_t n) noexcept {return p && n==1;};
                                                         assert(tableA.build(ea,executable) && tableB.build(eb,executable));
-                                                        const int joined=firstGraph.withReservedFlatDispatch(a,tableA,[&](void*) noexcept -> int {
+                                                        void* publishedParents[2]{};
+                                                        const int joined=frame.children().template withPairedVpFactories<true>(firstGraph,a,tableA,
+                                                            secondGraph,b,tableB,[&](void* parent0,void* parent1) noexcept -> int {
+                                                        publishedParents[0]=parent0;publishedParents[1]=parent1;
                                                         assert(firstGraph.withReservedFlatDispatch(a,tableA,[](void*) noexcept -> int {assert(false);return 0;})==5);
-                                                        return secondGraph.withReservedFlatDispatch(b,tableB,[&](void*) noexcept -> int {
+                                                        for(size_t i=0;i<2;++i) {
+                                                            void* parent=publishedParents[i];uintptr_t vtable=0,factory=0;
+                                                            std::memcpy(&vtable,parent,8);
+                                                            std::memcpy(&factory,reinterpret_cast<void*>(vtable+0x1e0),8);
+                                                            void* created=reinterpret_cast<void*(*)(void*) noexcept>(factory)(parent);
+                                                            assert(created==(i?b:a));
+                                                            std::memcpy(static_cast<uint8_t*>(parent)+0x80,&created,8);
+                                                        }
                                                         for(size_t i=0;i<2;++i) {
                                                             void* child=i?b:a;const auto& entries=i?eb:ea;
                                                             entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
@@ -21187,7 +21197,11 @@ int main() {
                                                         }
                                                         return expected;
                                                         });
-                                                        });
+                                                        for(void* parent:publishedParents) {
+                                                            uintptr_t published=1;
+                                                            std::memcpy(&published,static_cast<uint8_t*>(parent)+0x80,8);
+                                                            assert(!published);
+                                                        }
                                                         uintptr_t restoredA=1,restoredB=1;
                                                         std::memcpy(&restoredA,a,8);std::memcpy(&restoredB,b,8);
                                                         assert(!restoredA && !restoredB);
