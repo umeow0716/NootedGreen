@@ -5671,6 +5671,23 @@ public:
     }
     bool hdr() noexcept {return features() && hdrPresent_;}
     uint32_t sfc() noexcept {frame_.fail();return UINT32_MAX;}
+    // Read the original leased target, not requested allocation-key values.
+    // These fields are independently consumed by52bf0/native surface control.
+    // The enclosing context-root owner must retain the original resource;
+    // this read does not create backing, enable MMC or prove completion.
+    bool readTargetCompressionState(bool& compressed,TglOwnedSfcCompressionMode& mode) noexcept {
+        if(!healthy()) return false;
+        uint8_t flag=0;uint32_t raw=0;
+        if(!gate_(reinterpret_cast<uintptr_t>(&target_)+0x29a,&flag,1) ||
+           !gate_(reinterpret_cast<uintptr_t>(&target_)+0x29c,&raw,4)) return false;
+        if(raw!=static_cast<uint32_t>(TglOwnedSfcCompressionMode::Disabled) &&
+           raw!=static_cast<uint32_t>(TglOwnedSfcCompressionMode::Media) &&
+           raw!=static_cast<uint32_t>(TglOwnedSfcCompressionMode::Render)) {
+            frame_.fail();return false;
+        }
+        if(!healthy()) return false;
+        compressed=(flag&1)!=0;mode=static_cast<TglOwnedSfcCompressionMode>(raw);return true;
+    }
     // Mutable access must come from the enclosing owned target lease. The
     // compression references/decompressor still require resource provenance;
     // they are not inferred from undocumented Darwin surface offsets.
@@ -5688,12 +5705,9 @@ public:
         if(!actualFill) return false;
         // Same native fields consumed by tglSurfaceControlParams/52bf0.
         // Sidecar state is not authority to contradict the leased surface.
-        uint8_t nativeCompressed=0;uint32_t nativeMode=0;
-        if(!gate_(reinterpret_cast<uintptr_t>(&target_)+0x29a,&nativeCompressed,1) ||
-           !gate_(reinterpret_cast<uintptr_t>(&target_)+0x29c,&nativeMode,4)) return false;
-        if((mode!=TglOwnedSfcCompressionMode::Disabled && mode!=TglOwnedSfcCompressionMode::Media &&
-            mode!=TglOwnedSfcCompressionMode::Render) ||
-           bool(nativeCompressed&1)!=compressed || nativeMode!=static_cast<uint32_t>(mode)) {
+        bool nativeCompressed=false;auto nativeMode=TglOwnedSfcCompressionMode::Disabled;
+        if(!readTargetCompressionState(nativeCompressed,nativeMode)) return false;
+        if(nativeCompressed!=compressed || nativeMode!=mode) {
             frame_.fail();return false;
         }
         TglSurfaceRect sourceRect{},targetRect{};
@@ -5715,7 +5729,7 @@ public:
         // Successful decompression is irreversible even if another lease was
         // lost during the call. Preserve that fact in the actual target while
         // its own lease remains valid; never publish a pipe on frame failure.
-        if((nativeCompressed&1) && !compressed && mode==TglOwnedSfcCompressionMode::Disabled) {
+        if(nativeCompressed && !compressed && mode==TglOwnedSfcCompressionMode::Disabled) {
             if(!targetOwner_.hasSurfaceLease(target_)) {frame_.fail();return false;}
             writableTarget.tail[0xa]&=uint8_t{0xfe};
             const uint32_t disabled=0;

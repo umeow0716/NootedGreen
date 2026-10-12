@@ -3078,7 +3078,7 @@ static void testLeasedGen12PlatformPolicy() {
     struct SfcFixture {
         static int extent(void* vp,void*,void*,void*) noexcept {++*static_cast<unsigned*>(vp);return 1;}
     };
-    for(unsigned scenario=0;scenario<23;++scenario) {
+    for(unsigned scenario=0;scenario<26;++scenario) {
         TglOwnedSurfaceStorage source{},target{};
         std::array<uint8_t,0x1bc0> child{};
         std::array<uint8_t,0x139> parameters{};
@@ -3105,6 +3105,9 @@ static void testLeasedGen12PlatformPolicy() {
         for(size_t offset : {0x30u,0x40u,0x50u}) std::memcpy(source.prefix.data()+offset,&rect,16);
         std::memcpy(target.prefix.data()+0x40,&rect,16);
         if(scenario==10 || scenario>=16) {const float bottom=1120;std::memcpy(target.prefix.data()+0x4c,&bottom,4);}
+        target.tail[0xa]=scenario==17 || scenario==18?0xc1:0xc0;
+        const uint32_t targetCompressionMode=scenario==23?99:scenario==17 || scenario==18?3:0;
+        std::memcpy(target.tail.data()+0xc,&targetCompressionMode,4);
         std::memcpy(source.prefix.data()+0x130,&format,4);std::memcpy(target.prefix.data()+0x130,&targetFormat,4);
         ChildOwner childOwner{childAddress,0x100000};SurfaceOwner sourceOwner{&source},targetOwner{&target};
         if(scenario==6) targetOwner.allow=false;
@@ -3115,12 +3118,15 @@ static void testLeasedGen12PlatformPolicy() {
         if(scenario==4) a.lut=Presence::Unknown;
         auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
             if(scenario==12 && p==childAddress+0x1b9c) return false;
+            if(scenario==25 && p==targetAddress+0x29c) return false;
             auto copy=[&](uintptr_t base,const void* data,size_t size) noexcept {
                 if(p<base || p-base>size || n>size-(p-base)) return false;
                 std::memcpy(out,static_cast<const uint8_t*>(data)+p-base,n);return true;
             };
-            return copy(childAddress,child.data(),child.size()) || copy(paramsAddress,parameters.data(),parameters.size()) ||
+            const bool copied=copy(childAddress,child.data(),child.size()) || copy(paramsAddress,parameters.data(),parameters.size()) ||
                 copy(sourceAddress,&source,sizeof(source)) || copy(targetAddress,&target,sizeof(target));
+            if(scenario==24 && p==targetAddress+0x29c) targetOwner.allow=false;
+            return copied;
         };
         auto query=[&](uintptr_t s,uintptr_t t,bool& needed) noexcept {
             assert(s==sourceAddress && t==targetAddress);++queries;needed=scenario==13;
@@ -3129,15 +3135,17 @@ static void testLeasedGen12PlatformPolicy() {
             return scenario!=5;
         };
         auto fill=[&](auto& active) noexcept {
-            ++fills;bool compressed=scenario==17 || scenario==18;
-            auto mode=compressed?TglOwnedSfcCompressionMode::Media:TglOwnedSfcCompressionMode::Disabled;
+            ++fills;bool compressed=true;auto mode=TglOwnedSfcCompressionMode::Render;
+            const bool acquired=active.readTargetCompressionState(compressed,mode);
+            if(scenario>=23) {
+                assert(!acquired && compressed && mode==TglOwnedSfcCompressionMode::Render);
+                return false;
+            }
+            assert(acquired);
             if(scenario==22) mode=static_cast<TglOwnedSfcCompressionMode>(99);
             uint32_t compressionFormat=compressed?7:0;int status=-1;unsigned decompressions=0;
-            target.tail[0xa]=compressed?0xc1:0xc0;
-            const uint32_t nativeMode=static_cast<uint32_t>(mode);
-            std::memcpy(target.tail.data()+0xc,&nativeMode,4);
-            if(scenario==20) target.tail[0xa]|=1;
-            if(scenario==21) {const uint32_t wrongMode=3;std::memcpy(target.tail.data()+0xc,&wrongMode,4);}
+            if(scenario==20) compressed=!compressed;
+            if(scenario==21) mode=TglOwnedSfcCompressionMode::Media;
             auto decompress=[&]() noexcept {
                 ++decompressions;
                 if(scenario==18) sourceOwner.allow=false;
