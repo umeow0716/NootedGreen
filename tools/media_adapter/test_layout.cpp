@@ -22159,13 +22159,33 @@ int main() {
                                     assert(originalReport==packets.execution);
                                     std::memcpy(static_cast<uint8_t*>(child)+0x1b0,&input,8);
                                     unsigned acquired=0,writebacks=0;
-                                    const auto transaction=tglWithCapturedVeboxCommandTransaction(
-                                        sourceLease,leasedOwner,executionLease,child,packets.execution,packets.source,
-                                        [&](int32_t& remaining) noexcept -> int {
-                                            ++acquired;remaining=64;return 31;
-                                        },[&](int status,int32_t remaining) noexcept -> bool {
-                                            ++writebacks;assert(status==31 && remaining==64);return false;
+                                    TglOwnedVeboxCommandTransactionResult transaction;
+                                    unsigned renderCalls=0;
+                                    const auto whole=tglRunLeasedVeboxSurfaceRender(renderBinding,leasedOwner,child,
+                                        &packets,sourceLease,packets.source,targetLease,*packets.target,
+                                        [&](uintptr_t entry,void* actual,void* argument,void* pair) noexcept -> int {
+                                            ++renderCalls;
+                                            assert(entry==renderBinding.entry && actual==child && argument==&packets);
+                                            uintptr_t originalSource=0,originalTarget=0;
+                                            std::memcpy(&originalSource,static_cast<uint8_t*>(pair)+0x10,8);
+                                            std::memcpy(&originalTarget,static_cast<uint8_t*>(pair)+0x18,8);
+                                            assert(originalSource==reinterpret_cast<uintptr_t>(&source) &&
+                                                originalTarget==reinterpret_cast<uintptr_t>(&target));
+                                            assert(ho.borrowed && dn.size()==sizeof(TglOwnedDnParameterStorage));
+                                            transaction=tglWithCapturedVeboxCommandTransaction(
+                                                sourceLease,leasedOwner,executionLease,child,packets.execution,packets.source,
+                                                [&](int32_t& remaining) noexcept -> int {
+                                                    ++acquired;remaining=64;return 31;
+                                                },[&](int status,int32_t remaining) noexcept -> bool {
+                                                    ++writebacks;assert(status==31 && remaining==64);return false;
+                                                });
+                                            return transaction.status;
                                         });
+                                    assert(renderCalls==1 && whole.nativeEntered && whole.status==transaction.status &&
+                                        !whole.acquired && !whole.writtenBack);
+                                    // These flags come from captured command evidence above,
+                                    // not from whole Render success or its entry flag.
+                                    transaction.nativeEntered=whole.nativeEntered;
                                     assert(acquired==1 && writebacks==1 && transaction.status==5 &&
                                         transaction.builderStatus==31 && transaction.acquired && !transaction.writtenBack);
                                     return transaction;
@@ -22176,7 +22196,7 @@ int main() {
                         });
                         // Source/history each retain one token; NV12 target
                         // retains both plane tokens, even when handles alias.
-                        assert(r.acquired && frameDn.live==1 && refs[1]==4);
+                        assert(r.acquired && r.nativeEntered && frameDn.live==1 && refs[1]==4);
                         uintptr_t detachedDn=1;
                         std::memcpy(&detachedDn,source.prefix.data()+0x90,8);
                         assert(detachedDn==0);
@@ -22196,7 +22216,7 @@ int main() {
                                 assert(pending);return 0;
                             },[&](auto&,bool pending,const auto& result) noexcept {
                                 ++prepareCalls;
-                                assert(pending && result.acquired && !result.writtenBack);
+                                assert(pending && result.nativeEntered && result.acquired && !result.writtenBack);
                                 assert(ho.borrowed && frameDn.live==1 && refs[1]==4);
                                 assert(!cleaned[0] && !cleaned[1] && vpCpu.live && vpAvsCpu.live);
                                 assert(!parents.pinExclusive(base,0x8000,1,parentAddress).get());
@@ -22207,7 +22227,7 @@ int main() {
                             assert(pending);retirementQualified=true;return 0;
                         },[&](auto& frame,bool pending,const auto& result) noexcept {
                             ++prepareCalls;
-                            assert(pending && result.acquired && !result.writtenBack);
+                            assert(pending && result.nativeEntered && result.acquired && !result.writtenBack);
                             assert(ho.borrowed && frameDn.live==1 && refs[1]==4);
                             assert(!cleaned[0] && !cleaned[1] && vpCpu.live && vpAvsCpu.live);
                             auto admitDetach=[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;};
