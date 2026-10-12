@@ -15787,6 +15787,16 @@ int main() {
                     // Query owns its metadata mutation; no command/state is published on failure.
                     assert(commands.state==savedState && output.prefix[0xf0]==0x5a);
                     assert(queries==4 && consumers==2 && !state.hasParametersLease());
+                    const unsigned beforeInvalidOutput=native.allocations;
+                    TglOwnedSurfaceStorage unbackedOutput;
+                    auto changedPrefix=prefix;
+                    const uint32_t changedInput=input+1;
+                    std::memcpy(changedPrefix.data()+0x30,&changedInput,4);
+                    assert(tglWithOwnedVpResourceBoundState(commands,state,storage.resources(),unbackedOutput,
+                        changedPrefix,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,query,
+                        [&](auto&) noexcept -> int {++consumers;return 0;})==5);
+                    assert(native.allocations==beforeInvalidOutput && queries==4 && consumers==2 &&
+                        commands.state==savedState);
                     assert(storage.resources().withCommandResources(input,scaled,
                         [](const auto&,const auto&,const auto*) noexcept {return 0;})==0);
                 } else assert(!native.live && native.releases==failure);

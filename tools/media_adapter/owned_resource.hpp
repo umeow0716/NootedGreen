@@ -17781,7 +17781,8 @@ int tglWithOwnedVpResourceBoundState(TglOwnedSfcCommandParameters& parameters,
     TglOwnedSfcGen12Tail tail,bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,
     TglOwnedSfcCompressionMode compressionMode,Query query,Use use) noexcept {
     static_assert(noexcept(use(parameters)),"VP resource-bound state consumer ABI");
-    if(parameters.filtersInUse || !state.data() || state.hasParametersLease() || tail.sfdLineBuffer) return 5;
+    if(parameters.filtersInUse || !state.data() || state.hasParametersLease() || tail.sfdLineBuffer ||
+        !tglNativeBackingPresent(output.resource)) return 5;
     TglOwnedSfcStateParametersPacket checked{};
     if(!tglPrepareOwnedSfcGen12Pass(checked,prefix,tail,rgbAdaptive,eightTapChroma,
         compressionEnabled,compressionMode)) return 5;
