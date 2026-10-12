@@ -7402,6 +7402,44 @@ static void testNativeResourceBoundary() {
                                 assert(owner.hasSurfaceLease(s) && parameterBackend.live==1);
                             }));
                         assert(targetCalls==1);
+                        std::array<TglOwnedSurfaceStorage,2> dnGroup{};
+                        const std::array<TglOwnedSurfaceStorage*,2> dnViews{&dnGroup[0],&dnGroup[1]};
+                        unsigned groupCalls=0;
+                        assert(owner.withBorrowedDenoiseMetadataGroup(s,parameters,dnViews,
+                            [&](const auto& sourceView,const auto& views) noexcept {
+                                ++groupCalls;uintptr_t sourceDn=0;
+                                std::memcpy(&sourceDn,sourceView.prefix.data()+0x90,8);
+                                assert(sourceDn==parameters.get());
+                                for(auto* view:views) {uintptr_t dn=0;
+                                    std::memcpy(&dn,view->prefix.data()+0x90,8);assert(dn==sourceDn);}
+                                parameters.reset();assert(parameterBackend.live==1);
+                                assert(!owner.withBorrowedDenoiseMetadataGroup(s,parameters,dnViews,
+                                    [](const auto&,const auto&) noexcept {assert(false);}));
+                            }));
+                        assert(groupCalls==1);
+                        for(const auto& view:dnGroup) {uintptr_t dn=1;
+                            std::memcpy(&dn,view.prefix.data()+0x90,8);assert(!dn);}
+                        assert(!owner.withBorrowedDenoiseMetadataGroup(s,parameters,
+                            std::array<TglOwnedSurfaceStorage*,2>{&dnGroup[0],&dnGroup[0]},
+                            [](const auto&,const auto&) noexcept {assert(false);}));
+                        TglOwnedDescriptorOnlySurface dnPeer;
+                        bool peerChanged=false;
+                        assert(dnPeer.prepare(dnRequest,peerChanged) && dnPeer.publishFfdnFrame(s));
+                        unsigned dnPairCalls=0;
+                        assert(dnTarget.withBorrowedFfdnDenoisePair(dnPeer,owner,s,parameters,
+                            [&](const auto&,const auto& views) noexcept {
+                                ++dnPairCalls;
+                                for(auto* view:views) {uintptr_t dn=0;
+                                    std::memcpy(&dn,view->prefix.data()+0x90,8);assert(dn==parameters.get());}
+                                dnTarget.reset();dnPeer.reset();parameters.reset();
+                                assert(!dnTarget.withBorrowedFfdnDenoisePair(dnPeer,owner,s,parameters,
+                                    [](const auto&,const auto&) noexcept {assert(false);}));
+                            }));
+                        assert(dnPairCalls==1 && parameterBackend.live==1);
+                        for(auto* descriptor:std::array<TglOwnedDescriptorOnlySurface*,2>{&dnTarget,&dnPeer})
+                            assert(descriptor->withDescriptor([](const auto& view) noexcept {
+                                uintptr_t dn=1;std::memcpy(&dn,view.prefix.data()+0x90,8);assert(!dn);
+                            }));
                         assert(dnTarget.withBorrowedExecutionAndDenoise(owner,s,parameters,owner,s,
                             [&](const auto& sourceView,const auto& targetView) noexcept {
                                 ++targetCalls;uintptr_t dn=0,handle=0,expectedHandle=0;

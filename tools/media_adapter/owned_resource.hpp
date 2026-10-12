@@ -7307,6 +7307,19 @@ public:
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         return owner.withBorrowedDenoiseMetadata(source,parameters,storage_,use);
     }
+    // Reborrow both FFDN outputs with ONE tracked-parameter lease. The
+    // descriptors stay busy until source and both DN90 slots are detached.
+    template<class SourceOwner,class Parameters,class Use>
+    bool withBorrowedFfdnDenoisePair(TglOwnedDescriptorOnlySurface& peer,
+        SourceOwner& owner,const TglOwnedSurfaceStorage& source,Parameters& parameters,Use use) noexcept {
+        if(&peer==this || !owner.hasSurfaceLease(source) ||
+           !matchesPreparedFfdnSource(source) || !peer.matchesPreparedFfdnSource(source)) return false;
+        busy_=true;peer.busy_=true;
+        struct Unlock {bool& first;bool& second;~Unlock(){first=false;second=false;}}
+            unlock{busy_,peer.busy_};
+        return owner.withBorrowedDenoiseMetadataGroup(source,parameters,
+            std::array<TglOwnedSurfaceStorage*,2>{&storage_,&peer.storage_},use);
+    }
     // Compose the two independently qualified roles without recursively
     // acquiring this descriptor. Caller must already pin both actual owners;
     // no inference that input and execution are the same surface is made.
@@ -7602,30 +7615,49 @@ public:
     // owner. Both source and CPU metadata are detached before its lease ends.
     // Not valid for native160 (which can consume/free DN parameters), nor GPU
     // work retaining either pointer after this callback.
+    template<size_t Count,class Parameters,class Use>
+    bool withBorrowedDenoiseMetadataGroup(const TglOwnedSurfaceStorage& expected,
+        Parameters& parameters,const std::array<TglOwnedSurfaceStorage*,Count>& metadata,Use use) noexcept {
+        using Views=std::array<const TglOwnedSurfaceStorage*,Count>;
+        static_assert(Count>0 && noexcept(use(expected,std::declval<const Views&>())) &&
+            std::is_same_v<decltype(use(expected,std::declval<const Views&>())),void>);
+        if(!ready_ || !busy_ || &expected!=&surface_ ||
+           !capture_.backed(surface_.resource)) return false;
+        uintptr_t sourcePointer=0;
+        std::memcpy(&sourcePointer,surface_.prefix.data()+0x90,8);
+        if(sourcePointer) return false;
+        Views views{};
+        for(size_t i=0;i<Count;++i) {
+            if(!metadata[i] || metadata[i]==&surface_) return false;
+            for(size_t j=0;j<i;++j) if(metadata[i]==metadata[j]) return false;
+            uintptr_t pointer=0;std::memcpy(&pointer,metadata[i]->prefix.data()+0x90,8);
+            if(pointer) return false;
+            views[i]=metadata[i];
+        }
+        bool consumed=false;
+        const bool leased=parameters.withBorrowedAddress([&](uintptr_t pointer,size_t extent) noexcept {
+            if(extent<8) return;
+            auto* sourceSlot=surface_.prefix.data()+0x90;
+            struct Restore {uint8_t* source;const std::array<TglOwnedSurfaceStorage*,Count>& targets;
+                ~Restore(){std::memset(source,0,8);
+                    for(auto* target:targets) std::memset(target->prefix.data()+0x90,0,8);}
+            } restore{sourceSlot,metadata};
+            std::memcpy(sourceSlot,&pointer,8);
+            for(auto* target:metadata) std::memcpy(target->prefix.data()+0x90,&pointer,8);
+            use(expected,static_cast<const Views&>(views));
+            consumed=true;
+        });
+        return leased && consumed;
+    }
     template<class Parameters,class Use>
     bool withBorrowedDenoiseMetadata(const TglOwnedSurfaceStorage& expected,
         Parameters& parameters,TglOwnedSurfaceStorage& metadata,Use use) noexcept {
         static_assert(noexcept(use(expected,static_cast<const TglOwnedSurfaceStorage&>(metadata))) &&
             std::is_same_v<decltype(use(expected,static_cast<const TglOwnedSurfaceStorage&>(metadata))),void>,
             "borrowed DN metadata ABI");
-        if(!ready_ || !busy_ || &expected!=&surface_ || &metadata==&surface_ ||
-           !capture_.backed(surface_.resource)) return false;
-        uintptr_t sourcePointer=0,targetPointer=0;
-        std::memcpy(&sourcePointer,surface_.prefix.data()+0x90,8);
-        std::memcpy(&targetPointer,metadata.prefix.data()+0x90,8);
-        if(sourcePointer || targetPointer) return false;
-        bool consumed=false;
-        const bool leased=parameters.withBorrowedAddress([&](uintptr_t pointer,size_t extent) noexcept {
-            if(extent<8) return;
-            auto* sourceSlot=surface_.prefix.data()+0x90;
-            auto* targetSlot=metadata.prefix.data()+0x90;
-            struct Restore {uint8_t* source;uint8_t* target;
-                ~Restore(){std::memset(source,0,8);std::memset(target,0,8);}} restore{sourceSlot,targetSlot};
-            std::memcpy(sourceSlot,&pointer,8);std::memcpy(targetSlot,&pointer,8);
-            use(expected,static_cast<const TglOwnedSurfaceStorage&>(metadata));
-            consumed=true;
-        });
-        return leased && consumed;
+        return withBorrowedDenoiseMetadataGroup(expected,parameters,
+            std::array<TglOwnedSurfaceStorage*,1>{&metadata},
+            [&](const auto& source,const auto& views) noexcept {use(source,*views[0]);});
     }
     // Fast-fill recheck must observe the actual leased target, not a detached
     // rectangle copy. Only its proven +4c bottom is borrowed; retain every
