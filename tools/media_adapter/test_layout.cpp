@@ -21976,7 +21976,9 @@ int main() {
                         // Recording report backing outlives pending frame retirement,
                         // not merely the synchronous command callback below.
                         struct RecordingExecutionBackend {
-                            std::array<uint8_t,0xa10> bytes{};
+                            // Full owned report extent: DI policy also reads
+                            // d28, beyond the older feature-only a10 fixture.
+                            std::array<uint8_t,0xd48> bytes{};
                             unsigned destroyed=0;
                             uintptr_t create() noexcept {assert(false);return 0;}
                             int initialize(uintptr_t object) noexcept {return validate(object)?0:5;}
@@ -23137,6 +23139,14 @@ int main() {
                                 });
                             assert(missingPair.status==5 && !missingPair.requiresRetention());
                             auto creatorFrameRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                for(const auto range: {std::pair<uintptr_t,size_t>{
+                                    reinterpret_cast<uintptr_t>(pairCpu[0].bytes.data()),pairCpu[0].bytes.size()},
+                                    {report,executionBackend.bytes.size()}}) {
+                                    if(address>=range.first && address-range.first<=range.second &&
+                                        size<=range.second-(address-range.first)) {
+                                        std::memcpy(output,reinterpret_cast<const void*>(address),size);return true;
+                                    }
+                                }
                                 return readReportHelper(address,output,size) || diServiceRead(address,output,size);
                             };
                             unsigned creatorFrameUses=0;
@@ -23149,21 +23159,34 @@ int main() {
                                     tglNativeDiIecpServicesReady(live.registerResource.services));
                                 assert(live.registerResource.services.registration.context==os &&
                                     live.control.services.control.context==0x6000);
+                                assert(live.control.policy.child==live.leases.child &&
+                                    live.control.policy.execution==live.leases.execution &&
+                                    live.control.policy.target==live.leases.target);
+                                auto* childBytes=static_cast<uint8_t*>(child);
+                                const uint8_t originalMmc=childBytes[0x1ba9];
+                                uintptr_t originalTarget=0;
+                                std::memcpy(&originalTarget,executionBackend.bytes.data()+0x60,8);
+                                const auto targetAddress=reinterpret_cast<uintptr_t>(live.leases.target);
+                                std::memcpy(executionBackend.bytes.data()+0x60,&targetAddress,8);
+                                bool enabled=true;childBytes[0x1ba9]=2;
+                                assert(live.control.policy(live.leases.source,0,false,enabled)==0 && !enabled);
+                                childBytes[0x1ba9]=1;
+                                assert(live.control.policy(live.leases.source,0,false,enabled)==0 && enabled);
+                                childBytes[0x1ba9]=originalMmc;
+                                std::memcpy(executionBackend.bytes.data()+0x60,&originalTarget,8);
                                 TglOwnedVeboxCommandTransactionResult result;
                                 result.status=live.withInput([](auto&) noexcept -> int {return -87;});
                                 return result;
                             };
                             const auto creatorFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
-                                capturePacket,false,readReportHelper,rejectPacket,rejectPacket,
-                                TglDiIecpControlPolicy{},useCreatorFrame);
+                                capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame);
                             assert(creatorFrame.status==-87 && !creatorFrame.requiresRetention() &&
                                 creatorFrameUses==1 && packetGathers==1);
                             admitDiControl=false;
                             const auto rejectedCreatorFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
-                                capturePacket,false,readReportHelper,rejectPacket,rejectPacket,
-                                TglDiIecpControlPolicy{},useCreatorFrame);
+                                capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame);
                             assert(rejectedCreatorFrame.status==5 && !rejectedCreatorFrame.requiresRetention() &&
                                 creatorFrameUses==1 && packetGathers==1);
                             admitDiControl=true;packetGathers=0;
@@ -26713,6 +26736,14 @@ int main() {
                 return false;
             };
             TglDiIecpControlPolicy policy;
+            TglOwnedDiIecpControlPolicyReader<decltype(readPolicy)> deferred{0x1000,0x4000,&storage[1],readPolicy};
+            bool enabled=false;
+            assert(deferred(storage[0],0,false,enabled)==0 && enabled && modeReads==1);
+            mmc=2;
+            assert(deferred(storage[0],0,false,enabled)==0 && !enabled && modeReads==1);
+            target+=8;enabled=true;
+            assert(deferred(storage[0],0,false,enabled)==5 && !enabled && modeReads==1);
+            target-=8;mmc=3;modeReads=0;
             assert(tglReadOwnedDiIecpControlPolicy(policy,0x1000,0x4000,&storage[1],readPolicy) &&
                 policy.mmcEnabled && policy.executionMode==7 && policy.target==&storage[1] && modeReads==1);
             modeReadable=false;

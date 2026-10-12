@@ -15456,6 +15456,20 @@ bool tglReadOwnedDiIecpControlPolicy(TglDiIecpControlPolicy& output,
     }
     output=candidate;return true;
 }
+// Construct under held owned frame leases; every producer invocation reads
+// the current report policy, never a pre-preparation snapshot.
+template<class Read> struct TglOwnedDiIecpControlPolicyReader {
+    uintptr_t child,execution;
+    const TglOwnedSurfaceStorage* target;
+    Read read;
+    int operator()(const TglOwnedSurfaceStorage& surface,size_t slot,
+        bool directTarget,bool& enabled) noexcept {
+        enabled=false;
+        TglDiIecpControlPolicy policy;
+        if(!tglReadOwnedDiIecpControlPolicy(policy,child,execution,target,read)) return 5;
+        return policy(surface,slot,directTarget,enabled);
+    }
+};
 // Lives only inside the captured-input consumer. Identity and resource shape
 // supplement, never replace, the caller's backing/ownership admission.
 template<class Admit> struct TglDiIecpLiveResourceAdmission {
@@ -22304,23 +22318,31 @@ public:
     }
     // Resolve native resource services while the original creator/MHW owner
     // is retained, then borrow them for the entire synchronous live frame.
-    // Policy remains an explicit, qualified caller input, not a default.
+    // Policy is read at producer use through these same owned frame leases.
     template<class ExecutionOwner,class NativeRead,class Qualify,class Executable,
-        class CaptureFactory,class Read,class SurfaceAdmit,class DiAdmit,class Policy,class Consume>
+        class CaptureFactory,class Read,class SurfaceAdmit,class DiAdmit,class Consume>
     TglOwnedVeboxCommandTransactionResult withNativeOwnedVpCreatorLivePacketFrame(
         size_t childIndex,const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         ExecutionOwner& executionOwner,const TglNativeVphalMhwView& view,uintptr_t sku,
         NativeRead nativeRead,Qualify qualify,Executable executable,CaptureFactory makeCapture,
-        bool disableTemporalDenoise,Read read,SurfaceAdmit admitSurface,DiAdmit admitDi,
-        Policy policy,Consume consume) noexcept {
+        bool disableTemporalDenoise,Read read,SurfaceAdmit admitSurface,DiAdmit admitDi,Consume consume) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
         const int status=withCreatorDiIecpServices(view,nativeRead,qualify,executable,
             [&](const TglNativeDiIecpServices& services) noexcept -> int {
                 TglNativeDiIecpRegistration registration{services};
-                TglNativeDiIecpControl<Policy> control{services,policy};
-                result=withNativeOwnedVpLivePacketFrame(childIndex,roles,sourceIndex,targetIndex,
-                    executionOwner,view.renderHal,sku,nativeRead,makeCapture,disableTemporalDenoise,
-                    read,admitSurface,admitDi,registration,control,consume);
+                result=withNativeOwnedVpCommandFrame(childIndex,roles,sourceIndex,targetIndex,
+                    executionOwner,view.renderHal,sku,nativeRead,
+                    [&](auto& owner,void* child,void* vp,auto& graph,auto& lines,
+                        auto& source,auto& target,auto& dn,auto& packets) noexcept {
+                        auto capture=makeCapture(owner,child,vp,graph,lines,source,target,dn,packets);
+                        TglOwnedDiIecpControlPolicyReader<Read> policy{
+                            packets.child,packets.execution,packets.target,read};
+                        TglNativeDiIecpControl<decltype(policy)> control{services,policy};
+                        TglOwnedVeboxLivePacketContext<decltype(capture),Read,SurfaceAdmit,DiAdmit,
+                            decltype(registration),decltype(control)> live{
+                            {},packets,disableTemporalDenoise,capture,read,admitSurface,admitDi,registration,control};
+                        return consume(owner,child,vp,graph,lines,source,target,dn,live);
+                    });
                 return result.status;
             });
         result.status=status;
