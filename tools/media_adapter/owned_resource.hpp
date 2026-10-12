@@ -7209,6 +7209,43 @@ inline bool tglPrepareOwnedFfdiAllocationRequest(const TglOwnedSurfaceStorage& s
         TglOwnedFfdiAllocationKind::DescriptorOnly;
     output=candidate;return true;
 }
+// Allocation-time history bytes, not a resource owner. The retained frame
+// must keep the original owner alive; every use requires its current lease
+// and unchanged resource identity. DN90 must be borrowed separately, never
+// persisted as an untracked pointer. No public raw snapshot accessor.
+class TglOwnedFfdnHistorySnapshot {
+    TglOwnedSurfaceStorage snapshot_{};
+    const void* owner_=nullptr;
+    const TglOwnedSurfaceStorage* source_=nullptr;
+    bool ready_=false,busy_=false;
+public:
+    TglOwnedFfdnHistorySnapshot()=default;
+    TglOwnedFfdnHistorySnapshot(const TglOwnedFfdnHistorySnapshot&)=delete;
+    TglOwnedFfdnHistorySnapshot& operator=(const TglOwnedFfdnHistorySnapshot&)=delete;
+    template<class Owner>
+    bool capture(Owner& owner,const TglOwnedSurfaceStorage& source) noexcept {
+        if(busy_ || !owner.hasSurfaceLease(source)) return false;
+        uintptr_t dn=0;std::memcpy(&dn,source.prefix.data()+0x90,8);
+        if(dn) return false;
+        snapshot_=source;owner_=&owner;source_=&source;ready_=true;return true;
+    }
+    void reset() noexcept {if(!busy_) {snapshot_={};owner_=nullptr;source_=nullptr;ready_=false;}}
+    template<class Owner,class Use>
+    int withView(Owner& owner,const TglOwnedSurfaceStorage& source,Use use) noexcept {
+        const auto admitted=[&]() noexcept {
+            return ready_ && owner_==&owner && source_==&source && owner.hasSurfaceLease(source) &&
+                !std::memcmp(snapshot_.resource.data(),source.resource.data(),snapshot_.resource.size());
+        };
+        if(busy_ || !admitted()) return 5;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        static_assert(noexcept(use(static_cast<const TglOwnedSurfaceStorage&>(snapshot_))) &&
+            std::is_same_v<decltype(use(static_cast<const TglOwnedSurfaceStorage&>(snapshot_))),int>);
+        const int result=use(static_cast<const TglOwnedSurfaceStorage&>(snapshot_));
+        return admitted()?result:5;
+    }
+};
+
 // Private descriptor-only slot: native49fe0/4a14d does not allocate GPU
 // backing for type1/format!=3d. Never expose withSurface()/resource-token
 // ownership: callers must separately retain the borrowed source resource.
@@ -7363,6 +7400,23 @@ public:
         return valid && owner.hasSurfaceLease(source)?result:5;
     }
     const void* surfaceBinding() const noexcept {return &storage_;}
+    template<class Owner,class Use>
+    int withBorrowedHistorySnapshotScope(TglOwnedFfdnHistorySnapshot& snapshot,
+        Owner& owner,const TglOwnedSurfaceStorage& source,Use use) noexcept {
+        if(busy_) return 5;
+        const auto saved=storage_;const bool wasReady=ready_;bool entered=false;
+        struct Restore {TglOwnedDescriptorOnlySurface& self;
+            const TglOwnedSurfaceStorage& saved;bool ready;bool& entered;
+            ~Restore(){if(entered) {self.storage_=saved;self.ready_=ready;self.busy_=false;}}
+        } restore{*this,saved,wasReady,entered};
+        return snapshot.withView(owner,source,[&](const auto& captured) noexcept -> int {
+            entered=true;busy_=true;
+            storage_=captured;ready_=true;
+            static_assert(noexcept(use(static_cast<const TglOwnedSurfaceStorage&>(storage_))) &&
+                std::is_same_v<decltype(use(static_cast<const TglOwnedSurfaceStorage&>(storage_))),int>);
+            return use(static_cast<const TglOwnedSurfaceStorage&>(storage_));
+        });
+    }
     bool readFfdnPriorCompression(bool& output) const noexcept {
         if(busy_) return false;
         constexpr size_t base=offsetof(TglOwnedSurfaceStorage,tail);
