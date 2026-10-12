@@ -13709,11 +13709,24 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        int children[2]{},packet=0;
+        const std::array<TglOwnedVpEntrySet,2> base{};
+        assert(tglWithOwnedVpPairedPlatformDispatchEntries(children,children+1,base,
+            [&](void* a,const auto& ea,auto&,void*,const auto&,auto&) noexcept -> int {
+                ea.platformPacket(a,nullptr,&packet);return 0;
+            })==5);
+        assert(tglWithOwnedVpPairedPlatformDispatchEntries(children,children+1,base,
+            [&](void* a,const auto& ea,auto& phase,void*,const auto&,auto&) noexcept -> int {
+                return phase.withEntries(a,ea,[]() noexcept -> int {assert(false);return 0;});
+            })==5);
+    }
+    {
         int children[2]{};
         std::array<uint8_t,0xf8> state{};
         std::array<uint8_t,64> ief{};
         TglOwnedVpCscProducerContext<0xf8> context(children,ief,state.data(),nullptr);
         TglOwnedVpCscDispatchContext phase(children);
+        assert(phase.withContext(phase,[]() noexcept -> int {assert(false);return 0;})==5);
         assert(phase.withContext(context,[&]() noexcept -> int {
             assert(phase.withContext(context,[]() noexcept -> int {assert(false);return 0;})==5);
             phase.csc(state.data(),ief.data());return 0;
@@ -16601,6 +16614,11 @@ int main() {
             const auto after=packet;
             expired.platformPacket(vp.bytes.data(),nullptr,packet.data());
             assert(expired.compression(vp.bytes.data(),settings.data(),&surface,packet.data())==5 && packet==after);
+            assert(tglWithOwnedVpPlatformCompressionAssembly(vp,surface,packet,settingsAddress,
+                binding,inputRead,invoke,base,[&](void* child,const auto& entries) noexcept -> int {
+                    entries.platformPacket(child,nullptr,nullptr);return 0;
+                })==5);
+            assert(packet==after);
             for(unsigned occupied=0;occupied<4;++occupied) {
                 auto conflict=base;
                 if(occupied==0) conflict.platformSetup=expired.platformSetup;
@@ -21066,7 +21084,8 @@ int main() {
                                         assert(stateCount==2 && avsCount==2 && filterCount==2 && emitCount==2);
                                     }
                                     {
-                                        std::array<uint8_t,0x298> source{},target{};
+                                        std::array<uint8_t,0x298> source{};
+                                        std::array<uint8_t,0x2a8> target{};
                                         std::array<uint8_t,0x1c> mhw{};
                                         std::array<uint8_t,0x68> settings{};
                                         auto put=[](auto& bytes,size_t offset,auto value) noexcept {
@@ -21090,6 +21109,7 @@ int main() {
                                                 std::memcpy(out,bytes.data()+address-base,size);return true;
                                             };
                                             return span(0x1000,source) || span(0x2000,target) ||
+                                                span(reinterpret_cast<uintptr_t>(target.data()),target) ||
                                                 span(0x3000,mhw) || span(0x4000,settings);
                                         };
                                         int data[2]{},command=0;
@@ -21102,6 +21122,8 @@ int main() {
                                             std::array<TglOwnedVpCscCache,2> cscCaches;
                                             std::array<std::array<uint8_t,64>,2> iefPackets{};
                                             TglOwnedVpCscDispatchContext* phases[2]{};
+                                            TglOwnedVpPlatformDispatchContext* platformPhases[2]{};
+                                            TglNativeVpCompressionBinding compressionBinding;
                                             const TglOwnedVpEntrySet* catalogues[2]{};
                                             assert(firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
                                                 return tglWithOwnedVpPairedAcquiredFrameCore(firstGraph,first,firstLines.resources(),
@@ -21119,18 +21141,34 @@ int main() {
                                                             [](TglCscCoefficients&,uint32_t,uint32_t) noexcept {return true;},
                                                             [&](auto& context,uint8_t* packet) noexcept -> int {
                                                                 return phases[index]->withContext(context,[&]() noexcept -> int {
-                                                                    catalogues[index]->csc(child,packet,iefPackets[index].data());
-                                                                    ++emissions;return 0;
+                                                                    auto& backing=index?frontendVp1.bytes:vpCpu.bytes;
+                                                                    const TglOwnedVpEntrySet empty;
+                                                                    return graph.withLeasedPlatformCompressionAssemblyEntries(child,target,
+                                                                        backing,0x4000,compressionBinding,read,TglNativeVpCompressionInvoker{},empty,
+                                                                        [&](void* admitted,const auto& native) noexcept -> int {
+                                                                            return platformPhases[index]->withEntries(admitted,native,[&]() noexcept -> int {
+                                                                                catalogues[index]->csc(child,packet,iefPackets[index].data());
+                                                                                catalogues[index]->platformPacket(child,nullptr,packet);
+                                                                                const int result=catalogues[index]->compression(child,
+                                                                                    reinterpret_cast<void*>(0x4000),target.data(),packet);
+                                                                                if(!result) ++emissions;
+                                                                                return result;
+                                                                            });
+                                                                        });
                                                                 });
                                                             });
                                                     },
                                                     [&](void* a,const auto& baseA,void* b,const auto& baseB) noexcept -> int {
                                                         const std::array<TglOwnedVpEntrySet,2> base{baseA,baseB};
                                                         return tglWithOwnedVpPairedCscDispatchEntries(a,b,base,
-                                                            [&](void*,const auto& ea,auto& pa,void*,const auto& eb,auto& pb) noexcept -> int {
-                                                        phases[0]=&pa;phases[1]=&pb;catalogues[0]=&ea;catalogues[1]=&eb;
-                                                        constexpr uint32_t remaining=(1U<<21)|(1U<<24)|(1U<<25)|(1U<<26);
-                                                        assert(ea.missingMask()==remaining && eb.missingMask()==remaining);
+                                                            [&](void*,const auto& cscA,auto& pa,void*,const auto& cscB,auto& pb) noexcept -> int {
+                                                        phases[0]=&pa;phases[1]=&pb;
+                                                        const std::array<TglOwnedVpEntrySet,2> cscEntries{cscA,cscB};
+                                                        return tglWithOwnedVpPairedPlatformDispatchEntries(a,b,cscEntries,
+                                                            [&](void*,const auto& ea,auto& qa,void*,const auto& eb,auto& qb) noexcept -> int {
+                                                        platformPhases[0]=&qa;platformPhases[1]=&qb;
+                                                        catalogues[0]=&ea;catalogues[1]=&eb;
+                                                        assert(ea.hasAllEntries() && eb.hasAllEntries());
                                                         for(size_t i=0;i<2;++i) {
                                                             void* child=i?b:a;const auto& entries=i?eb:ea;
                                                             entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
@@ -21142,6 +21180,7 @@ int main() {
                                                             if(result) return result;
                                                         }
                                                         return expected;
+                                                        });
                                                         });
                                                     });
                                             })==expected);

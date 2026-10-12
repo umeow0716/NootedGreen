@@ -10049,7 +10049,8 @@ public:
         forward_(active_,state,ief);
     }
     template<class Context,class Use> int withContext(Context& context,Use use) noexcept {
-        if(error_ || active_ || !context.owns(child_)) return 5;
+        if(error_ || active_ || static_cast<void*>(&context)==static_cast<void*>(this) ||
+            !context.owns(child_)) return 5;
         active_=&context;
         forward_=+[](void* c,void* s,void* i) noexcept {static_cast<Context*>(c)->csc(s,i);};
         static_assert(noexcept(use()) && noexcept(context.status()),"phase CSC consumer ABI");
@@ -10547,6 +10548,7 @@ public:
         std::memcpy(packet_+4,&zero,4);applied_=true;
     }
     int status() const noexcept {return error_ ? error_ : applied_ ? 0 : 5;}
+    int error() const noexcept {return error_;}
 };
 // Exact donor1df3c0 takes this, an ignored surface in RSI, packet in RDX;
 // writes one DWORD at packet+4 and has void ABI. No donor code is invoked.
@@ -10766,6 +10768,52 @@ bool tglBindOwnedVpCompressionEntry(void* child,TglOwnedVpEntrySet& target) noex
     candidate.compression=&TglOwnedVpCompressionCallback<Resolve>::compression;
     target=candidate;return true;
 }
+class TglOwnedVpPlatformDispatchContext {
+    void* child_;
+    const TglOwnedVpEntrySet* active_=nullptr;
+    int error_=0;
+public:
+    explicit TglOwnedVpPlatformDispatchContext(void* child) noexcept :child_(child){}
+    bool owns(void* child) const noexcept {return child && child==child_;}
+    int status() const noexcept {return error_;}
+    void produce(void* packet) noexcept {
+        if(!active_) {error_=5;return;}
+        active_->platformPacket(child_,nullptr,packet);
+    }
+    int compression(void* settings,void* output,void* packet) noexcept {
+        if(!active_) {error_=5;return 5;}
+        return active_->compression(child_,settings,output,packet);
+    }
+    template<class Use> int withEntries(void* child,const TglOwnedVpEntrySet& entries,Use use) noexcept {
+        using Resolve=TglOwnedVpSfcResolve<TglOwnedVpPlatformDispatchContext>;
+        if(!owns(child) || error_ || active_ || !entries.platformPacket || !entries.compression ||
+            entries.platformPacket==&TglOwnedVpPlatformPacketCallback<Resolve>::produce ||
+            entries.compression==&TglOwnedVpCompressionCallback<Resolve>::compression) return 5;
+        active_=&entries;
+        static_assert(noexcept(use()),"platform phase consumer ABI");
+        const int result=use();active_=nullptr;
+        return result?result:error_;
+    }
+};
+template<class Use>
+int tglWithOwnedVpPairedPlatformDispatchEntries(void* first,void* second,
+    const std::array<TglOwnedVpEntrySet,2>& base,Use use) noexcept {
+    using Context=TglOwnedVpPlatformDispatchContext;
+    using Resolve=TglOwnedVpSfcResolve<Context>;
+    Context a(first),b(second);
+    typename TglOwnedVpSfcScopedContext<Context>::Pair scope(first,a,second,b);
+    if(!scope.bound()) return 5;
+    auto entries=base;
+    for(size_t i=0;i<2;++i) {
+        void* child=i?second:first;
+        if(!tglBindOwnedVpPlatformAdmissionEntries<Resolve>(child,entries[i]) ||
+            !tglBindOwnedVpPlatformPacketEntry<Resolve>(child,entries[i]) ||
+            !tglBindOwnedVpCompressionEntry<Resolve>(child,entries[i])) return 5;
+    }
+    static_assert(noexcept(use(first,entries[0],a,second,entries[1],b)),"paired platform phase ABI");
+    const int result=use(first,entries[0],a,second,entries[1],b);
+    return result?result:(a.status()?a.status():b.status());
+}
 // Caller retains VP, output and packet backing throughout this CPU-only
 // assembly. Both resolver scopes expire before returning to that caller.
 template<class Surface,size_t PacketBytes,class Read,class Invoke,class Use>
@@ -10797,7 +10845,8 @@ int tglWithOwnedVpPlatformCompressionAssembly(TglOwnedVpSfcCallerStorage& vp,
     auto combined=base;
     if(!combined.appendDisjoint(additions)) return 5;
     static_assert(noexcept(use(child,combined)),"VP platform/compression assembly ABI");
-    return use(child,combined);
+    const int result=use(child,combined);
+    return result?result:platform.error();
 }
 template<class Surface,size_t PacketBytes,class Read,class Invoke,class Use>
 int tglWithOwnedVpPairedPlatformCompressionAssembly(
@@ -10841,7 +10890,8 @@ int tglWithOwnedVpPairedPlatformCompressionAssembly(
             !combined[i].appendDisjoint(additions)) return 5;
     }
     static_assert(noexcept(use(a,combined[0],b,combined[1])),"paired platform/compression ABI");
-    return use(a,combined[0],b,combined[1]);
+    const int result=use(a,combined[0],b,combined[1]);
+    return result?result:(p0.error()?p0.error():p1.error());
 }
 struct TglOwnedSfcGeometryInput {
     uint32_t inputFormat=0,outputFormat=0,inputFrameMode=0,rotation=0;
