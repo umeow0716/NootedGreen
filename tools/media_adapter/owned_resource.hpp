@@ -21706,6 +21706,19 @@ bool tglValidateRendererCreatorEnvironment(Backing& backing,const TglNativeVphal
         environment.fill.resolve(os,image,read,qualify,executable) &&
         backing.matchesResourceEnvironment(environment);
 }
+template<class Backing,class Read,class Qualify,class Executable,class Use>
+int tglWithCreatorDiIecpServices(Backing& backing,const TglVeboxHardwareBinding* retained,
+    const TglNativeVphalMhwView& view,Read read,Qualify qualify,Executable executable,Use use) noexcept {
+    static_assert(noexcept(use(std::declval<const TglNativeDiIecpServices&>())) &&
+        std::is_same_v<decltype(use(std::declval<const TglNativeDiIecpServices&>())),int>);
+    TglVeboxHardwareBinding hardware;
+    if(!retained || backing.retention()() ||
+        retained->interface!=view.hardware.interface || retained->os!=view.os ||
+        !tglValidateRendererCreatorEnvironment(backing,view,read,qualify,executable,hardware)) return 5;
+    TglNativeDiIecpServices services;
+    if(!services.resolve(view.os,hardware.interface,view.renderer.image,read,qualify,executable)) return 5;
+    return use(static_cast<const TglNativeDiIecpServices&>(services));
+}
 struct TglNativeRendererChildParameters {
     uintptr_t history=0,performance=0;
     TglNativeRendererCacheSettings cache;
@@ -21886,18 +21899,8 @@ public:
     template<class Read,class Qualify,class Executable,class Use>
     int withCreatorDiIecpServices(const TglNativeVphalMhwView& view,
         Read read,Qualify qualify,Executable executable,Use use) noexcept {
-        static_assert(noexcept(use(std::declval<const TglNativeDiIecpServices&>())) &&
-            std::is_same_v<decltype(use(std::declval<const TglNativeDiIecpServices&>())),int>);
-        const auto* retained=mhwLease_.binding();
-        TglVeboxHardwareBinding hardware;
-        if(!retained || backing_.retention()() ||
-            retained->interface!=view.hardware.interface || retained->os!=view.os ||
-            !tglValidateRendererCreatorEnvironment(backing_,view,read,qualify,executable,hardware))
-            return 5;
-        TglNativeDiIecpServices services;
-        if(!services.resolve(view.os,hardware.interface,view.renderer.image,
-            read,qualify,executable)) return 5;
-        return use(static_cast<const TglNativeDiIecpServices&>(services));
+        return tglWithCreatorDiIecpServices(backing_,mhwLease_.binding(),view,
+            read,qualify,executable,use);
     }
     template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker,
         class Query=TglNativeRendererCacheInvoker>
@@ -22034,6 +22037,12 @@ public:
         if(backing_.retention()() || children_.first().owner().constructedBase() ||
             children_.second().owner().constructedBase()) return false;
         return mhwLease_.acquire(std::forward<ParentLease>(parent),std::forward<Args>(args)...);
+    }
+    template<class Read,class Qualify,class Executable,class Use>
+    int withCreatorDiIecpServices(const TglNativeVphalMhwView& view,
+        Read read,Qualify qualify,Executable executable,Use use) noexcept {
+        return tglWithCreatorDiIecpServices(backing_,mhwLease_.binding(),view,
+            read,qualify,executable,use);
     }
     template<class ParentLease,class... Args>
     bool retainBorrowedMhwOwned(ParentLease&& parent,Args&&... args) noexcept {

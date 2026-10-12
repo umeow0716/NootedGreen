@@ -22019,6 +22019,50 @@ int main() {
                                 !borrowedResources.context && !borrowedResources.allocate && !borrowedResources.release);
                             putNative(nativeCreator,0x40,os);
                             assert(frame.resolveBorrowedResources(borrowedResources,resourceRead,qualifyMhw,executableMhw));
+                            bool admitDiControl=true;
+                            unsigned diServiceUses=0;
+                            auto diServiceRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                                if(bytes==8 && (address==os+0x248 || address==base+0x759548 ||
+                                    address==base+0x759580)) {
+                                    const uintptr_t value=base+(address==os+0x248?0x645e0:
+                                        address==base+0x759548?0x172080:0x179530);
+                                    std::memcpy(out,&value,8);return true;
+                                }
+                                if(address==base+0x645e0 && bytes==22) {
+                                    const std::array<uint8_t,22> anchor{0x55,0x48,0x89,0xe5,0x31,0xc0,
+                                        0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0,0x89,0x55,0xec,
+                                        0x89,0x4d,0xe8,0x5d,0xc3};
+                                    std::memcpy(out,anchor.data(),bytes);return true;
+                                }
+                                if(address==base+0x172080 && bytes==11) {
+                                    const std::array<uint8_t,11> anchor{0x55,0x48,0x89,0xe5,0x48,
+                                        0x81,0xec,0x40,0x01,0x00,0x00};
+                                    std::memcpy(out,anchor.data(),bytes);return true;
+                                }
+                                if(address==base+0x179530 && bytes==8) {
+                                    if(!admitDiControl) return false;
+                                    const std::array<uint8_t,8> anchor{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x50};
+                                    std::memcpy(out,anchor.data(),bytes);return true;
+                                }
+                                return resourceRead(address,out,bytes);
+                            };
+                            auto useDiServices=[&](const TglNativeDiIecpServices& services) noexcept -> int {
+                                ++diServiceUses;
+                                assert(removeParent()==5 && !parentDeaths);
+                                assert(services.registration.context==os && services.registration.entry==base+0x645e0);
+                                assert(services.control.context==0x6000 && services.control.entry==base+0x179530);
+                                return -87;
+                            };
+                            assert(frame.withCreatorDiIecpServices(frontendCreatorView,diServiceRead,
+                                qualifyMhw,executableMhw,useDiServices)==-87 && diServiceUses==1);
+                            admitDiControl=false;
+                            assert(frame.withCreatorDiIecpServices(frontendCreatorView,diServiceRead,
+                                qualifyMhw,executableMhw,useDiServices)==5 && diServiceUses==1);
+                            admitDiControl=true;
+                            putNative(nativeCreator,0x40,os+8);
+                            assert(frame.withCreatorDiIecpServices(frontendCreatorView,diServiceRead,
+                                qualifyMhw,executableMhw,useDiServices)==5 && diServiceUses==1);
+                            putNative(nativeCreator,0x40,os);
                             TglNativeDnScalarRequest dnRequest;
                             dnRequest.mode=0;dnRequest.word24=1;
                             dnRequest.word28=11;dnRequest.word2c=13;
