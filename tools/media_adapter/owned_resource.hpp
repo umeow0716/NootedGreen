@@ -1659,15 +1659,19 @@ public:
 // lifetime. This proves topology and addressability, not image/type or retain.
 struct TglNativeVeboxRendererView {
     TglNativeVeboxParentView parent{};
-    uintptr_t renderer=0,configuration=0;
+    uintptr_t creator=0,renderer=0,configuration=0;
     uintptr_t image=0,vtable=0,initialize=0,frame=0;
     template<class Read,class Admit>
     bool resolve(uintptr_t context,Read read,Admit admit) noexcept {
-        *this={};TglNativeVeboxParentView candidate;uintptr_t object=0;
+        *this={};TglNativeVeboxParentView candidate;uintptr_t vphal=0,object=0;
+        // 2340eb publishes the VPHAL returned by1353a0, NOT its renderer.
+        // Native133c28 loads renderer from that object's+68 field.
         if(!candidate.resolve(context,read,admit) ||
-            !read(context+0x12e0,&object,8) || !object ||
+            !read(context+0x12e0,&vphal,8) || !vphal ||
+            vphal>UINTPTR_MAX-0x70 || !admit(vphal,size_t{0x70}) ||
+            !read(vphal+0x68,&object,8) || !object ||
             object>UINTPTR_MAX-0x2cb8 || !admit(object,size_t{0x2cb8})) return false;
-        parent=candidate;renderer=object;configuration=object+0x2cb0;return true;
+        parent=candidate;creator=vphal;renderer=object;configuration=object+0x2cb0;return true;
     }
     // Retained stage6 journals prove G12Tgllp vptr75bba0, not the abstract
     // VphalRenderer base. Image qualification authenticates exact file bytes.

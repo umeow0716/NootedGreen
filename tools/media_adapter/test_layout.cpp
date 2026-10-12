@@ -13179,7 +13179,8 @@ static void testRetainedVeboxFrames() {
             ++parentReads;if(size!=8) return false;
             uintptr_t value=0;
             if(address==0x20128) value=contextPhysical;
-            else if(address==0x212e0) value=contextRenderer;
+            else if(address==0x212e0) value=0x50000;
+            else if(address==0x50068) value=contextRenderer;
             else if(address==0x212f0) value=0x9000;
             else if(address==0x8050) value=0xa000;
             else if(address==0x9008) value=embedded;
@@ -13192,7 +13193,7 @@ static void testRetainedVeboxFrames() {
         auto parentAdmit=[](uintptr_t address,size_t size) noexcept {
             return (address==0x20000 && size==0x12f8) || (address==0x8000 && size==0x58) ||
                 (address==0x9000 && size==0x10) || (address==0xa000 && size==0x50) ||
-                (address==0x30000 && size==0x2cb8);
+                (address==0x30000 && size==0x2cb8) || (address==0x50000 && size==0x70);
         };
         auto contextUse=[&](auto&,const TglNativeVeboxParentView& parent) noexcept -> int {
             ++contextCalls;assert(parent.context==0x20000 && parent.physical==0x8000 &&
@@ -14057,18 +14058,21 @@ int main() {
         std::array<uint8_t,0x10> os{};
         std::array<uint8_t,0x50> wrapper{};
         std::array<uint8_t,0x2d50> renderer{};
+        std::array<uint8_t,0x70> vphal{};
         const auto c=reinterpret_cast<uintptr_t>(context.data());
         const auto p=reinterpret_cast<uintptr_t>(physical.data());
         const auto o=reinterpret_cast<uintptr_t>(os.data());
         const auto w=reinterpret_cast<uintptr_t>(wrapper.data());
         const auto r=reinterpret_cast<uintptr_t>(renderer.data());
+        const auto v=reinterpret_cast<uintptr_t>(vphal.data());
         auto put=[](uintptr_t base,size_t offset,uintptr_t value) {
             std::memcpy(reinterpret_cast<void*>(base+offset),&value,8);
         };
-        put(c,0x128,p);put(c,0x12f0,o);put(p,0x50,w);put(o,8,w+0x48);put(c,0x12e0,r);
+        put(c,0x128,p);put(c,0x12f0,o);put(p,0x50,w);put(o,8,w+0x48);put(c,0x12e0,v);put(v,0x68,r);
         auto admit=[&](uintptr_t address,size_t size) noexcept {
-            for(const auto& range:std::array<std::pair<uintptr_t,size_t>,5>{{
-                {c,context.size()},{p,physical.size()},{o,os.size()},{w,wrapper.size()},{r,renderer.size()}}})
+            for(const auto& range:std::array<std::pair<uintptr_t,size_t>,6>{{
+                {c,context.size()},{p,physical.size()},{o,os.size()},{w,wrapper.size()},
+                {r,renderer.size()},{v,vphal.size()}}})
                 if(address>=range.first && address-range.first<=range.second &&
                    size<=range.second-(address-range.first)) return true;
             return false;
@@ -14108,7 +14112,7 @@ int main() {
         assert(!roots.resolve(c,inputRead,inputAdmit) && !roots.input);
         TglNativeVeboxRendererView rendererView;
         assert(rendererView.resolve(c,read,admit) && rendererView.parent.physical==p &&
-            rendererView.renderer==r && rendererView.configuration==r+0x2cb0);
+            rendererView.creator==v && rendererView.renderer==r && rendererView.configuration==r+0x2cb0);
         constexpr uintptr_t image=0x10000000;
         uintptr_t nativeInit=image+0x132510,nativeFrame=image+0x131fa0;
         put(r,0,image+0x75bba0);
@@ -14525,8 +14529,12 @@ int main() {
         }
         put(c,0x12e0,0);assert(!rendererView.resolve(c,read,admit) && !rendererView.renderer);
         put(c,0x12e0,UINTPTR_MAX-8);assert(!rendererView.resolve(c,read,admit));
-        put(c,0x12e0,r+renderer.size()-0x2cb8+8);assert(!rendererView.resolve(c,read,admit));
-        put(c,0x12e0,r);
+        put(c,0x12e0,r);assert(!rendererView.resolve(c,read,admit) && !rendererView.creator);
+        put(c,0x12e0,v+8);assert(!rendererView.resolve(c,read,admit));
+        put(c,0x12e0,v);put(v,0x68,0);assert(!rendererView.resolve(c,read,admit));
+        put(v,0x68,UINTPTR_MAX-8);assert(!rendererView.resolve(c,read,admit));
+        put(v,0x68,r+renderer.size()-0x2cb8+8);assert(!rendererView.resolve(c,read,admit));
+        put(v,0x68,r);
         put(o,8,w);assert(!view.resolve(c,read,admit));
         assert(!rendererView.resolve(c,read,admit) && !rendererView.configuration);
         assert(!view.context && !view.physical && !view.os && !view.wrapper);
