@@ -7768,6 +7768,11 @@ static void testNativeResourceBoundary() {
                                                 offsetof(TglOwnedSurfaceStorage,resource),4)==0);
                                             return -23;
                                         })==-23);
+                                    assert(tglWithPreparedFfdiSecondary(firstBacking,destination,
+                                        [&](const auto& secondaryView,const auto& output) noexcept -> int {
+                                            assert(destination.hasSurfaceLease(secondaryView) && firstBacking.hasSurfaceLease(output));
+                                            return -24;
+                                        })==-24);
                                     assert(backingBackend.allocations==2 && !backingBackend.releases);
                                     reportBackend.bytes[0x12]=1;
                                     assert(runEither()==-17 && backingBackend.allocations==2 && !backingBackend.releases);
@@ -8406,6 +8411,24 @@ static void testNativeResourceBoundary() {
                                                         return -76;
                                                     },static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
                                                     {&current,nullptr,nullptr,nullptr})==-76);
+                                                assert(borrowFixture.allocations==graphAllocations && borrowFixture.fills==1);
+                                                assert(retained.withPreparedSurfaceViews(linkedInput,
+                                                    static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                    static_cast<decltype(&linkedInput)>(nullptr),0,TglOwnedFfdiAllocationKind::NativeBacking,
+                                                    false,false,false,[](const auto& ffdi,const auto& ffdn,const auto&,const auto&) noexcept -> int {
+                                                        assert(!ffdi.count && !ffdi.outputs[0] && !ffdi.secondaryTarget && !ffdn.outputs[0]);return -77;
+                                                    },static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
+                                                    {&current,nullptr,nullptr,nullptr})==-77);
+                                                assert(retained.ffdiBacked()[0]->publishFfdiSecondaryFrom(linkedInput,current));
+                                                assert(retained.withPreparedSurfaceViews(linkedInput,
+                                                    static_cast<decltype(&linkedInput)>(nullptr),&linkedInput,
+                                                    static_cast<decltype(&linkedInput)>(nullptr),0,TglOwnedFfdiAllocationKind::NativeBacking,
+                                                    true,false,false,[&](const auto& ffdi,const auto& ffdn,const auto&,const auto&) noexcept -> int {
+                                                        assert(!ffdi.count && ffdi.secondarySource==&current && ffdi.secondaryTarget);
+                                                        assert(retained.ffdiBacked()[0]->hasSurfaceLease(*ffdi.secondaryTarget));
+                                                        assert(ffdn.outputs[0]);return -78;
+                                                    },static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
+                                                    {&current,nullptr,&current,nullptr})==-78);
                                                 assert(borrowFixture.allocations==graphAllocations && borrowFixture.fills==1);
                                                 retained.auxiliary().retention().observe(
                                                     TglOwnedVeboxCommandTransactionResult{31,31,true,false});
@@ -9197,6 +9220,10 @@ static void testNativeResourceBoundary() {
                         std::memcpy(&wanted,source.resource.data()+0x200-resourceBase,4);
                         assert(actual==wanted);return 31;
                     })==31 && secondaryConsumers==1);
+                assert(tglWithPreparedFfdiSecondary(targets[0],owner,
+                    [&](const auto& source,const auto&) noexcept -> int {
+                        assert(owner.hasSurfaceLease(source));return -25;
+                    })==-25);
                 TglOwnedDescriptorOnlySurface unprepared;
                 assert(owner.withSurface([&](const auto& captured) noexcept {
                     assert(tglWithOwnedDescriptorFfdiSecondary(targets[0],owner,

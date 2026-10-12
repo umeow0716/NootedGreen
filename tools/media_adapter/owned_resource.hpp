@@ -7258,6 +7258,7 @@ class TglOwnedDescriptorOnlySurface {
     bool ready_=false,busy_=false;
     const TglOwnedSurfaceStorage* ffdiSource_=nullptr;
     const TglOwnedSurfaceStorage* ffdiExecution_=nullptr;
+    const TglOwnedSurfaceStorage* ffdiSecondary_=nullptr;
     const TglOwnedSurfaceStorage* ffdnSource_=nullptr;
 public:
     TglOwnedDescriptorOnlySurface()=default;
@@ -7275,7 +7276,7 @@ public:
         std::memcpy(storage_.prefix.data()+0x130,&request.key.format,4);
         std::memcpy(storage_.prefix.data()+0xe4,&request.key.tile,4);
         std::memcpy(storage_.prefix.data()+0xe0,&zero,4);
-        ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdnSource_=nullptr;
+        ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdiSecondary_=nullptr;ffdnSource_=nullptr;
         ready_=true;changed=true;return true; //4a1af writes1 even on reuse
     }
     // Persist only qualified frame scalars. Borrowed handle1a0 and DN90
@@ -7289,16 +7290,16 @@ public:
         if(!tglPrepareOwnedFfdiFrameMetadata(storage_,input,query)) return false;
         if(execution) tglCopyOwnedFfdiPrimaryScalars(storage_,*execution);
         if(secondary) tglCopyOwnedFfdiSecondaryMetadata(storage_,*secondary);
-        ffdiSource_=&input;ffdiExecution_=execution;ffdnSource_=nullptr;
+        ffdiSource_=&input;ffdiExecution_=execution;ffdiSecondary_=secondary;ffdnSource_=nullptr;
         return true;
     }
     bool matchesPreparedFfdiRoles(const TglOwnedSurfaceStorage& source,
-        const TglOwnedSurfaceStorage* execution) const noexcept {
-        return ready_ && !busy_ && ffdiSource_==&source && ffdiExecution_==execution;
+        const TglOwnedSurfaceStorage* execution,const TglOwnedSurfaceStorage* secondary=nullptr) const noexcept {
+        return ready_ && !busy_ && ffdiSource_==&source && ffdiExecution_==execution && ffdiSecondary_==secondary;
     }
     bool publishFfdnFrame(const TglOwnedSurfaceStorage& input) noexcept {
         if(!ready_ || busy_ || !tglPrepareOwnedFfdnFrameMetadata(storage_,input)) return false;
-        ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdnSource_=&input;return true;
+        ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdiSecondary_=nullptr;ffdnSource_=&input;return true;
     }
     bool matchesPreparedFfdnSource(const TglOwnedSurfaceStorage& source) const noexcept {
         return ready_ && !busy_ && ffdnSource_==&source;
@@ -7309,7 +7310,10 @@ public:
     template<class SourceOwner>
     bool publishFfdiSecondaryFrom(SourceOwner& owner,const TglOwnedSurfaceStorage& secondary) noexcept {
         if(!ready_ || busy_ || &secondary==&storage_ || !owner.hasSurfaceLease(secondary)) return false;
-        tglCopyOwnedFfdiSecondaryMetadata(storage_,secondary);return true;
+        tglCopyOwnedFfdiSecondaryMetadata(storage_,secondary);ffdiSecondary_=&secondary;return true;
+    }
+    bool matchesPreparedFfdiSecondary(const TglOwnedSurfaceStorage& source) const noexcept {
+        return ready_ && !busy_ && ffdiSecondary_==&source;
     }
     // Native execution60->FFDI1a0 is a borrowed IOSurface/resource58, not
     // a separately owned resource. Require the complete actual type1 source
@@ -7435,7 +7439,7 @@ public:
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         use(static_cast<const TglOwnedSurfaceStorage&>(storage_));return true;
     }
-    void reset() noexcept {if(!busy_) {storage_={};ready_=false;ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdnSource_=nullptr;}}
+    void reset() noexcept {if(!busy_) {storage_={};ready_=false;ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdiSecondary_=nullptr;ffdnSource_=nullptr;}}
 };
 
 // ICL1f7eba..1f7fb1 data policy only, not its virtual-base object ABI.
@@ -7793,6 +7797,9 @@ public:
         return ready_ && !busy_ && ffdiSource_==&source && ffdiExecution_==execution &&
             ffdiSecondary_==secondary && capture_.backed(surface_.resource);
     }
+    bool matchesPreparedFfdiSecondary(const TglOwnedSurfaceStorage& source) noexcept {
+        return ready_ && !busy_ && ffdiSecondary_==&source && capture_.backed(surface_.resource);
+    }
     // Both native-backed output shells borrow one DN parameter owner. This
     // scope is non-consuming, not native160 or asynchronous GPU retention.
     template<class SourceOwner,class Parameters,class Use>
@@ -8044,7 +8051,7 @@ int tglWithPreparedDescriptorFfdiViews(std::array<TglOwnedDescriptorOnlySurface,
     return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,3>{&input,execution,secondary},captured,
         [&](const auto& inputs) noexcept -> int {
             for(size_t i=0;i<count;++i)
-                if(!targets[i].matchesPreparedFfdiRoles(*inputs[0],inputs[1])) return 5;
+                if(!targets[i].matchesPreparedFfdiRoles(*inputs[0],inputs[1],i?nullptr:inputs[2])) return 5;
             Outputs outputs{};
             const auto enter=[&](auto&& self,size_t index) noexcept -> int {
                 if(index==count) return use(inputs,static_cast<const Outputs&>(outputs),count);
@@ -8248,6 +8255,27 @@ int tglWithOwnedBackedFfdiSecondary(TargetOwner& target,Owner& secondary,
         });
         return leased?result:5;
     });
+}
+
+// Producer-time secondary-only access: no publication, allocation or primary
+// frame requirement. The exact original secondary owner is pinned again.
+template<class Target,class Owner,class Use>
+int tglWithPreparedFfdiSecondary(Target& target,Owner& secondary,Use use,
+    const TglOwnedSurfaceStorage* captured=nullptr) noexcept {
+    return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,1>{&secondary},
+        std::array<const TglOwnedSurfaceStorage*,1>{captured},[&](const auto& views) noexcept -> int {
+            if(!target.matchesPreparedFfdiSecondary(*views[0])) return 5;
+            int result=5;
+            auto consume=[&](const auto& output) noexcept {
+                static_assert(noexcept(use(*views[0],output)) &&
+                    std::is_same_v<decltype(use(*views[0],output)),int>);
+                result=use(*views[0],output);
+            };
+            bool leased=false;
+            if constexpr(std::is_same_v<Target,TglOwnedDescriptorOnlySurface>) leased=target.withDescriptor(consume);
+            else leased=target.withSurface(consume);
+            return leased?result:5;
+        });
 }
 
 // Two FFDN allocations (1f7fd1), each followed by history handling and
@@ -18820,19 +18848,17 @@ public:
         if(kind!=TglOwnedFfdiAllocationKind::DescriptorOnly) return 5;
         return tglWithPreparedDescriptorFfdiViews(ffdiDescriptors_,input,execution,secondary,count,use,captured);
     }
-    // Active-FFDi producer graph. Selection/count/flags are supplied by the
-    // admitted post-preparation reader; bypass/secondary-only is separate.
+    // Selection/count/flags are supplied by the admitted post-preparation
+    // reader. Count0 borrows only existing secondary slot0, or bypasses FFDi.
     template<class Owner,class Use,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
     int withPreparedSurfaceViews(Owner& input,Owner* execution,Owner* secondary,Owner* previous,
         size_t count,TglOwnedFfdiAllocationKind kind,bool useFfdn,bool referenceValid,bool useStmm,
         Use use,Parameters* parameters=nullptr,
         std::array<const TglOwnedSurfaceStorage*,4> captured={}) noexcept {
-        if(auxiliary_.retention()() || !count || count>4) return 5;
+        if(auxiliary_.retention()() || count>4) return 5;
         return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,4>{&input,execution,secondary,previous},captured,
             [&](const auto& roles) noexcept -> int {
-                return withPreparedFfdiViews(input,execution,secondary,count,kind,
-                    [&](const auto& inputs,const auto& outputs,size_t active) noexcept -> int {
-                        TglOwnedFfdiTailViews ffdi;ffdi.inputs=inputs;ffdi.outputs=outputs;ffdi.count=active;
+                auto afterFfdi=[&](const TglOwnedFfdiTailViews& ffdi) noexcept -> int {
                         auto tail=[&](const TglOwnedFfdnTailViews& ffdn) noexcept -> int {
                             return auxiliary_.withPreparedViews(useStmm,
                                 [&](const auto& stmm,const auto& statistics) noexcept -> int {
@@ -18843,6 +18869,22 @@ public:
                         };
                         if(!useFfdn) return tail({});
                         return withPreparedFfdnViews(input,*roles[0],previous,roles[3],referenceValid,tail,parameters);
+                    };
+                if(!count) {
+                    TglOwnedFfdiTailViews ffdi;ffdi.inputs[0]=roles[0];
+                    if(!secondary) return afterFfdi(ffdi);
+                    auto consume=[&](const auto& source,const auto& target) noexcept -> int {
+                        ffdi.secondarySource=&source;ffdi.secondaryTarget=&target;return afterFfdi(ffdi);
+                    };
+                    if(kind==TglOwnedFfdiAllocationKind::NativeBacking)
+                        return tglWithPreparedFfdiSecondary(ffdi_[0],*secondary,consume,roles[2]);
+                    if(kind!=TglOwnedFfdiAllocationKind::DescriptorOnly) return 5;
+                    return tglWithPreparedFfdiSecondary(ffdiDescriptors_[0],*secondary,consume,roles[2]);
+                }
+                return withPreparedFfdiViews(input,execution,secondary,count,kind,
+                    [&](const auto& inputs,const auto& outputs,size_t active) noexcept -> int {
+                        TglOwnedFfdiTailViews ffdi;ffdi.inputs=inputs;ffdi.outputs=outputs;ffdi.count=active;
+                        return afterFfdi(ffdi);
                     },{roles[0],roles[1],roles[2]});
             });
     }
