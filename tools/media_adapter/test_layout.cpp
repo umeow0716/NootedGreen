@@ -8496,7 +8496,16 @@ static void testNativeResourceBoundary() {
                                                         [&](uintptr_t,void*,void*,void*) noexcept -> int {++renderEntries;return 0;});
                                                     assert(missingTarget.status==5 && !missingTarget.nativeEntered &&
                                                         !readerRetention() && renderEntries==0);
-                                                    using EntryProducers=typename Types::template Producers<
+                                                    unsigned liveAdmissions=0;
+                                                    auto liveSurfaceAdmission=[&](const TglOwnedSurfaceStorage& surface,size_t role) noexcept -> int {
+                                                        assert(&surface==&linkedStorage && role==0);
+                                                        assert(linkedInput.hasSurfaceLease(surface));
+                                                        ++liveAdmissions;return -82;
+                                                    };
+                                                    using EntryTypes=TglRetainedVeboxLiveFrameTypes<FrameStmmApi,decltype(linkedInput),
+                                                        std::decay_t<decltype(childOwner)>,std::decay_t<decltype(reportOwner)>,decltype(read),
+                                                        decltype(liveSurfaceAdmission),decltype(unused),decltype(unused),decltype(unused)>;
+                                                    using EntryProducers=typename EntryTypes::template Producers<
                                                         decltype(rejectPackets),decltype(rejectCsc)>;
                                                     RetainedAuxiliary auxiliary{actualChild};
                                                     RetainedScope auxiliaryScope(actualChild,auxiliary);
@@ -8506,6 +8515,8 @@ static void testNativeResourceBoundary() {
                                                         RetainedScope,typename EntryProducers::Resolve,RetainedScope,RetainedFormatRead>(
                                                         actualChild,childOwner.renderHooks)));
                                                     auto renderLeases=leases;renderLeases.target=&linkedStorage;
+                                                    const uintptr_t liveTarget=reinterpret_cast<uintptr_t>(&linkedStorage);
+                                                    std::memcpy(reportBackend.bytes.data()+0x60,&liveTarget,8);
                                                     TglVeboxRenderBinding entryBinding;
                                                     entryBinding.image=childOwner.renderImage;
                                                     entryBinding.entry=entryBinding.image+0x12c9d0;
@@ -8513,7 +8524,7 @@ static void testNativeResourceBoundary() {
                                                         RetainedResolve,RetainedScope,RetainedScope,RetainedScope,RetainedFormatRead>(
                                                         retained,linkedInput,linkedInput,static_cast<decltype(&linkedInput)>(nullptr),
                                                         static_cast<decltype(&linkedInput)>(nullptr),childOwner,reportOwner,
-                                                        renderLeases,false,false,{},0,read,unused,unused,unused,unused,
+                                                        renderLeases,false,false,{},0,read,liveSurfaceAdmission,unused,unused,unused,
                                                         rejectPackets,rejectCsc,entryBinding,nullptr,readerRetention,
                                                         static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
                                                         [&](uintptr_t entry,void* object,void* argument,void* descriptor) noexcept -> int {
@@ -8525,6 +8536,18 @@ static void testNativeResourceBoundary() {
                                                             assert(first==reinterpret_cast<uintptr_t>(&linkedStorage) && last==first);
                                                             auto* producer=EntryProducers::Resolve::get(object);
                                                             assert(producer);
+                                                            const int captured=producer->frame.frame.frame.capture(
+                                                                [&](const TglDiIecpInputs& live) noexcept -> int {
+                                                                    assert(live.current==&linkedStorage && live.target==&linkedStorage);
+                                                                    return -83;
+                                                                });
+                                                            // These outputs were allocated without an execution
+                                                            // target; replacing that role with source must reject.
+                                                            assert(captured==5);
+                                                            using SurfaceCallback=int(*)(void*,bool,void*) noexcept;
+                                                            const int surfaceStatus=reinterpret_cast<SurfaceCallback>(childOwner.renderHooks[7])(
+                                                                object,false,&surfacePacket);
+                                                            assert(surfaceStatus==5 && liveAdmissions==0);
                                                             return -81; // CPU native-entry stand-in, not GPU execution.
                                                         });
                                                     assert(entered.status==-81 && entered.nativeEntered && readerRetention() && renderEntries==1);
