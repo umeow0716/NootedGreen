@@ -22128,6 +22128,10 @@ int main() {
                                 return object==reinterpret_cast<uintptr_t>(bytes.data());
                             }
                             void destroy(uintptr_t object) noexcept {assert(validate(object));++destroyed;}
+                            int commitDndi(uintptr_t object,const TglOwnedDndiState& state) noexcept {
+                                if(!validate(object)) return 5;
+                                return TglNativeExecutionInvoker{}.commitDndi(object,state);
+                            }
                             int clearKernelScratch(uintptr_t object,void* child,size_t extent,int32_t index) noexcept {
                                 assert(validate(object));++scratchCalls;
                                 return tglClearOwnedVeboxKernelScratch(child,extent,bytes.data(),bytes.size(),index);
@@ -22363,8 +22367,26 @@ int main() {
                                 }
                                 return false;
                             };
-                            // Use the actual query/factory callbacks as well as retained
-                            // lifecycle owners; state/resource producers remain fixtures.
+                            auto readReportHelper=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                uintptr_t helper=0;
+                                std::memcpy(&helper,pairCpu[0].bytes.data()+0x1bb8,8);
+                                if(!helper || address!=helper+0x10 || size!=8) return false;
+                                std::memcpy(output,&report,8);return true;
+                            };
+                            auto creatorFrameRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                for(const auto range: {std::pair<uintptr_t,size_t>{
+                                    reinterpret_cast<uintptr_t>(pairCpu[0].bytes.data()),pairCpu[0].bytes.size()},
+                                    {report,executionBackend.bytes.size()}}) {
+                                    if(address>=range.first && address-range.first<=range.second &&
+                                        size<=range.second-(address-range.first)) {
+                                        std::memcpy(output,reinterpret_cast<const void*>(address),size);return true;
+                                    }
+                                }
+                                return readReportHelper(address,output,size) || diServiceRead(address,output,size);
+                            };
+                            auto rejectPacket=[](auto&&...) noexcept {return false;};
+                            // Use actual retained-frame producer/query/factory callbacks.
+                            // Admission/allocation/mode entries remain nonexecuted fixtures.
                             struct FrontendFormatRead {
                                 bool operator()(uintptr_t address,void* output,size_t size) const noexcept {
                                     if(!address || !output || size!=sizeof(uint32_t)) return false;
@@ -22382,6 +22404,23 @@ int main() {
                             using ChildLifetime=TglOwnedVeboxLifetimeContext<ChildOwner>;
                             using ChildLifetimeScope=TglOwnedVeboxScopedContext<ChildLifetime>;
                             using ChildLifetimeResolve=TglOwnedVeboxScopedLifetimeResolve<ChildLifetime>;
+                            using CreatorRead=decltype(creatorFrameRead);
+                            using CreatorCapture=TglRetainedVeboxLiveInputReader<UnusedFrameApi,
+                                TglHeldOwnedSurfaceRole,ChildOwner,decltype(executionLease),CreatorRead>;
+                            using CreatorControl=TglNativeDiIecpControl<TglOwnedDiIecpControlPolicyReader<CreatorRead>>;
+                            using CreatorLive=TglOwnedVeboxLivePacketContext<CreatorCapture,CreatorRead,
+                                decltype(rejectPacket),decltype(rejectPacket),TglNativeDiIecpRegistration,CreatorControl>;
+                            using CreatorCsc=TglOwnedCscProducer<CreatorRead,decltype(qualifyMhw),
+                                decltype(executableMhw),TglNativeCscInvoker>;
+                            using CreatorProducers=TglOwnedVeboxFrameProducerTypes<CreatorLive,ChildOwner,
+                                decltype(executionLease),CreatorRead,TglNativeDndiStackAdmission,CreatorCsc>;
+                            using CreatorProducerResolve=typename CreatorProducers::Resolve;
+                            for(auto& entries:pairHooks) {
+                                entries=tglBindOwnedVeboxKernelSetupHook<CreatorProducerResolve>(entries);
+                                entries=tglBindOwnedVeboxProducerHooks<CreatorProducerResolve>(entries);
+                                entries=tglBindOwnedVeboxCscHook<CreatorProducerResolve>(entries);
+                                entries=tglBindOwnedVeboxDndiHook<CreatorProducerResolve>(entries);
+                            }
                             ChildLifetime firstLifetime(frame.children().first().owner());
                             ChildLifetime secondLifetime(frame.children().second().owner());
                             typename ChildLifetimeScope::Pair lifecyclePair(
@@ -23270,12 +23309,6 @@ int main() {
                             // Recording native constructor publication; the entry only
                             // borrows this existing child-owned report, never allocates one.
                             std::memcpy(pairCpu[0].bytes.data()+0x88,&report,8);
-                            uintptr_t reportHelper=0;
-                            std::memcpy(&reportHelper,pairCpu[0].bytes.data()+0x1bb8,8);
-                            auto readReportHelper=[&](uintptr_t address,void* output,size_t size) noexcept {
-                                if(!reportHelper || address!=reportHelper+0x10 || size!=8) return false;
-                                std::memcpy(output,&report,8);return true;
-                            };
                             unsigned packetGathers=0;
                             auto capturePacket=[&](auto&,void*,void* vp,auto& graph,auto&,
                                 auto& source,auto& target,auto&,auto& packets) noexcept {
@@ -23288,7 +23321,6 @@ int main() {
                                     return use(static_cast<const TglDiIecpInputs&>(input));
                                 };
                             };
-                            auto rejectPacket=[](auto&&...) noexcept {return false;};
                             const auto missingPair=frame.withNativeOwnedVpLivePacketFrame(0,roles,0,0,
                                 executionLease,0x2200,0x3300,readReportHelper,
                                 [](auto&&...) noexcept {
@@ -23303,17 +23335,6 @@ int main() {
                                     return result;
                                 });
                             assert(missingPair.status==5 && !missingPair.requiresRetention());
-                            auto creatorFrameRead=[&](uintptr_t address,void* output,size_t size) noexcept {
-                                for(const auto range: {std::pair<uintptr_t,size_t>{
-                                    reinterpret_cast<uintptr_t>(pairCpu[0].bytes.data()),pairCpu[0].bytes.size()},
-                                    {report,executionBackend.bytes.size()}}) {
-                                    if(address>=range.first && address-range.first<=range.second &&
-                                        size<=range.second-(address-range.first)) {
-                                        std::memcpy(output,reinterpret_cast<const void*>(address),size);return true;
-                                    }
-                                }
-                                return readReportHelper(address,output,size) || diServiceRead(address,output,size);
-                            };
                             unsigned creatorFrameUses=0;
                             unsigned creatorRoleCaptures=0;
                             auto captureCreator=[&](auto& owner,void* child,void* vp,auto& graph,auto& lines,
@@ -23455,13 +23476,26 @@ int main() {
                             const auto retainedCreatorFrame=frame.withNativeOwnedVpCreatorRetainedPacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
                                 false,false,{},creatorFrameRead,rejectPacket,rejectPacket,
-                                [&](auto& owner,void* child,void*,auto&,auto&,auto&,auto&,auto&,auto& live,auto&,auto&,
+                                [&](auto& owner,void* child,void*,auto&,auto&,auto&,auto&,auto&,auto& live,auto& csc,auto& admitDndi,
                                     auto& sourceRole,auto& targetRole) noexcept {
                                     ++retainedCreatorUses;
+                                    static_assert(std::is_same_v<std::decay_t<decltype(live)>,CreatorLive>);
+                                    static_assert(std::is_same_v<std::decay_t<decltype(csc)>,CreatorCsc>);
                                     assert(ChildLifetimeResolve{}(child)==&firstLifetime && firstLifetime.owns(child));
                                     assert(&live.capture.sourceOwner==&sourceRole && live.capture.targetOwner==&targetRole);
                                     assert(&live.capture.storage==&frame.backing().command().backing() &&
                                         &live.capture.childOwner==&owner && live.capture.child==child);
+                                    const int bound=tglWithOwnedVeboxFrameProducers(live,owner,executionLease,0,
+                                        creatorFrameRead,admitDndi,csc,[&](void* object,auto& producer) noexcept -> int {
+                                            assert(object==child && CreatorProducerResolve::get(child)==&producer);
+                                            auto expected=tglBindOwnedVeboxKernelSetupHook<CreatorProducerResolve>(pairHooks[0]);
+                                            expected=tglBindOwnedVeboxProducerHooks<CreatorProducerResolve>(expected);
+                                            expected=tglBindOwnedVeboxCscHook<CreatorProducerResolve>(expected);
+                                            expected=tglBindOwnedVeboxDndiHook<CreatorProducerResolve>(expected);
+                                            assert(expected==pairHooks[0] && owner.matchesPrivateVtableHooks(expected));
+                                            return 0;
+                                        });
+                                    assert(bound==0 && !CreatorProducerResolve::get(child));
                                     // No +58 allocation has published a selection here.
                                     // Real retained capture must reject, never use the
                                     // older direct-input recording fixture as a fallback.
