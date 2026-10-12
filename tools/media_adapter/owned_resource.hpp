@@ -18744,6 +18744,17 @@ struct TglCapturedVeboxLiveInputReader {
     }
 };
 
+// The catalogue is available before private-table installation, without
+// constructing a frame or reading a report. Runtime uses this exact type.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
+    class SurfaceAdmit,class DiAdmit,class Register,class Control>
+struct TglCapturedVeboxLiveFrameTypes {
+    using Capture=TglCapturedVeboxLiveInputReader<SourceOwner,ChildOwner,ExecutionOwner,Read>;
+    using Frame=TglOwnedVeboxLivePacketContext<Capture,Read,SurfaceAdmit,DiAdmit,Register,Control>;
+    template<class PacketAdmit,class ProduceCsc>
+    using Producers=TglOwnedVeboxFrameProducerTypes<Frame,ChildOwner,ExecutionOwner,Read,PacketAdmit,ProduceCsc>;
+};
+
 // Deferred live reader while the allocation-stage resource groups are still
 // owned by the caller. It only composes existing admission/input capture and
 // packet publication; it neither allocates nor normalizes nor calls slot118.
@@ -18764,11 +18775,12 @@ TglOwnedVeboxCommandTransactionResult tglWithCapturedLiveVeboxPacketFrame(
     result.status=tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
         reinterpret_cast<void*>(leases.child),leases.execution,leases.source,
         [&](void* child,uintptr_t execution,const auto&) noexcept -> int {
-            TglCapturedVeboxLiveInputReader<SourceOwner,ChildOwner,ExecutionOwner,Read>
-                capture{sourceOwner,childOwner,executionOwner,child,execution,
+            using Types=TglCapturedVeboxLiveFrameTypes<SourceOwner,ChildOwner,ExecutionOwner,
+                Read,SurfaceAdmit,DiAdmit,Register,Control>;
+            typename Types::Capture capture{sourceOwner,childOwner,executionOwner,child,execution,
                     leases.source,ffdi,ffdn,stmm,statistics,read,alignDi64,controls};
-            TglOwnedVeboxLivePacketContext<decltype(capture),Read,SurfaceAdmit,DiAdmit,Register,Control>
-                frame{{},leases,disableTemporalDenoise,capture,read,admitSurface,admitDi,registerResource,control};
+            typename Types::Frame frame{{},leases,disableTemporalDenoise,capture,read,
+                admitSurface,admitDi,registerResource,control};
             static_assert(noexcept(consume(frame)) &&
                 std::is_same_v<decltype(consume(frame)),TglOwnedVeboxCommandTransactionResult>);
             result=consume(frame);

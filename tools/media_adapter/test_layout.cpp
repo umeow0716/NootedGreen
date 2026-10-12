@@ -8520,6 +8520,14 @@ static void testNativeResourceBoundary() {
                                                                 liveLeases,false,false,input.controls,
                                                                 stateRead,surfaceAdmit,admitted,liveRegistration,control,liveInputRetention,
                                                                 [&](auto& live) noexcept {
+                                                                    using CapturedTypes=TglCapturedVeboxLiveFrameTypes<
+                                                                        std::remove_reference_t<decltype(linkedInput)>,
+                                                                        std::remove_reference_t<decltype(childOwner)>,
+                                                                        std::remove_reference_t<decltype(reportOwner)>,
+                                                                        decltype(stateRead),decltype(surfaceAdmit),decltype(admitted),
+                                                                        decltype(liveRegistration),decltype(control)>;
+                                                                    static_assert(std::is_same_v<typename CapturedTypes::Frame,
+                                                                        std::remove_reference_t<decltype(live)>>);
                                                                     assert(liveInputReads==0 && !liveInputRetention());
                                                                     TglOwnedVeboxCommandTransactionResult result;
                                                                     result.status=live.withInput([&](auto& view) noexcept -> int {
