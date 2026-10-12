@@ -19895,6 +19895,20 @@ public:
             reinterpret_cast<void*>(view.renderHal),history,performance,cache,status,read,qualify,
             construct,object,&sharedSfcGate_);
     }
+    template<class Read,class Qualify,class Executable>
+    int initializeVpFromCreator(const TglNativeVphalMhwView& view,uint32_t channel,
+        uintptr_t performance,Read read,Qualify qualify,Executable executable) {
+        const auto* retained=mhwLease_.binding();
+        TglVeboxHardwareBinding hardware;
+        TglSfcMhwBinding sfc;
+        uintptr_t object=0;
+        if(!retained || retained->interface!=view.hardware.interface || backing_.retention()() ||
+            !tglValidateRendererCreatorEnvironment(backing_,view,read,qualify,executable,hardware) ||
+            !read(view.parent+0x60,&object,8) || !object || object==hardware.interface ||
+            !sfc.resolve(view.renderer.image,read,qualify,executable) ||
+            !sfc.validateConstructedObject(object,view.os,read)) return 5;
+        return backing_.initializeVp(sfc,view.os,view.renderHal,object,read,channel,performance);
+    }
     // Scalar-only request (no nested request38 payload). Publish through the
     // existing native-release slot only after this exact tracked allocation
     // has been initialized; do not infer layout from an arbitrary byte count.

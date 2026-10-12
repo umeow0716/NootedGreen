@@ -20173,14 +20173,22 @@ int main() {
                                 [&](uintptr_t address,uint64_t generation,uintptr_t) noexcept {
                                     return address==rendererAddress && generation==1;
                                 },[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
-                            // CPU admission fixture only; no native image/resource entry is executed.
-                            struct VpBinding {
-                                uintptr_t image=base;
-                                bool validateConstructedObject(uintptr_t,uintptr_t,
-                                    bool (*)(uintptr_t,void*,size_t)) const noexcept {return true;}
-                            } vpBinding;
-                            auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
-                            assert(frame.backing().initializeVp(vpBinding,os,0x2200,0x3300,noRead,1,0)==0);
+                            assert(frame.initializeVpFromCreator(staleCreator,1,0,
+                                frontendRead,qualifyMhw,executableMhw)==5 && !vpCpu.live);
+                            putNative(nativeCreator,0x60,0);
+                            assert(frame.initializeVpFromCreator(frontendCreatorView,1,0,
+                                frontendRead,qualifyMhw,executableMhw)==5 && !vpCpu.live);
+                            putNative(nativeCreator,0x60,frontendSfc);
+                            assert(frame.initializeVpFromCreator(frontendCreatorView,1,0,
+                                frontendRead,qualifyMhw,executableMhw)==0);
+                            assert(frame.backing().withVpResources([&](auto&,auto& storage,auto&) noexcept {
+                                uintptr_t vpOs=0,vpRh=0,vpSfc=0;
+                                std::memcpy(&vpOs,storage.bytes.data()+0x10,8);
+                                std::memcpy(&vpRh,storage.bytes.data()+0x18,8);
+                                std::memcpy(&vpSfc,storage.bytes.data()+0x20,8);
+                                assert(vpOs==os && vpRh==frontendCreatorView.renderHal && vpSfc==frontendSfc);
+                                return 0;
+                            })==0);
                             const uintptr_t foreignDn=0xdead;
                             std::memcpy(source.prefix.data()+0x90,&foreignDn,8);
                             const auto foreignDnResult=frame.withPrivateChildCommandFrame(0,roles,0,0,
