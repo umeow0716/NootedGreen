@@ -23266,12 +23266,29 @@ int main() {
                                 return readReportHelper(address,output,size) || diServiceRead(address,output,size);
                             };
                             unsigned creatorFrameUses=0;
+                            unsigned creatorRoleCaptures=0;
+                            auto captureCreator=[&](auto& owner,void* child,void* vp,auto& graph,auto& lines,
+                                auto& source,auto& target,auto& dn,auto& packets,auto& sourceRole,auto& targetRole) noexcept {
+                                ++creatorRoleCaptures;
+                                assert(sourceRole.hasSurfaceLease(packets.source) &&
+                                    targetRole.hasSurfaceLease(*packets.target));
+                                assert((&sourceRole==&targetRole)==(&packets.source==packets.target));
+                                auto original=capturePacket(owner,child,vp,graph,lines,source,target,dn,packets);
+                                return [original,&sourceRole,&targetRole,&packets](auto use) noexcept -> int {
+                                    // References survive factory return until deferred
+                                    // producer use, under the same frontend lease.
+                                    assert(sourceRole.hasSurfaceLease(packets.source) &&
+                                        targetRole.hasSurfaceLease(*packets.target));
+                                    return original(use);
+                                };
+                            };
                             struct DeniedCreatorCsc {
                                 void coefficients(uintptr_t,uint32_t,uint32_t,float*,float*,float*) const noexcept {assert(false);}
                                 bool matrix(uintptr_t,uint32_t,uint32_t,float*) const noexcept {assert(false);return false;}
                             };
                             auto useCreatorFrame=[&](auto& owner,void* child,void* vp,auto& graph,auto&,
-                                auto& sourceOwner,auto& targetOwner,auto&,auto& live,auto& csc,auto& admitDndi) noexcept {
+                                auto&,auto&,auto&,auto& live,auto& csc,auto& admitDndi,
+                                auto& sourceRole,auto& targetRole) noexcept {
                                 ++creatorFrameUses;
                                 static_assert(std::is_same_v<std::decay_t<decltype(admitDndi)>,TglNativeDndiStackAdmission>);
                                 assert(!admitDndi(0,0x30,0,0x24));
@@ -23284,8 +23301,6 @@ int main() {
                                 // Actual heterogeneous frontend source/target,
                                 // not allocated-surface stand-ins. Both scopes
                                 // are already held by the enclosing frame.
-                                TglHeldOwnedSurfaceRole sourceRole(sourceOwner,live.leases.source);
-                                TglHeldOwnedSurfaceRole targetRole(targetOwner,*live.leases.target);
                                 const std::array<TglHeldOwnedSurfaceRole*,3> roles{&sourceRole,&targetRole,&sourceRole};
                                 const std::array<const TglOwnedSurfaceStorage*,3> seeds{
                                     &live.leases.source,live.leases.target,&live.leases.source};
@@ -23318,7 +23333,7 @@ int main() {
                             };
                             const auto creatorFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
-                                capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame,DeniedCreatorCsc{});
+                                captureCreator,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame,DeniedCreatorCsc{});
                             assert(creatorFrame.status==-87 && !creatorFrame.requiresRetention() &&
                                 creatorFrameUses==1 && packetGathers==1);
                             bool admitCscAnchors=true;
@@ -23351,8 +23366,11 @@ int main() {
                             } cscRecording{base,cscCalls,cscQueries};
                             const auto qualifiedCscFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,qualifiedCreatorRead,qualifyMhw,executableMhw,
-                                capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,
-                                [&](auto& owner,void* child,void*,auto&,auto&,auto&,auto&,auto&,auto&,auto& csc,auto& admitDndi) noexcept {
+                                captureCreator,false,creatorFrameRead,rejectPacket,rejectPacket,
+                                [&](auto& owner,void* child,void*,auto&,auto&,auto&,auto&,auto&,auto& live,auto& csc,auto& admitDndi,
+                                    auto& sourceRole,auto& targetRole) noexcept {
+                                    assert(sourceRole.hasSurfaceLease(live.leases.source) &&
+                                        targetRole.hasSurfaceLease(*live.leases.target));
                                     assert(!admitDndi(0,0x30,0,0x24));
                                     std::array<uint8_t,0x3c> saved{};
                                     std::memcpy(saved.data(),static_cast<uint8_t*>(child)+0xa0,saved.size());
@@ -23385,9 +23403,10 @@ int main() {
                             admitDiControl=false;
                             const auto rejectedCreatorFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
-                                capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame,DeniedCreatorCsc{});
+                                captureCreator,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame,DeniedCreatorCsc{});
                             assert(rejectedCreatorFrame.status==5 && !rejectedCreatorFrame.requiresRetention() &&
                                 creatorFrameUses==1 && packetGathers==1);
+                            assert(creatorRoleCaptures==2);
                             admitDiControl=true;packetGathers=0;
                             executionResult=frame.withNativeOwnedVpLivePacketFrame(0,roles,0,0,
                                 executionLease,0x2200,0x3300,readReportHelper,capturePacket,false,

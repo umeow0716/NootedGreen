@@ -22417,14 +22417,23 @@ public:
                     executionOwner,view.renderHal,sku,nativeRead,
                     [&](auto& owner,void* child,void* vp,auto& graph,auto& lines,
                         auto& source,auto& target,auto& dn,auto& packets) noexcept {
-                        auto capture=makeCapture(owner,child,vp,graph,lines,source,target,dn,packets);
+                        if(!packets.target) return TglOwnedVeboxCommandTransactionResult{};
+                        // Construct role views BEFORE the deferred reader. Its
+                        // references and the allocation planner then share the
+                        // exact same views until live/capture have unwound.
+                        TglHeldOwnedSurfaceRole sourceRole(source,packets.source);
+                        TglHeldOwnedSurfaceRole borrowedTargetRole(target,*packets.target);
+                        auto& targetRole=packets.target==&packets.source ? sourceRole:borrowedTargetRole;
+                        auto capture=makeCapture(owner,child,vp,graph,lines,source,target,dn,packets,
+                            sourceRole,targetRole);
                         TglOwnedDiIecpControlPolicyReader<Read> policy{
                             packets.child,packets.execution,packets.target,read};
                         TglNativeDiIecpControl<decltype(policy)> control{services,policy};
                         TglOwnedVeboxLivePacketContext<decltype(capture),Read,SurfaceAdmit,DiAdmit,
                             decltype(registration),decltype(control)> live{
                             {},packets,disableTemporalDenoise,capture,read,admitSurface,admitDi,registration,control};
-                        return consume(owner,child,vp,graph,lines,source,target,dn,live,csc,admitDndi);
+                        return consume(owner,child,vp,graph,lines,source,target,dn,live,csc,admitDndi,
+                            sourceRole,targetRole);
                     });
                 return result.status;
             });
