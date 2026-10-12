@@ -19213,8 +19213,17 @@ int tglRunRetainedDiIecpFrameInput(TglNativeVeboxSurfaceFrameStorage<Api>& stora
             return storage.withPreparedSurfaceViews(sourceOwner,targetOwner,secondaryOwner,previousOwner,
                 count,kind,allocatedFfdn,state.referenceValid,allocatedStmm,
                 [&](const auto& ffdi,const auto& ffdn,const auto& stmm,const auto& statistics) noexcept -> int {
+                    // SetupSurfaceStates always names the selected STMM shell,
+                    // even when DN/DI is disabled and no STMM resource exists.
+                    // Keep allocation selection unchanged: these are borrowed
+                    // CPU shells, not active backing or a GPU resource lease.
+                    auto packetStmm=stmm;
+                    if(!allocatedStmm) {
+                        const auto& shells=storage.auxiliary().stmmStorage().surfaces();
+                        packetStmm.surfaces={&shells[0],&shells[1]};
+                    }
                     return tglRunCapturedDiIecpFrameInput(sourceOwner,childOwner,executionOwner,active,report,
-                        current,ffdi,ffdn,stmm,statistics,read,alignDi64,controls,consume);
+                        current,ffdi,ffdn,packetStmm,statistics,read,alignDi64,controls,consume);
                 },parameters,{&current,nullptr,nullptr,nullptr});
         });
 }

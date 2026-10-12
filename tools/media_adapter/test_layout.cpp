@@ -8569,13 +8569,19 @@ static void testNativeResourceBoundary() {
                                                         {&current,&current,nullptr,nullptr})==0);
                                                     retained.publishPreparedSelection(true);
                                                     TglOwnedVeboxFrameRetention packetRetention;
+                                                    const auto packetAllocations=borrowFixture.allocations;
+                                                    const auto packetFills=borrowFixture.fills;
                                                     const auto packets=tglWithRetainedLiveVeboxPacketFrame(retained,linkedInput,&linkedInput,
                                                         static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
                                                         childOwner,reportOwner,renderLeases,false,false,{},read,liveSurfaceAdmission,
                                                         unused,unused,unused,packetRetention,
                                                         [&](auto& frame) noexcept -> TglOwnedVeboxCommandTransactionResult {
                                                             TglOwnedVeboxCommandTransactionResult value;
-                                                            const int captureStatus=frame.capture([](const TglDiIecpInputs&) noexcept -> int {return -83;});
+                                                            const int captureStatus=frame.capture([&](const TglDiIecpInputs& live) noexcept -> int {
+                                                                assert(!live.stmmNeeded && live.stmm[0]==&retained.auxiliary().stmmStorage().surfaces()[0] &&
+                                                                    live.stmm[1]==&retained.auxiliary().stmmStorage().surfaces()[1]);
+                                                                return -83;
+                                                            });
                                                             assert(captureStatus==-83);
                                                             value.status=tglWithOwnedVeboxFrameHookBindings<RetainedResolve,RetainedScope,
                                                                 RetainedScope,RetainedScope,RetainedFormatRead>(frame,childOwner,reportOwner,0,
@@ -8588,10 +8594,10 @@ static void testNativeResourceBoundary() {
                                                                 });
                                                             return value;
                                                         });
-                                                    // Capture now succeeds with the final allocation role.
-                                                    // Packet composition still rejects absent inactive STMM;
-                                                    // do not manufacture backing or claim positive emission.
-                                                    assert(packets.status==5 && liveAdmissions==0 && !packetRetention());
+                                                    // Inactive STMM shells now reach packet admission, without
+                                                    // allocating backing. Admission's exact rejection survives.
+                                                    assert(packets.status==-82 && liveAdmissions==1 && !packetRetention());
+                                                    assert(borrowFixture.allocations==packetAllocations && borrowFixture.fills==packetFills);
                                                     assert(!EntryProducers::Resolve::get(actualChild));
                                                     childOwner.renderImage=0;childOwner.renderHooks.fill(0);
                                                     reportBackend.bytes=savedReport;
