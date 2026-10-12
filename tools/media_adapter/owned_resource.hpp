@@ -17439,7 +17439,8 @@ template<class Graph,class Lines,class Read,class Retire,class Release,
 int tglWithOwnedVpPairedAcquiredFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerStorage& first,Lines& firstLines,
     Graph& secondGraph,TglOwnedVpSfcCallerStorage& second,Lines& secondLines,
     const std::array<TglOwnedVpFrameAcquisitionArguments,2>& args,
-    Read& read,Retire& retire,Release& release,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+    Read& read,Retire& retire,Release& release,State state,Avs avs,Ief ief,Emit emit,Use use,
+    const std::array<bool,2>& participates={true,true}) noexcept {
     return tglWithOwnedVpFrameAcquisitionContext(first,args[0].source,args[0].target,args[0].mhw,
         args[0].settings,args[0].conditionalSource,args[0].parameters,args[0].original,read,
         [&](auto& ca,const auto& fa,const auto& ga,uintptr_t ra) noexcept -> int {
@@ -17482,7 +17483,7 @@ int tglWithOwnedVpPairedAcquiredFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerS
                                         static_assert(noexcept(use(x,firstEntries,y,secondEntries,prepared,ga,gb)));
                                         return use(x,firstEntries,y,secondEntries,prepared,ga,gb);
                                     } else return use(x,firstEntries,y,secondEntries);
-                                });
+                                },participates);
                         });
                 });
         });

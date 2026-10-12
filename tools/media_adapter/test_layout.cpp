@@ -21189,7 +21189,8 @@ int main() {
                                                     });
                                             })==expected);
                                     }
-                                    for(int expected:{0,-31}) {
+                                    for(int expected:{0,-31}) for(unsigned selected:{1U,2U,3U}) {
+                                        const std::array<bool,2> participates{{bool(selected&1),bool(selected&2)}};
                                         TglOwnedVpFramePreparation snapshots[2];
                                         snapshots[0].regions.scale.scaling=true;
                                         snapshots[1].regions.scale.scaling=true;
@@ -21221,19 +21222,20 @@ int main() {
                                                     ea.formatMode(a,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
                                                     eb.sampleMode(b,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
                                                     eb.formatMode(b,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
-                                                    int result=eb.setup(b,reinterpret_cast<void*>(0x1000),
-                                                        reinterpret_cast<void*>(0x2000),renderData+1);
+                                                    int result=participates[1]?eb.setup(b,reinterpret_cast<void*>(0x1000),
+                                                        reinterpret_cast<void*>(0x2000),renderData+1):0;
                                                     if(result) return result;
-                                                    result=ea.setup(a,reinterpret_cast<void*>(0x1000),
-                                                        reinterpret_cast<void*>(0x2000),renderData);
+                                                    result=participates[0]?ea.setup(a,reinterpret_cast<void*>(0x1000),
+                                                        reinterpret_cast<void*>(0x2000),renderData):0;
                                                     if(result) return result;
-                                                    result=ea.send(a,renderData,&command);
+                                                    result=participates[0]?ea.send(a,renderData,&command):0;
                                                     if(result) return result;
-                                                    result=eb.send(b,renderData+1,&command);
+                                                    result=participates[1]?eb.send(b,renderData+1,&command):0;
                                                     return result?result:expected;
-                                                });
+                                                },participates);
                                         })==expected);
-                                        assert(stateCount==2 && avsCount==2 && filterCount==2 && emitCount==2);
+                                        const unsigned count=unsigned(participates[0])+unsigned(participates[1]);
+                                        assert(stateCount==count && avsCount==count && filterCount==count && emitCount==count);
                                     }
                                     {
                                         std::array<uint8_t,0x298> source{};
