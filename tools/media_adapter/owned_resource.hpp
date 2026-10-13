@@ -14970,6 +14970,21 @@ public:
         uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
         void* source,void* renderData,State state,Avs avs,Ief ief,Emit emit,Use use,
         bool participates=true) noexcept {
+        if(!ready_ || !busy_ || state_.hasParametersLease() || avs_.hasParametersLease() ||
+            !source || !renderData || !target) return 5;
+        TglOwnedVpFramePublication publication(storage_);
+        if(!publication.publish(frame,conditionalSource,settings,target,sourceA8)) return 5;
+        auto ready=[&]() noexcept {return publication.activeFor(storage_.bytes.data());};
+        return withReadyPreparedContexts(frame,target,source,renderData,state,avs,ief,
+            emit,use,ready,participates);
+    }
+    // Bind producers before acquisition; only the caller's live publication
+    // authority may admit setup/send. This does not acquire or publish a frame.
+    template<class State,class Avs,class Ief,class Emit,class Use,class Ready>
+    int withReadyPreparedContexts(const TglOwnedVpFramePreparation& frame,
+        uintptr_t target,void* source,void* renderData,State state,Avs avs,Ief ief,
+        Emit emit,Use use,Ready ready,bool participates=true) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<bool,Ready&>,"live frame authority ABI");
         auto invokeIef=[&](void* child,uint8_t* packet) noexcept {
             if constexpr(std::is_invocable_v<Ief,void*,decltype(frame),uint8_t*>) {
                 static_assert(std::is_nothrow_invocable_v<Ief,void*,decltype(frame),uint8_t*>,"leased IEF packet ABI");
@@ -14996,9 +15011,12 @@ public:
             noexcept(emit(nullptr,nullptr,nullptr)),"leased producer ABI");
         if(!ready_ || !busy_ || state_.hasParametersLease() || avs_.hasParametersLease() ||
             !source || !renderData || !target) return 5;
-        return tglWithOwnedVpPreparedFrame(storage_,frame,conditionalSource,
-            settings,target,sourceA8,[&](void* child,const auto&) noexcept {
-                    auto produceState=[&]() noexcept {return invokeState(child);};
+        auto bind=[&](void* child) noexcept -> int {
+                    auto produceState=[&]() noexcept {
+                        if(!ready()) return 5;
+                        const int result=invokeState(child);
+                        return result ? result : (ready()?0:5);
+                    };
                     uint8_t* leasedFilterPacket=nullptr;
                     auto produceFilters=[&]() noexcept {
                         invokeIef(child,leasedFilterPacket);
@@ -15008,12 +15026,16 @@ public:
                     ProducerContext producer{child,renderData,source,reinterpret_cast<void*>(target),
                         produceState,produceFilters};
                 auto produce=[&]() noexcept -> int {
-                    if(producer.active) return 5;
+                    if(!ready() || producer.active) return 5;
                     Guard productionGuard(producer.active);
                     const int result=tglSetupOwnedVpSfcStages(frame,
                         [&]() noexcept {return producer.state(renderData,source,
                             reinterpret_cast<void*>(target));},
-                        [&]() noexcept {return avs(child,frame,avs_);},
+                        [&]() noexcept {
+                            if(!ready()) return 5;
+                            const int status=avs(child,frame,avs_);
+                            return status ? status : (ready()?0:5);
+                        },
                         [&]() noexcept {
                             const int filterResult=state_.withVpParameterPublication(storage_,[&](const uint8_t* packet) noexcept {
                                 producer.leasedState=packet;
@@ -15025,13 +15047,18 @@ public:
                             });
                             if(filterResult && !producer.error) producer.error=filterResult;
                         });
-                    return result ? result : producer.error;
+                    return result ? result : (producer.error ? producer.error : (ready()?0:5));
                 };
                 auto consume=[&](void* d,void* command) noexcept -> int {
+                    if(!ready()) return 5;
                     return state_.withParameters([&](const uint8_t*) noexcept {
                         auto view=[&]() noexcept -> int {
                             return tglWithOwnedVpSfcCpuView(storage_,state_,avs_,
-                                [&](void* leased) noexcept {return emit(leased,d,command);},
+                                [&](void* leased) noexcept {
+                                    if(!ready()) return 5;
+                                    const int status=emit(leased,d,command);
+                                    return status ? status : (ready()?0:5);
+                                },
                                 frame.regions.scale.scaling || frame.color.at9b8);
                         };
                         if(!(frame.regions.scale.scaling || frame.color.at9b8)) return view();
@@ -15045,7 +15072,8 @@ public:
                 const int result=use(producer,context);
                 if(result) return result;
                 return context.completionStatus();
-            });
+            };
+        return bind(storage_.bytes.data());
     }
     // Compose setup/send and phase-gated state/filter while the pass is live. Existing
     // entries retain their outer resolver leases; this does not publish a
