@@ -19420,6 +19420,27 @@ int main() {
                         [](uintptr_t address,size_t size) noexcept {
                             return address==0x100000+0x23e4c4 && size==6;
                         }));
+                    auto cscRead=[](uintptr_t address,void* out,size_t size) noexcept {
+                        const std::array<uint8_t,15> coefficients{
+                            0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x80,0,0,0,0x48,0x8d,0x45,0xc0};
+                        const std::array<uint8_t,5> call{0xe8,0x53,0x6e,0,0};
+                        const std::array<uint8_t,35> matrix{
+                            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,0x89,0x7d,0xfc,
+                            0x89,0x75,0xf8,0x48,0x89,0x55,0xf0,0xc6,0x45,0xef,0,
+                            0x8b,0x7d,0xfc,0xbe,0xff,0xff,0xff,0xff,0xe8,0xfd,0xe9,0xff,0xff};
+                        const auto copy=[&](uintptr_t offset,const auto& anchor) noexcept {
+                            if(address!=0x100000+offset || size!=anchor.size()) return false;
+                            std::memcpy(out,anchor.data(),size);return true;
+                        };
+                        return copy(0x4dac0,coefficients) || copy(0x4daf8,call) || copy(0x54950,matrix);
+                    };
+                    auto cscImage=[](uintptr_t image) noexcept {return image==0x100000;};
+                    auto cscRx=[](uintptr_t address,size_t size) noexcept {
+                        return (address==0x100000+0x4dac0 && size==15) ||
+                            (address==0x100000+0x4daf8 && size==5) || (address==0x100000+0x54950 && size==35);
+                    };
+                    TglCscCoefficientsBinding cscBinding;
+                    assert(cscBinding.resolve(0x100000,cscRead,cscImage,cscRx));
                     unsigned nativeMathCalls=0;
                     auto makeState=[&](void*,const auto& prepared,const auto& geometry,auto& stateOwner,
                           void* data,void* originalSource,void* originalTarget) noexcept -> int {
@@ -19508,28 +19529,6 @@ int main() {
                             unsigned coefficientBuilds=0;
                             // Native CSC anchors/invoker are explicit CPU fixtures;
                             // exercise existing product admission, not fabricated cache coefficients.
-                            auto cscRead=[](uintptr_t address,void* out,size_t size) noexcept {
-                                const std::array<uint8_t,15> coefficients{
-                                    0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x80,0,0,0,0x48,0x8d,0x45,0xc0};
-                                const std::array<uint8_t,5> call{0xe8,0x53,0x6e,0,0};
-                                const std::array<uint8_t,35> matrix{
-                                    0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,0x89,0x7d,0xfc,
-                                    0x89,0x75,0xf8,0x48,0x89,0x55,0xf0,0xc6,0x45,0xef,0,
-                                    0x8b,0x7d,0xfc,0xbe,0xff,0xff,0xff,0xff,0xe8,0xfd,0xe9,0xff,0xff};
-                                const auto copy=[&](uintptr_t offset,const auto& anchor) noexcept {
-                                    if(address!=0x100000+offset || size!=anchor.size()) return false;
-                                    std::memcpy(out,anchor.data(),size);return true;
-                                };
-                                return copy(0x4dac0,coefficients) || copy(0x4daf8,call) || copy(0x54950,matrix);
-                            };
-                            auto cscImage=[](uintptr_t image) noexcept {return image==0x100000;};
-                            auto cscRx=[](uintptr_t address,size_t size) noexcept {
-                                return (address==0x100000+0x4dac0 && size==15) ||
-                                    (address==0x100000+0x4daf8 && size==5) ||
-                                    (address==0x100000+0x54950 && size==35);
-                            };
-                            TglCscCoefficientsBinding cscBinding;
-                            assert(cscBinding.resolve(0x100000,cscRead,cscImage,cscRx));
                             if(cscEnabled) {
                                 TglOwnedVpCscCache deniedCache;
                                 unsigned deniedMatrices=0;
@@ -19681,7 +19680,8 @@ int main() {
                             reinterpret_cast<void*>(0x2000),&passData)==0);
                         return passEntries.send(child,&passData,&passCommand);
                       })==consumerResult);
-                    if(!cscEnabled) {
+                    for(bool denyCsc:{false,true}) {
+                        if(denyCsc && !cscEnabled) continue;
                         // Complete catalogue is live BEFORE VP40/VP48, while
                         // concrete packet contexts remain phase-local in Emit.
                         passStates=passAvs=passIefCalls=stateDataReads=0;
@@ -19689,13 +19689,27 @@ int main() {
                         TglOwnedVpPlatformDispatchContext* livePlatform=nullptr;
                         const TglOwnedVpEntrySet* liveCatalogue=nullptr;
                         bool catalogueBeforeSetup=false;
+                        TglOwnedVpCscCache phaseCscCache;unsigned phaseCscBuilds=0,phaseMatrixQueries=0;
                         const int preSetupResult=graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,
                             0x1000,0x2000,0x3000,0x4000,0,0x4000,{},passData.data(),read,
                             makeState,makeAvs,makeIef,
                             [&](void* child,void*,void*,const auto&) noexcept -> int {
                                 assert(catalogueBeforeSetup && liveCsc && livePlatform && liveCatalogue &&
                                     passStates==1 && passAvs==1 && passIefReady);
-                                TglOwnedVpCscProducerContext<0xf8> concreteCsc(child,passFilters.ief,stateCpu.bytes.data(),nullptr);
+                                const auto originalIef=passFilters.ief;
+                                const int phaseResult=tglWithOwnedVpCscContextSpan<0xf8>(*storage,passFilters.ief,
+                                    stateCpu.bytes.data(),phaseCscCache,3,5,0,
+                                    [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
+                                    [&](TglCscCoefficients& coefficients,uint32_t from,uint32_t to) noexcept {
+                                        return tglProduceNativeCscCoefficients(cscBinding,coefficients,from,to,cscRead,cscImage,cscRx,
+                                            [&](uintptr_t entry,uint32_t a,uint32_t b,float* matrix,float*,float*) noexcept {
+                                                assert(entry==0x100000+0x4dac0 && a==3 && b==5);
+                                                ++phaseCscBuilds;matrix[0]=7;
+                                            },[&](uintptr_t entry,uint32_t a,uint32_t b,float*) noexcept {
+                                                assert(entry==0x100000+0x54950 && a==3 && b==5);
+                                                ++phaseMatrixQueries;return !denyCsc;
+                                            });
+                                    },[&](auto& concreteCsc) noexcept -> int {
                                 return liveCsc->withContext(concreteCsc,[&]() noexcept -> int {
                                     TglNativeVpCompressionBinding noCompressionBinding;
                                     auto physicalTargetRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
@@ -19712,11 +19726,18 @@ int main() {
                                             assert(actual==child);
                                             return livePlatform->withEntries(child,concreteEntries,[&]() noexcept -> int {
                                                 liveCatalogue->csc(child,stateCpu.bytes.data(),passFilters.ief.data());
+                                                if(cscEnabled) {
+                                                    uintptr_t matrix=0;std::memcpy(&matrix,passFilters.ief.data()+0x28,8);
+                                                    assert(matrix && *reinterpret_cast<const float*>(matrix)==7.f);
+                                                }
                                                 liveCatalogue->platformPacket(child,nullptr,stateCpu.bytes.data());
                                                 return consumerResult;
                                             });
                                         });
                                 });
+                                    });
+                                assert(passFilters.ief==originalIef);
+                                return phaseResult;
                             },[&](void* child,const auto& preparedEntries) noexcept -> int {
                                 assert(!passStates && !passAvs);
                                 uintptr_t published=1;std::memcpy(&published,storage->bytes.data()+0x938,8);
@@ -19759,11 +19780,14 @@ int main() {
                                             });
                                     });
                             });
-                        if(preSetupResult!=consumerResult) std::fprintf(stderr,
+                        const int expectedPhase=denyCsc?5:consumerResult;
+                        if(preSetupResult!=expectedPhase) std::fprintf(stderr,
                             "pre-setup catalogue result=%d expected=%d built=%d states=%u avs=%u state-live=%d\n",
-                            preSetupResult,consumerResult,int(catalogueBeforeSetup),passStates,passAvs,int(stateCpu.live));
-                        assert(preSetupResult==consumerResult);
+                            preSetupResult,expectedPhase,int(catalogueBeforeSetup),passStates,passAvs,int(stateCpu.live));
+                        assert(preSetupResult==expectedPhase);
                         assert(catalogueBeforeSetup && passStates==1 && passAvs==1 && !liveCatalogue);
+                        assert(phaseMatrixQueries==unsigned(cscEnabled) &&
+                            phaseCscBuilds==unsigned(cscEnabled && !denyCsc) && phaseCscCache.reset());
                     }
                     for(size_t offset:{size_t(0x923),size_t(0x998),size_t(0x99c),size_t(0x9c0)})
                         assert(std::memcmp(storage->bytes.data()+offset,beforeModes.data()+offset,offset==0x923?1:offset==0x9c0?8:4)==0);
