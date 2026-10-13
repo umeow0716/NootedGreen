@@ -55,6 +55,25 @@ int main()
 		}
 		assert(collect(0x12345678,[](Counters& value) noexcept {value={8,1};return true;},output));
 		assert(output.terminated==1); // Raw terminated observation, never hidden or treated as completion.
+		const Reply nativeReply=output;
+		for(unsigned mode=0;mode<8;++mode) {
+			Reply observed=saved;unsigned calls=0;
+			auto call=[&](uint32_t method,void *wire,size_t *bytes) noexcept {
+				++calls;assert(method==NGVfDeviceObservation::selector && *bytes==sizeof(Reply));
+				auto& reply=*static_cast<Reply*>(wire);reply=nativeReply;
+				if(mode==1) *bytes-=1;
+				if(mode==2) *bytes+=1;
+				if(mode==3) reply.abiVersion+=1;
+				if(mode==4) reply.bytes-=1;
+				if(mode==5) reply.registryId+=1;
+				if(mode==6) reply.familyUuid[15]^=1;
+				return mode==7?31:0;
+			};
+			assert(query(nativeReply.registryId,call,observed)==(mode==0) && calls==1);
+			assert(observed.restartReports==(mode==0?nativeReply.restartReports:saved.restartReports));
+			assert(observed.terminated==(mode==0?1U:saved.terminated));
+			calls=0;assert(!query(0,call,observed) && !calls);
+		}
 	}
 
 	auto handshake = makeRelayRequest(opcodeHandshake,
