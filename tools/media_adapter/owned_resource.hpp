@@ -5208,6 +5208,27 @@ public:
            candidateSupport!=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported)) return false;
         table=candidateTable;generic=candidateGeneric;support=candidateSupport;return true;
     }
+    // Short read-only SFC-object borrow, not a command reservation. Release it
+    // before later setup/send; holding withObject through completion would
+    // incorrectly block the native command sequence on this same handle.
+    template<class Read>
+    bool readLeasedSfcAlignment(void* parent,const TglSfcMhwBinding& binding,
+        uintptr_t address,void* output,size_t bytes,Read read) noexcept {
+        static_assert(noexcept(read(address,output,bytes)) &&
+            std::is_same_v<decltype(read(address,output,bytes)),bool>);
+        if(!output || !bytes || !hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(parent),binding.image) ||
+           sfc_.image()!=binding.image || !sfc_.os()) return false;
+        const auto generation=sfc_.generation();
+        const int status=sfc_.withObject([&](void* object) noexcept -> int {
+            const auto mhw=reinterpret_cast<uintptr_t>(object);
+            if(!mhw || mhw>UINTPTR_MAX-0x1c || address<mhw+0x18 || address-mhw>=0x1c ||
+               bytes>0x1c-(address-mhw) || !binding.validateConstructedObject(mhw,sfc_.os(),read)) return 5;
+            if(!read(address,output,bytes)) return 5;
+            return sfc_.generation()==generation && sfc_.get()==object &&
+                hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(parent),binding.image)?0:5;
+        });
+        return status==0;
+    }
     // Parent CPU lease and native SFC reservation cover the same command
     // sequence. Never expose a persistent backend or transfer SFC ownership.
     template<class CommandInvoke,class Use>

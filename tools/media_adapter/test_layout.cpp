@@ -25063,13 +25063,15 @@ int main() {
                 {
                     struct CommandInvoke {
                         unsigned calls=0;int result=31;uintptr_t failureEntry=0;
+                        uintptr_t lastObject=0;
                         std::array<uintptr_t,32> sequence{};
                         int record(uintptr_t entry) noexcept {
                             sequence.at(calls++)=entry;
                             return failureEntry && entry==failureEntry?-43:result;
                         }
                         int parameters(uintptr_t entry,void* object,void* command,const void* p) noexcept {
-                            assert(object && command && p);return record(entry);
+                            assert(object && command && p);
+                            lastObject=reinterpret_cast<uintptr_t>(object);return record(entry);
                         }
                         int state(uintptr_t entry,void* object,void* command,const void* p,const void* output) noexcept {
                             assert(object && command && p && output);return record(entry);
@@ -25096,6 +25098,43 @@ int main() {
                             });
                     })==-17);
                     assert(commandInvoke.calls==1 && cpu.live && !eventCount);
+                    unsigned alignmentReads=0;bool corruptAlignmentHeader=false;
+                    const auto alignmentObject=commandInvoke.lastObject;
+                    assert(alignmentObject);
+                    auto alignmentRead=[&](uintptr_t address,void* out,size_t size) noexcept -> bool {
+                        ++alignmentReads;
+                        if(address==os+0x88 && size==8) return read(address,out,size);
+                        if(address<alignmentObject || address-alignmentObject>0x41 ||
+                           size>0x41-(address-alignmentObject)) return false;
+                        std::memcpy(out,reinterpret_cast<const void*>(address),size);
+                        if(corruptAlignmentHeader && address==alignmentObject && size==0x41)
+                            static_cast<uint8_t*>(out)[0x40]=0;
+                        return true;
+                    };
+                    uint16_t alignment=0;
+                    assert(!owner.readLeasedSfcAlignment(owner.constructedBase(),commandBinding,
+                        alignmentObject+0x18,&alignment,sizeof(alignment),alignmentRead));
+                    assert(!alignmentReads);
+                    assert(owner.withPrivateChild([&](void* parent) noexcept -> int {
+                        assert(owner.readLeasedSfcAlignment(parent,commandBinding,
+                            alignmentObject+0x18,&alignment,sizeof(alignment),alignmentRead));
+                        assert(alignment==16);
+                        assert(owner.readLeasedSfcAlignment(parent,commandBinding,
+                            alignmentObject+0x1a,&alignment,sizeof(alignment),alignmentRead));
+                        assert(alignment==4);
+                        const auto reads=alignmentReads;
+                        assert(!owner.readLeasedSfcAlignment(parent,commandBinding,
+                            alignmentObject+0x1b,&alignment,sizeof(alignment),alignmentRead));
+                        auto foreign=commandBinding;foreign.image++;
+                        assert(!owner.readLeasedSfcAlignment(parent,foreign,
+                            alignmentObject+0x18,&alignment,sizeof(alignment),alignmentRead));
+                        assert(alignmentReads==reads);
+                        corruptAlignmentHeader=true;
+                        assert(!owner.readLeasedSfcAlignment(parent,commandBinding,
+                            alignmentObject+0x18,&alignment,sizeof(alignment),alignmentRead));
+                        corruptAlignmentHeader=false;
+                        return 0;
+                    })==0);
                     TglOwnedSfcCommandParameters prepared;
                     TglOwnedSurfaceStorage output;
                     auto deniedRead=[](uintptr_t,void*,size_t) noexcept {assert(false);return false;};
