@@ -6692,6 +6692,23 @@ struct TglOwnedGen12SurfaceFeatures {
     TglOwnedFeaturePresence lut=TglOwnedFeaturePresence::Unknown;
     TglOwnedFeaturePresence hdr=TglOwnedFeaturePresence::Unknown;
 };
+// Publish a policy record only AFTER the original metadata owner's checked
+// borrow has ended successfully. Conversion LUT evidence says nothing about
+// HDR: leave that independent producer unknown rather than invent absence.
+template<class SourceOwner,class Read>
+bool tglAcquireLeasedConversionLutFeatures(SourceOwner& owner,
+    const TglOwnedSurfaceStorage& source,TglVeboxPipeAcquisition& frame,
+    Read read,TglOwnedGen12SurfaceFeatures& output) noexcept {
+    if(!frame.healthy()) return false;
+    TglOwnedGen12SurfaceFeatures candidate{&source,&frame};
+    const int status=owner.withLeasedConversionMetadata(source,read,
+        [&](uintptr_t metadata,auto bounded) noexcept -> int {
+            return tglReadLeasedConversion3dLutPresence(owner,source,metadata,bounded,candidate.lut)?0:5;
+        });
+    if(status || !owner.hasSurfaceLease(source) || !frame.healthy() ||
+       candidate.lut==TglOwnedFeaturePresence::Unknown) {frame.fail();return false;}
+    output=candidate;return true;
+}
 // Gen12 selection consumes source LUT presence and either surface's HDR
 // presence only. Preserve outputs on every failure and poison acquisition so
 // an unknown/foreign/stale record cannot silently select a valid pipe mode.

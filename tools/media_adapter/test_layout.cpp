@@ -14689,6 +14689,27 @@ static void testRetainedVeboxFrames() {
                             assert(&actual==&original);
                             return graph.withLeasedConversionMetadata(actual,readMetadata,useMetadata);
                         })==-95 && reads==2);
+                        TglVeboxPipeAcquisition featureFrame;
+                        TglOwnedGen12SurfaceFeatures features;
+                        assert(graph.withMutableSurface([&](auto& actual) noexcept -> int {
+                            return tglAcquireLeasedConversionLutFeatures(graph,actual,featureFrame,readMetadata,features)?0:5;
+                        })==0);
+                        assert(features.surface==&original && features.frame==&featureFrame &&
+                            features.lut==TglOwnedFeaturePresence::Present && features.hdr==TglOwnedFeaturePresence::Unknown);
+                        bool rejected=false,hdr=true;
+                        assert(!tglAcquireLeasedGen12PipeFeatures(rejected,hdr,graph,original,features,
+                            graph,original,features,featureFrame) && !rejected && hdr && !featureFrame.healthy());
+                        const unsigned beforeRetry=reads;
+                        assert(graph.withMutableSurface([&](auto& actual) noexcept -> int {
+                            return tglAcquireLeasedConversionLutFeatures(graph,actual,featureFrame,readMetadata,features)?0:5;
+                        })==5 && reads==beforeRetry);
+                        TglVeboxPipeAcquisition failedFrame;
+                        const uint32_t invalidMode=3;std::memcpy(conversion.data()+0x64,&invalidMode,4);
+                        assert(graph.withMutableSurface([&](auto& actual) noexcept -> int {
+                            return tglAcquireLeasedConversionLutFeatures(graph,actual,failedFrame,readMetadata,features)?0:5;
+                        })==5 && !failedFrame.healthy());
+                        assert(features.frame==&featureFrame && features.lut==TglOwnedFeaturePresence::Present &&
+                            features.hdr==TglOwnedFeaturePresence::Unknown);
                         const uintptr_t zero=0;std::memcpy(original.prefix.data()+0xa8,&zero,8);
                     }
                     assert(!refs);
