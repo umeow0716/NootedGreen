@@ -13966,9 +13966,17 @@ public:
         TglOwnedVpSfcScopedContext<Context> scope(child,initialization);
         auto entries=base;
         if(!scope.bound() || !tglBindOwnedVpInitializeEntry<Resolve>(child,entries)) return 5;
-        static_assert(noexcept(use(child,static_cast<const TglOwnedVpEntrySet&>(entries))) &&
-            std::is_same_v<decltype(use(child,static_cast<const TglOwnedVpEntrySet&>(entries))),int>);
-        const int result=use(child,static_cast<const TglOwnedVpEntrySet&>(entries));
+        const int result=[&]() noexcept -> int {
+            if constexpr(std::is_invocable_v<Use,void*,const TglOwnedVpEntrySet&,const Context&>) {
+                static_assert(noexcept(use(child,std::as_const(entries),std::as_const(initialization))) &&
+                    std::is_same_v<decltype(use(child,std::as_const(entries),std::as_const(initialization))),int>);
+                return use(child,std::as_const(entries),std::as_const(initialization));
+            } else {
+                static_assert(noexcept(use(child,std::as_const(entries))) &&
+                    std::is_same_v<decltype(use(child,std::as_const(entries))),int>);
+                return use(child,std::as_const(entries));
+            }
+        }();
         return result?result:initialization.status();
     }
     // CPU teardown only: the enclosing runtime owner still has to establish
@@ -14365,25 +14373,40 @@ public:
                     },avs,ief,emit,use);
             });
     }
-    // Resource-bound graphs are already initialized. Bind their initialization
-    // ABI only during final emission, alongside the prepared pass resolvers;
-    // never retain a construction resolver or reinitialize live backing.
+    // Resource-bound graphs are already initialized. Keep the initialized-frame
+    // ABI live through catalogue use and emission, alongside prepared resolvers.
+    // Reject a failed initializer before emission; never reuse construction
+    // admission or reinitialize live backing.
     template<class Read,class State,class Avs,class Ief,class Emit,class Use>
     int withInitializedFrameCallbackAssemblyPass(const TglOwnedVpEntrySet& base,
         uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
         uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
         void* renderData,Read read,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
         if(base.initialize) return 5;
+        const TglOwnedVpPassInitContext<StateBackend>* activeInitialization=nullptr;
+        void* initializedChild=nullptr;
+        void (*initialize)(void*) noexcept=nullptr;
         return withLeasedCallbackAssemblyPass(base,source,target,mhw,settings,
             conditionalSource,parameters,original,renderData,read,state,avs,ief,
             [&](void* child,void* data,void* command,const TglOwnedVpEntrySet& entries) noexcept {
+                if(child!=initializedChild || !activeInitialization || activeInitialization->status() ||
+                   !initialize || entries.initialize) return 5;
+                auto initialized=entries;initialized.initialize=initialize;
+                static_assert(std::is_nothrow_invocable_r_v<int,Emit,void*,void*,void*,const TglOwnedVpEntrySet&>,
+                    "Initialized VP frame emission ABI");
+                return emit(child,data,command,initialized);
+            },[&](void* child,const TglOwnedVpEntrySet& entries) noexcept -> int {
+                if(activeInitialization) return 5;
                 return withLeasedInitializedAssemblyEntries(child,entries,
-                    [&](void* admitted,const TglOwnedVpEntrySet& initialized) noexcept {
-                        static_assert(std::is_nothrow_invocable_r_v<int,Emit,void*,void*,void*,const TglOwnedVpEntrySet&>,
-                            "Initialized VP frame emission ABI");
-                        return emit(admitted,data,command,initialized);
+                    [&](void* admitted,const TglOwnedVpEntrySet& initialized,const auto& admission) noexcept -> int {
+                        initializedChild=admitted;initialize=initialized.initialize;activeInitialization=&admission;
+                        static_assert(noexcept(use(admitted,initialized)) &&
+                            std::is_same_v<decltype(use(admitted,initialized)),int>);
+                        const int result=use(admitted,initialized);
+                        activeInitialization=nullptr;initializedChild=nullptr;initialize=nullptr;
+                        return result;
                     });
-            },use);
+            });
     }
     template<class Read,class Lines,class Retire,class State,class Avs,class Ief,class Emit,class Invoke>
     int withLeasedResourceCallbackPass(uintptr_t source,uintptr_t target,uintptr_t mhw,

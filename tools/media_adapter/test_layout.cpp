@@ -18924,7 +18924,7 @@ int main() {
                     assert(frame.at922 && geometry.frameWidth==geometrySnapshot.frameWidth);
                     acquisitionConsumed=true;return 31;
                 })==31 && acquisitionConsumed);
-            for(unsigned stageFailure=0;stageFailure<10;++stageFailure) {
+            for(unsigned stageFailure=0;stageFailure<11;++stageFailure) {
                 calls=0;unsigned states=0,emits=0;int data=0,command=0;
                 const bool conflict=stageFailure>=3 && stageFailure<=7;
                 TglOwnedVpEntrySet base;
@@ -18953,7 +18953,9 @@ int main() {
                         if(stageFailure==9) entries.initialize(emittedChild);
                         ++emits;return stageFailure==2?-17:0;
                     },[&](void* child,const auto& entries) noexcept {
+                        assert(entries.initialize); // same resolver stays live through setup/send/emission
                         assert(entries.compressionFormat==admittedFormat);
+                        if(stageFailure==10) entries.initialize(child);
                         const int result=entries.setup(child,reinterpret_cast<void*>(0x1000),
                             reinterpret_cast<void*>(0x2000),&data);
                         const int sent=result?result:entries.send(child,&data,&command);
@@ -18964,8 +18966,8 @@ int main() {
                             assert(calls==before); // duplicate cannot reacquire the frame snapshot
                         }
                         return sent;
-                    })==(conflict || stageFailure==8 || stageFailure==9?5:stageFailure==1?31:stageFailure==2?-17:0));
-                assert(states==(conflict?0U:1U) && emits==(stageFailure==1 || conflict?0U:1U));
+                    })==(conflict || stageFailure==8 || stageFailure==9 || stageFailure==10?5:stageFailure==1?31:stageFailure==2?-17:0));
+                assert(states==(conflict?0U:1U) && emits==(stageFailure==1 || stageFailure==10 || conflict?0U:1U));
                 assert(calls==(conflict?0U:total));
             }
             calls=0;
