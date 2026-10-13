@@ -9338,6 +9338,12 @@ public:
     void sampleMode(void* source,void* target) noexcept {
         if(!prepared_ || invalid_ || sampled_ || reinterpret_cast<uintptr_t>(source)!=source_ ||
             reinterpret_cast<uintptr_t>(target)!=target_) {invalid_=true;return;}
+        // Acquisition may predate an enclosing frame publication. Restore
+        // the fields actually borrowed at first write, not pre-prepare bytes.
+        size_t cursor=0;
+        for(size_t i=0;i<offsets.size();++i) {
+            std::memcpy(saved_.data()+cursor,storage_.bytes.data()+offsets[i],sizes[i]);cursor+=sizes[i];
+        }
         tglPrepareOwnedVpSampleMode(input_,result_.state,result_);sampled_=true;
         std::memcpy(storage_.bytes.data()+0x998,&result_.state.at998,4);
         storage_.bytes[0x923]=result_.state.at923;
@@ -10806,7 +10812,9 @@ class TglOwnedVpFramePublication {
     inline static constexpr std::array<size_t,18> lengths_{
         8,8,8,8,4,4,1,4,4,1,8,1,1,1,1,4,4,4};
     std::array<std::array<uint8_t,8>,18> saved_{};
-    bool attempted_=false,active_=false,invalid_=false;
+    std::array<std::array<uint8_t,8>,18> published_{};
+    bool attempted_=false,active_=false;
+    mutable bool invalid_=false;
 public:
     explicit TglOwnedVpFramePublication(TglOwnedVpSfcCallerStorage& storage) noexcept:storage_(storage) {}
     TglOwnedVpFramePublication(const TglOwnedVpFramePublication&)=delete;
@@ -10844,10 +10852,17 @@ public:
         std::memcpy(storage_.bytes.data()+0x928,&frame.regions.scale.at928,4);
         std::memcpy(storage_.bytes.data()+0x92c,&frame.regions.scale.at92c,4);
         std::memcpy(storage_.bytes.data()+0x9a0,&frame.at9a0,4);
+        for(size_t i=0;i<offsets_.size();++i)
+            std::memcpy(published_[i].data(),storage_.bytes.data()+offsets_[i],lengths_[i]);
         active_=true;return true;
     }
     bool activeFor(const void* child) const noexcept {
-        return active_ && !invalid_ && child==storage_.bytes.data();
+        if(!active_ || invalid_ || child!=storage_.bytes.data()) return false;
+        for(size_t i=0;i<offsets_.size();++i)
+            if(std::memcmp(published_[i].data(),storage_.bytes.data()+offsets_[i],lengths_[i])) {
+                invalid_=true;return false;
+            }
+        return true;
     }
 };
 

@@ -20723,6 +20723,20 @@ int main() {
         assert(tglWithOwnedVpPreparedFrame(storage,frame,0x1000,0x2000,0,0x7000,use)==5);
         assert(tglWithOwnedVpPreparedFrame(storage,frame,0x1000,0x2000,0x3000,0,use)==5);
         assert(calls==1 && storage.bytes==original);
+        for(size_t offset:{0x988,0x980,0x990,0x9b0,0x998,0x99c,0x923,0x9a4,0x9a8,
+            0x9b8,0x9c0,0x920,0x921,0x922,0x924,0x928,0x92c,0x9a0}) {
+            const auto before=storage.bytes;
+            {
+                TglOwnedVpFramePublication publication(storage);
+                assert(publication.publish(frame,0x1000,0x2000,0x3000,0x7000));
+                const uint8_t expected=storage.bytes[offset];
+                storage.bytes[offset]^=1;
+                assert(!publication.activeFor(storage.bytes.data()));
+                storage.bytes[offset]=expected;
+                assert(!publication.activeFor(storage.bytes.data())); // Revocation cannot be undone.
+            }
+            assert(storage.bytes==before);
+        }
         for(int nativeResult:{0,-31}) {
             auto expected=storage.bytes;
             {
