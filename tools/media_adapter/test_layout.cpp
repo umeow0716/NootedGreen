@@ -13429,6 +13429,7 @@ static void testFillCscBinding() {
         const std::array<uint8_t,19> compressionBody{
             0x55,0x48,0x89,0xe5,0x31,0xc0,0x48,0x89,0x7d,0xf8,
             0x48,0x89,0x75,0xf0,0x89,0x55,0xec,0x5d,0xc3};
+        bool compressionSlotValid=true,compressionCodeValid=true;
         TglOwnedSurfaceStorage originalSource,originalTarget;
         std::array<uint8_t,0xd30> data{};std::array<uint8_t,12> fillData{};
         const auto put=[](auto& bytes,size_t offset,auto value) noexcept {
@@ -13440,9 +13441,14 @@ static void testFillCscBinding() {
         put(data,0xd28,uint32_t(7));data[0xd2c]=1;
         std::memcpy(fillData.data()+4,source.data(),4);put(fillData,8,uint32_t(3));
         auto nativeRead=[&](uintptr_t address,void* out,size_t bytes) noexcept -> bool {
-            if(address==os+0x3a8 && bytes==8) {std::memcpy(out,&compressionEntry,8);return true;}
+            if(address==os+0x3a8 && bytes==8) {
+                const uintptr_t entry=compressionEntry+(compressionSlotValid?0:1);
+                std::memcpy(out,&entry,8);return true;
+            }
             if(address==compressionEntry && bytes==compressionBody.size()) {
-                std::memcpy(out,compressionBody.data(),bytes);return true;
+                std::memcpy(out,compressionBody.data(),bytes);
+                if(!compressionCodeValid) static_cast<uint8_t*>(out)[0]^=1;
+                return true;
             }
             const auto span=[&](const void* region,size_t size) noexcept {
                 const auto first=reinterpret_cast<uintptr_t>(region);
@@ -13463,7 +13469,8 @@ static void testFillCscBinding() {
         acquired.geometry.destinationRight=960;acquired.geometry.destinationBottom=810;
         acquired.geometry.targetFormat=0x19;acquired.modes.source130=0x19;
         TglOwnedVpFramePreparation frame;assert(tglPrepareOwnedVpFrame(acquired,{},frame));frame.at920=true;
-        for(unsigned scenario=0;scenario<7;++scenario) {
+        for(unsigned scenario=0;scenario<9;++scenario) {
+            compressionSlotValid=scenario!=7;compressionCodeValid=scenario!=8;
             bool live=scenario!=1,dropFill=scenario==2,dropCompression=scenario==4;
             unsigned fills=0,effects=0;
             auto healthy=[&](uintptr_t s,uintptr_t t) noexcept {
@@ -13496,6 +13503,7 @@ static void testFillCscBinding() {
                 assert(actual.packet==previous && actual.sourceSiting==99);
                 // Failed native effects never publish converted fill into cache.
                 const auto before=fills;live=true;dropFill=dropCompression=false;corrupt=0;
+                compressionSlotValid=compressionCodeValid=true;
                 geometry=acquired.geometry;
                 assert(produce(compressionBinding)==0 && fills==before+1);
             }

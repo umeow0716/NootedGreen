@@ -11093,11 +11093,11 @@ struct TglNativeVpCompressionInvoker {
 // OS/resource/mode and returns0 without dereferencing any argument. Donor
 // 1e0753..1e0779 ignores the result. Bind the TGL entry, never ICL code.
 class TglNativeVpCompressionBinding {
-    uintptr_t os_=0,entry_=0;
+    uintptr_t os_=0,entry_=0,image_=0;
 public:
     template<class Read,class Qualify,class Executable>
     bool resolve(uintptr_t os,uintptr_t image,Read read,Qualify qualify,Executable executable) {
-        os_=entry_=0;
+        os_=entry_=image_=0;
         constexpr std::array<uint8_t,19> anchor{
             0x55,0x48,0x89,0xe5,0x31,0xc0,0x48,0x89,0x7d,0xf8,
             0x48,0x89,0x75,0xf0,0x89,0x55,0xec,0x5d,0xc3};
@@ -11106,7 +11106,7 @@ public:
            !qualify(image) || !read(os+0x3a8,&entry,8) || entry!=image+0x65d00 ||
            !executable(entry,anchor.size()) || !read(entry,actual.data(),actual.size()) ||
            actual!=anchor) return false;
-        os_=os;entry_=entry;return true;
+        os_=os;entry_=entry;image_=image;return true;
     }
     // Enclosing caller pins OS/image/output through this synchronous scope.
     // Backing presence is not GPU completion or asynchronous lifetime evidence.
@@ -11120,6 +11120,18 @@ public:
         static_assert(noexcept(use(apply)) && noexcept(invoke(uintptr_t{},uintptr_t{},
             static_cast<const void*>(nullptr),uint32_t{})),"compression output lease ABI");
         return use(apply);
+    }
+    // Revalidate the original OS slot and exact held image immediately before
+    // native state effects, not merely when the reusable binding was created.
+    // Read/Qualify must be restricted to that frame's retained OS/image.
+    template<class Surface,class Read,class Qualify,class Executable,class Use,
+        class Invoke=TglNativeVpCompressionInvoker>
+    int withQualifiedOutput(const Surface& surface,Read read,Qualify qualify,
+        Executable executable,Use use,Invoke invoke={}) const noexcept {
+        TglNativeVpCompressionBinding current;
+        if(!os_ || !image_ || !current.resolve(os_,image_,read,qualify,executable) ||
+           current.entry_!=entry_) return 5;
+        return current.withOutput(surface,use,invoke);
     }
 };
 // +d0 reads the OUTPUT surface, not the effective input format +99c.
@@ -11602,7 +11614,7 @@ int tglPrepareNativeLeasedOwnedVpCpuState(const TglOwnedVpFramePreparation& fram
     auto apply=[&](uint32_t mode) noexcept {
         if(effectStatus) return;
         if(!healthy(source,targetAddress)) {effectStatus=5;return;}
-        effectStatus=compression.withOutput(target,[&](auto nativeApply) noexcept -> int {
+        effectStatus=compression.withQualifiedOutput(target,read,qualify,executable,[&](auto nativeApply) noexcept -> int {
             if(!healthy(source,targetAddress)) return 5;
             nativeApply(mode);return healthy(source,targetAddress)?0:5;
         },compressionInvoke);
