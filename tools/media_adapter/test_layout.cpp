@@ -26084,6 +26084,30 @@ int main() {
                     auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
                     TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
                     assert(graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
+                    int reservedData=0;unsigned reservedFactories=0;
+                    assert(graph.withDeferredFrameCallbackAssemblyPass({},0x1000,0x2000,0x3000,0x4000,
+                        0,0x4000,{},&reservedData,noRead,
+                        [](auto&&...) noexcept -> int {assert(false);return 5;},
+                        [](auto&&...) noexcept -> int {assert(false);return 5;},
+                        [](auto&&...) noexcept {assert(false);},
+                        [](auto&&...) noexcept -> int {assert(false);return 5;},
+                        [&](void* child,const auto&,const auto&,const auto&,auto ready) noexcept -> int {
+                            uintptr_t state=1;std::memcpy(&state,static_cast<uint8_t*>(child)+0x938,8);
+                            assert(!ready() && !state); // No state publication before factory.
+                            TglOwnedVpFlatDispatchTable table;
+                            assert(table.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
+                            return owner.template withVpFactoryVtableDispatch<true>(graph,child,table,
+                                [&](void* parent) noexcept -> int {
+                                    uintptr_t vptr=0,entry=0;
+                                    std::memcpy(&vptr,parent,8);
+                                    std::memcpy(&entry,reinterpret_cast<void*>(vptr+0x1e0),8);
+                                    void* created=reinterpret_cast<void*(*)(void*) noexcept>(entry)(parent);
+                                    assert(created==child && !ready());
+                                    std::memcpy(static_cast<uint8_t*>(parent)+0x80,&created,8);
+                                    ++reservedFactories;return -17;
+                                });
+                        })==-17);
+                    assert(reservedFactories==1);
                     assert(graph.withAdmissionView(false,noRead,[&](void* child,const auto& admission) noexcept {
                         auto complete=testVpPresenceEntries();
                         complete.compressionFormat=admission.compressionFormat; // Other entries are fixture-only.

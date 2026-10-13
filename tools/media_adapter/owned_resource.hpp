@@ -5078,20 +5078,22 @@ public:
     // callable table lease. Detach80 before restoring VP's vptr, then release
     // the parent lease. Consumer supplies the native allocation call; this is
     // not a persistent +1e0 installation or an asynchronous ownership claim.
-    template<class VpOwner,class Table,class Use>
+    template<bool Reserved=false,class VpOwner,class Table,class Use>
     int withVpFactoryFlatDispatch(VpOwner& vp,void* child,const Table& table,Use use) noexcept {
         return withPrivateChild([&](void* parent) noexcept {
-            return vp.withLeasedFlatDispatch(child,table,[&](void* admitted) noexcept {
+            auto factory=[&](void* admitted) noexcept {
                 return withLeasedVpFactory(parent,admitted,use);
-            });
+            };
+            if constexpr(Reserved) return vp.withReservedFlatDispatch(child,table,factory);
+            else return vp.withLeasedFlatDispatch(child,table,factory);
         });
     }
     // Install only in our writable private table, never native image text/data.
     // The whole native synchronous call is enclosed by the factory resolver
     // and VP table leases; restore +1e0 before either resolver can expire.
-    template<class VpOwner,class Table,class Use>
+    template<bool Reserved=false,class VpOwner,class Table,class Use>
     int withVpFactoryVtableDispatch(VpOwner& vp,void* child,const Table& table,Use use) noexcept {
-        return withVpFactoryFlatDispatch(vp,child,table,
+        return withVpFactoryFlatDispatch<Reserved>(vp,child,table,
             [&](void* parent,auto factory) noexcept {
                 uintptr_t vptr=0;std::memcpy(&vptr,parent,8);
                 if(vptr!=table_.addressPoint()) return 5;
@@ -5140,13 +5142,13 @@ public:
     // Keep native initialization AND its synchronous consumer inside the same
     // VP factory/table lease. A successful init is not GPU completion and does
     // not transfer parent80 ownership. The enclosing renderer retains metadata.
-    template<class VpOwner,class Table,class Use,class Invoke=TglNativeVeboxStageInvoker>
+    template<bool Reserved=false,class VpOwner,class Table,class Use,class Invoke=TglNativeVeboxStageInvoker>
     int withInitializedVp(const TglVeboxAllocateBinding& binding,VpOwner& vp,
         void* child,const Table& table,void* request,void* metadata,Use use,Invoke invoke={}) noexcept {
         static_assert(noexcept(use(nullptr)),"initialized VP consumer ABI");
         if(!request || !metadata || binding.image!=image_ ||
            binding.entry!=image_+0x126740) return 5;
-        return withVpFactoryVtableDispatch(vp,child,table,[&](void* parent) noexcept {
+        return withVpFactoryVtableDispatch<Reserved>(vp,child,table,[&](void* parent) noexcept {
             const int result=tglInvokeLeasedVeboxAllocate(binding,*this,parent,request,metadata,invoke);
             if(result) return result;
             uintptr_t linked=0;
