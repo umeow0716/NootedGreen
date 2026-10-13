@@ -3937,8 +3937,14 @@ struct TglVeboxHardwareBinding {
     // updateGlobalCommPage429b0 writes ONLY its trace-enable DWORD at+0.
     // get_event_machine d1dc exports event mapping/config ce0/ce4/ce8 plus
     // channel data. Neither inspected body directly exports9dc/dc8. Remaining
-    // get_config d080 virtual868/990/a90 outputs need their own provenance;
-    // do not relabel configuration or mapped stamp data as a reset epoch.
+    // Exact family vtable7b8e0+10 resolves get_config d080's virtual868 to
+    // totalTextureMemory434b6 (ca8),990 to getMaxWiredSysMemorySize401d2
+    // (348),a90 to getMaxResourceSize4017c (capacity policy via988/ca8).
+    // These populate config outputs8/20/28; they are capacity interfaces,
+    // not native reset/termination epochs. Subclass overrides require their
+    // own image binding, never reinterpret these ABI fields as status data.
+    // A future owned read-only health query must use a distinct authenticated
+    // interface, not extend/repurpose the proven 0x7c IntelHwCapsInfo reply.
     // Prove the owned allocation reaches this mapping path before relying on
     // it; external CPU buffers and failed STMM unlock remain separate cases.
     // Release-only CPU capture198a776a... at46268e is a null-guarded import
