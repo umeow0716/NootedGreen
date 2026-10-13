@@ -15018,8 +15018,11 @@ public:
                         return result ? result : (ready()?0:5);
                     };
                     uint8_t* leasedFilterPacket=nullptr;
+                    bool filterAuthorityLost=false;
                     auto produceFilters=[&]() noexcept {
+                        if(!ready()) {filterAuthorityLost=true;return;}
                         invokeIef(child,leasedFilterPacket);
+                        if(!ready()) filterAuthorityLost=true;
                     };
                     using ProducerContext=TglOwnedVpPreparedProducerContext<
                         decltype(produceState),decltype(produceFilters)>;
@@ -15043,7 +15046,7 @@ public:
                                 producer.filters(const_cast<uint8_t*>(packet),source);
                                 leasedFilterPacket=nullptr;
                                 producer.leasedState=nullptr;
-                                return producer.error;
+                                return producer.error ? producer.error : (filterAuthorityLost?5:0);
                             });
                             if(filterResult && !producer.error) producer.error=filterResult;
                         });

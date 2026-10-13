@@ -20242,6 +20242,19 @@ int main() {
             };
             assert(graph.withPairedProducerReservation(peerGraph,[&](void* a,void* b) noexcept -> int {
                 pairedChildren[0]=a;pairedChildren[1]=b;
+                // Deferred binding must neither run producers nor accept setup
+                // before the native acquisition has published a live frame.
+                unsigned deniedUses=0;
+                assert(graph.withReadyPreparedContexts(callbackPrepared,0x2000,
+                    &source,&data,makeState,makeAvs,makeFilters,emitPair,
+                    [&](auto&,auto& setupContext) noexcept -> int {
+                        ++deniedUses;
+                        assert(setupContext.setup(&source,reinterpret_cast<void*>(0x2000),&data)==5);
+                        assert(setupContext.send(&data,&command)==5);
+                        return 0;
+                    },[]() noexcept {return false;})==5);
+                assert(deniedUses==1 && pairedState==0 && pairedAvs==0 &&
+                    pairedFilters==0 && pairedEmit==0);
                 return graph.withLeasedPreparedContexts(callbackPrepared,
                     0x6000,0x4000,0x2000,reference,&source,&data,
                     makeState,makeAvs,makeFilters,emitPair,[&](auto& p0,auto& s0) noexcept -> int {
