@@ -20572,6 +20572,14 @@ int main() {
                             entries.sampleMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
                             entries.formatMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
                             assert(context.status()==0 && calls==9);
+                            TglOwnedVpModeInput sharedInput;TglOwnedVpModeResult sharedResult;
+                            uintptr_t sharedReference=0;
+                            assert(context.snapshot(sharedInput,sharedResult,sharedReference) && calls==9);
+                            assert(sharedResult.state.at998==5 && sharedResult.state.at99c==3 &&
+                                sharedResult.borrowSourceA8 && sharedReference==0x5000);
+                            storage.bytes[0x99c]^=1;
+                            assert(!context.snapshot(sharedInput,sharedResult,sharedReference) && calls==9);
+                            storage.bytes[0x99c]^=1;
                         }
                     }
                     if(deferredCase) assert(context.status()==5);

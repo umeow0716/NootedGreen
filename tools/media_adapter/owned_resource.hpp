@@ -9300,7 +9300,7 @@ public:
     TglOwnedVpModeContext(TglOwnedVpSfcCallerStorage& storage,uintptr_t source,
         uintptr_t target,uintptr_t settings,Read read,DeferredAcquisition) noexcept
         :storage_(storage),read_(read),source_(source),target_(target),settings_(settings) {}
-    bool acquire() noexcept {
+    bool acquire(const TglOwnedVpModeState* originalOverride=nullptr) noexcept {
         if(attempted_ || invalid_) {invalid_=true;return false;}
         attempted_=true;
         size_t cursor=0;
@@ -9310,6 +9310,7 @@ public:
         TglOwnedVpModeState original;
         std::memcpy(&original.at998,saved_.data(),4);
         std::memcpy(&original.at99c,saved_.data()+4,4);original.at923=saved_[8]&1;
+        if(originalOverride) original=*originalOverride;
         prepared_=tglReadOwnedVpModes(source_,target_,settings_,read_,original,input_,result_,reference_) && !invalid_;
         uintptr_t existingReference=0;
         std::memcpy(&existingReference,saved_.data()+9,8);
@@ -9331,6 +9332,16 @@ public:
         return !invalid_ && (!attempted_ || prepared_) && child==storage_.bytes.data();
     }
     int status() const noexcept {return prepared_ && sampled_ && formatted_ && !invalid_ ? 0 : 5;}
+    bool snapshot(TglOwnedVpModeInput& input,TglOwnedVpModeResult& result,
+        uintptr_t& reference) const noexcept {
+        uint32_t color=0,format=0;
+        if(!outputColorSpace(color) || !outputFormat(format)) return false;
+        uintptr_t actualReference=0;
+        std::memcpy(&actualReference,storage_.bytes.data()+0x9c0,8);
+        if(storage_.bytes[0x923]!=result_.state.at923 ||
+            (result_.borrowSourceA8 && actualReference!=reference_)) return false;
+        input=input_;result=result_;reference=reference_;return true;
+    }
     // Exact ICL1f7690/1f77a0 return the VP mode fields998/99c. Here
     // those bytes belong to this owned, fully prepared scoped context, not
     // a foreign donor object. Reject an out-of-band overwrite before export.
@@ -10766,17 +10777,19 @@ bool tglReadOwnedVpIefSnapshot(uintptr_t descriptor,Read read,
     }
     output=candidate;return true;
 }
-template<class Read>
-bool tglReadOwnedVpFramePreparation(uintptr_t source,uintptr_t target,uintptr_t mhw,
+template<class Read,class Modes>
+bool tglReadOwnedVpFramePreparationWithModes(uintptr_t source,uintptr_t target,uintptr_t mhw,
     uintptr_t settings,bool conditionalAvailable,Read read,const TglOwnedVpModeState& original,
     TglOwnedVpFramePreparation& output,uintptr_t& sourceA8,
-    TglOwnedVpRegionInput* geometrySnapshot=nullptr) noexcept {
+    TglOwnedVpRegionInput* geometrySnapshot,Modes acquireModes) noexcept {
+    static_assert(noexcept(acquireModes(std::declval<TglOwnedVpModeInput&>(),
+        std::declval<TglOwnedVpModeResult&>(),std::declval<uintptr_t&>())),"VP mode snapshot ABI");
     static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP frame leased read ABI");
-    if(!source || !target || source>UINTPTR_MAX-0x298 || target>UINTPTR_MAX-0x298) return false;
+    if(!source || !target || !settings || source>UINTPTR_MAX-0x298 || target>UINTPTR_MAX-0x298) return false;
     TglOwnedVpFramePreparationInput input;TglOwnedVpRegions regions;
     TglOwnedVpModeResult modes;uintptr_t reference=0;
     if(!tglReadOwnedVpRegions(source,target,mhw,read,input.geometry,regions) ||
-       !tglReadOwnedVpModes(source,target,settings,read,original,input.modes,modes,reference) ||
+       !acquireModes(input.modes,modes,reference) ||
        !read(source+0x120,&input.source120,4) || !read(source+0x294,&input.source294,4) ||
        !read(target+0x294,&input.target294,4)) return false;
     input.conditionalSourceAvailable=conditionalAvailable;
@@ -10785,12 +10798,27 @@ bool tglReadOwnedVpFramePreparation(uintptr_t source,uintptr_t target,uintptr_t 
     if(!read(source+0x78,&ief,8)) return false;
     if(!tglReadOwnedVpIefSnapshot(ief,read,input)) return false;
     TglOwnedVpFramePreparation candidate;
-    if(!tglPrepareOwnedVpFrame(input,original,candidate)) return false;
+    if(!tglPrepareOwnedVpFrame(input,original,candidate) ||
+       candidate.color.modes.state.at998!=modes.state.at998 ||
+       candidate.color.modes.state.at99c!=modes.state.at99c ||
+       candidate.color.modes.state.at923!=modes.state.at923 ||
+       candidate.color.modes.borrowSourceA8!=modes.borrowSourceA8) return false;
     output=candidate;sourceA8=reference;
     // Setup and state generation must share the same leased descriptor read,
     // rather than reread potentially changing source/target geometry.
     if(geometrySnapshot) *geometrySnapshot=input.geometry;
     return true;
+}
+template<class Read>
+bool tglReadOwnedVpFramePreparation(uintptr_t source,uintptr_t target,uintptr_t mhw,
+    uintptr_t settings,bool conditionalAvailable,Read read,const TglOwnedVpModeState& original,
+    TglOwnedVpFramePreparation& output,uintptr_t& sourceA8,
+    TglOwnedVpRegionInput* geometrySnapshot=nullptr) noexcept {
+    return tglReadOwnedVpFramePreparationWithModes(source,target,mhw,settings,conditionalAvailable,
+        read,original,output,sourceA8,geometrySnapshot,
+        [&](auto& input,auto& modes,auto& reference) noexcept {
+            return tglReadOwnedVpModes(source,target,settings,read,original,input,modes,reference);
+        });
 }
 struct TglOwnedVpChromaStatePrefix {
     std::array<uint8_t,0xb8> packet{};
