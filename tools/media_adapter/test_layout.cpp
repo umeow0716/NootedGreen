@@ -13440,7 +13440,9 @@ static void testFillCscBinding() {
         originalTarget.tail[0x299-0x290]=1;originalTarget.resource[0x20]=1;
         put(data,0xd28,uint32_t(7));data[0xd2c]=1;
         std::memcpy(fillData.data()+4,source.data(),4);put(fillData,8,uint32_t(3));
+        unsigned frameReads=0,bindingReads=0;
         auto nativeRead=[&](uintptr_t address,void* out,size_t bytes) noexcept -> bool {
+            ++bindingReads;
             if(address==os+0x3a8 && bytes==8) {
                 const uintptr_t entry=compressionEntry+(compressionSlotValid?0:1);
                 std::memcpy(out,&entry,8);return true;
@@ -13450,18 +13452,25 @@ static void testFillCscBinding() {
                 if(!compressionCodeValid) static_cast<uint8_t*>(out)[0]^=1;
                 return true;
             }
+            return read(address,out,bytes);
+        };
+        auto frameRead=[&](uintptr_t address,void* out,size_t bytes) noexcept -> bool {
+            ++frameReads;
             const auto span=[&](const void* region,size_t size) noexcept {
                 const auto first=reinterpret_cast<uintptr_t>(region);
                 if(address<first || address-first>size || bytes>size-(address-first)) return false;
                 std::memcpy(out,reinterpret_cast<const void*>(address),bytes);return true;
             };
             return span(&originalSource,sizeof(originalSource)) || span(&originalTarget,sizeof(originalTarget)) ||
-                span(data.data(),data.size()) || span(fillData.data(),fillData.size()) || read(address,out,bytes);
+                span(data.data(),data.size()) || span(fillData.data(),fillData.size());
         };
         auto nativeQualify=[&](uintptr_t image) noexcept {return qualify(image);};
         auto nativeExecutable=[&](uintptr_t entry,size_t bytes) noexcept {return executable(entry,bytes);};
         TglNativeVpCompressionBinding compressionBinding;
         assert(compressionBinding.resolve(os,base,nativeRead,nativeQualify,nativeExecutable));
+        std::array<uint8_t,16> deniedBytes{};
+        assert(!frameRead(base+0x4d970,deniedBytes.data(),16));
+        assert(!nativeRead(reinterpret_cast<uintptr_t>(&originalSource),deniedBytes.data(),4));
         TglOwnedVpFramePreparationInput acquired;
         acquired.geometry.frameWidth=1920;acquired.geometry.frameHeight=1080;
         acquired.geometry.targetWidth=960;acquired.geometry.targetHeight=810;
@@ -13493,7 +13502,7 @@ static void testFillCscBinding() {
             auto produce=[&](const auto& selectedCompression) noexcept {
                 return tglPrepareNativeLeasedOwnedVpCpuState(frame,geometry,reinterpret_cast<uintptr_t>(&originalSource),
                     originalTarget,reinterpret_cast<uintptr_t>(data.data()),reinterpret_cast<uintptr_t>(fillData.data()),0,
-                    binding,selectedCompression,nativeRead,nativeQualify,nativeExecutable,healthy,actualCache,actual,
+                    binding,selectedCompression,frameRead,nativeRead,nativeQualify,nativeExecutable,healthy,actualCache,actual,
                     nativeFill,nativeCompression);
             };
             assert(produce(scenario==3?missingCompression:compressionBinding)==(scenario?5:0));
@@ -13514,14 +13523,16 @@ static void testFillCscBinding() {
         frame.at920=false;auto opaqueGeometry=acquired.geometry;opaqueGeometry.targetFormat=3;
         TglOwnedSfcFillCache opaqueCache;TglOwnedVpChromaStatePrefix opaque;
         TglFillCscBinding missingFill;TglNativeVpCompressionBinding missingCompression;
+        frameReads=bindingReads=0;
         assert(tglPrepareNativeLeasedOwnedVpCpuState(frame,opaqueGeometry,
             reinterpret_cast<uintptr_t>(&originalSource),originalTarget,reinterpret_cast<uintptr_t>(data.data()),
-            0,0,missingFill,missingCompression,nativeRead,nativeQualify,nativeExecutable,
+            0,0,missingFill,missingCompression,frameRead,nativeRead,nativeQualify,nativeExecutable,
             [&](uintptr_t s,uintptr_t t) noexcept {
                 return s==reinterpret_cast<uintptr_t>(&originalSource) && t==reinterpret_cast<uintptr_t>(&originalTarget);
             },opaqueCache,opaque,
             [](uintptr_t,void*,const void*,uint32_t,uint32_t) noexcept -> bool {assert(false);return false;},
             [](uintptr_t,uintptr_t,const void*,uint32_t) noexcept {assert(false);})==0);
+        assert(frameReads && !bindingReads);
     }
     const auto published = packet;
     assert(cache.prepare(packet,true,1,source,3,7,nativeConvert) && calls == 5);

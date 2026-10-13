@@ -11586,18 +11586,21 @@ bool tglPrepareLeasedOwnedVpCpuState(const TglOwnedVpFramePreparation& frame,
 // No eager compression binding/backing requirement on branches that never
 // call OS+3a8. Packet/cache publication is transactional; native external
 // effects are not rolled back. This still does not qualify all Gen12 fields.
-template<class Surface,class Read,class Qualify,class Executable,class Healthy,
+// Frame reads and OS/code binding reads are separate capabilities. Neither
+// reader is a fallback for the other; no image permission is added to Extra.
+template<class Surface,class Read,class NativeRead,class Qualify,class Executable,class Healthy,
     class FillInvoke=TglNativeFillCscInvoker,class CompressionInvoke=TglNativeVpCompressionInvoker>
 int tglPrepareNativeLeasedOwnedVpCpuState(const TglOwnedVpFramePreparation& frame,
     const TglOwnedVpRegionInput& geometry,uintptr_t source,const Surface& target,
     uintptr_t settings,uintptr_t conditionalSource,uintptr_t alpha,
     const TglFillCscBinding& fill,const TglNativeVpCompressionBinding& compression,
-    Read read,Qualify qualify,Executable executable,Healthy healthy,
+    Read read,NativeRead nativeRead,Qualify qualify,Executable executable,Healthy healthy,
     TglOwnedSfcFillCache& cache,TglOwnedVpChromaStatePrefix& output,
     FillInvoke fillInvoke={},CompressionInvoke compressionInvoke={}) noexcept {
     const auto targetAddress=reinterpret_cast<uintptr_t>(tglOwnedSfcSurfaceBytes(target));
     static_assert(std::is_nothrow_invocable_r_v<bool,Healthy&,uintptr_t,uintptr_t>);
-    static_assert(std::is_nothrow_invocable_r_v<bool,Qualify&,uintptr_t> &&
+    static_assert(std::is_nothrow_invocable_r_v<bool,NativeRead&,uintptr_t,void*,size_t> &&
+        std::is_nothrow_invocable_r_v<bool,Qualify&,uintptr_t> &&
         std::is_nothrow_invocable_r_v<bool,Executable&,uintptr_t,size_t> &&
         std::is_nothrow_invocable_r_v<bool,FillInvoke&,uintptr_t,uint8_t*,const uint8_t*,uint32_t,uint32_t> &&
         std::is_nothrow_invocable_v<CompressionInvoke&,uintptr_t,uintptr_t,const void*,uint32_t>);
@@ -11608,13 +11611,13 @@ int tglPrepareNativeLeasedOwnedVpCpuState(const TglOwnedVpFramePreparation& fram
     auto candidateCache=cache;TglOwnedVpChromaStatePrefix candidate;int effectStatus=0;
     auto convert=[&](auto& converted,const auto& sample,uint32_t from,uint32_t to) noexcept -> bool {
         if(!healthy(source,targetAddress)) return false;
-        return tglConvertNativeFill(fill,converted,sample,from,to,read,qualify,executable,fillInvoke) &&
+        return tglConvertNativeFill(fill,converted,sample,from,to,nativeRead,qualify,executable,fillInvoke) &&
             healthy(source,targetAddress);
     };
     auto apply=[&](uint32_t mode) noexcept {
         if(effectStatus) return;
         if(!healthy(source,targetAddress)) {effectStatus=5;return;}
-        effectStatus=compression.withQualifiedOutput(target,read,qualify,executable,[&](auto nativeApply) noexcept -> int {
+        effectStatus=compression.withQualifiedOutput(target,nativeRead,qualify,executable,[&](auto nativeApply) noexcept -> int {
             if(!healthy(source,targetAddress)) return 5;
             nativeApply(mode);return healthy(source,targetAddress)?0:5;
         },compressionInvoke);
