@@ -17413,16 +17413,25 @@ int main() {
                     std::memcpy(prefix.data()+0x30,&input,4);
                     std::memcpy(prefix.data()+0x4c,&scaled,4);
                     unsigned queries=0;
-                    assert(storage.resources().withCommandResources(input,scaled,
-                        [&](const auto& a,const auto& b,const auto* sfd) noexcept -> int {
+                    prefix[0]=0;
+                    assert(storage.resources().withVeboxCommandResources(prefix,
+                        [](const auto&,const auto&,const auto*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                    assert(!queries && native.live==3);
+                    prefix[0]=1;
+                    assert(storage.resources().withVeboxCommandResources(prefix,
+                        [&](const auto& a,const auto& b,const auto* sfd,const auto& tail) noexcept -> int {
                             assert(sfd && native.live==3);
+                            assert(!tail.engineMode && !tail.inputBitDepth && !tail.tileType &&
+                                !tail.sfdLineBuffer && !tail.histogramSurface && !tail.avsLineTile && !tail.sfdLineTile);
+                            assert(storage.resources().withVeboxCommandResources(prefix,
+                                [](const auto&,const auto&,const auto*,const auto&) noexcept -> int {assert(false);return 0;})==5);
                             auto query=[&](auto&) noexcept {
                                 ++queries;
                                 assert(!storage.lines().tryReset() && !storage.sfd().tryReset());
                                 return 0;
                             };
                             assert(tglPrepareOwnedVpLeasedSurfaceState(commands,state,output,a,b,sfd,
-                                prefix,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,query)==0);
+                                prefix,tail,false,false,false,TglOwnedSfcCompressionMode::Disabled,query)==0);
                             assert(!state.hasParametersLease());
                             const std::array<uintptr_t,4> expected{
                                 reinterpret_cast<uintptr_t>(output.resource.data()),
@@ -23267,6 +23276,7 @@ int main() {
                                                 *reinterpret_cast<TglOwnedSurfaceStorage*>(second.bytes.data()+0x670));
                                             std::array<const TglOwnedSurfaceStorage*,2> leasedAvs{},leasedIef{};
                                             std::array<const std::array<uint8_t,0x148>*,2> leasedSfd{};
+                                            std::array<const TglOwnedSfcGen12Tail*,2> leasedTails{};
                                             std::array<TglOwnedSfcAvsTables,2> avsTables{};
                                             std::array<TglOwnedSfcCommandParameters,2> commandInputs;
                                             TglNativeSineBinding sineBinding;
@@ -23361,7 +23371,7 @@ int main() {
                                                         assert(prefixesPrepared);
                                                         const size_t index=child==first.bytes.data()?0:1;
                                                         const auto& prefix=statePrefixes[index];
-                                                        assert(leasedAvs[index] && leasedIef[index]);
+                                                        assert(leasedAvs[index] && leasedIef[index] && leasedTails[index]);
                                                         auto wrongFormat=prefix.packet;
                                                         const uint32_t packedFormat=0x15;
                                                         std::memcpy(wrongFormat.data()+0x2c,&packedFormat,4);
@@ -23370,14 +23380,14 @@ int main() {
                                                         const unsigned originalReads=layoutApi.reads;
                                                         assert(tglPrepareOwnedVpLeasedNv12State(commandInputs[index],packet,
                                                             *leasedOutputs[index],*leasedAvs[index],*leasedIef[index],leasedSfd[index],
-                                                            wrongFormat,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,
+                                                            wrongFormat,*leasedTails[index],false,false,false,TglOwnedSfcCompressionMode::Disabled,
                                                             outputOwners[index],layoutApi,layoutSink)==5);
                                                         assert(layoutApi.reads==originalReads &&
                                                             leasedOutputs[index]->prefix==originalOutputPrefix &&
                                                             commandInputs[index].state==originalState);
                                                         const int bound=tglPrepareOwnedVpLeasedNv12State(commandInputs[index],packet,
                                                             *leasedOutputs[index],*leasedAvs[index],*leasedIef[index],leasedSfd[index],
-                                                            prefix.packet,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,
+                                                            prefix.packet,*leasedTails[index],false,false,false,TglOwnedSfcCompressionMode::Disabled,
                                                             outputOwners[index],layoutApi,layoutSink);
                                                         assert(bound==0);
                                                         if(bound) return bound;
@@ -23565,15 +23575,17 @@ int main() {
                                                                     std::memcpy(&input,statePrefixes[i].packet.data()+0x30,4);
                                                                     std::memcpy(&scaled,statePrefixes[i].packet.data()+0x4c,4);
                                                                     int status=lines.resources().ensure(input,scaled);
-                                                                    if(!status) status=lines.resources().withCommandResources(input,scaled,
-                                                                        [&](const auto& avs,const auto& ief,const auto* sfd) noexcept -> int {
+                                                                    if(!status) status=lines.resources().withVeboxCommandResources(statePrefixes[i].packet,
+                                                                        [&](const auto& avs,const auto& ief,const auto* sfd,const auto& tail) noexcept -> int {
                                                                             leasedAvs[i]=&avs;leasedIef[i]=&ief;leasedSfd[i]=sfd;
+                                                                            leasedTails[i]=&tail;
                                                                             assert(!lines.lines().tryReset() && !lines.sfd().tryReset());
                                                                             int result=entries.setup(child,reinterpret_cast<void*>(0x1000),
                                                                                 reinterpret_cast<void*>(0x2000),data+i);
                                                                             if(result) std::fprintf(stderr,"NV12 setup status=%d child=%zu states=%u\n",result,i,states);
                                                                             if(!result) result=entries.send(child,data+i,&command);
                                                                             leasedAvs[i]=nullptr;leasedIef[i]=nullptr;leasedSfd[i]=nullptr;
+                                                                            leasedTails[i]=nullptr;
                                                                             return result;
                                                                         });
                                                                     leasedOutputs[i]=nullptr;

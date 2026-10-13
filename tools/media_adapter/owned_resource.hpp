@@ -839,6 +839,14 @@ struct TglOwnedSfcGen12Tail {
     // do not transplant the six-resource Linux Gen12 struct ordering.
     uintptr_t histogramSurface=0,sfdLineBuffer=0,avsLineTile=0,sfdLineTile=0;
 };
+// Explicit regular VEBOX producer, not default admission for other pipes.
+// Intel Gen12 InitRenderData zeroes the extension; SetSfcStateParams adds
+// SFD separately. Resource pointers must come from the enclosing owner scope.
+inline bool tglPrepareOwnedVeboxSfcGen12Tail(const std::array<uint8_t,0xb8>& prefix,
+    TglOwnedSfcGen12Tail& output) noexcept {
+    if(prefix[0]!=1) return false;
+    output=TglOwnedSfcGen12Tail{};return true;
+}
 // Prefix must be independently qualified for the current TGL pass. This
 // encoder does not establish ICL/TGL prefix equivalence or allocate backing.
 // Consumer audit: ICL175950 masks dimensions at +30/+34 to 12 bits;
@@ -18301,7 +18309,7 @@ int tglWithOwnedVeboxSfcGen12Tail(TglOwnedSfcLineBuffers<Backend>& lines,
     std::memcpy(&scaledHeight,prefix.data()+0x4c,4);
     return lines.withBuffers(inputHeight,scaledHeight,[&]() noexcept -> int {
         TglOwnedSfcGen12Tail tail{};
-        if(!lines.bindSfdRow(tail)) return 5;
+        if(!tglPrepareOwnedVeboxSfcGen12Tail(prefix,tail) || !lines.bindSfdRow(tail)) return 5;
         return use(static_cast<const TglOwnedSfcGen12Tail&>(tail));
     });
 }
@@ -18481,6 +18489,22 @@ public:
                 static_assert(noexcept(use(avs,ief,sfd)),"VP command resource lease ABI");
                 return use(avs,ief,sfd);
             });
+        });
+    }
+    // Persistent VP has TWO full surfaces plus a separate SFD owner, unlike
+    // standalone row buffers. Supply all three under their existing leases.
+    // State binding receives the separately leased SFD descriptor and installs
+    // it once; do not pass a raw SFD pointer through the scalar tail.
+    template<class Use> int withVeboxCommandResources(const std::array<uint8_t,0xb8>& prefix,Use use) noexcept {
+        TglOwnedSfcGen12Tail tail;
+        if(!tglPrepareOwnedVeboxSfcGen12Tail(prefix,tail)) return 5;
+        uint32_t input=0,scaled=0;
+        std::memcpy(&input,prefix.data()+0x30,4);
+        std::memcpy(&scaled,prefix.data()+0x4c,4);
+        return withCommandResources(input,scaled,[&](const auto& avs,const auto& ief,const auto* sfd) noexcept -> int {
+            static_assert(noexcept(use(avs,ief,sfd,static_cast<const TglOwnedSfcGen12Tail&>(tail))) &&
+                std::is_same_v<decltype(use(avs,ief,sfd,static_cast<const TglOwnedSfcGen12Tail&>(tail))),int>);
+            return use(avs,ief,sfd,static_cast<const TglOwnedSfcGen12Tail&>(tail));
         });
     }
     int ensure(uint32_t input,uint32_t scaled) noexcept {
