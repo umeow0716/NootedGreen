@@ -23463,6 +23463,8 @@ class TglNativeVeboxFrontendRendererFrameStorage {
     // Original frontend surfaces must outlive child cleanup.
     TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
 public:
+    using SourceOwnerType=SourceOwner;
+    using TargetOwnerType=TargetOwner;
     template<class Resolve,class Read,class Qualify,class Executable,class VpInvoke,class... Args>
     TglNativeVeboxFrontendRendererFrameStorage(uintptr_t source,Resolve resolve,
         TargetOwner& target,CfApi cf,uintptr_t resourceType,uintptr_t surfaceType,
@@ -23999,6 +24001,60 @@ public:
                         TglOwnedVeboxCommandTransactionResult>);
                 return consume(source,target,parameters_,leases);
             });
+    }
+};
+
+// Native context roots and the complete renderer aggregate share one owner.
+// Construct supplies the already-qualified concrete renderer dependencies;
+// it cannot substitute fixture source/target owner types. Pending frames must
+// be retired by the enclosing registry before clear/destruction.
+template<class Registry,class Renderer,size_t Capacity=64>
+class TglNativeContextRendererFrameStorage {
+    using Sidecars=TglNativeContextSurfaceOwners<Registry,Capacity>;
+    using Owner=typename Sidecars::Owner;
+    static_assert(std::is_same_v<typename Renderer::SourceOwnerType,Owner> &&
+        std::is_same_v<typename Renderer::TargetOwnerType,Owner>,"original context-pinned renderer owners");
+    Sidecars* sidecars_=nullptr;
+    Renderer* renderer_=nullptr;
+    bool busy_=false;
+public:
+    template<class Read,class Admit,class Writable,class Construct>
+    TglNativeContextRendererFrameStorage(Registry& registry,uintptr_t image,uintptr_t physical,
+        uint64_t generation,const TglNativeContextInputRoots& roots,uintptr_t source,uintptr_t target,
+        Read read,Admit admit,Writable writable,Construct construct) noexcept {
+        bool sourceRoot=false,targetRoot=false;
+        for(auto p:roots.sources) sourceRoot=sourceRoot || (p && p==source);
+        for(auto p:roots.targets) targetRoot=targetRoot || (p && p==target);
+        if(!sourceRoot || !targetRoot) return;
+        sidecars_=new(std::nothrow) Sidecars;
+        if(!sidecars_ || !sidecars_->initialize(registry,image,physical,generation,roots,read,admit,writable)) return;
+        auto* sourceOwner=sidecars_->resolve(source);auto* targetOwner=sidecars_->resolve(target);
+        if(!sourceOwner || !targetOwner) return;
+        auto* heldSidecars=sidecars_;
+        auto resolve=[heldSidecars](uintptr_t p) noexcept {return heldSidecars->resolve(p);};
+        static_assert(noexcept(construct(source,resolve,*targetOwner)) &&
+            std::is_same_v<decltype(construct(source,resolve,*targetOwner)),Renderer*>,"qualified renderer construction ABI");
+        renderer_=construct(source,resolve,*targetOwner);
+    }
+    TglNativeContextRendererFrameStorage(const TglNativeContextRendererFrameStorage&)=delete;
+    TglNativeContextRendererFrameStorage& operator=(const TglNativeContextRendererFrameStorage&)=delete;
+    ~TglNativeContextRendererFrameStorage() noexcept {
+        // Last-resort quarantine retains BOTH renderer and pinned sidecars;
+        // freeing just the roots would invalidate pending native resources.
+        (void)clear();
+    }
+    bool surfacesReady() const noexcept {return renderer_ && renderer_->surfacesReady();}
+    bool canDestroy() noexcept {return !busy_ && (!renderer_ || !renderer_->backing().retention()());}
+    bool clear() noexcept {
+        if(!canDestroy()) return false;
+        delete renderer_;renderer_=nullptr;delete sidecars_;sidecars_=nullptr;return true;
+    }
+    template<class Use> int withFrame(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<Renderer&>())) &&
+            std::is_same_v<decltype(use(std::declval<Renderer&>())),int>);
+        if(busy_ || !surfacesReady()) return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        return use(*renderer_);
     }
 };
 

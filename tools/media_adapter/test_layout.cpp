@@ -14901,6 +14901,46 @@ static void testRetainedVeboxFrames() {
                 unsigned refs=0;
                 using Sidecars=TglNativeContextSurfaceOwners<decltype(owners),2>;
                 {
+                    using NativeOwner=typename Sidecars::Owner;
+                    struct RendererFixture {
+                        using SourceOwnerType=NativeOwner;using TargetOwnerType=NativeOwner;
+                        struct Retention {bool pending=false;bool operator()() const noexcept {return pending;}};
+                        struct Backing {Retention held;Retention& retention() noexcept {return held;}} backing_;
+                        NativeOwner& source;NativeOwner& target;unsigned& destroyed;
+                        RendererFixture(NativeOwner& s,NativeOwner& t,unsigned& d) noexcept:source(s),target(t),destroyed(d) {}
+                        ~RendererFixture() noexcept {assert(source.ready() && target.ready());++destroyed;}
+                        bool surfacesReady() const noexcept {return source.ready() && target.ready();}
+                        Backing& backing() noexcept {return backing_;}
+                    };
+                    auto renderRoots=roots;renderRoots.targets[0]=historyAddress;
+                    unsigned constructed=0,destroyedRenderer=0;
+                    auto construct=[&](uintptr_t originalSource,auto resolve,NativeOwner& targetOwner) noexcept -> RendererFixture* {
+                        assert(originalSource==address && resolve(address) && resolve(historyAddress)==&targetOwner);
+                        ++constructed;
+                        return new(std::nothrow) RendererFixture(*resolve(address),targetOwner,destroyedRenderer);
+                    };
+                    using Storage=TglNativeContextRendererFrameStorage<decltype(owners),RendererFixture,2>;
+                    Storage retained(owners,image,0x8000,success.ticket.generation,renderRoots,address,historyAddress,
+                        readGraph,admitGraph,admitGraph,construct);
+                    assert(retained.surfacesReady() && retained.canDestroy() && constructed==1);
+                    RendererFixture* live=nullptr;
+                    assert(retained.withFrame([&](auto& frame) noexcept -> int {
+                        live=&frame;
+                        typename NativeOwner::SurfaceOwnerLease sourceLease(frame.source);
+                        typename NativeOwner::SurfaceOwnerLease targetLease(frame.target);
+                        assert(sourceLease.storage()==&original && targetLease.storage()==&history);
+                        assert(!retained.canDestroy() && !retained.clear());
+                        assert(retained.withFrame([](auto&) noexcept -> int {assert(false);return 0;})==5);
+                        frame.backing().retention().pending=true;return -31;
+                    })==-31);
+                    assert(!retained.canDestroy() && !retained.clear() && !destroyedRenderer);
+                    live->backing().retention().pending=false;
+                    assert(retained.clear() && destroyedRenderer==1 && !retained.surfacesReady());
+                    Storage stale(owners,image,0x8000,success.ticket.generation+1,renderRoots,address,historyAddress,
+                        readGraph,admitGraph,admitGraph,construct);
+                    assert(!stale.surfacesReady() && constructed==1);
+                }
+                {
                     Sidecars set;
                     assert(set.initialize(owners,image,0x8000,success.ticket.generation,roots,readGraph,admitGraph,admitGraph));
                     assert(set.resolve(address) && set.resolve(historyAddress) && !set.resolve(0x1234));
