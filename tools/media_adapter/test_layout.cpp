@@ -612,7 +612,13 @@ static void testTrackedCpuOwner() {
         const uint32_t pipe=1,type=1,format=0x19;
         std::memcpy(report.data()+0xa0c,&pipe,4);std::memcpy(source.prefix.data(),&type,4);
         std::memcpy(source.prefix.data()+0x130,&format,4);
-        struct ChildOwner {uintptr_t value;bool hasPrivateChildLease(uintptr_t p) noexcept {return p==value;}} owner{childAddress};
+        struct ChildOwner {
+            uintptr_t value,report;bool nativeGetter=true;
+            bool hasPrivateChildLease(uintptr_t p) noexcept {return p==value;}
+            bool hasPrivateSfcRenderDataLease(uintptr_t p,uintptr_t data) noexcept {
+                return nativeGetter && p==value && data==report;
+            }
+        } owner{childAddress,execution};
         struct ExecutionOwner {uintptr_t value;bool hasExecutionLease(uintptr_t p) noexcept {return p==value;}} executionOwner{execution};
         struct SurfaceOwner {const TglOwnedSurfaceStorage* value;bool live=true;
             bool hasSurfaceLease(const TglOwnedSurfaceStorage& s) noexcept {return live && &s==value;}
@@ -662,6 +668,8 @@ static void testTrackedCpuOwner() {
         mode=5;assert(!stage(report,input,finish) && finishes==4);targetOwner.live=true;
         const unsigned before=prepares;sourceOwner.live=false;
         assert(!stage(report,input,finish) && prepares==before);sourceOwner.live=true;
+        owner.nativeGetter=false;
+        assert(!stage(report,input,finish) && prepares==before);owner.nativeGetter=true;
         mode=0;const uintptr_t foreign=0x887700;
         std::memcpy(source.prefix.data()+0x70,&foreign,8);
         report[0x11]=0xa3;assert(!stage(report,input,finish) && report[0x11]==0xa3 && finishes==4);
@@ -24152,6 +24160,10 @@ int main() {
                                                     &activeSource==&sourceOwner && &activeTarget==&targetOwner &&
                                                     &activeDn==&parameters && &activePackets==&packets);
                                                 assert(resources.withResources([](auto&&...) noexcept -> int {assert(false);return 0;})==5);
+                                                assert(activeOwner.hasPrivateSfcRenderDataLease(
+                                                    reinterpret_cast<uintptr_t>(activeChild),packets.execution));
+                                                assert(!activeOwner.hasPrivateSfcRenderDataLease(
+                                                    reinterpret_cast<uintptr_t>(activeChild),packets.execution+8));
                                                 uintptr_t actualMhw=0;
                                                 std::memcpy(&actualMhw,static_cast<uint8_t*>(activeVp)+0x20,8);
                                                 assert(actualMhw);

@@ -5206,6 +5206,18 @@ public:
     bool hasPrivateChildImageLease(uintptr_t expected,uintptr_t image) const noexcept {
         return image && image_==image && hasPrivateChildLease(expected);
     }
+    // Native12c010 obtains report via child48=12ea30, then passes that
+    // SAME report as VP40's data argument (and thus VP90 RSI). Admit only
+    // an already-linked report: no getter invocation/lazy allocation here.
+    // The enclosing execution owner independently pins the native report.
+    bool hasPrivateSfcRenderDataLease(uintptr_t child,uintptr_t report) const noexcept {
+        if(!report || !hasPrivateChildImageLease(child,image_) || image_>UINTPTR_MAX-0x12ea30 ||
+           table_.entries[0x48/8]!=image_+0x12ea30) return false;
+        uintptr_t installed=0,linked=0;
+        std::memcpy(&installed,reinterpret_cast<const void*>(child),8);
+        std::memcpy(&linked,reinterpret_cast<const uint8_t*>(child)+0x88,8);
+        return installed==table_.addressPoint() && linked==report;
+    }
     bool hasPrivateFeaturePreparationLease(uintptr_t expected,uintptr_t image) const noexcept {
         if(!hasPrivateChildImageLease(expected,image) || image>UINTPTR_MAX-0x12aba0 ||
            table_.entries[0x170/8]!=image+0x12aba0) return false;
@@ -12190,9 +12202,12 @@ public:
             std::is_same_v<decltype(executionOwner_.hasExecutionLease(uintptr_t{})),bool> &&
             std::is_same_v<decltype(sourceOwner_.hasSurfaceLease(source_)),bool> &&
             std::is_same_v<decltype(targetOwner_.hasSurfaceLease(target_)),bool>);
+        static_assert(noexcept(childOwner_.hasPrivateSfcRenderDataLease(uintptr_t{},uintptr_t{})) &&
+            std::is_same_v<decltype(childOwner_.hasPrivateSfcRenderDataLease(uintptr_t{},uintptr_t{})),bool>);
         auto leased=[&]() noexcept {
             if(!child_ || !vp_ || reinterpret_cast<uintptr_t>(report.data())!=execution_ ||
                !childOwner_.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child_)) ||
+               !childOwner_.hasPrivateSfcRenderDataLease(reinterpret_cast<uintptr_t>(child_),execution_) ||
                !executionOwner_.hasExecutionLease(execution_) || !sourceOwner_.hasSurfaceLease(source_) ||
                !targetOwner_.hasSurfaceLease(target_)) return false;
             uintptr_t vp=0,execution=0;uint32_t pipe=0;
