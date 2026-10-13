@@ -23242,6 +23242,54 @@ int main() {
                         std::array<unsigned,16> frontendVp1Events{};size_t frontendVp1EventCount=0;
                         Cpu frontendVp1{{},frontendVp1Events,frontendVp1EventCount};
                         Cpu frontendAvs1{{},frontendVp1Events,frontendVp1EventCount};
+                        {
+                            using Sidecars=TglNativeContextSurfaceOwners<decltype(parents),3>;
+                            using OriginalOwner=typename Sidecars::Owner;
+                            using NativeFrontend=TglNativeVeboxFrontendRendererFrameStorage<UnusedFrameApi,
+                                OriginalOwner,OriginalOwner,Cf,FrameDnBackend,decltype(frontendCleanup),
+                                NativeCpu,TrackedSfc,decltype(pairDestroy),FrameMhwInvoke,BorrowedMhw>;
+                            TglNativeContextInputRoots roots;
+                            roots.input=0x40000;roots.parent.context=parentAddress;roots.parent.physical=0x8000;
+                            roots.sources[0]=reinterpret_cast<uintptr_t>(&source);
+                            roots.targets[0]=reinterpret_cast<uintptr_t>(&target);
+                            auto admitRoot=[&](uintptr_t p,size_t bytes) noexcept {
+                                return bytes==0x2a8 && (p==reinterpret_cast<uintptr_t>(&source) ||
+                                    p==reinterpret_cast<uintptr_t>(&target) || p==hp);
+                            };
+                            auto readRoot=[&](uintptr_t p,void* out,size_t bytes) noexcept {
+                                for(auto* shell:{&source,&target,&history}) {
+                                    const auto at=reinterpret_cast<uintptr_t>(shell);
+                                    if(p>=at && p-at<=sizeof(*shell) && bytes<=sizeof(*shell)-(p-at)) {
+                                        std::memcpy(out,reinterpret_cast<void*>(p),bytes);return true;
+                                    }
+                                }
+                                return false;
+                            };
+                            unsigned nativeConstructions=0;
+                            auto constructNative=[&](uintptr_t p,auto resolve,OriginalOwner& originalTarget) noexcept -> NativeFrontend* {
+                                ++nativeConstructions;
+                                return new(std::nothrow) NativeFrontend(p,resolve,originalTarget,Cf{refs},uintptr_t{11},uintptr_t{12},
+                                    frameDn,base,allocatorRead,[](uintptr_t image) noexcept {return image==base;},
+                                    [](uintptr_t,size_t) noexcept {return true;},environment.resources,environment.pageSize,environment.fill,
+                                    std::array<NativeCpu,2>{NativeCpu{vpCpu,&vpAvsCpu},NativeCpu{frontendVp1,&frontendAvs1}},
+                                    std::array<decltype(frontendCleanup),2>{frontendCleanup,frontendCleanup},
+                                    std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
+                                    std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
+                                    std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
+                            };
+                            using RetainedNative=TglNativeContextRendererFrameStorage<decltype(parents),NativeFrontend,3>;
+                            const auto beforeRefs=refs;
+                            RetainedNative retained(parents,base,0x8000,1,roots,roots.sources[0],roots.targets[0],
+                                readRoot,admitRoot,admitRoot,constructNative);
+                            assert(retained.surfacesReady() && nativeConstructions==1);
+                            assert(retained.withFrame([&](auto& nativeFrame) noexcept -> int {
+                                assert(nativeFrame.surfacesReady() && nativeFrame.children().bound());
+                                assert(!retained.canDestroy() && !retained.clear() && removeParent()==5);
+                                return -31;
+                            })==-31);
+                            assert(retained.clear() && refs==beforeRefs && !vpCpu.live && !vpAvsCpu.live &&
+                                !frontendVp1.live && !frontendAvs1.live && !frameDn.live);
+                        }
                         const auto ticket=frames.create(reinterpret_cast<uintptr_t>(&source),
                             [&](uintptr_t address) noexcept -> TestFrontendOriginalOwner* {
                                 if(address==reinterpret_cast<uintptr_t>(&source)) return &so;
