@@ -13415,6 +13415,98 @@ static void testFillCscBinding() {
     assert(packet == empty && calls == 4);
     nativeResult = true;
     assert(cache.prepare(packet,true,1,source,3,7,nativeConvert) && calls == 5);
+    {
+        constexpr uintptr_t os=base+0x800000;
+        const uintptr_t compressionEntry=base+0x65d00;
+        const std::array<uint8_t,19> compressionBody{
+            0x55,0x48,0x89,0xe5,0x31,0xc0,0x48,0x89,0x7d,0xf8,
+            0x48,0x89,0x75,0xf0,0x89,0x55,0xec,0x5d,0xc3};
+        TglOwnedSurfaceStorage originalSource,originalTarget;
+        std::array<uint8_t,0xd30> data{};std::array<uint8_t,12> fillData{};
+        const auto put=[](auto& bytes,size_t offset,auto value) noexcept {
+            std::memcpy(bytes.data()+offset,&value,sizeof(value));
+        };
+        put(originalSource.prefix,0,uint32_t(1));put(originalTarget.prefix,0,uint32_t(7));
+        put(originalTarget.prefix,0x130,uint32_t(0x19));put(originalTarget.prefix,0xe4,uint32_t(1));
+        originalTarget.tail[0x299-0x290]=1;originalTarget.resource[0x20]=1;
+        put(data,0xd28,uint32_t(7));data[0xd2c]=1;
+        std::memcpy(fillData.data()+4,source.data(),4);put(fillData,8,uint32_t(3));
+        auto nativeRead=[&](uintptr_t address,void* out,size_t bytes) noexcept -> bool {
+            if(address==os+0x3a8 && bytes==8) {std::memcpy(out,&compressionEntry,8);return true;}
+            if(address==compressionEntry && bytes==compressionBody.size()) {
+                std::memcpy(out,compressionBody.data(),bytes);return true;
+            }
+            const auto span=[&](const void* region,size_t size) noexcept {
+                const auto first=reinterpret_cast<uintptr_t>(region);
+                if(address<first || address-first>size || bytes>size-(address-first)) return false;
+                std::memcpy(out,reinterpret_cast<const void*>(address),bytes);return true;
+            };
+            return span(&originalSource,sizeof(originalSource)) || span(&originalTarget,sizeof(originalTarget)) ||
+                span(data.data(),data.size()) || span(fillData.data(),fillData.size()) || read(address,out,bytes);
+        };
+        auto nativeQualify=[&](uintptr_t image) noexcept {return qualify(image);};
+        auto nativeExecutable=[&](uintptr_t entry,size_t bytes) noexcept {return executable(entry,bytes);};
+        TglNativeVpCompressionBinding compressionBinding;
+        assert(compressionBinding.resolve(os,base,nativeRead,nativeQualify,nativeExecutable));
+        TglOwnedVpFramePreparationInput acquired;
+        acquired.geometry.frameWidth=1920;acquired.geometry.frameHeight=1080;
+        acquired.geometry.targetWidth=960;acquired.geometry.targetHeight=810;
+        acquired.geometry.sourceRight=1920;acquired.geometry.sourceBottom=1080;
+        acquired.geometry.destinationRight=960;acquired.geometry.destinationBottom=810;
+        acquired.geometry.targetFormat=0x19;acquired.modes.source130=0x19;
+        TglOwnedVpFramePreparation frame;assert(tglPrepareOwnedVpFrame(acquired,{},frame));frame.at920=true;
+        for(unsigned scenario=0;scenario<7;++scenario) {
+            bool live=scenario!=1,dropFill=scenario==2,dropCompression=scenario==4;
+            unsigned fills=0,effects=0;
+            auto healthy=[&](uintptr_t s,uintptr_t t) noexcept {
+                return live && s==reinterpret_cast<uintptr_t>(&originalSource) &&
+                    t==reinterpret_cast<uintptr_t>(&originalTarget);
+            };
+            auto nativeFill=[&](uintptr_t entry,void* out,const void* in,uint32_t from,uint32_t to) noexcept {
+                assert(entry==binding.entry && from==3 && to==7);
+                ++fills;std::memcpy(out,in,4);if(dropFill) live=false;return true;
+            };
+            auto nativeCompression=[&](uintptr_t entry,uintptr_t actualOs,const void* resource,uint32_t mode) noexcept {
+                assert(entry==compressionEntry && actualOs==os && resource==originalTarget.resource.data() && mode==1);
+                ++effects;if(dropCompression) live=false;
+            };
+            TglOwnedSfcFillCache actualCache;TglOwnedVpChromaStatePrefix actual;
+            actual.packet.fill(0xa5);actual.sourceSiting=99;const auto previous=actual.packet;
+            auto geometry=acquired.geometry;if(scenario==6) geometry.targetFormat=3;
+            TglNativeVpCompressionBinding missingCompression;
+            if(scenario==5) corrupt=base+0x4da74;
+            auto produce=[&](const auto& selectedCompression) noexcept {
+                return tglPrepareNativeLeasedOwnedVpCpuState(frame,geometry,reinterpret_cast<uintptr_t>(&originalSource),
+                    originalTarget,reinterpret_cast<uintptr_t>(data.data()),reinterpret_cast<uintptr_t>(fillData.data()),0,
+                    binding,selectedCompression,nativeRead,nativeQualify,nativeExecutable,healthy,actualCache,actual,
+                    nativeFill,nativeCompression);
+            };
+            assert(produce(scenario==3?missingCompression:compressionBinding)==(scenario?5:0));
+            assert(fills==unsigned(scenario!=1 && scenario!=5 && scenario!=6));
+            assert(effects==unsigned(scenario==0 || scenario==4));
+            if(scenario) {
+                assert(actual.packet==previous && actual.sourceSiting==99);
+                // Failed native effects never publish converted fill into cache.
+                const auto before=fills;live=true;dropFill=dropCompression=false;corrupt=0;
+                geometry=acquired.geometry;
+                assert(produce(compressionBinding)==0 && fills==before+1);
+            }
+        }
+        // Native short-circuit: no fill and non-MMC format need neither
+        // optional native effect binding nor output backing at scalar stage.
+        put(originalTarget.prefix,0x130,uint32_t(3));originalTarget.resource.fill(0);
+        frame.at920=false;auto opaqueGeometry=acquired.geometry;opaqueGeometry.targetFormat=3;
+        TglOwnedSfcFillCache opaqueCache;TglOwnedVpChromaStatePrefix opaque;
+        TglFillCscBinding missingFill;TglNativeVpCompressionBinding missingCompression;
+        assert(tglPrepareNativeLeasedOwnedVpCpuState(frame,opaqueGeometry,
+            reinterpret_cast<uintptr_t>(&originalSource),originalTarget,reinterpret_cast<uintptr_t>(data.data()),
+            0,0,missingFill,missingCompression,nativeRead,nativeQualify,nativeExecutable,
+            [&](uintptr_t s,uintptr_t t) noexcept {
+                return s==reinterpret_cast<uintptr_t>(&originalSource) && t==reinterpret_cast<uintptr_t>(&originalTarget);
+            },opaqueCache,opaque,
+            [](uintptr_t,void*,const void*,uint32_t,uint32_t) noexcept -> bool {assert(false);return false;},
+            [](uintptr_t,uintptr_t,const void*,uint32_t) noexcept {assert(false);})==0);
+    }
     const auto published = packet;
     assert(cache.prepare(packet,true,1,source,3,7,nativeConvert) && calls == 5);
     // A reset forces revalidation; revoked image admission must not call native.

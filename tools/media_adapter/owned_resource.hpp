@@ -3035,6 +3035,12 @@ struct TglFillCscBinding {
         image = base; entry = base+0x4d970; return true;
     }
 };
+struct TglNativeFillCscInvoker {
+    bool operator()(uintptr_t entry,void* output,const void* source,uint32_t from,uint32_t to) const noexcept {
+        using Fn=bool(*)(void*,const void*,uint32_t,uint32_t);
+        return reinterpret_cast<Fn>(entry)(output,source,from,to);
+    }
+};
 
 // Native writes are confined to a private candidate. A false native result or
 // stale image binding cannot publish partially converted fill data.
@@ -11549,6 +11555,51 @@ bool tglPrepareLeasedOwnedVpCpuState(const TglOwnedVpFramePreparation& frame,
     return tglPrepareOwnedVpCpuState(frame,geometry,input.settings0f,input.settings13,
         input.fillAlpha,input.outputColorSpace,input.sourceColorSpace,input.compression,
         cache,convert,apply,output);
+}
+
+// Native effects for the reference scalar state producer. Healthy MUST cover
+// the original source/output and OS/image generation throughout this scope.
+// No eager compression binding/backing requirement on branches that never
+// call OS+3a8. Packet/cache publication is transactional; native external
+// effects are not rolled back. This still does not qualify all Gen12 fields.
+template<class Surface,class Read,class Qualify,class Executable,class Healthy,
+    class FillInvoke=TglNativeFillCscInvoker,class CompressionInvoke=TglNativeVpCompressionInvoker>
+int tglPrepareNativeLeasedOwnedVpCpuState(const TglOwnedVpFramePreparation& frame,
+    const TglOwnedVpRegionInput& geometry,uintptr_t source,const Surface& target,
+    uintptr_t settings,uintptr_t conditionalSource,uintptr_t alpha,
+    const TglFillCscBinding& fill,const TglNativeVpCompressionBinding& compression,
+    Read read,Qualify qualify,Executable executable,Healthy healthy,
+    TglOwnedSfcFillCache& cache,TglOwnedVpChromaStatePrefix& output,
+    FillInvoke fillInvoke={},CompressionInvoke compressionInvoke={}) noexcept {
+    const auto targetAddress=reinterpret_cast<uintptr_t>(tglOwnedSfcSurfaceBytes(target));
+    static_assert(std::is_nothrow_invocable_r_v<bool,Healthy&,uintptr_t,uintptr_t>);
+    static_assert(std::is_nothrow_invocable_r_v<bool,Qualify&,uintptr_t> &&
+        std::is_nothrow_invocable_r_v<bool,Executable&,uintptr_t,size_t> &&
+        std::is_nothrow_invocable_r_v<bool,FillInvoke&,uintptr_t,uint8_t*,const uint8_t*,uint32_t,uint32_t> &&
+        std::is_nothrow_invocable_v<CompressionInvoke&,uintptr_t,uintptr_t,const void*,uint32_t>);
+    if(!healthy(source,targetAddress)) return 5;
+    TglOwnedVpCpuStateInputs input;
+    if(!tglReadOwnedVpCpuStateInputs(frame,source,targetAddress,settings,conditionalSource,alpha,read,input) ||
+       !healthy(source,targetAddress)) return 5;
+    auto candidateCache=cache;TglOwnedVpChromaStatePrefix candidate;int effectStatus=0;
+    auto convert=[&](auto& converted,const auto& sample,uint32_t from,uint32_t to) noexcept -> bool {
+        if(!healthy(source,targetAddress)) return false;
+        return tglConvertNativeFill(fill,converted,sample,from,to,read,qualify,executable,fillInvoke) &&
+            healthy(source,targetAddress);
+    };
+    auto apply=[&](uint32_t mode) noexcept {
+        if(effectStatus) return;
+        if(!healthy(source,targetAddress)) {effectStatus=5;return;}
+        effectStatus=compression.withOutput(target,[&](auto nativeApply) noexcept -> int {
+            if(!healthy(source,targetAddress)) return 5;
+            nativeApply(mode);return healthy(source,targetAddress)?0:5;
+        },compressionInvoke);
+    };
+    if(!tglPrepareOwnedVpCpuState(frame,geometry,input.settings0f,input.settings13,input.fillAlpha,
+        input.outputColorSpace,input.sourceColorSpace,input.compression,candidateCache,convert,apply,candidate))
+        return effectStatus?effectStatus:5;
+    if(effectStatus || !healthy(source,targetAddress)) return effectStatus?effectStatus:5;
+    cache=candidateCache;output=candidate;return 0;
 }
 
 // TGL129e3e/129e65 ignore surface/state producer returns;129ec3 (+70)
