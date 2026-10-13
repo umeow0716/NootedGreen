@@ -3925,6 +3925,20 @@ struct TglVeboxHardwareBinding {
     // submitted stamp at+104+24*i into its hardware stamp pointer, then sfence.
     // Therefore even stamp equality after termination cannot distinguish real
     // execution from teardown; a live device/generation gate is indispensable.
+    // Further exact family reference UUID6C4A16B1-66DC-3A8B-9F0B-D3E027B16EB1:
+    // reportGPURestart3d82e increments accelerator9dc at3d8ed. This is a
+    // candidate restart report counter, NOT proved userspace generation ABI.
+    // Independent requestTerminate3d3fe calls deviceTerminatedUnlocked3d434
+    // at3d410 BEFORE base requestTerminate dispatch3d42e. That path updates
+    // dc8 and event-machine termination without updating9dc in its body;
+    // unchanged restart count or a sampled IOService-active bit is therefore
+    // not established reset/termination exclusion. Do not infer equivalence.
+    // get_device_info d52c returns devicef8 plus global comm-page mapping/size;
+    // updateGlobalCommPage429b0 writes ONLY its trace-enable DWORD at+0.
+    // get_event_machine d1dc exports event mapping/config ce0/ce4/ce8 plus
+    // channel data. Neither inspected body directly exports9dc/dc8. Remaining
+    // get_config d080 virtual868/990/a90 outputs need their own provenance;
+    // do not relabel configuration or mapped stamp data as a reset epoch.
     // Prove the owned allocation reaches this mapping path before relying on
     // it; external CPU buffers and failed STMM unlock remain separate cases.
     // Release-only CPU capture198a776a... at46268e is a null-guarded import
