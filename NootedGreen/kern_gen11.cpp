@@ -13,6 +13,7 @@
 #include "kern_vf_context_shutdown.hpp"
 #include "kern_vf_submission_gate.hpp"
 #include "kern_vf_runtime.hpp"
+#include "kern_vf_device_observation.hpp"
 #include "kern_vf_runtime_patch.hpp"
 #include "kern_vf_mmio_response.hpp"
 #include "kern_vf_legacy_ctb.hpp"
@@ -168,6 +169,7 @@ uint32_t gVfDoorbellCount = 0;
 void *gVfGlobalPageTable = nullptr;
 void *gVfHardwareGuc = nullptr;
 void *gVfAccelerator = nullptr;
+bool gVfDeviceObservationAbiVerified = false;
 // Tahoe's IntelAccelerator::stop releases and clears +0x1260 before invoking
 // the inherited IOGraphicsAccelerator2::stop.  That inherited body then drops
 // the kernel task, whose stamp/scratch mappings can still enter release_pte and
@@ -2506,6 +2508,32 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		               ioAccelImage, size,
 		               NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid),
 		           "ngreen", "Unsupported Tahoe IOAcceleratorFamily2 private ABI");
+		// Diagnostics only: preserve all native routes if this optional private
+		// field provenance is unavailable. No native instruction is modified.
+		const auto reportRestart = patcher.solveSymbol(index,
+			"__ZN22IOGraphicsAccelerator216reportGPURestartEP17IOAccelSubmitter2PKcjy", address, size);
+		const auto terminated = patcher.solveSymbol(index,
+			"__ZN22IOGraphicsAccelerator224deviceTerminatedUnlockedEv", address, size);
+		constexpr uint8_t reportField[] = {0x41,0xff,0x85,0xdc,0x09,0x00,0x00};
+		constexpr uint8_t terminatedField[] = {0x48,0x81,0xc7,0xc8,0x0d,0x00,0x00};
+		const auto containsAnchor = [address, size](mach_vm_address_t symbol,
+		                                          size_t offset, size_t length) {
+			return symbol >= address && symbol - address <= size &&
+			       offset <= size - (symbol - address) &&
+			       length <= size - (symbol - address) - offset;
+		};
+		const auto anchorMatches = [](mach_vm_address_t site, const uint8_t *expected, size_t length) {
+			const auto *actual = reinterpret_cast<const volatile uint8_t *>(site);
+			for (size_t i = 0; i < length; ++i)
+				if (actual[i] != expected[i]) return false;
+			return true;
+		};
+		gVfDeviceObservationAbiVerified = reportRestart && terminated &&
+			containsAnchor(reportRestart, 0xBF, sizeof(reportField)) &&
+			containsAnchor(terminated, 9, sizeof(terminatedField)) &&
+			anchorMatches(reportRestart + 0xBF, reportField, sizeof(reportField)) &&
+			anchorMatches(terminated + 9, terminatedField, sizeof(terminatedField));
+		patcher.clearError();
 		KernelPatcher::SolveRequest lifecycle[] = {
 			{"__ZN22IOGraphicsAccelerator217enableAcceleratorEv",
 			 this->ioGraphicsEnableAccelerator},
@@ -5654,6 +5682,34 @@ IOReturn Gen11::vfSurfaceExternalMethod(void *that, uint32_t selector,
 		that, selector, arguments, dispatch, target, reference);
 }
 
+// Separate owned ABI: native Intel selectors never enter this parser.
+static IOReturn vfReadOwnedDeviceObservation(void *accelerator, uint32_t selector,
+                                           void *arguments, void *dispatch,
+                                           void *target, void *reference)
+{
+		if (!gVfDeviceObservationAbiVerified)
+			return kIOReturnUnsupported;
+		auto *args = static_cast<IOExternalMethodArguments *>(arguments);
+		if (selector != NGVfDeviceObservation::selector ||
+		    !NGVfDeviceObservation::inlineShape(args, kIOExternalMethodArgumentsCurrentVersion,
+		                                      dispatch, target, reference))
+			return kIOReturnBadArgument;
+		NGVfDeviceObservation::Reply reply {};
+		const uint64_t registryId = static_cast<IORegistryEntry *>(accelerator)->getRegistryEntryID();
+		if (!NGVfDeviceObservation::collect(registryId, [&](NGVfDeviceObservation::Counters &out) noexcept {
+			OSSynchronizeIO();
+			out.restartReports = getMember<UInt32>(accelerator, 0x9DC);
+			out.terminated = getMember<UInt32>(accelerator, 0xDC8);
+			OSSynchronizeIO();
+			return true;
+		}, reply)) return kIOReturnBusy;
+		const auto *wire = reinterpret_cast<const uint8_t *>(&reply);
+		auto *output = static_cast<volatile uint8_t *>(args->structureOutput);
+		for (size_t i = 0; i < sizeof(reply); ++i) output[i] = wire[i];
+		return kIOReturnSuccess;
+
+}
+
 IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	                                  void *arguments, void *dispatch,
 	                                  void *target, void *reference)
@@ -5662,6 +5718,10 @@ IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	VfExternalProducerGuard guard(accelerator);
 	if (!guard)
 		return kIOReturnOffline;
+	if (selector == NGVfDeviceObservation::selector &&
+	    gVfIdentity == VfIdentity::Virtual && accelerator && accelerator == gVfAccelerator &&
+	    checkKernelArgument("-ngreenmediaadapter"))
+		return vfReadOwnedDeviceObservation(accelerator, selector, arguments, dispatch, target, reference);
 	// Observe the resource-create boundary without reading user arguments or
 	// changing native dispatch. Saturation bounds logging across all clients.
 	static volatile UInt32 observedCreates = 0;

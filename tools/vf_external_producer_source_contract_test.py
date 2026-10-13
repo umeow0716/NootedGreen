@@ -81,6 +81,21 @@ def contract(source, path="<source>"):
             f"{path}: original entered before lease: {signature}"
 
     shared = function_body(source, "IOReturn Gen11::vfSharedExternalMethod(")
+    owned = function_body(source, "static IOReturn vfReadOwnedDeviceObservation(")
+    for token in ("selector == NGVfDeviceObservation::selector",
+                  "gVfIdentity == VfIdentity::Virtual", "accelerator == gVfAccelerator",
+                  'checkKernelArgument("-ngreenmediaadapter")',
+                  "return vfReadOwnedDeviceObservation(accelerator, selector, arguments, dispatch, target, reference);"):
+        assert token in shared, f"{path}: lost owned selector admission: {token}"
+    assert shared.index("VfExternalProducerGuard guard") < shared.index("return vfReadOwnedDeviceObservation"), \
+        f"{path}: owned query must hold native instance lease"
+    for token in ("!gVfDeviceObservationAbiVerified", "return kIOReturnUnsupported;",
+                  "selector != NGVfDeviceObservation::selector", "NGVfDeviceObservation::inlineShape(",
+                  "return kIOReturnBadArgument;", "getRegistryEntryID()",
+                  "NGVfDeviceObservation::collect(", "0x9DC", "0xDC8", "return kIOReturnBusy;"):
+        assert token in owned, f"{path}: incomplete owned read-only query: {token}"
+    assert "oVfSharedExternalMethod" not in owned and "structureInput" not in owned, \
+        f"{path}: owned query must not enter native resource dispatch/read input"
     for token in ("if (selector == 0)", "while (used < 32)",
                   "OSCompareAndSwap(used, used + 1, &observedCreates)",
                   "const IOReturn result = FunctionCast(vfSharedExternalMethod,",
@@ -262,6 +277,16 @@ def contract(source, path="<source>"):
 
 def mutation_contract(source, path):
     mutations = (
+        ("selector == NGVfDeviceObservation::selector", "selector >= NGVfDeviceObservation::selector", 1),
+        ("accelerator && accelerator == gVfAccelerator", "accelerator", 1),
+        ('checkKernelArgument("-ngreenmediaadapter"))\n\t\treturn vfReadOwnedDeviceObservation',
+         'true)\n\t\treturn vfReadOwnedDeviceObservation', 1),
+        ("if (!gVfDeviceObservationAbiVerified)", "if (false)", 1),
+        ("!NGVfDeviceObservation::inlineShape(args,", "!true /* shape bypass */ || (args,", 1),
+        ("out.restartReports = getMember<UInt32>(accelerator, 0x9DC);",
+         "out.restartReports = getMember<UInt32>(accelerator, 0x9D8);", 1),
+        ("out.terminated = getMember<UInt32>(accelerator, 0xDC8);",
+         "out.terminated = getMember<UInt32>(accelerator, 0xDC0);", 1),
         ("while (used < 16)", "while (true)", 1),
         ("if (selector != 0 && result != kIOReturnSuccess)", "if (otherTicket && result != kIOReturnSuccess)", 1),
         ("OSCompareAndSwap(used, used + 1, &observedOtherFailures)", "OSCompareAndSwap(used, used + 1, &observedOtherMethods)", 1),

@@ -79,9 +79,10 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {
     # V350 adds only LiluAPI::onProcLoad for the exact proven encoder path.
-    # The kernel import partition remains unchanged.
+    # Owned diagnostic reply adds only IORegistryEntry::getRegistryEntryID;
+    # exact Tahoe IOAcceleratorFamily2 also imports this public registry API.
     "Lilu": (17, "8d08e64b8c1b5c788f5fcc360ad6f4a8f8f60c03db0627263171cdfed6fb0cf2"),
-    "kernel": (53, "dcd5632e265d7acf19fa5d94172a3d08349ee731a56efb7e9d03622c1e07b8f2"),
+    "kernel": (54, "250eccb8380e842c565aeb42364d426ed13887b2c4fa17d65134e1fdaa823e3b"),
 }
 
 # These programs require an execution environment deliberately absent from the

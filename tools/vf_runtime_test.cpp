@@ -1,10 +1,61 @@
 #include "../NootedGreen/kern_vf_runtime.hpp"
+#include "../NootedGreen/kern_vf_device_observation.hpp"
 #include <cassert>
 #include <cstdio>
 
 int main()
 {
 	using namespace NGVfRuntime;
+	{
+		using namespace NGVfDeviceObservation;
+		struct Envelope {
+			uint32_t version=2, selector=NGVfDeviceObservation::selector;
+			uintptr_t asyncWakePort=0, asyncReference=0, asyncReferenceCount=0;
+			uintptr_t scalarInput=0, scalarInputCount=0, scalarOutput=0, scalarOutputCount=0;
+			uintptr_t structureInput=0, structureInputSize=0, structureInputDescriptor=0;
+			uintptr_t structureOutputDescriptor=0, structureOutputDescriptorSize=0, structureVariableOutputData=0;
+			uintptr_t structureOutput=1, structureOutputSize=sizeof(Reply);
+		} envelope;
+		assert(inlineShape(&envelope,2,nullptr,nullptr,nullptr));
+		assert(!inlineShape<Envelope>(nullptr,2,nullptr,nullptr,nullptr));
+		for (unsigned i=0;i<3;++i)
+			assert(!inlineShape(&envelope,2,i==0?&envelope:nullptr,i==1?&envelope:nullptr,i==2?&envelope:nullptr));
+		uintptr_t Envelope::* forbidden[] = {
+			&Envelope::asyncWakePort,&Envelope::asyncReference,&Envelope::asyncReferenceCount,
+			&Envelope::scalarInput,&Envelope::scalarInputCount,&Envelope::scalarOutput,&Envelope::scalarOutputCount,
+			&Envelope::structureInput,&Envelope::structureInputSize,&Envelope::structureInputDescriptor,
+			&Envelope::structureOutputDescriptor,&Envelope::structureOutputDescriptorSize,&Envelope::structureVariableOutputData};
+		for(auto field:forbidden) {
+			envelope.*field=1;assert(!inlineShape(&envelope,2,nullptr,nullptr,nullptr));envelope.*field=0;
+		}
+		envelope.version=1;assert(!inlineShape(&envelope,2,nullptr,nullptr,nullptr));envelope.version=2;
+		envelope.selector=0;assert(!inlineShape(&envelope,2,nullptr,nullptr,nullptr));envelope.selector=NGVfDeviceObservation::selector;
+		envelope.structureOutput=0;assert(!inlineShape(&envelope,2,nullptr,nullptr,nullptr));envelope.structureOutput=1;
+		const size_t wrongSizes[]={sizeof(Reply)-1,sizeof(Reply)+1};
+		for(auto size:wrongSizes) {
+			envelope.structureOutputSize=size;assert(!inlineShape(&envelope,2,nullptr,nullptr,nullptr));
+		}
+		Reply output{};unsigned reads=0;
+		auto stable=[&](Counters& value) noexcept {++reads;value={7,0};return true;};
+		assert(collect(0x12345678,stable,output) && reads==2);
+		assert(output.abiVersion==1 && output.bytes==40 && output.registryId==0x12345678 &&
+		    output.restartReports==7 && !output.terminated);
+		for(unsigned i=0;i<16;++i) assert(output.familyUuid[i]==NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i]);
+		const Reply saved=output;
+		reads=0;assert(!collect(0,stable,output) && !reads);
+		for(unsigned mode=0;mode<3;++mode) {
+			reads=0;
+			auto changed=[&](Counters& value) noexcept {
+				++reads;value={uint32_t(mode==0?reads:7),uint32_t(mode==1?reads:0)};
+				return mode!=2 || reads!=2;
+			};
+			assert(!collect(0x12345678,changed,output) && reads==2);
+			assert(output.registryId==saved.registryId && output.restartReports==saved.restartReports &&
+			    output.terminated==saved.terminated);
+		}
+		assert(collect(0x12345678,[](Counters& value) noexcept {value={8,1};return true;},output));
+		assert(output.terminated==1); // Raw terminated observation, never hidden or treated as completion.
+	}
 
 	auto handshake = makeRelayRequest(opcodeHandshake,
 		(static_cast<uint32_t>(iovMajor) << 16U) | iovMinor, 0, 0);
