@@ -15493,6 +15493,51 @@ static void testActualNv12LayoutSnapshot() {
     assert(uvRow==32);
 }
 int main() {
+    {
+        std::array<uint8_t,16> batch{};std::array<uint8_t,48> items{};std::array<uint8_t,8> event{};
+        auto put=[](auto& bytes,size_t offset,auto value) noexcept {std::memcpy(bytes.data()+offset,&value,sizeof(value));};
+        auto reset=[&]() noexcept {
+            batch={};items={};event={};
+            put(batch,0,uint32_t(2));put(batch,8,uintptr_t(0x2000));
+            put(items,0,uintptr_t(0x3000));put(items,8,uint32_t(0x3ea));put(items,12,uint32_t(1));
+            put(event,4,uint32_t(7));
+        };
+        auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            auto span=[&](uintptr_t base,const auto& bytes) noexcept {
+                if(address<base || address-base>bytes.size() || size>bytes.size()-(address-base)) return false;
+                std::memcpy(out,bytes.data()+address-base,size);return true;
+            };
+            return span(0x1000,batch) || span(0x2000,items) || span(0x3000,event);
+        };
+        const TglNativeFrameOutputReceipt receipt{0x4000,0x3000,7,true};
+        for(uint32_t status:{1U,2U,3U}) {
+            reset();TglNativeFrameEventObservation observation;
+            assert(observation.capture(receipt,0x1000,read));
+            assert(!observation.capture(receipt,0x1000,read));
+            put(items,16,status);uint32_t actual=99;
+            assert(observation.observe(read,actual) && actual==status); // Even status1 grants no retirement.
+        }
+        for(unsigned mutation=0;mutation<8;++mutation) {
+            reset();TglNativeFrameEventObservation observation;
+            assert(observation.capture(receipt,0x1000,read));put(items,16,uint32_t(1));
+            if(mutation==0) put(batch,0,uint32_t(1));
+            if(mutation==1) put(batch,8,uintptr_t(0x2018));
+            if(mutation==2) put(items,0,uintptr_t(0x3010));
+            if(mutation==3) put(event,4,uint32_t(8));
+            if(mutation==4) put(items,8,uint32_t(0x3e9));
+            if(mutation==5) put(items,12,uint32_t(0));
+            if(mutation==6) put(items,16,uint32_t(4));
+            if(mutation==7) put(items,24,uintptr_t(0x3000));
+            uint32_t actual=99;assert(!observation.observe(read,actual) && actual==99);
+        }
+        reset();put(items,24,uintptr_t(0x3000));
+        TglNativeFrameEventObservation duplicate;
+        assert(!duplicate.capture(receipt,0x1000,read));
+        reset();put(batch,0,uint32_t(65));
+        assert(!duplicate.capture(receipt,0x1000,read));
+        reset();put(event,4,uint32_t(8));
+        assert(!duplicate.capture(receipt,0x1000,read));
+    }
     testActualNv12LayoutSnapshot();
     {
         int children[2]{},packet=0;

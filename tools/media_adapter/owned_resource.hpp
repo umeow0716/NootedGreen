@@ -21042,6 +21042,52 @@ struct TglNativeFrameOutputReceipt {
     uint32_t index=0;
     bool valid=false;
 };
+// Exact slot12=15b01: batch count0/list8, 24-byte items with event0,
+// type8/wait12/status16. Status1 is only a native report, NOT completion:
+// wait/test may bypass on reset/termination. Caller holds the SAME retained
+// receipt and physical/context generation throughout capture/native/observe.
+class TglNativeFrameEventObservation {
+    uintptr_t batch_=0,list_=0,item_=0,event_=0,context_=0;
+    uint32_t count_=0,index_=0,type_=0,wait_=0;
+    bool valid_=false;
+public:
+    template<class Read> bool capture(const TglNativeFrameOutputReceipt& receipt,
+        uintptr_t batch,Read read) noexcept {
+        static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})));
+        if(valid_ || !receipt.valid || !receipt.context || !receipt.event ||
+            receipt.event>UINTPTR_MAX-8 || !batch || batch>UINTPTR_MAX-16) return false;
+        TglNativeFrameEventObservation candidate;
+        candidate.batch_=batch;candidate.event_=receipt.event;candidate.index_=receipt.index;candidate.context_=receipt.context;
+        if(!read(batch,&candidate.count_,4) || !candidate.count_ || candidate.count_>64 ||
+            !read(batch+8,&candidate.list_,8) || !candidate.list_ ||
+            candidate.list_>UINTPTR_MAX-size_t(candidate.count_)*24) return false;
+        unsigned matches=0;
+        for(uint32_t i=0;i<candidate.count_;++i) {
+            const uintptr_t item=candidate.list_+size_t(i)*24;
+            uintptr_t event=0;
+            if(!read(item,&event,8)) return false;
+            if(event!=candidate.event_) continue;
+            if(++matches!=1 || !read(item+8,&candidate.type_,4) ||
+                !read(item+12,&candidate.wait_,4) ||
+                (candidate.type_!=0x3ea && candidate.type_!=0x3e9 && candidate.type_!=0x3eb)) return false;
+            candidate.item_=item;
+        }
+        uint32_t index=0;
+        if(matches!=1 || !read(candidate.event_+4,&index,4) || index!=candidate.index_) return false;
+        candidate.valid_=true;*this=candidate;return true;
+    }
+    template<class Read> bool observe(Read read,uint32_t& status) const noexcept {
+        static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})));
+        if(!valid_) return false;
+        TglNativeFrameEventObservation current;
+        if(!current.capture(TglNativeFrameOutputReceipt{context_,event_,index_,true},batch_,read) ||
+            current.count_!=count_ || current.list_!=list_ || current.item_!=item_ ||
+            current.type_!=type_ || current.wait_!=wait_) return false;
+        uint32_t value=0;
+        if(!read(item_+16,&value,4) || value<1 || value>3) return false;
+        status=value;return true;
+    }
+};
 template<class Frame,size_t Capacity=2> class TglOwnedVeboxRetainedFrames {
     static_assert(Capacity>0 && Capacity<=2,"bounded pending-frame budget");
     static_assert(std::is_nothrow_destructible_v<Frame>,"frame cleanup must not throw");
