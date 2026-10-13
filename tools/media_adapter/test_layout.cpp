@@ -23934,9 +23934,18 @@ int main() {
                                         return tglRunCapturedSelectedVeboxAdmissionStages(owner,executionLease,child,
                                             params,pass,packets.source,*packets.target,interfaces,reportBytes,readInput,reset,
                                             selectPipe,historyStage,
-                                            featureStage,[&](auto& report,const auto& captured,auto finish) noexcept -> bool {
+                                            featureStage,[&](auto& report,const auto& captured,auto finish,auto& resources) noexcept -> bool {
+                                                const unsigned consumedBefore=admissionConsumes;
+                                                const int resourceStatus=resources.withResources([&](auto& activeOwner,void* activeChild,
+                                                    void* activeVp,auto& graph,auto&,auto& activeSource,auto& activeTarget,
+                                                    auto& activeDn,auto& activePackets) noexcept -> int {
+                                                assert(&activeOwner==&owner && activeChild==child && graph.ownsStorage(activeVp) &&
+                                                    &activeSource==&sourceOwner && &activeTarget==&targetOwner &&
+                                                    &activeDn==&parameters && &activePackets==&packets);
+                                                assert(resources.withResources([](auto&&...) noexcept -> int {assert(false);return 0;})==5);
                                                 assert(captured.leasedParamsE0==interfaces.paramsE0 && captured.leasedParamsF0==0);
                                                 uintptr_t vp=0;std::memcpy(&vp,bytes+0x80,8);assert(vp);
+                                                assert(activeVp==reinterpret_cast<void*>(vp));
                                                 const std::array<uint8_t,1> noDn{};
                                                 auto prepare=[&](void* actual,uintptr_t e0,uintptr_t f0,
                                                     const auto& source,const auto& target,uintptr_t execution,auto complete) noexcept -> int {
@@ -23949,7 +23958,11 @@ int main() {
                                                 };
                                                 TglOwnedVeboxScopedSfcAdmissionStage stage(owner,executionLease,sourceOwner,targetOwner,
                                                     child,reinterpret_cast<void*>(vp),packets.execution,packets.source,*packets.target,noDn,prepare);
-                                                return stage(report,captured,finish);
+                                                return stage(report,captured,finish)?0:5;
+                                                });
+                                                if(admissionConsumes!=consumedBefore)
+                                                    assert(resources.withResources([](auto&&...) noexcept -> int {assert(false);return 0;})==5);
+                                                return resourceStatus==0;
                                             },enterResources)?0:5;
                                     });
                                     std::memcpy(bytes+0x90,&savedHistory,8);

@@ -12083,6 +12083,23 @@ bool tglReadLeasedVeboxAdmissionInputs(TglVeboxAdmissionStagesInput& output,
 // Qualified callbacks own reset/optional VP reset, history setup, platform
 // feature query, native170 and complete VP28+flag publication respectively.
 // All frame/report/parameter owners must remain leased across this call.
+// Non-owning, noncopyable view of an enclosing frame scope. Resource access
+// never reacquires backing and never extends any graph/surface/report lease.
+template<class Complete,class Resources> class TglOwnedVeboxScopedFrameCompletion {
+    Complete& complete_;Resources& resources_;
+public:
+    TglOwnedVeboxScopedFrameCompletion(Complete& complete,Resources& resources) noexcept:
+        complete_(complete),resources_(resources){}
+    TglOwnedVeboxScopedFrameCompletion(const TglOwnedVeboxScopedFrameCompletion&)=delete;
+    bool operator()() noexcept {
+        static_assert(noexcept(complete_()) && std::is_same_v<decltype(complete_()),bool>);
+        return complete_();
+    }
+    template<class Use> int withResources(Use use) noexcept {
+        static_assert(noexcept(resources_(use)) && std::is_same_v<decltype(resources_(use)),int>);
+        return resources_(use);
+    }
+};
 struct TglVeboxAdmissionDirectScope {
     template<class Run> bool operator()(Run run) const noexcept {return run();}
 };
@@ -12144,8 +12161,13 @@ bool tglRunSelectedVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& inpu
             if(!sfc(execution)) return false;
             admitted=true;
         } else {
-            auto invokeScoped=[&](auto& stage,auto finish) noexcept -> bool {
-                if constexpr(std::is_invocable_v<decltype(stage),Execution&,
+            auto invokeScoped=[&](auto& stage,auto finish,auto&... resources) noexcept -> bool {
+                if constexpr(sizeof...(resources)==1 && std::is_invocable_v<decltype(stage),Execution&,
+                    const TglVeboxAdmissionStagesInput&,decltype(finish),decltype(resources)&...>) {
+                    static_assert(noexcept(stage(execution,input,finish,resources...)) &&
+                        std::is_same_v<decltype(stage(execution,input,finish,resources...)),bool>);
+                    return stage(execution,input,finish,resources...);
+                } else if constexpr(std::is_invocable_v<decltype(stage),Execution&,
                     const TglVeboxAdmissionStagesInput&,decltype(finish)>) {
                     static_assert(noexcept(stage(execution,input,finish)) &&
                         std::is_same_v<decltype(stage(execution,input,finish)),bool>);
@@ -12156,7 +12178,7 @@ bool tglRunSelectedVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& inpu
                     return stage(execution,finish);
                 }
             };
-            const bool done=invokeScoped(sfc,finishSfc);
+            const bool done=invokeScoped(sfc,finishSfc,completion...);
             accepted=done && finished && !finishRepeated && accepted;
             return accepted;
         }
@@ -23010,8 +23032,6 @@ public:
                         source.hasSurfaceLease(packets.source) && target.hasSurfaceLease(*expectedTarget);
                 };
                 auto enterResources=[&](auto runAdmission) noexcept -> bool {
-                    static_assert(noexcept(runAdmission()) &&
-                        std::is_same_v<decltype(runAdmission()),bool>);
                     if(entered) {repeated=true;return false;}
                     entered=true;
                     if(!identities()) return false;
@@ -23037,10 +23057,31 @@ public:
                                     backing_.retention().observe(consumed);
                                     return true;
                                     };
-                                    bool admitted=false;
-                                    if constexpr(std::is_invocable_v<decltype(runAdmission)&,decltype(complete)>)
-                                        admitted=runAdmission(complete);
-                                    else admitted=runAdmission() && complete();
+                                    bool resourcesBusy=false;
+                                    auto resources=[&](auto use) noexcept -> int {
+                                        if(completed || resourcesBusy || !identities()) return 5;
+                                        resourcesBusy=true;
+                                        static_assert(noexcept(use(actualOwner,actualChild,vp,graph,lines,
+                                            actualSource,actualTarget,dn,actualPackets)) &&
+                                            std::is_same_v<decltype(use(actualOwner,actualChild,vp,graph,lines,
+                                                actualSource,actualTarget,dn,actualPackets)),int>);
+                                        const int result=use(actualOwner,actualChild,vp,graph,lines,
+                                            actualSource,actualTarget,dn,actualPackets);
+                                        resourcesBusy=false; // single exit after statically noexcept use
+                                        return identities()?result:5;
+                                    };
+                                    TglOwnedVeboxScopedFrameCompletion frameCompletion(complete,resources);
+                                    auto invokeAdmission=[&](auto& run,auto& completion) noexcept -> bool {
+                                        if constexpr(std::is_invocable_v<decltype(run),decltype(completion)>) {
+                                            static_assert(noexcept(run(completion)) &&
+                                                std::is_same_v<decltype(run(completion)),bool>);
+                                            return run(completion);
+                                        } else {
+                                            static_assert(noexcept(run()) && std::is_same_v<decltype(run()),bool>);
+                                            return run() && completion();
+                                        }
+                                    };
+                                    const bool admitted=invokeAdmission(runAdmission,frameCompletion);
                                     if((!admitted || !accepted || repeated) && !consumed.status) consumed.status=5;
                                     return consumed.status;
                                 });
