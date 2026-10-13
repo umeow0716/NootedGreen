@@ -23963,13 +23963,30 @@ int main() {
                                                     &activeSource==&sourceOwner && &activeTarget==&targetOwner &&
                                                     &activeDn==&parameters && &activePackets==&packets);
                                                 assert(resources.withResources([](auto&&...) noexcept -> int {assert(false);return 0;})==5);
-                                                auto noExternal=[](uintptr_t,void*,size_t) noexcept {return false;};
+                                                uintptr_t actualMhw=0;
+                                                std::memcpy(&actualMhw,static_cast<uint8_t*>(activeVp)+0x20,8);
+                                                assert(actualMhw);
+                                                auto sfcObjectRead=[&](uintptr_t address,void* out,size_t size) noexcept -> bool {
+                                                    if(address>=actualMhw && address-actualMhw<=0x41 &&
+                                                       size<=0x41-(address-actualMhw)) {
+                                                        std::memcpy(out,reinterpret_cast<const void*>(address),size);return true;
+                                                    }
+                                                    if(address==os+0x88 && size==8) return read(address,out,size);
+                                                    return false;
+                                                };
+                                                auto sfcAlignmentRead=[&](uintptr_t address,void* out,size_t size) noexcept {
+                                                    return activeOwner.readLeasedSfcAlignment(activeChild,mhw,address,out,size,sfcObjectRead);
+                                                };
                                                 TglLeasedVpFrameInputRead originalRead(activeSource,packets.source,
-                                                    activeTarget,*packets.target,executionLease,report,noExternal);
+                                                    activeTarget,*packets.target,executionLease,report,sfcAlignmentRead);
                                                 uint32_t sourceWidth=0,activePipe=0;
                                                 assert(originalRead(reinterpret_cast<uintptr_t>(&packets.source)+0xd8,&sourceWidth,4) &&
                                                     sourceWidth==admissionWidth);
                                                 assert(originalRead(packets.execution+0xa0c,&activePipe,4) && activePipe==1);
+                                                uint32_t alignedHeight=0,alignedWidth=0;
+                                                assert(tglReadOwnedSfcFrame(reinterpret_cast<uintptr_t>(&packets.source),actualMhw,
+                                                    originalRead,alignedHeight,alignedWidth));
+                                                assert(alignedHeight==16 && alignedWidth==64);
                                                 assert(captured.leasedParamsE0==interfaces.paramsE0 && captured.leasedParamsF0==0);
                                                 uintptr_t vp=0;std::memcpy(&vp,bytes+0x80,8);assert(vp);
                                                 assert(activeVp==reinterpret_cast<void*>(vp));
