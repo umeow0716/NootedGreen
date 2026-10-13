@@ -3306,13 +3306,16 @@ static void testNativeCscBinding() {
             v=table;g=generic;s=support;return true;
         }
     } owner{child,image,vt};
-    bool loseLease=false,replaceTable=false,failCsc=false;
+    bool loseLease=false,replaceTable=false,failCsc=false,loseSource=false,loseTarget=false;
+    bool sourceLeased=true,targetLeased=true;
     TglOwnedVeboxProducerPass cscPass;
     auto invoke = [&](uintptr_t e,uintptr_t c,uintptr_t s,uintptr_t t) noexcept {
         assert(e == image+0x12cfc0 && c == child && s == 0x9000 && t == 0xa000);
         if(loseLease) owner.leased=false;
         if(replaceTable) owner.table+=0x10;
         if(failCsc) assert(cscPass.record(31));
+        if(loseSource) sourceLeased=false;
+        if(loseTarget) targetLeased=false;
         ++calls; return nativeResult;
     };
     auto query = [&] {
@@ -3337,7 +3340,9 @@ static void testNativeCscBinding() {
         vt,0x4000,0x5000,needed,read,qualify,executable,invoke) && needed && calls == 2);
     assert(!binding.resolve(0,read,qualify,executable) && !binding.image && !binding.entry);
     assert(binding.resolve(image,read,qualify,executable));
-    auto healthy=[&]() noexcept {return cscPass.acceptsProducer();};
+    auto healthy=[&](uintptr_t s,uintptr_t t) noexcept {
+        return s==0x9000 && t==0xa000 && sourceLeased && targetLeased && cscPass.acceptsProducer();
+    };
     TglLeasedNativeTwoPassCscQuery leased(owner,binding,child,read,qualify,executable,invoke,healthy);
     calls=0;needed=true;nativeResult=false;
     assert(!leased(0x9000,0xa000,needed) && needed && !calls); // no active producer pass
@@ -3363,6 +3368,13 @@ static void testNativeCscBinding() {
     assert(!leased(0x9000,0xa000,needed) && needed && calls==6); // same failed pass cannot retry
     cscPass.close();assert(cscPass.begin());
     assert(leased(0x9000,0xa000,needed) && !needed && calls==7);
+    assert(!leased(0x9008,0xa000,needed) && !needed && calls==7);
+    sourceLeased=false;
+    assert(!leased(0x9000,0xa000,needed) && !needed && calls==7);
+    sourceLeased=true;loseSource=true;needed=true;
+    assert(!leased(0x9000,0xa000,needed) && needed && calls==8);
+    sourceLeased=true;loseSource=false;loseTarget=true;
+    assert(!leased(0x9000,0xa000,needed) && needed && calls==9);
     cscPass.close();
 }
 
@@ -14701,6 +14713,14 @@ static void testRetainedVeboxFrames() {
                             assert(&actual==&original);
                             return graph.withLeasedConversionMetadata(actual,readMetadata,useMetadata);
                         })==-95 && reads==2);
+                        TglOwnedVeboxProducerPass cscPass;
+                        TglLeasedVeboxCscFrameHealth<decltype(cscPass),decltype(graph),decltype(graph)>
+                            cscHealth{cscPass,graph,graph,original,original};
+                        assert(!cscHealth(address,address));
+                        assert(cscPass.begin() && cscHealth(address,address));
+                        assert(!cscHealth(address+8,address) && !cscHealth(address,address+8));
+                        assert(cscPass.record(31) && !cscHealth(address,address));
+                        cscPass.close();assert(!cscHealth(address,address));
                         TglVeboxPipeAcquisition featureFrame;
                         TglOwnedGen12SurfaceFeatures features;
                         assert(graph.withMutableSurface([&](auto& actual) noexcept -> int {
