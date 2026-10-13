@@ -18876,7 +18876,7 @@ int main() {
         }
     }
     {
-        std::array<uint8_t,0x298> source{},target{};
+        std::array<uint8_t,0x2a8> source{},target{};
         std::array<uint8_t,0x1c> mhw{};std::array<uint8_t,0x68> settings{};
         std::array<uint8_t,14> ief{};
         const auto put=[](auto& bytes,size_t offset,auto value) {
@@ -19421,9 +19421,7 @@ int main() {
                             return address==0x100000+0x23e4c4 && size==6;
                         }));
                     unsigned nativeMathCalls=0;
-                    assert(graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
-                      0,0x4000,{},passData.data(),read,
-                      [&](void*,const auto& prepared,const auto& geometry,auto& stateOwner,
+                    auto makeState=[&](void*,const auto& prepared,const auto& geometry,auto& stateOwner,
                           void* data,void* originalSource,void* originalTarget) noexcept -> int {
                           assert(geometry.frameWidth==geometrySnapshot.frameWidth);
                           assert(data==passData.data() && originalSource==reinterpret_cast<void*>(0x1000) &&
@@ -19444,8 +19442,8 @@ int main() {
                           producedPrefix=prefix;
                           avsRequired=prepared.regions.scale.scaling || prepared.color.at9b8;
                           ++passStates;return 0;
-                      },
-                      [&](void*,const auto& prepared,auto& avsOwner) noexcept -> int {
+                      };
+                    auto makeAvs=[&](void*,const auto& prepared,auto& avsOwner) noexcept -> int {
                           assert(passStates==1 && avsRequired);
                           TglOwnedSfcAvsConfiguration config;
                           if(!tglReadOwnedVpAvsConfiguration(prepared,producedPrefix,0,read,config)) return 5;
@@ -19461,8 +19459,8 @@ int main() {
                                   assert(entry==0x100000+0x23e4c4);++nativeMathCalls;
                                   return std::sin(value); // CPU recording fixture, NOT Darwin libm proof.
                               });
-                      },
-                      [&](void*,const auto& prepared) noexcept {
+                      };
+                    auto makeIef=[&](void*,const auto& prepared) noexcept {
                           ++passIefCalls;passIefEnabled=prepared.at922;
                           std::memcpy(passFilters.state.data(),stateCpu.bytes.data(),passFilters.state.size());
                           unsigned tableReads=0;
@@ -19474,7 +19472,9 @@ int main() {
                           assert(tableReads==unsigned(prepared.at922?5:0));
                           if(passIefReady)
                               std::memcpy(stateCpu.bytes.data(),passFilters.state.data(),passFilters.state.size());
-                      },
+                      };
+                    assert(graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
+                      0,0x4000,{},passData.data(),read,makeState,makeAvs,makeIef,
                       [&](void* leasedChild,void*,void*,const TglOwnedVpEntrySet& passEntries) noexcept {
                       if(!passIefReady) return 5; // Native void producer cannot return failure itself.
                       assert(passStates==1);
@@ -19681,6 +19681,90 @@ int main() {
                             reinterpret_cast<void*>(0x2000),&passData)==0);
                         return passEntries.send(child,&passData,&passCommand);
                       })==consumerResult);
+                    if(!cscEnabled) {
+                        // Complete catalogue is live BEFORE VP40/VP48, while
+                        // concrete packet contexts remain phase-local in Emit.
+                        passStates=passAvs=passIefCalls=stateDataReads=0;
+                        TglOwnedVpCscDispatchContext* liveCsc=nullptr;
+                        TglOwnedVpPlatformDispatchContext* livePlatform=nullptr;
+                        const TglOwnedVpEntrySet* liveCatalogue=nullptr;
+                        bool catalogueBeforeSetup=false;
+                        const int preSetupResult=graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,
+                            0x1000,0x2000,0x3000,0x4000,0,0x4000,{},passData.data(),read,
+                            makeState,makeAvs,makeIef,
+                            [&](void* child,void*,void*,const auto&) noexcept -> int {
+                                assert(catalogueBeforeSetup && liveCsc && livePlatform && liveCatalogue &&
+                                    passStates==1 && passAvs==1 && passIefReady);
+                                TglOwnedVpCscProducerContext<0xf8> concreteCsc(child,passFilters.ief,stateCpu.bytes.data(),nullptr);
+                                return liveCsc->withContext(concreteCsc,[&]() noexcept -> int {
+                                    TglNativeVpCompressionBinding noCompressionBinding;
+                                    auto physicalTargetRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                                        const auto first=reinterpret_cast<uintptr_t>(target.data());
+                                        if(address>=first && address-first<=target.size() && bytes<=target.size()-(address-first)) {
+                                            std::memcpy(out,target.data()+address-first,bytes);return true;
+                                        }
+                                        return read(address,out,bytes);
+                                    };
+                                    return tglWithOwnedVpPlatformCompressionAssembly(*storage,target,stateCpu.bytes,0x4000,
+                                        noCompressionBinding,physicalTargetRead,
+                                        [](uintptr_t,uintptr_t,const void*,uint32_t) noexcept {assert(false);},
+                                        TglOwnedVpEntrySet{},[&](void* actual,const auto& concreteEntries) noexcept -> int {
+                                            assert(actual==child);
+                                            return livePlatform->withEntries(child,concreteEntries,[&]() noexcept -> int {
+                                                liveCatalogue->csc(child,stateCpu.bytes.data(),passFilters.ief.data());
+                                                liveCatalogue->platformPacket(child,nullptr,stateCpu.bytes.data());
+                                                return consumerResult;
+                                            });
+                                        });
+                                });
+                            },[&](void* child,const auto& preparedEntries) noexcept -> int {
+                                assert(!passStates && !passAvs);
+                                uintptr_t published=1;std::memcpy(&published,storage->bytes.data()+0x938,8);
+                                assert(!published);
+                                assert(tglWithOwnedVpPhaseDispatchEntries(child,TglOwnedVpEntrySet{},
+                                    [&](void* actual,const auto& early,auto&,auto&) noexcept -> int {
+                                        early.csc(actual,nullptr,nullptr);
+                                        early.platformPacket(actual,nullptr,nullptr);
+                                        return 0;
+                                    })==5); // No concrete packet phase exists yet.
+                                return graph.template withLeasedModeAssemblyEntries<TglOwnedVpAssemblyPhase::BeforeSetup>(
+                                    child,read,lineResources,retire,0x1000,0x2000,0x4000,
+                                    [&](void*,const auto& modeEntries) noexcept -> int {
+                                        auto entries=modeEntries;assert(entries.appendDisjoint(preparedEntries));
+                                        return tglWithOwnedVpPhaseDispatchEntries(child,entries,
+                                            [&](void*,const auto& phaseEntries,auto& cscPhase,auto& platformPhase) noexcept -> int {
+                                                assert(tglWithOwnedVpPhaseDispatchEntries(child,TglOwnedVpEntrySet{},
+                                                    [](void*,const auto&,auto&,auto&) noexcept -> int {assert(false);return 0;})==5);
+                                                auto releaseAllocation=[](void*) noexcept {assert(false);};
+                                                TglOwnedVpLifetimeContext<decltype(graph),decltype(lineResources),
+                                                    decltype(retire),decltype(releaseAllocation)>
+                                                    lifetime(child,graph,lineResources,retire,releaseAllocation);
+                                                return tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,phaseEntries,
+                                                    [&](void*,const auto& complete) noexcept -> int {
+                                                        assert(complete.hasAllEntries() && !passStates && !passAvs);
+                                                        TglOwnedVpFlatDispatchTable table;
+                                                        assert(table.build(complete,[](uintptr_t,size_t) noexcept {return true;}));
+                                                        liveCsc=&cscPhase;livePlatform=&platformPhase;liveCatalogue=&complete;
+                                                        catalogueBeforeSetup=true;
+                                                        const int result=graph.withReservedFlatDispatch(child,table,[&](void* actual) noexcept -> int {
+                                                            complete.sampleMode(actual,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                                            complete.formatMode(actual,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x4000));
+                                                            const int setup=complete.setup(actual,reinterpret_cast<void*>(0x1000),
+                                                                reinterpret_cast<void*>(0x2000),passData.data());
+                                                            return setup?setup:complete.send(actual,passData.data(),&passCommand);
+                                                        });
+                                                        liveCsc=nullptr;livePlatform=nullptr;liveCatalogue=nullptr;
+                                                        return result;
+                                                    });
+                                            });
+                                    });
+                            });
+                        if(preSetupResult!=consumerResult) std::fprintf(stderr,
+                            "pre-setup catalogue result=%d expected=%d built=%d states=%u avs=%u state-live=%d\n",
+                            preSetupResult,consumerResult,int(catalogueBeforeSetup),passStates,passAvs,int(stateCpu.live));
+                        assert(preSetupResult==consumerResult);
+                        assert(catalogueBeforeSetup && passStates==1 && passAvs==1 && !liveCatalogue);
+                    }
                     for(size_t offset:{size_t(0x923),size_t(0x998),size_t(0x99c),size_t(0x9c0)})
                         assert(std::memcmp(storage->bytes.data()+offset,beforeModes.data()+offset,offset==0x923?1:offset==0x9c0?8:4)==0);
                     expiredAssembly.sampleMode(storage->bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));

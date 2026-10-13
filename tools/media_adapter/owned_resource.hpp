@@ -11287,6 +11287,25 @@ int tglWithOwnedVpPairedPlatformDispatchEntries(void* first,void* second,
     const int result=use(first,entries[0],a,second,entries[1],b);
     return result?result:(a.status()?a.status():b.status());
 }
+// Single VP counterpart of the existing paired phase scopes. These are the
+// SAME dispatch contexts, not replacement producers: concrete CSC/platform
+// contexts must still be admitted during their actual state/emission phase.
+template<class Use>
+int tglWithOwnedVpPhaseDispatchEntries(void* child,const TglOwnedVpEntrySet& base,Use use) noexcept {
+    TglOwnedVpCscDispatchContext csc(child);TglOwnedVpPlatformDispatchContext platform(child);
+    TglOwnedVpSfcScopedContext<TglOwnedVpCscDispatchContext> cscScope(child,csc);
+    TglOwnedVpSfcScopedContext<TglOwnedVpPlatformDispatchContext> platformScope(child,platform);
+    using CscResolve=TglOwnedVpSfcResolve<TglOwnedVpCscDispatchContext>;
+    using PlatformResolve=TglOwnedVpSfcResolve<TglOwnedVpPlatformDispatchContext>;
+    auto entries=base;
+    if(!cscScope.bound() || !platformScope.bound() || !tglBindOwnedVpCscEntry<CscResolve>(child,entries) ||
+       !tglBindOwnedVpPlatformAdmissionEntries<PlatformResolve>(child,entries) ||
+       !tglBindOwnedVpPlatformPacketEntry<PlatformResolve>(child,entries) ||
+       !tglBindOwnedVpCompressionEntry<PlatformResolve>(child,entries)) return 5;
+    static_assert(noexcept(use(child,entries,csc,platform)),"single VP phase scope ABI");
+    const int result=use(child,entries,csc,platform);
+    return result?result:(csc.status()?csc.status():platform.status());
+}
 // Caller retains VP, output and packet backing throughout this CPU-only
 // assembly. Both resolver scopes expire before returning to that caller.
 template<class Surface,size_t PacketBytes,class Read,class Invoke,class Use>
@@ -14105,6 +14124,7 @@ int tglWithOwnedVpPairedPreparedEntries(Producer& firstProducer,Setup& firstSetu
     return secondSetup.error;
 }
 
+enum class TglOwnedVpAssemblyPhase { PublishedState, BeforeSetup };
 template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedVpSfcCallerStorage storage_;
     TglOwnedSfcStateParameters<StateBackend> state_;
@@ -14472,10 +14492,11 @@ public:
             });
         });
     }
-    template<class Read,class Lines,class Retire,class Use>
+    template<TglOwnedVpAssemblyPhase Phase=TglOwnedVpAssemblyPhase::PublishedState,
+        class Read,class Lines,class Retire,class Use>
     int withLeasedAssemblyEntries(void* child,Read& read,Lines& lines,Retire& retire,Use use) noexcept {
         if(!ready_ || !busy_ || child!=storage_.bytes.data()) return 5;
-        return state_.withPublishedVpParameters(storage_,[&](const uint8_t*) noexcept {
+        auto assemble=[&]() noexcept -> int {
             return tglWithOwnedVpAssemblyEntries(storage_,read,lines,state_,retire,
                 [&](void* assembled,const TglOwnedVpAdmissionEntries& entries,
                     auto allocate,auto release) noexcept {
@@ -14487,7 +14508,14 @@ public:
                         "leased VP assembly ABI");
                     return use(child,static_cast<const TglOwnedVpEntrySet&>(bindings));
                 },retention_);
-        });
+        };
+        if constexpr(Phase==TglOwnedVpAssemblyPhase::BeforeSetup) {
+            // Bind callbacks without holding a state/AVS publication lease:
+            // VP90 still has to produce those packets. Invocations retain
+            // their existing phase-specific state/publication checks.
+            if(state_.hasParametersLease() || avs_.hasParametersLease()) return 5;
+            return assemble();
+        } else return state_.withPublishedVpParameters(storage_,[&](const uint8_t*) noexcept {return assemble();});
     }
     template<class Read,class Lines,class Retire,class Use>
     int withAssemblyView(bool avsEnabled,Read& read,Lines& lines,Retire& retire,Use use) noexcept {
@@ -14495,10 +14523,11 @@ public:
             return withLeasedAssemblyEntries(child,read,lines,retire,use);
         });
     }
-    template<class Read,class Lines,class Retire,class Use>
+    template<TglOwnedVpAssemblyPhase Phase=TglOwnedVpAssemblyPhase::PublishedState,
+        class Read,class Lines,class Retire,class Use>
     int withLeasedModeAssemblyEntries(void* child,Read& read,Lines& lines,Retire& retire,
         uintptr_t source,uintptr_t target,uintptr_t settings,Use use) noexcept {
-        return withLeasedAssemblyEntries(child,read,lines,retire,
+        return withLeasedAssemblyEntries<Phase>(child,read,lines,retire,
             [&](void* assemblyChild,const TglOwnedVpEntrySet& entries) noexcept {
                 if(assemblyChild!=child) return 5;
                 return tglWithOwnedVpModeAssembly(storage_,source,target,settings,read,entries,
