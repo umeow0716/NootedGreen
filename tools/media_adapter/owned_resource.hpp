@@ -11990,6 +11990,52 @@ struct TglVeboxAdmissionStagesInput {
 struct TglVeboxAdmissionBorrowedInterfaces {
     uintptr_t os=0,renderHal=0,sku=0,paramsF0=0,paramsE0=0;
 };
+// Original surface/report bytes only. Extra must independently authenticate
+// MHW and nested metadata allocations under their owning frame/image leases.
+// This reader borrows references; it creates no replacement shells and extends no leases.
+template<class SourceOwner,class TargetOwner,class ExecutionOwner,class Execution,class Extra>
+class TglLeasedVpFrameInputRead {
+    SourceOwner& sourceOwner_;TargetOwner& targetOwner_;ExecutionOwner& executionOwner_;
+    const TglOwnedSurfaceStorage& source_;const TglOwnedSurfaceStorage& target_;
+    Execution& execution_;Extra extra_;
+    bool healthy() const noexcept {
+        return execution_.data() && sourceOwner_.hasSurfaceLease(source_) &&
+            targetOwner_.hasSurfaceLease(target_) &&
+            executionOwner_.hasExecutionLease(reinterpret_cast<uintptr_t>(execution_.data()));
+    }
+public:
+    TglLeasedVpFrameInputRead(SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,
+        TargetOwner& targetOwner,const TglOwnedSurfaceStorage& target,ExecutionOwner& executionOwner,
+        Execution& execution,Extra extra) noexcept:
+        sourceOwner_(sourceOwner),targetOwner_(targetOwner),executionOwner_(executionOwner),
+        source_(source),target_(target),execution_(execution),extra_(std::move(extra)) {
+        static_assert(std::is_nothrow_move_constructible_v<Extra> && TglAdmissionExecutionExtent<Execution>::value>=0xa10);
+        static_assert(noexcept(sourceOwner_.hasSurfaceLease(source_)) &&
+            noexcept(targetOwner_.hasSurfaceLease(target_)) && noexcept(executionOwner_.hasExecutionLease(uintptr_t{})));
+        static_assert(std::is_same_v<decltype(sourceOwner_.hasSurfaceLease(source_)),bool> &&
+            std::is_same_v<decltype(targetOwner_.hasSurfaceLease(target_)),bool> &&
+            std::is_same_v<decltype(executionOwner_.hasExecutionLease(uintptr_t{})),bool>);
+    }
+    bool operator()(uintptr_t address,void* output,size_t bytes) noexcept {
+        static_assert(noexcept(extra_(address,output,bytes)) &&
+            std::is_same_v<decltype(extra_(address,output,bytes)),bool>);
+        if(!address || !output || !bytes || address>UINTPTR_MAX-bytes || !healthy()) return false;
+        const std::array<std::pair<const uint8_t*,size_t>,3> regions{{
+            {reinterpret_cast<const uint8_t*>(&source_),sizeof(source_)},
+            {reinterpret_cast<const uint8_t*>(&target_),sizeof(target_)},
+            {execution_.data(),TglAdmissionExecutionExtent<Execution>::value}}};
+        for(const auto& region:regions) {
+            const auto base=reinterpret_cast<uintptr_t>(region.first);
+            if(address<base) {if(bytes>base-address) return false;continue;}
+            const auto offset=address-base;
+            if(offset>=region.second) continue;
+            if(bytes>region.second-offset) return false;
+            std::memcpy(output,region.first+offset,bytes);return healthy();
+        }
+        return extra_(address,output,bytes) && healthy();
+    }
+};
+
 // Prepare must perform qualified VP28 once, then invoke complete(actualVp)
 // INSIDE its retained catalogue scope. It must not submit/render before that
 // continuation. DN storage stays caller-owned; a foreign source70 is rejected.
@@ -14495,6 +14541,8 @@ public:
         const TglOwnedVpEntrySet& base,const TglOwnedVpModeState& original,void* renderData,
         Read read,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
         if(!ownsStorage(expectedVp) || !source || !target || !execution || execution>UINTPTR_MAX-0xd48) return 5;
+        uintptr_t constructedMhw=0;std::memcpy(&constructedMhw,storage_.bytes.data()+0x20,8);
+        if(!mhw || mhw!=constructedMhw) return 5;
         return withInitializedFrameCallbackAssemblyPass(base,source,target,mhw,execution,
             input.leasedParamsE0,input.leasedParamsF0,original,renderData,read,state,avs,ief,emit,
             [&](void* actual,const TglOwnedVpEntrySet& entries) noexcept -> int {

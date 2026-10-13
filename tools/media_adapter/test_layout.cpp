@@ -617,6 +617,26 @@ static void testTrackedCpuOwner() {
         struct SurfaceOwner {const TglOwnedSurfaceStorage* value;bool live=true;
             bool hasSurfaceLease(const TglOwnedSurfaceStorage& s) noexcept {return live && &s==value;}
         } sourceOwner{&source},targetOwner{&target};
+        unsigned extraReads=0;bool expireOnExtra=false;
+        auto extra=[&](uintptr_t address,void* out,size_t size) noexcept {
+            ++extraReads;
+            if(address!=0x3000 || size!=2) return false;
+            const uint16_t alignment=2;std::memcpy(out,&alignment,2);
+            if(expireOnExtra) targetOwner.live=false;
+            return true;
+        };
+        TglLeasedVpFrameInputRead frameRead(sourceOwner,source,targetOwner,target,executionOwner,report,extra);
+        uint32_t readType=0;uint16_t alignment=0;
+        assert(frameRead(reinterpret_cast<uintptr_t>(&source),&readType,4) && readType==1 && !extraReads);
+        assert(frameRead(execution+0xa0c,&readType,4) && readType==1 && !extraReads);
+        assert(!frameRead(reinterpret_cast<uintptr_t>(&source)+sizeof(source)-1,&readType,4) && !extraReads);
+        assert(!frameRead(UINTPTR_MAX-1,&readType,4) && !extraReads);
+        assert(frameRead(0x3000,&alignment,2) && alignment==2 && extraReads==1);
+        sourceOwner.live=false;
+        assert(!frameRead(0x3000,&alignment,2) && extraReads==1);sourceOwner.live=true;
+        expireOnExtra=true;
+        assert(!frameRead(0x3000,&alignment,2) && extraReads==2);
+        expireOnExtra=false;targetOwner.live=true;
         unsigned prepares=0,finishes=0,mode=0;bool live=false;
         auto prepare=[&](void* actual,uintptr_t e0,uintptr_t f0,const auto& s,const auto& t,
             uintptr_t r,auto complete) noexcept -> int {
@@ -18974,9 +18994,9 @@ int main() {
                 admissionVp=storage.bytes.data();return 0;
             })==0);
             TglVeboxAdmissionStagesInput sfcInputs;sfcInputs.leasedParamsE0=0x6000;sfcInputs.leasedParamsF0=0x7000;
-            for(unsigned stageFailure=0;stageFailure<12;++stageFailure) {
+            for(unsigned stageFailure=0;stageFailure<13;++stageFailure) {
                 calls=0;unsigned states=0,emits=0;int data=0,command=0;
-                const bool conflict=(stageFailure>=3 && stageFailure<=7) || stageFailure==11;
+                const bool conflict=(stageFailure>=3 && stageFailure<=7) || stageFailure==11 || stageFailure==12;
                 TglOwnedVpEntrySet base;
                 const auto admittedFormat=+[](void*,uint32_t) noexcept {return true;};
                 base.compressionFormat=admittedFormat;
@@ -18991,7 +19011,7 @@ int main() {
                 if(stageFailure==6) base.filters=+[](void*,void*,void*,void*) noexcept {};
                 if(stageFailure==7) base.prepare=+[](void*,void*,void*,void*,void*,void*) noexcept {};
                 assert(graph.withSfcAdmissionCallbackAssembly(stageFailure==11?static_cast<uint8_t*>(admissionVp)+8:admissionVp,
-                    sfcInputs,0x1000,0x2000,0x4000,0x3000,base,{},&data,mutatingRead,
+                    sfcInputs,0x1000,0x2000,0x4000,stageFailure==12?0x3008:0x3000,base,{},&data,mutatingRead,
                     [&](void*,const auto& frame,const auto& geometry,auto&) noexcept {
                         assert(calls==total && !graph.tryReset() && frame.at922 &&
                             geometry.frameWidth==geometrySnapshot.frameWidth);
@@ -23943,6 +23963,13 @@ int main() {
                                                     &activeSource==&sourceOwner && &activeTarget==&targetOwner &&
                                                     &activeDn==&parameters && &activePackets==&packets);
                                                 assert(resources.withResources([](auto&&...) noexcept -> int {assert(false);return 0;})==5);
+                                                auto noExternal=[](uintptr_t,void*,size_t) noexcept {return false;};
+                                                TglLeasedVpFrameInputRead originalRead(activeSource,packets.source,
+                                                    activeTarget,*packets.target,executionLease,report,noExternal);
+                                                uint32_t sourceWidth=0,activePipe=0;
+                                                assert(originalRead(reinterpret_cast<uintptr_t>(&packets.source)+0xd8,&sourceWidth,4) &&
+                                                    sourceWidth==admissionWidth);
+                                                assert(originalRead(packets.execution+0xa0c,&activePipe,4) && activePipe==1);
                                                 assert(captured.leasedParamsE0==interfaces.paramsE0 && captured.leasedParamsF0==0);
                                                 uintptr_t vp=0;std::memcpy(&vp,bytes+0x80,8);assert(vp);
                                                 assert(activeVp==reinterpret_cast<void*>(vp));
