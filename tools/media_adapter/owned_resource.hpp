@@ -11990,6 +11990,61 @@ struct TglVeboxAdmissionStagesInput {
 struct TglVeboxAdmissionBorrowedInterfaces {
     uintptr_t os=0,renderHal=0,sku=0,paramsF0=0,paramsE0=0;
 };
+// Prepare must perform qualified VP28 once, then invoke complete(actualVp)
+// INSIDE its retained catalogue scope. It must not submit/render before that
+// continuation. DN storage stays caller-owned; a foreign source70 is rejected.
+template<class ChildOwner,class ExecutionOwner,class SourceOwner,class TargetOwner,class Dn,class Prepare>
+class TglOwnedVeboxScopedSfcAdmissionStage {
+    ChildOwner& childOwner_;ExecutionOwner& executionOwner_;
+    SourceOwner& sourceOwner_;TargetOwner& targetOwner_;
+    void* child_;void* vp_;uintptr_t execution_;
+    const TglOwnedSurfaceStorage& source_;const TglOwnedSurfaceStorage& target_;
+    const Dn& dn_;Prepare prepare_;
+public:
+    TglOwnedVeboxScopedSfcAdmissionStage(ChildOwner& childOwner,ExecutionOwner& executionOwner,
+        SourceOwner& sourceOwner,TargetOwner& targetOwner,void* child,void* vp,uintptr_t execution,
+        const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,const Dn& dn,Prepare prepare) noexcept:
+        childOwner_(childOwner),executionOwner_(executionOwner),sourceOwner_(sourceOwner),targetOwner_(targetOwner),
+        child_(child),vp_(vp),execution_(execution),source_(source),target_(target),dn_(dn),prepare_(std::move(prepare)) {
+        static_assert(std::is_nothrow_move_constructible_v<Prepare>);
+    }
+    template<class Execution,class Finish>
+    bool operator()(Execution& report,const TglVeboxAdmissionStagesInput& input,Finish finish) noexcept {
+        static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xa10 &&
+            noexcept(finish()) && std::is_same_v<decltype(finish()),bool>);
+        static_assert(noexcept(childOwner_.hasPrivateChildLease(uintptr_t{})) &&
+            noexcept(executionOwner_.hasExecutionLease(uintptr_t{})) &&
+            noexcept(sourceOwner_.hasSurfaceLease(source_)) && noexcept(targetOwner_.hasSurfaceLease(target_)));
+        static_assert(std::is_same_v<decltype(childOwner_.hasPrivateChildLease(uintptr_t{})),bool> &&
+            std::is_same_v<decltype(executionOwner_.hasExecutionLease(uintptr_t{})),bool> &&
+            std::is_same_v<decltype(sourceOwner_.hasSurfaceLease(source_)),bool> &&
+            std::is_same_v<decltype(targetOwner_.hasSurfaceLease(target_)),bool>);
+        auto leased=[&]() noexcept {
+            if(!child_ || !vp_ || reinterpret_cast<uintptr_t>(report.data())!=execution_ ||
+               !childOwner_.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child_)) ||
+               !executionOwner_.hasExecutionLease(execution_) || !sourceOwner_.hasSurfaceLease(source_) ||
+               !targetOwner_.hasSurfaceLease(target_)) return false;
+            uintptr_t vp=0,execution=0;uint32_t pipe=0;
+            std::memcpy(&vp,static_cast<uint8_t*>(child_)+0x80,8);
+            std::memcpy(&execution,static_cast<uint8_t*>(child_)+0x88,8);
+            std::memcpy(&pipe,report.data()+0xa0c,4);
+            return vp==reinterpret_cast<uintptr_t>(vp_) && execution==execution_ && pipe==1;
+        };
+        if(!leased()) return false;
+        bool called=false,repeated=false,accepted=false;
+        auto complete=[&](void* actual) noexcept -> int {
+            if(called) {repeated=true;return 5;}
+            called=true;
+            if(actual!=vp_ || !leased() || !tglPublishOwnedVeboxSfcAdmissionFlags(report,source_,dn_) || !leased()) return 5;
+            accepted=finish();return accepted?0:5;
+        };
+        static_assert(noexcept(prepare_(vp_,input.leasedParamsE0,input.leasedParamsF0,
+            source_,target_,execution_,complete)) && std::is_same_v<decltype(prepare_(vp_,
+                input.leasedParamsE0,input.leasedParamsF0,source_,target_,execution_,complete)),int>);
+        const int status=prepare_(vp_,input.leasedParamsE0,input.leasedParamsF0,source_,target_,execution_,complete);
+        return !status && called && !repeated && accepted && leased();
+    }
+};
 // Read only named admission inputs. Context authenticates params/pass and
 // retains their owners; source/target and interfaces are the same frame's
 // leased identities. No arbitrary pointer traversal or donor this adjustment.

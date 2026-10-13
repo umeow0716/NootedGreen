@@ -602,6 +602,51 @@ static void testTrackedCpuOwner() {
         assert(order==2 && nativeFlag==0x84);
     }
     {
+        std::array<uint8_t,0x90> child{};
+        std::array<uint8_t,0xd48> report{};
+        TglOwnedSurfaceStorage source{},target{};
+        std::array<uint8_t,1> dn{};
+        const uintptr_t childAddress=reinterpret_cast<uintptr_t>(child.data());
+        const uintptr_t execution=reinterpret_cast<uintptr_t>(report.data()),vp=0x44000;
+        std::memcpy(child.data()+0x80,&vp,8);std::memcpy(child.data()+0x88,&execution,8);
+        const uint32_t pipe=1,type=1,format=0x19;
+        std::memcpy(report.data()+0xa0c,&pipe,4);std::memcpy(source.prefix.data(),&type,4);
+        std::memcpy(source.prefix.data()+0x130,&format,4);
+        struct ChildOwner {uintptr_t value;bool hasPrivateChildLease(uintptr_t p) noexcept {return p==value;}} owner{childAddress};
+        struct ExecutionOwner {uintptr_t value;bool hasExecutionLease(uintptr_t p) noexcept {return p==value;}} executionOwner{execution};
+        struct SurfaceOwner {const TglOwnedSurfaceStorage* value;bool live=true;
+            bool hasSurfaceLease(const TglOwnedSurfaceStorage& s) noexcept {return live && &s==value;}
+        } sourceOwner{&source},targetOwner{&target};
+        unsigned prepares=0,finishes=0,mode=0;bool live=false;
+        auto prepare=[&](void* actual,uintptr_t e0,uintptr_t f0,const auto& s,const auto& t,
+            uintptr_t r,auto complete) noexcept -> int {
+            ++prepares;assert(actual==reinterpret_cast<void*>(vp) && e0==13 && f0==17 &&
+                &s==&source && &t==&target && r==execution);
+            live=true;int status=0;
+            if(mode!=1) status=complete(reinterpret_cast<void*>(mode==3?vp+8:vp));
+            if(mode==2) assert(complete(actual)==5);
+            if(mode==5) targetOwner.live=false;
+            live=false;return mode==4?31:status;
+        };
+        TglOwnedVeboxScopedSfcAdmissionStage stage(owner,executionOwner,sourceOwner,targetOwner,
+            child.data(),reinterpret_cast<void*>(vp),execution,source,target,dn,prepare);
+        TglVeboxAdmissionStagesInput input;input.leasedParamsE0=13;input.leasedParamsF0=17;
+        auto finish=[&]() noexcept {
+            assert(live && report[0x11]==0 && report[0x17]==1 && report[0xf]==1);++finishes;return true;
+        };
+        assert(stage(report,input,finish) && prepares==1 && finishes==1 && !live);
+        mode=1;assert(!stage(report,input,finish) && finishes==1);
+        mode=2;assert(!stage(report,input,finish) && finishes==2);
+        mode=3;assert(!stage(report,input,finish) && finishes==2);
+        mode=4;assert(!stage(report,input,finish) && finishes==3);
+        mode=5;assert(!stage(report,input,finish) && finishes==4);targetOwner.live=true;
+        const unsigned before=prepares;sourceOwner.live=false;
+        assert(!stage(report,input,finish) && prepares==before);sourceOwner.live=true;
+        mode=0;const uintptr_t foreign=0x887700;
+        std::memcpy(source.prefix.data()+0x70,&foreign,8);
+        report[0x11]=0xa3;assert(!stage(report,input,finish) && report[0x11]==0xa3 && finishes==4);
+    }
+    {
         TglVeboxFeatureBinding binding;constexpr uintptr_t image=0x10000000;
         bool exact=true,qualified=true,readable=true;uintptr_t slot=image+0x12aba0;
         auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
@@ -23884,12 +23929,22 @@ int main() {
                                         return tglRunCapturedSelectedVeboxAdmissionStages(owner,executionLease,child,
                                             params,pass,packets.source,*packets.target,interfaces,reportBytes,readInput,reset,
                                             selectPipe,historyStage,
-                                            featureStage,[&](auto&,const auto& captured,auto finish) noexcept -> bool {
+                                            featureStage,[&](auto& report,const auto& captured,auto finish) noexcept -> bool {
                                                 assert(captured.leasedParamsE0==interfaces.paramsE0 && captured.leasedParamsF0==0);
-                                                assert(!sfcScopeLive);sfcScopeLive=true;
-                                                const bool result=skipSfcFinish?true:finish();
-                                                if(repeatSfcFinish) assert(!finish());
-                                                sfcScopeLive=false;return result;
+                                                uintptr_t vp=0;std::memcpy(&vp,bytes+0x80,8);assert(vp);
+                                                const std::array<uint8_t,1> noDn{};
+                                                auto prepare=[&](void* actual,uintptr_t e0,uintptr_t f0,
+                                                    const auto& source,const auto& target,uintptr_t execution,auto complete) noexcept -> int {
+                                                    assert(actual==reinterpret_cast<void*>(vp) && e0==interfaces.paramsE0 && !f0 &&
+                                                        &source==&packets.source && &target==packets.target && execution==packets.execution);
+                                                    assert(!sfcScopeLive);sfcScopeLive=true;
+                                                    const int result=skipSfcFinish?0:complete(actual);
+                                                    if(repeatSfcFinish) assert(complete(actual)==5);
+                                                    sfcScopeLive=false;return result;
+                                                };
+                                                TglOwnedVeboxScopedSfcAdmissionStage stage(owner,executionLease,sourceOwner,targetOwner,
+                                                    child,reinterpret_cast<void*>(vp),packets.execution,packets.source,*packets.target,noDn,prepare);
+                                                return stage(report,captured,finish);
                                             },enterResources)?0:5;
                                     });
                                     std::memcpy(bytes+0x90,&savedHistory,8);
