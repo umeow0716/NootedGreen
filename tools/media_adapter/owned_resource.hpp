@@ -14556,9 +14556,16 @@ public:
                 if(!entries.appendDisjoint(acquisition)) return 5;
                 return withPreparedCallbackAssemblyPass(entries,frame,conditionalSource,parameters,target,reference,
                     reinterpret_cast<void*>(source),renderData,
-                    [&](void* child,const auto& prepared,auto& owner) noexcept -> int {
-                        static_assert(noexcept(state(child,prepared,geometry,owner)),"VP assembly state ABI");
-                        return state(child,prepared,geometry,owner);
+                    [&](void* child,const auto& prepared,auto& owner,void* data,void* input,void* output) noexcept -> int {
+                        if constexpr(std::is_invocable_v<State&,void*,decltype(prepared),decltype(geometry),
+                            decltype(owner),void*,void*,void*>) {
+                            static_assert(noexcept(state(child,prepared,geometry,owner,data,input,output)) &&
+                                std::is_same_v<decltype(state(child,prepared,geometry,owner,data,input,output)),int>);
+                            return state(child,prepared,geometry,owner,data,input,output);
+                        } else {
+                            static_assert(noexcept(state(child,prepared,geometry,owner)),"VP assembly state ABI");
+                            return state(child,prepared,geometry,owner);
+                        }
                     },avs,ief,emit,use);
             });
     }
@@ -14671,7 +14678,8 @@ public:
     int withPreparedCallbackPass(const TglOwnedVpFramePreparation& frame,
         uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
         void* source,void* renderData,State state,Avs avs,Ief ief,Emit emit,Invoke invoke) noexcept {
-        static_assert(noexcept(state(nullptr,frame,state_)) &&
+        static_assert((std::is_nothrow_invocable_r_v<int,State&,void*,decltype(frame),decltype(state_)&> ||
+            std::is_nothrow_invocable_r_v<int,State&,void*,decltype(frame),decltype(state_)&,void*,void*,void*>) &&
             noexcept(avs(nullptr,frame,avs_)) && noexcept(ief(nullptr,frame)) &&
             noexcept(emit(nullptr,nullptr,nullptr)),"VP callback producer ABI");
         if(!ready_ || busy_ || !source || !renderData || !target) return 5;
@@ -14732,13 +14740,26 @@ public:
                 ief(child,frame);
             }
         };
-        static_assert(noexcept(state(nullptr,frame,state_)) && noexcept(avs(nullptr,frame,avs_)) &&
+        auto invokeState=[&](void* child) noexcept -> int {
+            // ProducerContext admits the ORIGINAL slot90 data/source/target
+            // identities before invoking this closure; do not substitute the
+            // acquisition execution pointer for the native render-data.
+            if constexpr(std::is_invocable_v<State&,void*,decltype(frame),decltype(state_)&,void*,void*,void*>) {
+                static_assert(noexcept(state(child,frame,state_,renderData,source,reinterpret_cast<void*>(target))) &&
+                    std::is_same_v<decltype(state(child,frame,state_,renderData,source,reinterpret_cast<void*>(target))),int>);
+                return state(child,frame,state_,renderData,source,reinterpret_cast<void*>(target));
+            } else {
+                static_assert(noexcept(state(child,frame,state_)),"legacy state producer ABI");
+                return state(child,frame,state_);
+            }
+        };
+        static_assert(noexcept(avs(nullptr,frame,avs_)) &&
             noexcept(emit(nullptr,nullptr,nullptr)),"leased producer ABI");
         if(!ready_ || !busy_ || state_.hasParametersLease() || avs_.hasParametersLease() ||
             !source || !renderData || !target) return 5;
         return tglWithOwnedVpPreparedFrame(storage_,frame,conditionalSource,
             settings,target,sourceA8,[&](void* child,const auto&) noexcept {
-                    auto produceState=[&]() noexcept {return state(child,frame,state_);};
+                    auto produceState=[&]() noexcept {return invokeState(child);};
                     uint8_t* leasedFilterPacket=nullptr;
                     auto produceFilters=[&]() noexcept {
                         invokeIef(child,leasedFilterPacket);

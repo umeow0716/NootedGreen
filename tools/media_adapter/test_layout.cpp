@@ -19245,7 +19245,15 @@ int main() {
                 put(source,0x78,uintptr_t(0x5000));ief[0]=1;put(ief,4,3.5f);
                 for(bool cscEnabled:{false,true}) for(int consumerResult:{0,31}) {
                     put(source,0,uint32_t(cscEnabled?0:3));
-                    int passData=0,passCommand=0;
+                    std::array<uint8_t,0x20> passData{};int passCommand=0;
+                    TglOwnedSfcFillCache stateFillCache;unsigned stateDataReads=0;
+                    auto stateRead=[&](uintptr_t address,void* out,size_t bytes) noexcept -> bool {
+                        const auto data=reinterpret_cast<uintptr_t>(passData.data());
+                        if(address>=data && address-data<=passData.size() && bytes<=passData.size()-(address-data)) {
+                            ++stateDataReads;std::memcpy(out,passData.data()+address-data,bytes);return true;
+                        }
+                        return read(address,out,bytes);
+                    };
                     unsigned passStates=0,passAvs=0;
                     bool avsRequired=false;
                     TglOwnedVpChromaStatePrefix producedPrefix;
@@ -19266,12 +19274,20 @@ int main() {
                         }));
                     unsigned nativeMathCalls=0;
                     assert(graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
-                      0,0x4000,{},&passData,read,
-                      [&](void*,const auto& prepared,const auto& geometry,auto& stateOwner) noexcept -> int {
+                      0,0x4000,{},passData.data(),read,
+                      [&](void*,const auto& prepared,const auto& geometry,auto& stateOwner,
+                          void* data,void* originalSource,void* originalTarget) noexcept -> int {
                           assert(geometry.frameWidth==geometrySnapshot.frameWidth);
+                          assert(data==passData.data() && originalSource==reinterpret_cast<void*>(0x1000) &&
+                              originalTarget==reinterpret_cast<void*>(0x2000));
                           passIefExpected=prepared.at922 || prepared.color.modes.state.at923;
                           TglOwnedVpChromaStatePrefix prefix;
-                          if(!tglPrepareOwnedVpStatePrefix(prepared,geometry,false,false,prefix)) return 5;
+                          if(!tglPrepareLeasedOwnedVpCpuState(prepared,geometry,
+                              reinterpret_cast<uintptr_t>(originalSource),reinterpret_cast<uintptr_t>(originalTarget),
+                              reinterpret_cast<uintptr_t>(data),0,0x4000,stateRead,stateFillCache,
+                              [](auto&,const auto&,uint32_t,uint32_t) noexcept {assert(false);return false;},
+                              [](uint32_t mode) noexcept {assert(mode==0);},prefix)) return 5;
+                          assert(stateDataReads==2); // Native render-data, not acquisition settings0x4000.
                           // Exercise the audited prefix and Gen12 packet producer,
                           // rather than accepting setup with an untouched zero state.
                           // Tail/resource/fill inputs remain explicit CPU fixtures.
