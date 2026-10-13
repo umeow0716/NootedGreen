@@ -12946,9 +12946,11 @@ static void testSfcStateParameterOwnership() {
         TglOwnedVpSfcCallerStorage storage;
         struct VpBackend:Backend {
             TglOwnedVpSfcCallerStorage* storage=nullptr;
+            void* allocationContext=nullptr;void(*onAllocate)(void*) noexcept=nullptr;
             uintptr_t allocate(size_t size) {
                 assert(storage && !live);
                 for(size_t i=0x920;i<0x9c8;++i) assert(!storage->bytes[i]);
+                if(onAllocate) onAllocate(allocationContext);
                 return Backend::allocate(size);
             }
         } vpBackend;
@@ -13022,6 +13024,13 @@ static void testSfcStateParameterOwnership() {
             assert(vpBackend.allocations==allocations && vpBackend.releases==releases);
             return 0;
         })==0);
+        state.reset();Context reentered(storage,state);
+        vpBackend.allocationContext=&reentered;
+        vpBackend.onAllocate=+[](void* context) noexcept {static_cast<Context*>(context)->initialize();};
+        const auto beforeReentry=vpBackend.allocations;
+        reentered.initialize();
+        assert(reentered.status()==5 && vpBackend.allocations==beforeReentry+1 && state.data());
+        vpBackend.onAllocate=nullptr;vpBackend.allocationContext=nullptr;state.reset();
     }
 }
 
@@ -18912,6 +18921,69 @@ int main() {
         assert(prepared.color.at9b8 && prepared.color.metadata.at9a4==0x31);
         TglOwnedVpSfcCallerStorage scopedStorage;
         const auto originalStorage=scopedStorage.bytes;
+        TglOwnedVpEntrySet escapedDeferred;
+        for(unsigned mode=0;mode<10;++mode) {
+            scopedStorage.bytes=originalStorage;calls=0;fail=mode==5?1:0;
+            if(mode==8) {const uintptr_t occupied=1;std::memcpy(scopedStorage.bytes.data()+0x988,&occupied,8);}
+            const auto before=scopedStorage.bytes;unsigned setups=0;bool injected=false;
+            auto invokePrepare=[&](void* child,const auto& entries) noexcept {
+                entries.prepare(mode==3?static_cast<uint8_t*>(child)+8:child,
+                    reinterpret_cast<void*>(0x6000),reinterpret_cast<void*>(0x7000),
+                    reinterpret_cast<void*>(mode==4?0x1008:0x1000),reinterpret_cast<void*>(0x2000),
+                    reinterpret_cast<void*>(0x4000));
+            };
+            auto deferredRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                const bool result=read(address,out,bytes);
+                if(mode==9 && !injected) {
+                    injected=true;invokePrepare(scopedStorage.bytes.data(),escapedDeferred);
+                }
+                return result;
+            };
+            const int result=tglWithOwnedVpDeferredFrameEntry(scopedStorage,
+                0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},deferredRead,TglOwnedVpEntrySet{},
+                [&](void* child,const auto& entries,const auto& frame,const auto& geometry,
+                    const uintptr_t& sourceA8,auto ready) noexcept -> int {
+                    assert(!calls && !ready() && !geometry.frameWidth && !sourceA8 && scopedStorage.bytes==before);
+                    escapedDeferred=entries;
+                    TglOwnedVpSfcCallerStorage nested;
+                    assert(tglWithOwnedVpDeferredFrameEntry(nested,0x1000,0x2000,0x3000,0x4000,
+                        0x6000,0x7000,{},deferredRead,TglOwnedVpEntrySet{},
+                        [](void*,const auto&,const auto&,const auto&,const auto&,auto) noexcept -> int {
+                            assert(false);return 0;
+                        })==5 && !calls);
+                    if(mode==1) return 0;
+                    if(mode==7) return -17;
+                    invokePrepare(child,entries);
+                    if(mode==2) invokePrepare(child,entries);
+                    if(ready()) {
+                        assert(mode==0 || mode==6);
+                        assert(calls==total && frame.at922 && geometry.frameWidth==geometrySnapshot.frameWidth);
+                        uintptr_t target=0;std::memcpy(&target,scopedStorage.bytes.data()+0x9b0,8);
+                        assert(target==0x2000);++setups; // Native setup after prepare RETURN.
+                    }
+                    return mode==6?-31:0;
+                });
+            assert(result==(mode==0?0:mode==6?-31:mode==7?-17:5));
+            assert(setups==unsigned(mode==0 || mode==6) && scopedStorage.bytes==before);
+            const auto reads=calls;
+            invokePrepare(scopedStorage.bytes.data(),escapedDeferred);
+            assert(calls==reads && scopedStorage.bytes==before); // Expired callback is inert.
+        }
+        scopedStorage.bytes=originalStorage;fail=0;
+        calls=0;
+        assert(tglWithOwnedVpDeferredFrameEntry(scopedStorage,0x1000,0x2000,0x3000,0x4000,
+            0x6000,0x7000,{},read,escapedDeferred,
+            [](void*,const auto&,const auto&,const auto&,const auto&,auto) noexcept -> int {assert(false);return 0;})==5);
+        assert(!calls && scopedStorage.bytes==originalStorage);
+        assert(tglWithOwnedVpDeferredFrameEntry(scopedStorage,0x1000,0x2000,0x3000,0x4000,
+            0x6000,0x7000,{},read,TglOwnedVpEntrySet{},
+            [&](void* child,const auto& entries,const auto&,const auto&,const auto&,auto ready) noexcept -> int {
+                // Different reader/use types still expose the SAME native callback address.
+                assert(entries.prepare==escapedDeferred.prepare && !calls && !ready());
+                entries.prepare(child,reinterpret_cast<void*>(0x6000),reinterpret_cast<void*>(0x7000),
+                    reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000));
+                return ready()?0:5;
+            })==0 && calls==total && scopedStorage.bytes==originalStorage);
         for(unsigned mode=0;mode<5;++mode) {
             calls=0;bool consumed=false;
             const int result=tglWithOwnedVpAcquiredFrameEntry(scopedStorage,

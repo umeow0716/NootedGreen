@@ -10871,7 +10871,7 @@ template<class Acquire> struct TglOwnedVpFrameAcquisitionContext {
     void* child;
     std::array<uintptr_t,5> expected;
     Acquire& acquireFrame;
-    bool called=false,valid=false;
+    bool called=false,valid=false,rejected=false;
     bool owns(void* value) const noexcept {return value==child;}
     void prepare(void* conditional,void* parameters,void* source,
         void* target,void* settings) noexcept {
@@ -10879,8 +10879,10 @@ template<class Acquire> struct TglOwnedVpFrameAcquisitionContext {
             reinterpret_cast<uintptr_t>(conditional),reinterpret_cast<uintptr_t>(parameters),
             reinterpret_cast<uintptr_t>(source),reinterpret_cast<uintptr_t>(target),
             reinterpret_cast<uintptr_t>(settings)};
-        if(called || actual!=expected) {valid=false;called=true;return;}
-        called=true;valid=acquireFrame();
+        if(called || actual!=expected) {rejected=true;valid=false;called=true;return;}
+        called=true;
+        const bool acquired=acquireFrame();
+        valid=acquired && !rejected; // A reentrant refusal cannot be overwritten.
     }
 };
 
@@ -10930,6 +10932,43 @@ int tglWithOwnedVpFrameAcquisitionContext(TglOwnedVpSfcCallerStorage& storage,
     static_assert(noexcept(use(context,frame,geometry,sourceA8)),"VP acquisition context ABI");
     const int result=use(context,frame,geometry,sourceA8);
     return result?result:(context.called && context.valid?0:5);
+}
+
+// Catalogue first, native prepare later. Keep publication/snapshots alive
+// across callback return through the enclosing native Use; no eager prepare.
+// Caller retains/serializes all original owners and optional metadata leases.
+// Ready and snapshot references are scoped, not asynchronous handles.
+template<class Read,class Use>
+int tglWithOwnedVpDeferredFrameEntry(TglOwnedVpSfcCallerStorage& storage,
+    uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
+    uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
+    Read read,const TglOwnedVpEntrySet& base,Use use) noexcept {
+    if(base.prepare || !source || !target || !mhw || !settings) return 5;
+    TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;uintptr_t sourceA8=0;
+    TglOwnedVpFramePublication publication(storage);
+    auto acquire=[&]() noexcept -> bool {
+        return tglReadOwnedVpFramePreparation(source,target,mhw,settings,conditionalSource!=0,
+            read,original,frame,sourceA8,&geometry) &&
+            publication.publish(frame,conditionalSource,parameters,target,sourceA8);
+    };
+    TglOwnedVpFrameAcquisitionContext<decltype(acquire)> context{
+        storage.bytes.data(),{conditionalSource,parameters,source,target,settings},acquire};
+    // Common view gives a stable callback address across different reader/use
+    // types and rejects nested single/paired acquisition view scopes.
+    TglOwnedVpFrameAcquisitionView view(context);
+    using View=TglOwnedVpFrameAcquisitionView;
+    TglOwnedVpSfcScopedContext<View> scope(view.child,view);
+    using Resolve=TglOwnedVpSfcResolve<View>;
+    auto entries=base;
+    if(!scope.bound() || !tglBindOwnedVpFrameEntry<Resolve>(view.child,entries)) return 5;
+    auto ready=[&]() noexcept {
+        return context.called && context.valid && publication.activeFor(view.child);
+    };
+    static_assert(noexcept(use(view.child,std::as_const(entries),std::as_const(frame),
+        std::as_const(geometry),std::as_const(sourceA8),ready)),"native-driven prepare scope ABI");
+    const int result=use(view.child,std::as_const(entries),std::as_const(frame),
+        std::as_const(geometry),std::as_const(sourceA8),ready);
+    return result?result:(ready()?0:5);
 }
 
 template<bool RetainPrepare=false,class Read,class Invoke,class Use>
@@ -13862,7 +13901,7 @@ public:
 template<class Backend> class TglOwnedVpPassInitContext {
     TglOwnedVpSfcCallerStorage& storage_;
     TglOwnedSfcStateParameters<Backend>& state_;
-    bool called_=false;
+    bool called_=false,rejected_=false;
     int status_=5;
     struct Initialized {};
     TglOwnedVpPassInitContext(TglOwnedVpSfcCallerStorage& storage,
@@ -13880,9 +13919,10 @@ public:
     }
     bool owns(void* child) const noexcept {return child==storage_.bytes.data();}
     void initialize() noexcept {
-        if(called_) {status_=5;return;}
+        if(called_) {rejected_=true;status_=5;return;}
         called_=true;
-        status_=state_.initializeVpPass(storage_) ? 0 : 5;
+        const bool initialized=state_.initializeVpPass(storage_);
+        status_=initialized && !rejected_ ? 0 : 5;
     }
     int status() const noexcept {return status_;}
 };
