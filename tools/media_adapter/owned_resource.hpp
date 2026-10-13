@@ -24018,6 +24018,14 @@ class TglNativeContextRendererFrameStorage {
     Renderer* renderer_=nullptr;
     bool busy_=false;
 public:
+    // Scope::createContextRootFrame supplies its freshly authenticated roots
+    // first. Preserve that same proof; never resolve an independent root set.
+    template<class Read,class Admit,class Writable,class Construct>
+    TglNativeContextRendererFrameStorage(const TglNativeContextInputRoots& roots,Registry& registry,
+        uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t source,uintptr_t target,
+        Read read,Admit admit,Writable writable,Construct construct) noexcept
+        :TglNativeContextRendererFrameStorage(registry,image,physical,generation,roots,source,target,
+            read,admit,writable,construct) {}
     template<class Read,class Admit,class Writable,class Construct>
     TglNativeContextRendererFrameStorage(Registry& registry,uintptr_t image,uintptr_t physical,
         uint64_t generation,const TglNativeContextInputRoots& roots,uintptr_t source,uintptr_t target,

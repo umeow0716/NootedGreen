@@ -23279,7 +23279,7 @@ int main() {
                             };
                             using RetainedNative=TglNativeContextRendererFrameStorage<decltype(parents),NativeFrontend,3>;
                             const auto beforeRefs=refs;
-                            RetainedNative retained(parents,base,0x8000,1,roots,roots.sources[0],roots.targets[0],
+                            RetainedNative retained(roots,parents,base,0x8000,1,roots.sources[0],roots.targets[0],
                                 readRoot,admitRoot,admitRoot,constructNative);
                             assert(retained.surfacesReady() && nativeConstructions==1);
                             assert(retained.withFrame([&](auto& nativeFrame) noexcept -> int {
@@ -23289,6 +23289,53 @@ int main() {
                             })==-31);
                             assert(retained.clear() && refs==beforeRefs && !vpCpu.live && !vpAvsCpu.live &&
                                 !frontendVp1.live && !frontendAvs1.live && !frameDn.live);
+                            using PhysicalFrames=TglOwnedVeboxPhysicalFrameRegistry<RetainedNative,1>;
+                            PhysicalFrames physicalFrames;
+                            const auto physicalTicket=physicalFrames.reserve(base);
+                            assert(physicalFrames.publish(physicalTicket,base,0x8000));
+                            auto readContext=[&](uintptr_t p,void* out,size_t bytes) noexcept {
+                                if(bytes==8) {
+                                    uintptr_t value=0;
+                                    if(p==parentAddress+0x128) value=0x8000;
+                                    else if(p==parentAddress+0x12f0) value=os;
+                                    else if(p==parentAddress+0x12e8) value=roots.input;
+                                    else if(p==0x8050) value=0x90000;
+                                    else if(p==os+8) value=0x90048;
+                                    else if(p>=roots.input+8 && p<roots.input+8+17*8) value=roots.sources[(p-roots.input-8)/8];
+                                    else if(p>=roots.input+0x98 && p<roots.input+0x98+8*8) value=roots.targets[(p-roots.input-0x98)/8];
+                                    else return readRoot(p,out,bytes);
+                                    std::memcpy(out,&value,8);return true;
+                                }
+                                return readRoot(p,out,bytes);
+                            };
+                            auto admitContext=[&](uintptr_t p,size_t bytes) noexcept {
+                                return (p==parentAddress && bytes==0x12f8) || (p==0x8000 && bytes==0x58) ||
+                                    (p==os && bytes==0x10) || (p==0x90000 && bytes==0x50) ||
+                                    (p==roots.input && bytes==0xd8) || admitRoot(p,bytes);
+                            };
+                            typename PhysicalFrames::FrameTicket nativeTicket;
+                            assert(physicalFrames.withScope(physicalTicket,base,0x8000,[&](auto& scope) noexcept -> int {
+                                return scope.withNativeRequestItem(parentAddress,[&](auto& item) noexcept -> int {
+                                    nativeTicket=item.createContextRootFrame(readContext,admitContext,parents,base,uintptr_t(0x8000),uint64_t(1),
+                                        roots.sources[0],roots.targets[0],readRoot,admitRoot,admitRoot,constructNative);
+                                    return nativeTicket.generation?0:5;
+                                });
+                            })==0 && nativeConstructions==2);
+                            assert(physicalFrames.withLive(physicalTicket,base,0x8000,[&](auto& pool) noexcept -> int {
+                                const auto result=pool.run(nativeTicket,[&](auto& owned) noexcept {
+                                    const int status=owned.withFrame([](auto& frame) noexcept -> int {
+                                        assert(frame.surfacesReady() && frame.children().bound());return -31;
+                                    });
+                                    return TglOwnedVeboxCommandTransactionResult{status,0,false,false};
+                                });
+                                assert(result.status==-31 && !result.acquired);
+                                return pool.retire(nativeTicket,[](const auto&,bool pending,const auto& result) noexcept -> int {
+                                    assert(!pending && !result.acquired && result.status==-31);return 0;
+                                });
+                            })==0 && refs==beforeRefs);
+                            assert(physicalFrames.destroy(physicalTicket,base,0x8000,[](uintptr_t p) noexcept -> int {
+                                assert(p==0x8000);return 0; // Physical callback recording fixture.
+                            })==0);
                         }
                         const auto ticket=frames.create(reinterpret_cast<uintptr_t>(&source),
                             [&](uintptr_t address) noexcept -> TestFrontendOriginalOwner* {
