@@ -6366,6 +6366,16 @@ struct TglNativeBufferFillBinding {
 };
 
 struct TglNativeResourceBinding {
+    // Shared connection provenance (NOT yet a connection lifetime binding):
+    // exact TGL6373b..63769 reads database=OS[0], index=DWORD(OS+8), then
+    // wrapper=QWORD(database+8+index*15c0). Both63030 and63250 pass
+    // wrapper[0] to IOAccelResourceCreate. Exact sealed Tahoe framework
+    // UUID198a776a-fe03-35ee-8e53-7b9f14caabaa Create7ff80f461fe7+5c
+    // executes 41 8b 7d 18: connection=DWORD(device+18), with r13=device.
+    // Resolve under the SAME retained physical/OS lease; qualify both images,
+    // bound every pointer calculation/read, and revalidate database/index/
+    // wrapper/device/port before use. Neither an arbitrary open connection nor
+    // a cached port without native owner lifetime is an equivalent binding.
     uintptr_t context = 0, allocate = 0, release = 0;
     // Creator handoff precedes successful context12e0 publication. Resolve
     // resource callbacks through the SAME retained VPHAL parent lease instead
