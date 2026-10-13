@@ -9282,17 +9282,27 @@ bool tglReadOwnedVpModes(uintptr_t source,uintptr_t target,uintptr_t settings,Re
 // the source+A8 object remains borrowed under the caller's descriptor lease.
 template<class Read> class TglOwnedVpModeContext {
     TglOwnedVpSfcCallerStorage& storage_;
+    Read read_;
     uintptr_t source_,target_,settings_,reference_=0;
     TglOwnedVpModeInput input_;
     TglOwnedVpModeResult result_;
     std::array<uint8_t,17> saved_{};
-    bool prepared_=false,sampled_=false,formatted_=false,invalid_=false;
+    bool attempted_=false,prepared_=false,sampled_=false,formatted_=false,invalid_=false;
     static constexpr std::array<size_t,4> offsets{0x998,0x99c,0x923,0x9c0};
     static constexpr std::array<size_t,4> sizes{4,4,1,8};
 public:
+    struct DeferredAcquisition {};
     TglOwnedVpModeContext(TglOwnedVpSfcCallerStorage& storage,uintptr_t source,
         uintptr_t target,uintptr_t settings,Read read) noexcept
-        :storage_(storage),source_(source),target_(target),settings_(settings) {
+        :TglOwnedVpModeContext(storage,source,target,settings,read,DeferredAcquisition{}) {
+        (void)acquire();
+    }
+    TglOwnedVpModeContext(TglOwnedVpSfcCallerStorage& storage,uintptr_t source,
+        uintptr_t target,uintptr_t settings,Read read,DeferredAcquisition) noexcept
+        :storage_(storage),read_(read),source_(source),target_(target),settings_(settings) {}
+    bool acquire() noexcept {
+        if(attempted_ || invalid_) {invalid_=true;return false;}
+        attempted_=true;
         size_t cursor=0;
         for(size_t i=0;i<offsets.size();++i) {
             std::memcpy(saved_.data()+cursor,storage_.bytes.data()+offsets[i],sizes[i]);cursor+=sizes[i];
@@ -9300,12 +9310,13 @@ public:
         TglOwnedVpModeState original;
         std::memcpy(&original.at998,saved_.data(),4);
         std::memcpy(&original.at99c,saved_.data()+4,4);original.at923=saved_[8]&1;
-        prepared_=tglReadOwnedVpModes(source,target,settings,read,original,input_,result_,reference_);
+        prepared_=tglReadOwnedVpModes(source_,target_,settings_,read_,original,input_,result_,reference_) && !invalid_;
         uintptr_t existingReference=0;
         std::memcpy(&existingReference,saved_.data()+9,8);
         if(result_.borrowSourceA8 && existingReference) prepared_=false;
         // result_ will be produced by the ordered callbacks, not prepublished.
         result_={original,false};
+        return prepared_;
     }
     TglOwnedVpModeContext(const TglOwnedVpModeContext&)=delete;
     TglOwnedVpModeContext& operator=(const TglOwnedVpModeContext&)=delete;
@@ -9317,7 +9328,7 @@ public:
         }
     }
     bool owns(void* child) const noexcept {
-        return prepared_ && !invalid_ && child==storage_.bytes.data();
+        return !invalid_ && (!attempted_ || prepared_) && child==storage_.bytes.data();
     }
     int status() const noexcept {return prepared_ && sampled_ && formatted_ && !invalid_ ? 0 : 5;}
     // Exact ICL1f7690/1f77a0 return the VP mode fields998/99c. Here

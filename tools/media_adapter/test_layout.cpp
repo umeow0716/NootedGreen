@@ -20554,6 +20554,31 @@ int main() {
             const auto saved=storage.bytes;
             using Context=TglOwnedVpModeContext<decltype(read)>;
             using Resolve=TglOwnedVpSfcResolve<Context>;
+            for(unsigned deferredCase=0;deferredCase<4;++deferredCase) {
+                calls=0;fail=deferredCase==3?1:0;
+                {
+                    Context context(storage,0x1000,0x2000,0x3000,read,typename Context::DeferredAcquisition{});
+                    TglOwnedVpSfcScopedContext<Context> scope(storage.bytes.data(),context);
+                    TglOwnedVpEntrySet entries;
+                    assert(scope.bound() && !calls && storage.bytes==saved && context.status()==5);
+                    assert(tglBindOwnedVpModeEntries<Resolve>(storage.bytes.data(),entries) && !calls);
+                    if(deferredCase==1) {
+                        entries.sampleMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                        assert(!context.acquire() && !calls);
+                    } else {
+                        assert(context.acquire()==(deferredCase!=3));
+                        if(deferredCase==2) assert(!context.acquire() && calls==9);
+                        if(!deferredCase) {
+                            entries.sampleMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                            entries.formatMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                            assert(context.status()==0 && calls==9);
+                        }
+                    }
+                    if(deferredCase) assert(context.status()==5);
+                }
+                assert(storage.bytes==saved);
+            }
+            fail=0;
             for(unsigned scenario=0;scenario<5;++scenario) {
                 calls=0;
                 TglOwnedVpEntrySet modeEntries;
