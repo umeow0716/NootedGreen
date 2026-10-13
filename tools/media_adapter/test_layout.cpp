@@ -19819,10 +19819,14 @@ int main() {
                         const TglOwnedVpEntrySet* liveCatalogue=nullptr;
                         bool catalogueBeforeSetup=false;
                         TglOwnedVpCscCache phaseCscCache;unsigned phaseCscBuilds=0,phaseMatrixQueries=0;
-                        const int preSetupResult=graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,
+                        const int preSetupResult=graph.withDeferredInitializedFrameCallbackAssemblyPass(initializedEntries,
                             0x1000,0x2000,0x3000,0x4000,0,0x4000,{},passData.data(),read,
-                            makeState,makeAvs,makeIef,
-                            [&](void* child,void*,void*,const auto&) noexcept -> int {
+                            [&](void* c,const auto& f,const auto& g,auto& owner,
+                                void* d,void* s,void* t,auto ready) noexcept -> int {
+                                assert(ready());return makeState(c,f,g,owner,d,s,t);
+                            },makeAvs,makeIef,
+                            [&](void* child,void*,void*,const auto&,auto ready) noexcept -> int {
+                                assert(ready());
                                 assert(catalogueBeforeSetup && liveCsc && livePlatform && liveCatalogue &&
                                     passStates==1 && passAvs==1 && passIefReady);
                                 const auto originalIef=passFilters.ief;
@@ -19867,8 +19871,8 @@ int main() {
                                     });
                                 assert(passFilters.ief==originalIef);
                                 return phaseResult;
-                            },[&](void* child,const auto& preparedEntries) noexcept -> int {
-                                assert(!passStates && !passAvs);
+                            },[&](void* child,const auto& preparedEntries,const auto&,const auto&,auto ready) noexcept -> int {
+                                assert(!ready() && !passStates && !passAvs);
                                 uintptr_t published=1;std::memcpy(&published,storage->bytes.data()+0x938,8);
                                 assert(!published);
                                 assert(tglWithOwnedVpPhaseDispatchEntries(child,TglOwnedVpEntrySet{},
@@ -19897,6 +19901,11 @@ int main() {
                                                         liveCsc=&cscPhase;livePlatform=&platformPhase;liveCatalogue=&complete;
                                                         catalogueBeforeSetup=true;
                                                         const int result=graph.withReservedFlatDispatch(child,table,[&](void* actual) noexcept -> int {
+                                                            assert(!ready());
+                                                            complete.prepare(actual,nullptr,reinterpret_cast<void*>(0x4000),
+                                                                reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),
+                                                                reinterpret_cast<void*>(0x4000));
+                                                            assert(ready());
                                                             complete.sampleMode(actual,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
                                                             complete.formatMode(actual,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x4000));
                                                             const int setup=complete.setup(actual,reinterpret_cast<void*>(0x1000),
