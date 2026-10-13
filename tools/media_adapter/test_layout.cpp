@@ -19881,8 +19881,8 @@ int main() {
                                         early.platformPacket(actual,nullptr,nullptr);
                                         return 0;
                                     })==5); // No concrete packet phase exists yet.
-                                return graph.template withLeasedModeAssemblyEntries<TglOwnedVpAssemblyPhase::BeforeSetup>(
-                                    child,read,lineResources,retire,0x1000,0x2000,0x4000,
+                                return graph.template withLeasedAssemblyEntries<TglOwnedVpAssemblyPhase::BeforeSetup>(
+                                    child,read,lineResources,retire,
                                     [&](void*,const auto& modeEntries) noexcept -> int {
                                         auto entries=modeEntries;assert(entries.appendDisjoint(preparedEntries));
                                         return tglWithOwnedVpPhaseDispatchEntries(child,entries,
@@ -19906,8 +19906,6 @@ int main() {
                                                                 reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),
                                                                 reinterpret_cast<void*>(0x4000));
                                                             assert(ready());
-                                                            complete.sampleMode(actual,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
-                                                            complete.formatMode(actual,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x4000));
                                                             const int setup=complete.setup(actual,reinterpret_cast<void*>(0x1000),
                                                                 reinterpret_cast<void*>(0x2000),passData.data());
                                                             return setup?setup:complete.send(actual,passData.data(),&passCommand);
@@ -20580,6 +20578,10 @@ int main() {
                             storage.bytes[0x99c]^=1;
                             assert(!context.snapshot(sharedInput,sharedResult,sharedReference) && calls==9);
                             storage.bytes[0x99c]^=1;
+                            assert(context.releaseSnapshot(sharedInput,sharedResult,sharedReference) &&
+                                storage.bytes==saved && calls==9);
+                            assert(!context.releaseSnapshot(sharedInput,sharedResult,sharedReference) &&
+                                context.status()==5 && storage.bytes==saved && calls==9);
                         }
                     }
                     if(deferredCase) assert(context.status()==5);

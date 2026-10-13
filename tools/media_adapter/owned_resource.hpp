@@ -9287,7 +9287,7 @@ template<class Read> class TglOwnedVpModeContext {
     TglOwnedVpModeInput input_;
     TglOwnedVpModeResult result_;
     std::array<uint8_t,17> saved_{};
-    bool attempted_=false,prepared_=false,sampled_=false,formatted_=false,invalid_=false;
+    bool attempted_=false,prepared_=false,sampled_=false,formatted_=false,invalid_=false,handedOff_=false;
     static constexpr std::array<size_t,4> offsets{0x998,0x99c,0x923,0x9c0};
     static constexpr std::array<size_t,4> sizes{4,4,1,8};
 public:
@@ -9322,7 +9322,7 @@ public:
     TglOwnedVpModeContext(const TglOwnedVpModeContext&)=delete;
     TglOwnedVpModeContext& operator=(const TglOwnedVpModeContext&)=delete;
     ~TglOwnedVpModeContext() {
-        if(!sampled_) return;
+        if(!sampled_ || handedOff_) return;
         size_t cursor=0;
         for(size_t i=0;i<offsets.size();++i) {
             std::memcpy(storage_.bytes.data()+offsets[i],saved_.data()+cursor,sizes[i]);cursor+=sizes[i];
@@ -9341,6 +9341,17 @@ public:
         if(storage_.bytes[0x923]!=result_.state.at923 ||
             (result_.borrowSourceA8 && actualReference!=reference_)) return false;
         input=input_;result=result_;reference=reference_;return true;
+    }
+    // Once-only transfer to the enclosing frame publication. Restore our
+    // temporary mode writes before its snapshot; never restore again later.
+    bool releaseSnapshot(TglOwnedVpModeInput& input,TglOwnedVpModeResult& result,
+        uintptr_t& reference) noexcept {
+        if(handedOff_ || !snapshot(input,result,reference)) {invalid_=true;return false;}
+        size_t cursor=0;
+        for(size_t i=0;i<offsets.size();++i) {
+            std::memcpy(storage_.bytes.data()+offsets[i],saved_.data()+cursor,sizes[i]);cursor+=sizes[i];
+        }
+        handedOff_=true;return true;
     }
     // Exact ICL1f7690/1f77a0 return the VP mode fields998/99c. Here
     // those bytes belong to this owned, fully prepared scoped context, not
@@ -10997,12 +11008,23 @@ int tglWithOwnedVpDeferredFrameEntry(TglOwnedVpSfcCallerStorage& storage,
     uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
     uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
     Read read,const TglOwnedVpEntrySet& base,Use use) noexcept {
-    if(base.prepare || !source || !target || !mhw || !settings) return 5;
+    if(base.prepare || base.sampleMode || base.formatMode || !source || !target || !mhw || !settings) return 5;
+    using ModeContext=TglOwnedVpModeContext<Read>;
+    ModeContext modes(storage,source,target,settings,read,typename ModeContext::DeferredAcquisition{});
+    TglOwnedVpSfcScopedContext<ModeContext> modeScope(storage.bytes.data(),modes);
+    auto entries=base;
+    if(!modeScope.bound() || !tglBindOwnedVpModeEntries<TglOwnedVpSfcResolve<ModeContext>>(
+        storage.bytes.data(),entries)) return 5;
     TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;uintptr_t sourceA8=0;
     TglOwnedVpFramePublication publication(storage);
     auto acquire=[&]() noexcept -> bool {
-        return tglReadOwnedVpFramePreparation(source,target,mhw,settings,conditionalSource!=0,
-            read,original,frame,sourceA8,&geometry) &&
+        return tglReadOwnedVpFramePreparationWithModes(source,target,mhw,settings,conditionalSource!=0,
+            read,original,frame,sourceA8,&geometry,[&](auto& input,auto& result,auto& reference) noexcept {
+                if(!modes.acquire(&original)) return false;
+                entries.sampleMode(storage.bytes.data(),reinterpret_cast<void*>(source),reinterpret_cast<void*>(target));
+                entries.formatMode(storage.bytes.data(),reinterpret_cast<void*>(source),reinterpret_cast<void*>(settings));
+                return modes.releaseSnapshot(input,result,reference);
+            }) &&
             publication.publish(frame,conditionalSource,parameters,target,sourceA8);
     };
     TglOwnedVpFrameAcquisitionContext<decltype(acquire)> context{
@@ -11013,10 +11035,9 @@ int tglWithOwnedVpDeferredFrameEntry(TglOwnedVpSfcCallerStorage& storage,
     using View=TglOwnedVpFrameAcquisitionView;
     TglOwnedVpSfcScopedContext<View> scope(view.child,view);
     using Resolve=TglOwnedVpSfcResolve<View>;
-    auto entries=base;
     if(!scope.bound() || !tglBindOwnedVpFrameEntry<Resolve>(view.child,entries)) return 5;
     auto ready=[&]() noexcept {
-        return context.called && context.valid && publication.activeFor(view.child);
+        return context.called && context.valid && !modes.status() && publication.activeFor(view.child);
     };
     static_assert(noexcept(use(view.child,std::as_const(entries),std::as_const(frame),
         std::as_const(geometry),std::as_const(sourceA8),ready)),"native-driven prepare scope ABI");
