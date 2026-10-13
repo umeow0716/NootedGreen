@@ -19003,6 +19003,60 @@ int main() {
         }
         TglOwnedVpSfcCallerStorage secondStorage;
         const auto secondBefore=secondStorage.bytes;
+        {
+            struct Cpu {
+                std::array<uint8_t,0x2000> bytes{};bool live=false;
+                uintptr_t allocate(size_t size) noexcept {
+                    assert(!live && size<=bytes.size());live=true;return reinterpret_cast<uintptr_t>(bytes.data());
+                }
+                void release(uintptr_t p) noexcept {assert(live && p==reinterpret_cast<uintptr_t>(bytes.data()));live=false;}
+            } stateA,avsA,stateB,avsB;
+            struct Binding {
+                uintptr_t image=0x100000;
+                bool validateConstructedObject(uintptr_t,uintptr_t,bool(*)(uintptr_t,void*,size_t) noexcept) const noexcept {return true;}
+            } binding;
+            auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
+            TglOwnedVpSfcCpuGraph<Cpu,Cpu> ga(stateA,avsA),gb(stateB,avsB);
+            assert(ga.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0) &&
+                gb.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
+            int data[2]{};
+            const std::array<TglOwnedVpFrameAcquisitionArguments,2> args{{
+                {0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},&data[0]},
+                {0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},&data[1]}}};
+            assert(ga.withResourceOwnerStorage([&](auto& a) noexcept -> int {
+                return gb.withResourceOwnerStorage([&](auto& b) noexcept -> int {
+                    const auto savedA=a.bytes,savedB=b.bytes;
+                    for(int sendResult:{0,31}) {
+                        calls=0;unsigned states=0,emits=0;
+                        assert(tglWithOwnedVpPairedDeferredPreparedContexts(ga,a,gb,b,args,read,{},
+                            [&](void*,const auto&,const auto& geometry,auto&,void* d,void* s,void* t,auto ready) noexcept -> int {
+                                assert(ready() && geometry.frameWidth && (d==&data[0] || d==&data[1]) &&
+                                    s==reinterpret_cast<void*>(0x1000) && t==reinterpret_cast<void*>(0x2000));
+                                ++states;return 0; // Scope fixture, not native state generation.
+                            },[](void*,const auto&,auto&) noexcept -> int {return 0;},
+                            [](void*,const auto&) noexcept {},
+                            [&](void*,void*,void*,const auto& entries,auto ready) noexcept -> int {
+                                assert(ready() && entries.prepare && entries.setup && entries.send);++emits;return sendResult;
+                            },[&](const auto& objects,const auto& entries,const auto&,const auto&,auto ready) noexcept -> int {
+                                assert(!calls && !ready(0) && !ready(1));
+                                for(size_t i:{size_t(1),size_t(0)}) entries[i].prepare(objects[i],
+                                    reinterpret_cast<void*>(0x6000),reinterpret_cast<void*>(0x7000),
+                                    reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000));
+                                assert(ready(0) && ready(1));
+                                for(size_t i:{size_t(1),size_t(0)}) {
+                                    int status=entries[i].setup(objects[i],reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),&data[i]);
+                                    if(status) return status;
+                                    status=entries[i].send(objects[i],&data[i],&sendResult);if(status) return status;
+                                }
+                                return 0;
+                            })==sendResult);
+                        assert(states==unsigned(sendResult?1:2) && emits==states && calls==2*total &&
+                            a.bytes==savedA && b.bytes==savedB);
+                    }
+                    return 0;
+                });
+            })==0);
+        }
         const std::array<TglOwnedVpFrameAcquisitionArguments,2> deferredArgs{{
             {0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},nullptr},
             {0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},nullptr}}};

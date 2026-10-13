@@ -19427,6 +19427,52 @@ int tglWithOwnedVpPairedDeferredFrameEntries(TglOwnedVpSfcCallerStorage& first,
             return result?result:(ready(0) && ready(1)?0:5);
         });
 }
+template<class Graph,class Read,class State,class Avs,class Ief,class Emit,class Use>
+int tglWithOwnedVpPairedDeferredPreparedContexts(Graph& firstGraph,TglOwnedVpSfcCallerStorage& first,
+    Graph& secondGraph,TglOwnedVpSfcCallerStorage& second,
+    const std::array<TglOwnedVpFrameAcquisitionArguments,2>& args,Read read,
+    const std::array<TglOwnedVpEntrySet,2>& base,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+    if(!firstGraph.ownsStorage(first.bytes.data()) || !secondGraph.ownsStorage(second.bytes.data())) return 5;
+    for(size_t i=0;i<2;++i) {
+        uintptr_t mhw=0;std::memcpy(&mhw,(i?second:first).bytes.data()+0x20,8);
+        if(mhw!=args[i].mhw || !args[i].renderData || base[i].state || base[i].filters ||
+            base[i].setup || base[i].send) return 5;
+    }
+    return firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
+        return tglWithOwnedVpPairedDeferredFrameEntries(first,second,args,read,base,
+            [&](const auto& objects,const auto& acquired,const auto& frames,const auto& geometry,auto ready) noexcept -> int {
+                auto firstReady=[&]() noexcept {return ready(0);};
+                auto secondReady=[&]() noexcept {return ready(1);};
+                const std::array<TglOwnedVpEntrySet,2>* active=nullptr;
+                auto stateA=[&](void* c,const auto& f,auto& owner,void* d,void* s,void* t) noexcept -> int {
+                    return state(c,f,geometry[0],owner,d,s,t,firstReady);
+                };
+                auto stateB=[&](void* c,const auto& f,auto& owner,void* d,void* s,void* t) noexcept -> int {
+                    return state(c,f,geometry[1],owner,d,s,t,secondReady);
+                };
+                auto emission=[&](void* c,void* d,void* command) noexcept -> int {
+                    const size_t i=c==objects[0]?0:1;
+                    if(!active || c!=objects[i] || !ready(i)) return 5;
+                    auto currentReady=[&]() noexcept {return ready(i);};
+                    return emit(c,d,command,(*active)[i],currentReady);
+                };
+                return firstGraph.withReadyPreparedContexts(frames[0],args[0].target,
+                    reinterpret_cast<void*>(args[0].source),args[0].renderData,stateA,avs,ief,emission,
+                    [&](auto& pa,auto& sa) noexcept -> int {
+                        return secondGraph.withReadyPreparedContexts(frames[1],args[1].target,
+                            reinterpret_cast<void*>(args[1].source),args[1].renderData,stateB,avs,ief,emission,
+                            [&](auto& pb,auto& sb) noexcept -> int {
+                                return tglWithOwnedVpPairedPreparedEntries(pa,sa,pb,sb,acquired,
+                                    [&](void*,const auto& ea,void*,const auto& eb) noexcept -> int {
+                                        const std::array<TglOwnedVpEntrySet,2> entries{ea,eb};active=&entries;
+                                        const int result=use(objects,entries,frames,geometry,ready);
+                                        active=nullptr;return result;
+                                    });
+                            },secondReady);
+                    },firstReady);
+            });
+    });
+}
 template<class Graph,class Lines,class Read,class Retire,class Release,
     class State,class Avs,class Ief,class Emit,class Use>
 int tglWithOwnedVpPairedAcquiredFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerStorage& first,Lines& firstLines,
