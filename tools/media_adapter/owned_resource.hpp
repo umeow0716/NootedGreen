@@ -3107,16 +3107,20 @@ struct TglNativeTwoPassCscInvoke {
 // The owner supplies trusted table/hook addresses from its own storage, not
 // from a native object's untrusted vptr. Keep the same private child/image
 // lease throughout the native call; lost/replaced leases invalidate its result.
-template<class Owner,class Read,class Qualify,class Executable,class Invoke>
+template<class Owner,class Read,class Qualify,class Executable,class Invoke,class Health>
 class TglLeasedNativeTwoPassCscQuery {
     Owner& owner_;const TglTwoPassCscBinding binding_;uintptr_t child_;
-    Read& read_;Qualify& qualify_;Executable& executable_;Invoke& invoke_;
+    Read& read_;Qualify& qualify_;Executable& executable_;Invoke& invoke_;Health& health_;
 public:
     TglLeasedNativeTwoPassCscQuery(Owner& owner,const TglTwoPassCscBinding& binding,uintptr_t child,
-        Read& read,Qualify& qualify,Executable& executable,Invoke& invoke) noexcept:
+        Read& read,Qualify& qualify,Executable& executable,Invoke& invoke,Health& health) noexcept:
         owner_(owner),binding_(binding),child_(child),read_(read),qualify_(qualify),
-        executable_(executable),invoke_(invoke){}
+        executable_(executable),invoke_(invoke),health_(health){}
     bool operator()(uintptr_t source,uintptr_t target,bool& needed) noexcept {
+        // Native bool cannot report a failed owned void CSC callback. The
+        // enclosing SAME producer pass must be healthy before and after it.
+        static_assert(noexcept(health_()) && std::is_same_v<decltype(health_()),bool>);
+        if(!health_()) return false;
         static_assert(noexcept(owner_.describePrivateCscLease(child_,binding_.image,
             std::declval<uintptr_t&>(),std::declval<uintptr_t&>(),std::declval<uintptr_t&>())) &&
             noexcept(read_(uintptr_t{},nullptr,size_t{})) && noexcept(qualify_(uintptr_t{})) &&
@@ -3138,7 +3142,7 @@ public:
             [&](uintptr_t p,size_t n) noexcept {return executable_(p,n);},
             [&](uintptr_t e,uintptr_t c,uintptr_t s,uintptr_t t) noexcept {return invoke_(e,c,s,t);});
         uintptr_t currentTable=0,currentGeneric=0,currentSupport=0;
-        if(!success || !owner_.describePrivateCscLease(child_,binding_.image,
+        if(!success || !health_() || !owner_.describePrivateCscLease(child_,binding_.image,
             currentTable,currentGeneric,currentSupport) || currentTable!=table ||
             currentGeneric!=generic || currentSupport!=support) return false;
         needed=candidate;return true;
@@ -11484,6 +11488,7 @@ public:
     TglOwnedVeboxProducerPass()=default;
     TglOwnedVeboxProducerPass(const TglOwnedVeboxProducerPass&)=delete;
     TglOwnedVeboxProducerPass& operator=(const TglOwnedVeboxProducerPass&)=delete;
+    bool acceptsProducer() const noexcept {return active_ && !gated_ && !busy_ && !firstError_;}
     // Enclose the full authenticated native129ca0 invocation (all arguments
     // and their leases are supplied by the owning caller). Never reset the
     // latch between callbacks, including native early exits before slot70.

@@ -3306,11 +3306,13 @@ static void testNativeCscBinding() {
             v=table;g=generic;s=support;return true;
         }
     } owner{child,image,vt};
-    bool loseLease=false,replaceTable=false;
+    bool loseLease=false,replaceTable=false,failCsc=false;
+    TglOwnedVeboxProducerPass cscPass;
     auto invoke = [&](uintptr_t e,uintptr_t c,uintptr_t s,uintptr_t t) noexcept {
         assert(e == image+0x12cfc0 && c == child && s == 0x9000 && t == 0xa000);
         if(loseLease) owner.leased=false;
         if(replaceTable) owner.table+=0x10;
+        if(failCsc) assert(cscPass.record(31));
         ++calls; return nativeResult;
     };
     auto query = [&] {
@@ -3335,8 +3337,11 @@ static void testNativeCscBinding() {
         vt,0x4000,0x5000,needed,read,qualify,executable,invoke) && needed && calls == 2);
     assert(!binding.resolve(0,read,qualify,executable) && !binding.image && !binding.entry);
     assert(binding.resolve(image,read,qualify,executable));
-    TglLeasedNativeTwoPassCscQuery leased(owner,binding,child,read,qualify,executable,invoke);
+    auto healthy=[&]() noexcept {return cscPass.acceptsProducer();};
+    TglLeasedNativeTwoPassCscQuery leased(owner,binding,child,read,qualify,executable,invoke,healthy);
     calls=0;needed=true;nativeResult=false;
+    assert(!leased(0x9000,0xa000,needed) && needed && !calls); // no active producer pass
+    assert(cscPass.begin());
     assert(leased(0x9000,0xa000,needed) && !needed && calls==1);
     nativeResult=true;
     assert(leased(0x9000,0xa000,needed) && needed && calls==2);
@@ -3352,6 +3357,13 @@ static void testNativeCscBinding() {
     assert(!leased(0x9000,0xa000,needed) && !needed && calls==4);
     owner.table=vt;replaceTable=false;
     assert(leased(0x9000,0xa000,needed) && needed && calls==5);
+    nativeResult=false;failCsc=true;needed=true;
+    assert(!leased(0x9000,0xa000,needed) && needed && calls==6);
+    failCsc=false;
+    assert(!leased(0x9000,0xa000,needed) && needed && calls==6); // same failed pass cannot retry
+    cscPass.close();assert(cscPass.begin());
+    assert(leased(0x9000,0xa000,needed) && !needed && calls==7);
+    cscPass.close();
 }
 
 static void testLeasedGen12PlatformPolicy() {
