@@ -6452,6 +6452,61 @@ struct TglNativeResourceBinding {
     }
 };
 
+struct TglNativeSharedConnectionResult {
+    int nativeStatus=5;
+    bool called=false,stable=false;
+};
+// Internal snapshot mechanism; enclosing caller MUST pin the native OS owner.
+// A stable port is not a retained right and this does not manufacture one.
+template<class Read,class QualifyFramework,class Use>
+TglNativeSharedConnectionResult tglWithNativeSharedConnectionSnapshot(
+    uintptr_t os,uintptr_t create,Read read,QualifyFramework qualifyFramework,Use use) {
+    TglNativeSharedConnectionResult result;
+    if(!os || os>UINTPTR_MAX-12 || !create || create>UINTPTR_MAX-0x60 ||
+       !qualifyFramework(create)) return result;
+    std::array<uint8_t,4> anchor{};
+    if(!read(create+0x5c,anchor.data(),anchor.size()) ||
+       anchor!=std::array<uint8_t,4>{0x41,0x8b,0x7d,0x18}) return result;
+    struct Snapshot {
+        uintptr_t database=0,wrapper=0,device=0;
+        uint32_t index=0,port=0;
+        bool same(const Snapshot& other) const noexcept {
+            return database==other.database && wrapper==other.wrapper && device==other.device &&
+                   index==other.index && port==other.port;
+        }
+    };
+    const auto capture=[&](Snapshot& value) {
+        if(!read(os,&value.database,8) || !read(os+8,&value.index,4) || !value.database) return false;
+        const uint64_t offset=8+uint64_t(value.index)*0x15c0;
+        if(offset>UINTPTR_MAX-8 || value.database>UINTPTR_MAX-8-offset ||
+           !read(value.database+uintptr_t(offset),&value.wrapper,8) ||
+           !value.wrapper || value.wrapper>UINTPTR_MAX-8 ||
+           !read(value.wrapper,&value.device,8) || !value.device || value.device>UINTPTR_MAX-0x1c ||
+           !read(value.device+0x18,&value.port,4) || !value.port) return false;
+        return true;
+    };
+    Snapshot first,second,after;
+    if(!capture(first) || !capture(second) || !first.same(second)) return result;
+    result.nativeStatus=use(first.port);result.called=true;
+    result.stable=capture(after) && first.same(after);
+    return result;
+}
+// Production entry: derive OS only through the existing exact-image resource
+// binding and SAME retained physical parent lease, never an arbitrary port.
+template<class ParentLease,class Read,class Qualify,class Executable,class QualifyFramework,class Use>
+TglNativeSharedConnectionResult tglWithBorrowedVphalSharedConnection(
+    const TglNativeBorrowedVphalMhwLease<ParentLease>& lease,uintptr_t create,
+    Read read,Qualify qualify,Executable executable,QualifyFramework qualifyFramework,Use use) {
+    TglNativeResourceBinding binding;
+    if(!binding.resolveFromBorrowedVphal(lease,read,qualify,executable)) return {};
+    auto result=tglWithNativeSharedConnectionSnapshot(binding.context,create,read,qualifyFramework,use);
+    TglNativeResourceBinding after;
+    if(result.called && (!after.resolveFromBorrowedVphal(lease,read,qualify,executable) ||
+        binding.context!=after.context || binding.allocate!=after.allocate || binding.release!=after.release))
+        result.stable=false;
+    return result;
+}
+
 // Exact allocator637b9/638f0 reads the image's imported page-size pointer
 // at754130. Read the same 64-bit value used by type0; type1 uses its low DWORD.
 // No host-page-size assumption, guessed symbol lookup, or output on failure.

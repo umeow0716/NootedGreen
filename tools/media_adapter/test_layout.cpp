@@ -15543,6 +15543,51 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        constexpr uintptr_t os=0x1000,database=0x2000,wrapper=0x5000,device=0x6000,create=0x7000;
+        uintptr_t db=database,w=wrapper,d=device;uint32_t index=1,port=42;
+        std::array<uint8_t,4> anchor{0x41,0x8b,0x7d,0x18};
+        bool qualified=true,readable=true;unsigned calls=0,portReads=0;bool changeBefore=false;
+        const auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+            if(!readable)return false;
+            const void* source=nullptr;
+            if(p==create+0x5c && n==4)source=anchor.data();
+            if(p==os && n==8)source=&db;
+            if(p==os+8 && n==4)source=&index;
+            if(p==database+8+0x15c0 && n==8)source=&w;
+            if(p==wrapper && n==8)source=&d;
+            if(p==device+0x18 && n==4) {
+                ++portReads;if(changeBefore && portReads==2)++port;source=&port;
+            }
+            if(!source)return false;std::memcpy(out,source,n);return true;
+        };
+        const auto qualify=[&](uintptr_t p) noexcept {return qualified && p==create;};
+        const auto use=[&](uint32_t p) noexcept {++calls;assert(p==42);return 31;};
+        auto run=[&]() {return tglWithNativeSharedConnectionSnapshot(os,create,read,qualify,use);};
+        auto result=run();assert(result.called && result.stable && result.nativeStatus==31 && calls==1);
+        qualified=false;result=run();assert(!result.called && calls==1);qualified=true;
+        readable=false;result=run();assert(!result.called && calls==1);readable=true;
+        anchor[3]^=1;result=run();assert(!result.called && calls==1);anchor[3]^=1;
+        for(unsigned field=0;field<6;++field) {
+            db=database;w=wrapper;d=device;index=1;port=42;
+            if(field==0)db=UINTPTR_MAX;
+            if(field==1)w=UINTPTR_MAX;
+            if(field==2)d=UINTPTR_MAX;
+            if(field==3)index=UINT32_MAX;
+            if(field==4)port=0;
+            if(field==5)db=0;
+            result=run();assert(!result.called && calls==1);
+        }
+        db=database;w=wrapper;d=device;index=1;port=42;
+        changeBefore=true;portReads=0;result=run();assert(!result.called && calls==1);
+        changeBefore=false;port=42;
+        result=tglWithNativeSharedConnectionSnapshot(os,create,read,qualify,[&](uint32_t) noexcept {
+            ++calls;++port;return 31;
+        });
+        assert(result.called && !result.stable && result.nativeStatus==31 && calls==2);
+        assert(!tglWithNativeSharedConnectionSnapshot(UINTPTR_MAX,create,read,qualify,use).called);
+        assert(!tglWithNativeSharedConnectionSnapshot(os,UINTPTR_MAX,read,qualify,use).called);
+    }
+    {
         std::array<uint8_t,16> batch{};std::array<uint8_t,48> items{};std::array<uint8_t,8> event{};
         auto put=[](auto& bytes,size_t offset,auto value) noexcept {std::memcpy(bytes.data()+offset,&value,sizeof(value));};
         auto reset=[&]() noexcept {
@@ -17092,6 +17137,49 @@ int main() {
                     assert(lease.acquireOwned(std::move(pin),image,parent,creatorAddress,lifetime,ownedRead,
                         borrowedAdmit,qualify,ownedExec,parentAdmit));
                     assert(!pin.get() && lease.binding()->interface==nativeMhw);
+                    {
+                        constexpr uintptr_t database=0x90000000,wrapper=0x90010000,
+                            device=0x90020000,create=0x90030000;
+                        uint32_t port=42;unsigned queries=0;
+                        auto queryRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                            uintptr_t word=0;uint32_t dword=0;
+                            if(size==8) {
+                                if(address==nativeOs)word=database;
+                                if(address==nativeRenderHal)word=nativeOs;
+                                if(address==nativeOs+0x1f8)word=image+0x63720;
+                                if(address==nativeOs+0x200)word=image+0x63c00;
+                                if(address==database+8+0x15c0)word=wrapper;
+                                if(address==wrapper)word=device;
+                                if(word){std::memcpy(bytes,&word,8);return true;}
+                            }
+                            if(size==4 && (address==nativeOs+8 || address==device+0x18)) {
+                                dword=address==nativeOs+8?1:port;
+                                std::memcpy(bytes,&dword,4);return true;
+                            }
+                            if(address==create+0x5c && size==4) {
+                                const uint8_t anchor[]={0x41,0x8b,0x7d,0x18};
+                                std::memcpy(bytes,anchor,4);return true;
+                            }
+                            if(size==16 && (address==image+0x63720 || address==image+0x63c00)) {
+                                const uint8_t allocate[]={0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x70,0x48,0x89,0x7d,0xf0,0x48,0x89,0x75,0xe8};
+                                const uint8_t release[]={0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,0x31,0xc0,0x89,0xc1,0x48,0x89,0x7d,0xf8};
+                                std::memcpy(bytes,address==image+0x63720?allocate:release,16);return true;
+                            }
+                            return ownedRead(address,bytes,size);
+                        };
+                        auto queryExec=[&](uintptr_t address,size_t size) noexcept {
+                            return (size==16 && (address==image+0x63720 || address==image+0x63c00)) || ownedExec(address,size);
+                        };
+                        auto query=[&](auto use) {
+                            return tglWithBorrowedVphalSharedConnection(lease,create,queryRead,qualify,queryExec,
+                                [](uintptr_t value) noexcept {return value==create;},use);
+                        };
+                        auto result=query([&](uint32_t value) noexcept {++queries;assert(value==42 && !parentDeaths);return 31;});
+                        assert(result.called && result.stable && result.nativeStatus==31 && queries==1);
+                        result=query([&](uint32_t) noexcept {++queries;writeWord(creator,0x40,nativeOs+8);return 31;});
+                        assert(result.called && !result.stable && result.nativeStatus==31 && queries==2);
+                        writeWord(creator,0x40,nativeOs);
+                    }
                     assert(!lease.acquire(std::move(pin),image,parent,creatorAddress,borrowedRead,
                         borrowedAdmit,qualify,creatorExecutable,parentAdmit));
                     assert(parents.reconcileSuccessfulRemoval(image,0xb000,1,removed)==5 && !parentDeaths);
