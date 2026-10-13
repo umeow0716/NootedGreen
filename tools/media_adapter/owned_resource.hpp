@@ -19534,6 +19534,52 @@ int tglWithOwnedVpPairedAcquiredFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerS
         });
 }
 
+// Complete synchronous paired catalogue before native prepare. All real
+// packet contexts still bind at their phase; no GPU retirement is inferred.
+template<class Graph,class Lines,class Read,class Retire,class Release,
+    class State,class Avs,class Ief,class Emit,class Use>
+int tglWithOwnedVpPairedDeferredFrameAssembly(Graph& firstGraph,TglOwnedVpSfcCallerStorage& first,Lines& firstLines,
+    Graph& secondGraph,TglOwnedVpSfcCallerStorage& second,Lines& secondLines,
+    const std::array<TglOwnedVpFrameAcquisitionArguments,2>& args,Read read,Retire& retire,Release& release,
+    State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+    const std::array<TglOwnedVpEntrySet,2>* active=nullptr;
+    return tglWithOwnedVpPairedDeferredPreparedContexts(firstGraph,first,secondGraph,second,args,read,{},state,avs,ief,
+        [&](void* child,void* data,void* command,const auto&,auto ready) noexcept -> int {
+            const size_t i=child==first.bytes.data()?0:1;
+            if(!active || child!=(i?second:first).bytes.data() || !ready()) return 5;
+            return emit(child,data,command,(*active)[i],ready);
+        },[&](const auto& objects,const auto& prepared,const auto& frames,const auto& geometry,auto ready) noexcept -> int {
+            return firstGraph.withLeasedPairedAssemblyEntries(secondGraph,read,firstLines,secondLines,retire,
+                [&](void*,const auto& ra,void*,const auto& rb) noexcept -> int {
+                    auto resources=prepared;
+                    if(!resources[0].appendDisjoint(ra) || !resources[1].appendDisjoint(rb)) return 5;
+                    return firstGraph.withLeasedPairedInitializedAssemblyEntries(secondGraph,resources,
+                        [&](void*,const auto& ia,void*,const auto& ib) noexcept -> int {
+                            using Lifetime=TglOwnedVpLifetimeContext<Graph,Lines,Retire,Release>;
+                            Lifetime la(objects[0],firstGraph,firstLines,retire,release);
+                            Lifetime lb(objects[1],secondGraph,secondLines,retire,release);
+                            const std::array<TglOwnedVpEntrySet,2> initialized{ia,ib};
+                            return tglWithOwnedVpPairedLifetimeAssemblyEntries(objects[0],la,objects[1],lb,initialized,
+                                [&](void*,const auto& a,void*,const auto& b) noexcept -> int {
+                                    const std::array<TglOwnedVpEntrySet,2> lifetime{a,b};
+                                    return tglWithOwnedVpPairedCscDispatchEntries(objects[0],objects[1],lifetime,
+                                        [&](void*,const auto& ca,auto& cscA,void*,const auto& cb,auto& cscB) noexcept -> int {
+                                            const std::array<TglOwnedVpEntrySet,2> csc{ca,cb};
+                                            return tglWithOwnedVpPairedPlatformDispatchEntries(objects[0],objects[1],csc,
+                                                [&](void*,const auto& ea,auto& platformA,void*,const auto& eb,auto& platformB) noexcept -> int {
+                                                    const std::array<TglOwnedVpEntrySet,2> complete{ea,eb};
+                                                    if(!complete[0].hasAllEntries() || !complete[1].hasAllEntries()) return 5;
+                                                    active=&complete;
+                                                    const int result=use(objects,complete,frames,geometry,ready,cscA,cscB,platformA,platformB);
+                                                    active=nullptr;return result;
+                                                });
+                                        });
+                                });
+                        });
+                });
+        });
+}
+
 // CPU construction-to-lifetime transition. Construct must invoke the owned
 template<class Lifetime,class Use>
 int tglWithOwnedVpPairedLifetimeAssemblyEntries(void* first,Lifetime& firstLifetime,

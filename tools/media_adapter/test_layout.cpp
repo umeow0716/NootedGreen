@@ -19026,9 +19026,12 @@ int main() {
             assert(ga.withResourceOwnerStorage([&](auto& a) noexcept -> int {
                 return gb.withResourceOwnerStorage([&](auto& b) noexcept -> int {
                     const auto savedA=a.bytes,savedB=b.bytes;
+                    TestPairedVpResourceLines linesA{&a},linesB{&b};
+                    auto retire=[]() noexcept -> int {assert(false);return 5;};
+                    auto release=[](void*) noexcept {assert(false);};
                     for(int sendResult:{0,31}) {
                         calls=0;unsigned states=0,emits=0;
-                        assert(tglWithOwnedVpPairedDeferredPreparedContexts(ga,a,gb,b,args,read,{},
+                        assert(tglWithOwnedVpPairedDeferredFrameAssembly(ga,a,linesA,gb,b,linesB,args,read,retire,release,
                             [&](void*,const auto&,const auto& geometry,auto&,void* d,void* s,void* t,auto ready) noexcept -> int {
                                 assert(ready() && geometry.frameWidth && (d==&data[0] || d==&data[1]) &&
                                     s==reinterpret_cast<void*>(0x1000) && t==reinterpret_cast<void*>(0x2000));
@@ -19036,9 +19039,11 @@ int main() {
                             },[](void*,const auto&,auto&) noexcept -> int {return 0;},
                             [](void*,const auto&) noexcept {},
                             [&](void*,void*,void*,const auto& entries,auto ready) noexcept -> int {
-                                assert(ready() && entries.prepare && entries.setup && entries.send);++emits;return sendResult;
-                            },[&](const auto& objects,const auto& entries,const auto&,const auto&,auto ready) noexcept -> int {
-                                assert(!calls && !ready(0) && !ready(1));
+                                assert(ready() && entries.hasAllEntries());++emits;return sendResult;
+                            },[&](const auto& objects,const auto& entries,const auto&,const auto&,auto ready,
+                                auto& cscA,auto& cscB,auto& platformA,auto& platformB) noexcept -> int {
+                                assert(!calls && !ready(0) && !ready(1) && entries[0].hasAllEntries() && entries[1].hasAllEntries());
+                                assert(&cscA!=&cscB && &platformA!=&platformB);
                                 for(size_t i:{size_t(1),size_t(0)}) entries[i].prepare(objects[i],
                                     reinterpret_cast<void*>(0x6000),reinterpret_cast<void*>(0x7000),
                                     reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000));
