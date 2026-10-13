@@ -18285,6 +18285,27 @@ public:
     }
 };
 
+// Regular VEBOX->SFC, NOT HCP/scalability: Intel media-driver11ecb9ea
+// VphalSfcStateG12::InitRenderData zeroes the Gen12 allocation; its
+// SetSfcStateParams adds only SFD to the tail. Exact TGL168390 consumes
+// b8/bc/c0/c4..d0 and the distinct d8/e0/e8/f0 resource layout. No Linux
+// IEF-column slot is copied into Darwin. Keep the actual row buffers pinned
+// through Use; CPU pinning is not authority to retire submitted GPU work.
+template<class Backend,class Use>
+int tglWithOwnedVeboxSfcGen12Tail(TglOwnedSfcLineBuffers<Backend>& lines,
+    const std::array<uint8_t,0xb8>& prefix,Use use) noexcept {
+    static_assert(std::is_nothrow_invocable_r_v<int,Use&,const TglOwnedSfcGen12Tail&>);
+    if(prefix[0]!=1) return 5;
+    uint32_t inputHeight=0,scaledHeight=0;
+    std::memcpy(&inputHeight,prefix.data()+0x30,4);
+    std::memcpy(&scaledHeight,prefix.data()+0x4c,4);
+    return lines.withBuffers(inputHeight,scaledHeight,[&]() noexcept -> int {
+        TglOwnedSfcGen12Tail tail{};
+        if(!lines.bindSfdRow(tail)) return 5;
+        return use(static_cast<const TglOwnedSfcGen12Tail&>(tail));
+    });
+}
+
 // Native VP+58 has two full surfaces (3c8/670), not two copied resource
 // descriptors. Empty caller-owned shells/backends outlive this transaction.
 // SFD is a separate Gen12 resource; this pair does not claim to supply it.

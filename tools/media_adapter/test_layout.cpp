@@ -12049,6 +12049,20 @@ static void testSfcSfdOwnership() {
         TglOwnedSfcGen12Tail tail{};tail.sfdLineBuffer=0x1234;tail.avsLineTile=0x5678;
         assert(!buffers.bindSfdRow(tail) && !tail.sfdLineBuffer && tail.avsLineTile==0x5678);
         assert(buffers.ensure(1080,4000)==0 && backend.live==2 && !buffers.storage(2));
+        std::array<uint8_t,0xb8> normalPrefix{};normalPrefix[0]=1;
+        const uint32_t normalInputHeight=1080,normalScaledHeight=4000;
+        std::memcpy(normalPrefix.data()+0x30,&normalInputHeight,4);
+        std::memcpy(normalPrefix.data()+0x4c,&normalScaledHeight,4);
+        assert(tglWithOwnedVeboxSfcGen12Tail(buffers,normalPrefix,[&](const auto& actual) noexcept -> int {
+            assert(!actual.sfdLineBuffer && !actual.histogramSurface && !actual.avsLineTile && !actual.sfdLineTile);
+            assert(!actual.engineMode && !actual.inputBitDepth && !actual.tileType &&
+                !actual.srcStartX && !actual.srcEndX && !actual.dstStartX && !actual.dstEndX);
+            buffers.reset();assert(backend.live==2);
+            return -31;
+        })==-31);
+        normalPrefix[0]=0;
+        assert(tglWithOwnedVeboxSfcGen12Tail(buffers,normalPrefix,
+            [](const auto&) noexcept -> int {assert(false);return 0;})==5);
         assert(buffers.bindSfdRow(tail) && !tail.sfdLineBuffer);
         assert(buffers.ensure(1080,4001)==0 && backend.live==3 && buffers.storage(2));
         assert(buffers.bindSfdRow(tail) &&
@@ -12094,9 +12108,15 @@ static void testSfcSfdOwnership() {
         auto query=[&](TglOwnedSurfaceStorage& surface) noexcept {
             assert(&surface==&output);++queries;return queryResult;
         };
-        auto prepare=[&]() {
-            return tglPrepareOwnedSfcCommandState(commands,state,buffers,output,
-                prefix,{},true,false,false,TglOwnedSfcCompressionMode::Disabled,query);
+        auto prepare=[&]() noexcept {
+            return tglWithOwnedVeboxSfcGen12Tail(buffers,prefix,[&](const auto& actualTail) noexcept -> int {
+                assert(actualTail.sfdLineBuffer==reinterpret_cast<uintptr_t>(buffers.storage(2)->data()));
+                buffers.reset();assert(backend.live==3);
+                assert(tglWithOwnedVeboxSfcGen12Tail(buffers,prefix,
+                    [](const auto&) noexcept -> int {assert(false);return 0;})==5);
+                return tglPrepareOwnedSfcCommandState(commands,state,buffers,output,
+                    prefix,actualTail,true,false,false,TglOwnedSfcCompressionMode::Disabled,query);
+            });
         };
         const auto originalCommands=commands.state;
         assert(prepare()==5 && !queries && commands.state==originalCommands);
