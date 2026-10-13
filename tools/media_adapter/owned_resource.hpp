@@ -16848,7 +16848,7 @@ public:
 template<class ContextLease> class TglNativeContextRootSurfaceOwner {
     ContextLease context_;
     TglOwnedSurfaceStorage* shell_=nullptr;
-    bool borrowed_=false,conversionBorrowed_=false;
+    bool borrowed_=false,conversionBorrowed_=false,conversionFault_=false;
 public:
     template<class Writable>
     TglNativeContextRootSurfaceOwner(ContextLease&& lease,const TglNativeContextInputRoots& roots,
@@ -16878,12 +16878,13 @@ public:
     // never copy/adopt/free it, and never dereference its nested surface here.
     template<class Read,class Use> int withLeasedConversionMetadata(
         const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
-        if(conversionBorrowed_ || !hasSurfaceLease(expected)) return 5;
+        if(conversionFault_ || conversionBorrowed_ || !hasSurfaceLease(expected)) return 5;
         uintptr_t metadata=0;std::memcpy(&metadata,expected.prefix.data()+0xa8,8);
         if(!metadata || metadata>UINTPTR_MAX-0x70) return 5;
         auto valid=[&]() noexcept {
             uintptr_t current=0;std::memcpy(&current,expected.prefix.data()+0xa8,8);
-            return current==metadata && hasSurfaceLease(expected);
+            if(current!=metadata || !hasSurfaceLease(expected)) conversionFault_=true;
+            return !conversionFault_;
         };
         auto bounded=[&](uintptr_t address,void* output,size_t size) noexcept -> bool {
             static_assert(noexcept(read(address,output,size)) &&

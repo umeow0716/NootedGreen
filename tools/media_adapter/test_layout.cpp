@@ -14605,6 +14605,15 @@ static void testRetainedVeboxFrames() {
                         return useMetadata(p,read);
                     })==-94);
                     assert(metadataReads==2);
+                    assert(sidecar.withLeasedConversionMetadata(original,readMetadata,[&](uintptr_t p,auto read) noexcept -> int {
+                        const uintptr_t foreign=p+8;
+                        std::memcpy(original.prefix.data()+0xa8,&foreign,8);
+                        uint32_t value=0;
+                        assert(!read(p+0x64,&value,4) && metadataReads==2);
+                        std::memcpy(original.prefix.data()+0xa8,&p,8); // restoration cannot erase observed fault
+                        return 0;
+                    })==5);
+                    assert(sidecar.withLeasedConversionMetadata(original,readMetadata,useMetadata)==5 && metadataReads==2);
                     const uintptr_t zero=0;std::memcpy(original.prefix.data()+0xa8,&zero,8);
                     assert(sidecar.withLeasedConversionMetadata(original,readMetadata,useMetadata)==5 && metadataReads==2);
                 }
