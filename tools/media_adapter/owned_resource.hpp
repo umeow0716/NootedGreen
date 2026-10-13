@@ -15006,6 +15006,32 @@ public:
                     },ready);
             });
     }
+    // Already-initialized frame: retain the verified initialize resolver across
+    // deferred prepare AND emission. This is not a factory initialization API.
+    template<class Read,class State,class Avs,class Ief,class Emit,class Use>
+    int withDeferredInitializedFrameCallbackAssemblyPass(const TglOwnedVpEntrySet& base,
+        uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
+        uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
+        void* renderData,Read read,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+        if(base.initialize) return 5;
+        const TglOwnedVpEntrySet* active=nullptr;
+        const TglOwnedVpPassInitContext<StateBackend>* admission=nullptr;
+        return withDeferredFrameCallbackAssemblyPass(base,source,target,mhw,settings,
+            conditionalSource,parameters,original,renderData,read,state,avs,ief,
+            [&](void* child,void* data,void* command,const auto&,auto ready) noexcept -> int {
+                if(!active || !admission || admission->status() || !ready()) return 5;
+                return emit(child,data,command,*active,ready);
+            },[&](void* child,const auto& entries,const auto& frame,const auto& geometry,
+                auto ready) noexcept -> int {
+                return withLeasedInitializedAssemblyEntries(child,entries,
+                    [&](void* actual,const auto& initialized,const auto& initialization) noexcept -> int {
+                        active=&initialized;admission=&initialization;
+                        const int result=use(actual,initialized,frame,geometry,ready);
+                        active=nullptr;admission=nullptr;
+                        return result;
+                    });
+            });
+    }
     // Borrow real graph-backed producers without binding single-object TLS slots.
     // A caller may hold two such contexts and bind them through explicit Pair.
     template<class State,class Avs,class Ief,class Emit,class Use>

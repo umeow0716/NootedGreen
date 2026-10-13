@@ -19591,7 +19591,8 @@ int main() {
                         unsigned deferredEmits=0;
                         uint64_t beforeTarget=0;
                         std::memcpy(&beforeTarget,storage->bytes.data()+0x9b0,8);
-                        assert(graph.withDeferredFrameCallbackAssemblyPass({},0x1000,0x2000,0x3000,0x4000,
+                        void (*liveInitialize)(void*) noexcept=nullptr;
+                        assert(graph.withDeferredInitializedFrameCallbackAssemblyPass({},0x1000,0x2000,0x3000,0x4000,
                             0,0x4000,{},passData.data(),read,
                             [&](void* c,const auto& f,const auto& g,auto& owner,
                                 void* d,void* s,void* t,auto ready) noexcept -> int {
@@ -19599,10 +19600,12 @@ int main() {
                             },makeAvs,makeIef,
                             [&](void* c,void* d,void* command,const auto& entries,auto ready) noexcept -> int {
                                 assert(ready() && c==storage->bytes.data() && d==passData.data() && command);
-                                assert(entries.prepare && entries.setup && entries.send && passIefReady);
+                                assert(entries.prepare && entries.setup && entries.send && passIefReady &&
+                                    entries.initialize && entries.initialize==liveInitialize);
                                 ++deferredEmits;return sendResult;
                             },[&](void* child,const auto& entries,const auto&,const auto&,auto ready) noexcept -> int {
-                                assert(!ready());
+                                assert(!ready() && entries.initialize);
+                                liveInitialize=entries.initialize;
                                 entries.prepare(child,nullptr,reinterpret_cast<void*>(0x4000),
                                     reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),
                                     reinterpret_cast<void*>(0x4000));
