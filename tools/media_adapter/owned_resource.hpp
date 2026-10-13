@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <atomic>
 #include <new>
+#include "../../NootedGreen/kern_vf_device_observation.hpp"
 #if defined(__APPLE__)
 #include <dlfcn.h>
 #endif
@@ -6504,6 +6505,78 @@ TglNativeSharedConnectionResult tglWithBorrowedVphalSharedConnection(
     if(result.called && (!after.resolveFromBorrowedVphal(lease,read,qualify,executable) ||
         binding.context!=after.context || binding.allocate!=after.allocate || binding.release!=after.release))
         result.stable=false;
+    return result;
+}
+
+struct TglNativeDeviceObservationResult {
+    TglNativeSharedConnectionResult connection;
+    bool transportCalled=false,published=false;
+};
+struct TglDarwinDeviceObservationApi {
+    using GetService=int(*)(uint32_t,uint32_t*);
+    using RegistryId=int(*)(uint32_t,uint64_t*);
+    using Release=int(*)(uint32_t);
+    using StructMethod=int(*)(uint32_t,uint32_t,const void*,size_t,void*,size_t*);
+    GetService getService=nullptr;RegistryId registryId=nullptr;
+    Release release=nullptr;StructMethod structMethod=nullptr;
+    bool valid() const noexcept {return getService && registryId && release && structMethod;}
+#if defined(__APPLE__)
+    static TglDarwinDeviceObservationApi resolve() noexcept {
+        return {reinterpret_cast<GetService>(dlsym(RTLD_DEFAULT,"IOConnectGetService")),
+                reinterpret_cast<RegistryId>(dlsym(RTLD_DEFAULT,"IORegistryEntryGetRegistryEntryID")),
+                reinterpret_cast<Release>(dlsym(RTLD_DEFAULT,"IOObjectRelease")),
+                reinterpret_cast<StructMethod>(dlsym(RTLD_DEFAULT,"IOConnectCallStructMethod"))};
+    }
+#endif
+    int identity(uint32_t port,uint64_t& output) const noexcept {
+        if(!valid() || !port) return 5;
+        uint32_t service=0;uint64_t id=0;
+        const int serviceStatus=getService(port,&service);
+        if(serviceStatus) return serviceStatus;
+        if(!service) return 5;
+        const int idStatus=registryId(service,&id);
+        const int releaseStatus=release(service); // exactly once even on ID failure
+        if(idStatus) return idStatus;
+        if(releaseStatus) return releaseStatus;
+        if(!id) return 5;
+        output=id;return 0;
+    }
+    int read(uint32_t port,uint32_t selector,void* output,size_t* bytes) const noexcept {
+        if(!valid() || !port || selector!=NGVfDeviceObservation::selector ||
+           !output || !bytes || *bytes!=sizeof(NGVfDeviceObservation::Reply)) return 5;
+        return structMethod(port,selector,nullptr,0,output,bytes);
+    }
+};
+// Api::identity uses the shared connection's native IOService registry ID;
+// Api::read is the public synchronous, no-input IOConnect struct-method call.
+// No reply escapes until the retained owner/connection chain revalidates.
+template<class ParentLease,class Read,class Qualify,class Executable,class QualifyFramework,class Api>
+TglNativeDeviceObservationResult tglReadBorrowedVphalDeviceObservation(
+    const TglNativeBorrowedVphalMhwLease<ParentLease>& lease,uintptr_t create,
+    Read read,Qualify qualify,Executable executable,QualifyFramework qualifyFramework,
+    Api& api,NGVfDeviceObservation::Reply& output) {
+    static_assert(noexcept(api.identity(uint32_t{},std::declval<uint64_t&>())) &&
+                  noexcept(api.read(uint32_t{},uint32_t{},nullptr,static_cast<size_t*>(nullptr))),
+                  "native observation public API ABI");
+    TglNativeDeviceObservationResult result;
+    NGVfDeviceObservation::Reply candidate{};
+    result.connection=tglWithBorrowedVphalSharedConnection(lease,create,read,qualify,executable,
+        qualifyFramework,[&](uint32_t port) noexcept {
+            uint64_t registryId=0;
+            const int identityStatus=api.identity(port,registryId);
+            if(identityStatus) return identityStatus;
+            int nativeStatus=5;
+            const bool valid=NGVfDeviceObservation::query(registryId,
+                [&](uint32_t selector,void* wire,size_t* bytes) noexcept {
+                    result.transportCalled=true;
+                    nativeStatus=api.read(port,selector,wire,bytes);return nativeStatus;
+                },candidate);
+            return !valid && nativeStatus==0?5:nativeStatus;
+        });
+    if(result.connection.called && result.connection.stable &&
+       result.transportCalled && result.connection.nativeStatus==0) {
+        output=candidate;result.published=true;
+    }
     return result;
 }
 

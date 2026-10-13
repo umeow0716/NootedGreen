@@ -17179,6 +17179,35 @@ int main() {
                         result=query([&](uint32_t) noexcept {++queries;writeWord(creator,0x40,nativeOs+8);return 31;});
                         assert(result.called && !result.stable && result.nativeStatus==31 && queries==2);
                         writeWord(creator,0x40,nativeOs);
+                        static unsigned mode=0,releases=0,methods=0;
+                        static uint32_t* sharedPort=nullptr;sharedPort=&port;
+                        TglDarwinDeviceObservationApi api{
+                            +[](uint32_t p,uint32_t* service) {assert(p==42);*service=77;return mode==5?31:0;},
+                            +[](uint32_t service,uint64_t* id) {assert(service==77);*id=0xabc;return mode==1?31:0;},
+                            +[](uint32_t service) {assert(service==77);++releases;return mode==6?31:0;},
+                            +[](uint32_t p,uint32_t selector,const void* input,size_t inputSize,void* out,size_t* size) {
+                                assert(p==42 && selector==NGVfDeviceObservation::selector && !input && !inputSize);
+                                assert(*size==sizeof(NGVfDeviceObservation::Reply));++methods;
+                                auto& reply=*static_cast<NGVfDeviceObservation::Reply*>(out);
+                                reply={1,40,0xabc,7,1,{}};
+                                for(unsigned i=0;i<16;++i)reply.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
+                                if(mode==3)reply.familyUuid[0]^=1;
+                                if(mode==4)++*sharedPort;
+                                return mode==2?31:0;
+                            }};
+                        for(mode=0;mode<7;++mode) {
+                            port=42;releases=methods=0;
+                            NGVfDeviceObservation::Reply observed{};observed.restartReports=999;
+                            const auto observation=tglReadBorrowedVphalDeviceObservation(lease,create,queryRead,
+                                qualify,queryExec,[](uintptr_t value) noexcept {return value==create;},api,observed);
+                            assert(observation.published==(mode==0));
+                            assert(observed.restartReports==(mode==0?7U:999U));
+                            assert(releases==(mode==5?0U:1U));
+                            assert(methods==((mode==1 || mode==5 || mode==6)?0U:1U));
+                            if(mode==1 || mode==2 || mode==5 || mode==6)assert(observation.connection.nativeStatus==31);
+                            if(mode==4)assert(observation.transportCalled && !observation.connection.stable);
+                        }
+                        port=42;sharedPort=nullptr;
                     }
                     assert(!lease.acquire(std::move(pin),image,parent,creatorAddress,borrowedRead,
                         borrowedAdmit,qualify,creatorExecutable,parentAdmit));
