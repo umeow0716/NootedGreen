@@ -19002,6 +19002,28 @@ int main() {
             assert(calls==((mode==0 || mode==3)?total:0) && scopedStorage.bytes==originalStorage);
         }
         TglOwnedVpSfcCallerStorage secondStorage;
+        const auto secondBefore=secondStorage.bytes;
+        const std::array<TglOwnedVpFrameAcquisitionArguments,2> deferredArgs{{
+            {0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},nullptr},
+            {0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},nullptr}}};
+        for(unsigned pairedCase=0;pairedCase<4;++pairedCase) {
+            calls=0;
+            assert(tglWithOwnedVpPairedDeferredFrameEntries(scopedStorage,secondStorage,deferredArgs,read,{},
+                [&](const auto& objects,const auto& entries,const auto&,const auto&,auto ready) noexcept -> int {
+                    assert(!calls && !ready(0) && !ready(1) && !ready(2));
+                    if(pairedCase==3) return -31;
+                    auto prepare=[&](size_t i) noexcept {
+                        entries[i].prepare(objects[i],reinterpret_cast<void*>(0x6000),reinterpret_cast<void*>(0x7000),
+                            reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000));
+                    };
+                    prepare(1);assert(ready(1) && !ready(0) && calls==total);
+                    if(pairedCase==1) return 0;
+                    prepare(0);assert(ready(0) && ready(1) && calls==2*total);
+                    if(pairedCase==2) {prepare(0);assert(!ready(0) && ready(1) && calls==2*total);}
+                    return 0;
+                })==(pairedCase==0?0:pairedCase==3?-31:5));
+            assert(scopedStorage.bytes==originalStorage && secondStorage.bytes==secondBefore);
+        }
         for(unsigned mode=0;mode<5;++mode) {
             calls=0;TglOwnedVpEntrySet escaped;
             assert(tglWithOwnedVpFrameAcquisitionContext(scopedStorage,

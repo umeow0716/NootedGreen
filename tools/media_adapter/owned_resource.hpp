@@ -19375,6 +19375,58 @@ struct TglOwnedVpFrameAcquisitionArguments {
     TglOwnedVpModeState original;
     void* renderData;
 };
+// Both native children retain their own once-only acquisition/publication,
+// while one paired resolver scope covers the whole synchronous renderer call.
+template<class Read,class Use>
+int tglWithOwnedVpPairedDeferredFrameEntries(TglOwnedVpSfcCallerStorage& first,
+    TglOwnedVpSfcCallerStorage& second,const std::array<TglOwnedVpFrameAcquisitionArguments,2>& args,
+    Read read,const std::array<TglOwnedVpEntrySet,2>& base,Use use) noexcept {
+    if(&first==&second) return 5;
+    for(size_t i=0;i<2;++i) if(base[i].prepare || base[i].sampleMode || base[i].formatMode ||
+        !args[i].source || !args[i].target || !args[i].mhw || !args[i].settings) return 5;
+    using Modes=TglOwnedVpModeContext<Read>;
+    Modes ma(first,args[0].source,args[0].target,args[0].settings,read,typename Modes::DeferredAcquisition{});
+    Modes mb(second,args[1].source,args[1].target,args[1].settings,read,typename Modes::DeferredAcquisition{});
+    std::array<void*,2> objects{first.bytes.data(),second.bytes.data()};
+    typename TglOwnedVpSfcScopedContext<Modes>::Pair modeScope(objects[0],ma,objects[1],mb);
+    auto modeEntries=base;
+    using Resolve=TglOwnedVpSfcResolve<Modes>;
+    if(!modeScope.bound() || !tglBindOwnedVpModeEntries<Resolve>(objects[0],modeEntries[0]) ||
+        !tglBindOwnedVpModeEntries<Resolve>(objects[1],modeEntries[1])) return 5;
+    TglOwnedVpFramePublication pa(first),pb(second);
+    std::array<TglOwnedVpFramePreparation,2> frames;
+    std::array<TglOwnedVpRegionInput,2> geometry;
+    std::array<uintptr_t,2> references{};
+    auto acquire=[&](size_t i) noexcept -> bool {
+        auto& modes=i?mb:ma;auto& publication=i?pb:pa;
+        return tglReadOwnedVpFramePreparationWithModes(args[i].source,args[i].target,args[i].mhw,
+            args[i].settings,args[i].conditionalSource!=0,read,args[i].original,frames[i],references[i],&geometry[i],
+            [&](auto& input,auto& result,auto& reference) noexcept {
+                if(!modes.acquire(&args[i].original)) return false;
+                modeEntries[i].sampleMode(objects[i],reinterpret_cast<void*>(args[i].source),reinterpret_cast<void*>(args[i].target));
+                modeEntries[i].formatMode(objects[i],reinterpret_cast<void*>(args[i].source),reinterpret_cast<void*>(args[i].settings));
+                return modes.releaseSnapshot(input,result,reference);
+            }) && publication.publish(frames[i],args[i].conditionalSource,args[i].parameters,args[i].target,references[i]);
+    };
+    auto a=[&]() noexcept {return acquire(0);};auto b=[&]() noexcept {return acquire(1);};
+    TglOwnedVpFrameAcquisitionContext<decltype(a)> ca{objects[0],{args[0].conditionalSource,args[0].parameters,
+        args[0].source,args[0].target,args[0].settings},a};
+    TglOwnedVpFrameAcquisitionContext<decltype(b)> cb{objects[1],{args[1].conditionalSource,args[1].parameters,
+        args[1].source,args[1].target,args[1].settings},b};
+    return tglWithOwnedVpPairedFrameEntries(ca,cb,modeEntries,
+        [&](void*,const auto& ea,void*,const auto& eb) noexcept -> int {
+            const std::array<TglOwnedVpEntrySet,2> entries{ea,eb};
+            auto ready=[&](size_t i) noexcept {
+                if(i>1) return false;
+                return i ? cb.called && cb.valid && !mb.status() && pb.activeFor(objects[1]) :
+                    ca.called && ca.valid && !ma.status() && pa.activeFor(objects[0]);
+            };
+            static_assert(noexcept(use(objects,entries,std::as_const(frames),std::as_const(geometry),ready)),
+                "paired native-driven prepare ABI");
+            const int result=use(objects,entries,std::as_const(frames),std::as_const(geometry),ready);
+            return result?result:(ready(0) && ready(1)?0:5);
+        });
+}
 template<class Graph,class Lines,class Read,class Retire,class Release,
     class State,class Avs,class Ief,class Emit,class Use>
 int tglWithOwnedVpPairedAcquiredFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerStorage& first,Lines& firstLines,
