@@ -11498,6 +11498,51 @@ bool tglPrepareOwnedVpCpuState(const TglOwnedVpFramePreparation& frame,
     output=candidate;cache=candidateCache;return true;
 }
 
+// Exact ICL +90=1df3e0: settings flags are +0f/+13, while fill conversion
+// consumes target+0 and the +8a flag consumes source+0 (NOT source+120).
+// settings is the original slot90 RSI/data argument, also forwarded to +d0;
+// it is not interchangeable with the acquisition execution/report pointer.
+// Acquire every input before CSC/OS effects. Caller retains all original
+// descriptors and optional E0/F0 metadata through acquisition and use.
+struct TglOwnedVpCpuStateInputs {
+    bool settings0f=false,settings13=false;
+    uint32_t outputColorSpace=0,sourceColorSpace=0;
+    TglOwnedVpFillAlphaInput fillAlpha;
+    TglOwnedVpCompressionInput compression;
+};
+template<class Read>
+bool tglReadOwnedVpCpuStateInputs(const TglOwnedVpFramePreparation& frame,
+    uintptr_t source,uintptr_t target,uintptr_t settings,uintptr_t conditionalSource,
+    uintptr_t alpha,Read read,TglOwnedVpCpuStateInputs& output) noexcept {
+    static_assert(std::is_nothrow_invocable_r_v<bool,Read&,uintptr_t,void*,size_t>);
+    if(!source || !target || !settings || settings>UINTPTR_MAX-0x14) return false;
+    TglOwnedVpCpuStateInputs candidate;uint8_t flag0f=0,flag13=0;
+    if(!read(settings+0xf,&flag0f,1) ||
+       (!(flag0f&1) && !read(settings+0x13,&flag13,1)) ||
+       !read(source,&candidate.sourceColorSpace,4) ||
+       !tglReadOwnedVpCompression(settings,target,read,candidate.compression)) return false;
+    const auto format=candidate.compression.format;
+    const bool alphaFormat=format==1 || format==3 || format==0x15;
+    if((frame.at920 && !read(target,&candidate.outputColorSpace,4)) ||
+       !tglReadOwnedVpFillAlpha(frame.at920,conditionalSource,alphaFormat?alpha:0,
+            read,candidate.fillAlpha)) return false;
+    candidate.settings0f=flag0f&1;candidate.settings13=flag13&1;
+    output=candidate;return true;
+}
+template<class Read,class Convert,class Apply>
+bool tglPrepareLeasedOwnedVpCpuState(const TglOwnedVpFramePreparation& frame,
+    const TglOwnedVpRegionInput& geometry,uintptr_t source,uintptr_t target,
+    uintptr_t settings,uintptr_t conditionalSource,uintptr_t alpha,Read read,
+    TglOwnedSfcFillCache& cache,Convert convert,Apply apply,
+    TglOwnedVpChromaStatePrefix& output) noexcept {
+    TglOwnedVpCpuStateInputs input;
+    if(!tglReadOwnedVpCpuStateInputs(frame,source,target,settings,conditionalSource,alpha,read,input))
+        return false;
+    return tglPrepareOwnedVpCpuState(frame,geometry,input.settings0f,input.settings13,
+        input.fillAlpha,input.outputColorSpace,input.sourceColorSpace,input.compression,
+        cache,convert,apply,output);
+}
+
 // TGL129e3e/129e65 ignore surface/state producer returns;129ec3 (+70)
 // is the first checked status. Owned callbacks must share this per-pass latch
 // so an early failed producer cannot be followed by native command emission.

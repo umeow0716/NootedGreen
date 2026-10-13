@@ -18287,6 +18287,55 @@ int main() {
             [&](auto&,const auto&,uint32_t,uint32_t) noexcept {++converts;return false;},
             apply,state));
         assert(state.packet==saved && converts==1 && applies==1);
+        unsigned inputReads=0,deniedInput=0,leasedConverts=0,leasedApplies=0;
+        uint8_t nativeFlag0f=0;uint32_t nativeFormat=0x19;bool allowAlpha=false;
+        auto originalRead=[&](uintptr_t address,void* out,size_t bytes) noexcept -> bool {
+            if(++inputReads==deniedInput) return false;
+            uint32_t value=0;size_t expected=4;
+            switch(address) {
+                case 0x300f:value=nativeFlag0f;expected=1;break;
+                case 0x3013:assert(!nativeFlag0f);expected=1;break;
+                case 0x1000:value=1;break; // native source color, not source+120
+                case 0x2000:value=3;break; // native output color, not output+120
+                case 0x2130:value=nativeFormat;break;
+                case 0x3d28:value=7;break;
+                case 0x3d2c:case 0x2299:value=1;expected=1;break;
+                case 0x20e4:value=1;break;
+                case 0x4004:value=0x11223344;break;
+                case 0x4008:value=2;break;
+                case 0x5004:assert(allowAlpha);value=0;break;
+                case 0x5000:assert(allowAlpha);value=0x3f800000;break;
+                default:assert(false);return false;
+            }
+            assert(bytes==expected);std::memcpy(out,&value,bytes);return true;
+        };
+        auto leasedConvert=[&](auto& out,const auto& sample,uint32_t from,uint32_t to) noexcept {
+            ++leasedConverts;assert(from==2 && to==3);out=sample;return true;
+        };
+        auto leasedApply=[&](uint32_t mode) noexcept {++leasedApplies;assert(mode==1);};
+        TglOwnedSfcFillCache leasedCache;
+        assert(tglPrepareLeasedOwnedVpCpuState(frame,input.geometry,0x1000,0x2000,0x3000,
+            0x4000,0xdead,originalRead,leasedCache,leasedConvert,leasedApply,state));
+        assert(leasedConverts==1 && leasedApplies==1 && state.packet[0x8a]==1);
+        const unsigned requiredReads=inputReads;const auto leasedPacket=state.packet;
+        for(deniedInput=1;deniedInput<=requiredReads;++deniedInput) {
+            inputReads=0;leasedConverts=leasedApplies=0;
+            assert(!tglPrepareLeasedOwnedVpCpuState(frame,input.geometry,0x1000,0x2000,0x3000,
+                0x4000,0xdead,originalRead,leasedCache,leasedConvert,leasedApply,state));
+            assert(state.packet==leasedPacket && !leasedConverts && !leasedApplies);
+        }
+        deniedInput=0;inputReads=0;frame.at920=false;
+        TglOwnedVpCpuStateInputs acquired;
+        assert(tglReadOwnedVpCpuStateInputs(frame,0x1000,0x2000,0x3000,UINTPTR_MAX,
+            UINTPTR_MAX,originalRead,acquired));
+        assert(acquired.sourceColorSpace==1 && !acquired.fillAlpha.hasAlpha &&
+            inputReads==requiredReads-3); // no fill or unsupported-format alpha dereference
+        inputReads=0;nativeFlag0f=1;nativeFormat=3;allowAlpha=true;
+        assert(tglReadOwnedVpCpuStateInputs(frame,0x1000,0x2000,0x3000,UINTPTR_MAX,
+            0x5000,originalRead,acquired));
+        assert(inputReads==5 && acquired.settings0f && !acquired.settings13 &&
+            acquired.fillAlpha.hasAlpha && acquired.fillAlpha.alphaMode==0 &&
+            acquired.fillAlpha.constantAlpha==1.f);
     }
     {
         constexpr uintptr_t image=0x100000,os=0x200000;
