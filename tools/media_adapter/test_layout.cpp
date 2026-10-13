@@ -19566,6 +19566,27 @@ int main() {
                           if(passIefReady)
                               std::memcpy(stateCpu.bytes.data(),passFilters.state.data(),passFilters.state.size());
                       };
+                    for(int earlyResult:{0,17}) {
+                        unsigned deferredReads=0,deferredUses=0;
+                        auto deferredRead=[&](uintptr_t address,void* out,size_t size) noexcept {
+                            ++deferredReads;return read(address,out,size);
+                        };
+                        assert(graph.withDeferredFrameCallbackAssemblyPass({},0x1000,0x2000,0x3000,0x4000,
+                            0,0x4000,{},passData.data(),deferredRead,
+                            [&](void* c,const auto& f,const auto& g,auto& owner,
+                                void* d,void* s,void* t,auto ready) noexcept -> int {
+                                assert(ready());return makeState(c,f,g,owner,d,s,t);
+                            },makeAvs,makeIef,
+                            [](void*,void*,void*,const auto&,auto) noexcept -> int {
+                                assert(false);return 5;
+                            },[&](void*,const auto& entries,const auto&,const auto&,auto ready) noexcept -> int {
+                                ++deferredUses;
+                                assert(entries.prepare && entries.setup && entries.send && entries.state && entries.filters);
+                                assert(!ready() && !deferredReads);
+                                return earlyResult;
+                            })==(earlyResult?earlyResult:5));
+                        assert(deferredUses==1 && !deferredReads && !passStates && !passAvs && !passIefCalls);
+                    }
                     assert(graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
                       0,0x4000,{},passData.data(),read,makeState,makeAvs,makeIef,
                       [&](void* leasedChild,void*,void*,const TglOwnedVpEntrySet& passEntries) noexcept {

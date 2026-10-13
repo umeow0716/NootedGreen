@@ -14963,6 +14963,49 @@ public:
                 }
             });
     }
+    // Native drives prepare after all scoped entries are bound. Original
+    // surface/metadata owners must enclose this entire call, not just prepare.
+    template<class Read,class State,class Avs,class Ief,class Emit,class Use>
+    int withDeferredFrameCallbackAssemblyPass(const TglOwnedVpEntrySet& base,
+        uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
+        uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
+        void* renderData,Read read,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+        if(!ready_ || busy_ || !renderData || base.prepare || base.state || base.filters ||
+            base.setup || base.send || state_.hasParametersLease() || avs_.hasParametersLease()) return 5;
+        uintptr_t constructorMhw=0;
+        std::memcpy(&constructorMhw,storage_.bytes.data()+0x20,sizeof(constructorMhw));
+        if(constructorMhw!=mhw) return 5;
+        Guard reservation(busy_);
+        return tglWithOwnedVpDeferredFrameEntry(storage_,source,target,mhw,settings,
+            conditionalSource,parameters,original,read,base,
+            [&](void* child,const auto& preparedEntries,const auto& frame,const auto& geometry,
+                const auto&,auto ready) noexcept -> int {
+                const TglOwnedVpEntrySet* active=nullptr;
+                auto stateProducer=[&](void* c,const auto& f,auto& owner,
+                    void* data,void* s,void* t) noexcept -> int {
+                    return state(c,f,geometry,owner,data,s,t,ready);
+                };
+                auto emission=[&](void* c,void* data,void* command) noexcept -> int {
+                    if(!active || !ready()) return 5;
+                    return emit(c,data,command,*active,ready);
+                };
+                return withReadyPreparedContexts(frame,target,reinterpret_cast<void*>(source),renderData,
+                    stateProducer,avs,ief,emission,[&](auto& producer,auto& context) noexcept -> int {
+                        TglOwnedVpPreparedProducerView producerView(producer);
+                        TglOwnedVpPreparedSetupView setupView(context);
+                        TglOwnedVpSfcScopedContext<TglOwnedVpPreparedProducerView> pScope(child,producerView);
+                        TglOwnedVpSfcScopedContext<TglOwnedVpPreparedSetupView> sScope(child,setupView);
+                        auto entries=preparedEntries;
+                        if(!pScope.bound() || !sScope.bound() ||
+                            !tglBindOwnedVpProducerEntries<TglOwnedVpSfcResolve<TglOwnedVpPreparedProducerView>>(child,entries) ||
+                            !tglBindOwnedVpSetupSendEntries<TglOwnedVpSfcResolve<TglOwnedVpPreparedSetupView>>(child,entries)) return 5;
+                        active=&entries;
+                        const int result=use(child,std::as_const(entries),frame,geometry,ready);
+                        active=nullptr;
+                        return result;
+                    },ready);
+            });
+    }
     // Borrow real graph-backed producers without binding single-object TLS slots.
     // A caller may hold two such contexts and bind them through explicit Pair.
     template<class State,class Avs,class Ief,class Emit,class Use>
