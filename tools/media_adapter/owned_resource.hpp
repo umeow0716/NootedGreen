@@ -24016,7 +24016,7 @@ class TglNativeContextRendererFrameStorage {
         std::is_same_v<typename Renderer::TargetOwnerType,Owner>,"original context-pinned renderer owners");
     Sidecars* sidecars_=nullptr;
     Renderer* renderer_=nullptr;
-    bool busy_=false;
+    bool busy_=false,retirementStarted_=false,retirementFailed_=false,retired_=false;
 public:
     // Scope::createContextRootFrame supplies its freshly authenticated roots
     // first. Preserve that same proof; never resolve an independent root set.
@@ -24052,7 +24052,27 @@ public:
         (void)clear();
     }
     bool surfacesReady() const noexcept {return renderer_ && renderer_->surfacesReady();}
-    bool canDestroy() noexcept {return !busy_ && (!renderer_ || !renderer_->backing().retention()());}
+    bool canDestroy() noexcept {
+        return !busy_ && (!renderer_ || retired_ ||
+            (!retirementStarted_ && !renderer_->backing().retention()()));
+    }
+    // Retention is monotonic evidence of acquired/submitted work, not a flag
+    // to clear. Only the enclosing exact frame/event retirement authority may
+    // admit detaching native links and finally destroying this aggregate.
+    template<class Admit,class Prepare> int prepareRetirement(Admit admit,Prepare prepare) noexcept {
+        static_assert(noexcept(admit(std::declval<const Renderer&>(),bool{})) &&
+            std::is_same_v<decltype(admit(std::declval<const Renderer&>(),bool{})),int> &&
+            noexcept(prepare(std::declval<Renderer&>())) &&
+            std::is_same_v<decltype(prepare(std::declval<Renderer&>())),int>);
+        if(busy_ || !renderer_ || retired_ || retirementFailed_) return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        const int status=admit(std::as_const(*renderer_),renderer_->backing().retention()());
+        if(status) return status;
+        retirementStarted_=true;
+        const int result=prepare(*renderer_);
+        if(result) {retirementFailed_=true;return result;} // Unknown partial detach: quarantine.
+        retired_=true;return 0;
+    }
     bool clear() noexcept {
         if(!canDestroy()) return false;
         delete renderer_;renderer_=nullptr;delete sidecars_;sidecars_=nullptr;return true;
@@ -24060,7 +24080,7 @@ public:
     template<class Use> int withFrame(Use use) noexcept {
         static_assert(noexcept(use(std::declval<Renderer&>())) &&
             std::is_same_v<decltype(use(std::declval<Renderer&>())),int>);
-        if(busy_ || !surfacesReady()) return 5;
+        if(busy_ || retirementStarted_ || !surfacesReady()) return 5;
         busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
         return use(*renderer_);
     }

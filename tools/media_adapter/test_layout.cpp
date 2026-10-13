@@ -14934,7 +14934,18 @@ static void testRetainedVeboxFrames() {
                         frame.backing().retention().pending=true;return -31;
                     })==-31);
                     assert(!retained.canDestroy() && !retained.clear() && !destroyedRenderer);
-                    live->backing().retention().pending=false;
+                    assert(retained.prepareRetirement([](const auto&,bool pending) noexcept -> int {
+                        assert(pending);return 31;
+                    },[](auto&) noexcept -> int {assert(false);return 0;})==31);
+                    assert(!retained.clear() && !destroyedRenderer && live->backing().retention().pending);
+                    assert(retained.prepareRetirement([](const auto&,bool pending) noexcept -> int {
+                        assert(pending);return 0; // Recording exact retirement authority, not a GPU fence.
+                    },[&](auto& frame) noexcept -> int {
+                        assert(&frame==live && !retained.clear());
+                        assert(retained.withFrame([](auto&) noexcept -> int {assert(false);return 0;})==5);
+                        return 0;
+                    })==0 && live->backing().retention().pending);
+                    assert(retained.withFrame([](auto&) noexcept -> int {assert(false);return 0;})==5);
                     assert(retained.clear() && destroyedRenderer==1 && !retained.surfacesReady());
                     Storage stale(owners,image,0x8000,success.ticket.generation+1,renderRoots,address,historyAddress,
                         readGraph,admitGraph,admitGraph,construct);
@@ -23329,8 +23340,17 @@ int main() {
                                     return TglOwnedVeboxCommandTransactionResult{status,0,false,false};
                                 });
                                 assert(result.status==-31 && !result.acquired);
-                                return pool.retire(nativeTicket,[](const auto&,bool pending,const auto& result) noexcept -> int {
+                                return pool.retirePrepared(nativeTicket,[](const auto&,bool pending,const auto& result) noexcept -> int {
                                     assert(!pending && !result.acquired && result.status==-31);return 0;
+                                },[](auto& owned,bool pending,const auto& result) noexcept -> int {
+                                    assert(!pending && !result.acquired);
+                                    return owned.prepareRetirement([](const auto&,bool retained) noexcept -> int {
+                                        assert(!retained);return 0; // This frame was never submitted.
+                                    },[](auto& frame) noexcept -> int {
+                                        assert(!frame.children().first().owner().constructedBase() &&
+                                            !frame.children().second().owner().constructedBase());
+                                        return 0; // No native links were published in this construction test.
+                                    });
                                 });
                             })==0 && refs==beforeRefs);
                             assert(physicalFrames.destroy(physicalTicket,base,0x8000,[](uintptr_t p) noexcept -> int {
