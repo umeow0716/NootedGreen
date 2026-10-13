@@ -15140,6 +15140,55 @@ static void testRetainedVeboxFrames() {
                 assert(!pending && frame.roots.sources[16]==0x50000);return 0;
             });
         })==0 && rootDestroyed==2);
+        {
+            Pool::Ticket eventFrame;
+            assert(callbacks.withNewRequest(success.ticket,0x8000,[&](auto& frames) noexcept -> int {
+                eventFrame=frames.create(allocated,released,destroyed);
+                assert(eventFrame.generation);
+                assert(frames.run(eventFrame,[](Frame&) noexcept {
+                    return TglOwnedVeboxCommandTransactionResult{0,0,true,false};
+                }).acquired);
+                return frames.bindOutputReceipt(eventFrame,{0x20000,0x62000,7,true})?0:5;
+            })==0);
+            std::array<uint8_t,16> batch{};std::array<uint8_t,24> item{};std::array<uint8_t,8> event{};
+            auto putEvent=[](auto& bytes,size_t at,auto value) noexcept {std::memcpy(bytes.data()+at,&value,sizeof(value));};
+            putEvent(batch,0,uint32_t(1));putEvent(batch,8,uintptr_t(0x61000));
+            putEvent(item,0,uintptr_t(0x62000));putEvent(item,8,uint32_t(0x3ea));putEvent(item,12,uint32_t(1));
+            putEvent(event,4,uint32_t(7));
+            auto eventRead=[&](uintptr_t p,void* out,size_t bytes) noexcept {
+                auto span=[&](uintptr_t base,const auto& data) noexcept {
+                    if(p<base || p-base>data.size() || bytes>data.size()-(p-base)) return false;
+                    std::memcpy(out,data.data()+p-base,bytes);return true;
+                };
+                return span(0x60000,batch) || span(0x61000,item) || span(0x62000,event);
+            };
+            unsigned nativeEvents=0;int nativeEventResult=0;uint32_t reported=1;bool mutateIndex=false;
+            auto observe=[&]() noexcept -> int {
+                ++nativeEvents;putEvent(item,16,reported);
+                if(mutateIndex) putEvent(event,4,uint32_t(8));
+                return nativeEventResult;
+            };
+            for(uint32_t value:{1U,2U,3U}) {
+                reported=value;
+                const auto result=callbacks.observeFrameEvent(success.ticket,0x8000,eventFrame,0x60000,eventRead,observe);
+                assert(result.status==0 && result.nativeStatus==0 && result.called && result.observed && result.itemStatus==value);
+            }
+            nativeEventResult=31;
+            const auto failed=callbacks.observeFrameEvent(success.ticket,0x8000,eventFrame,0x60000,eventRead,observe);
+            assert(failed.status==31 && failed.nativeStatus==31 && failed.called && !failed.observed && !failed.itemStatus);
+            nativeEventResult=0;mutateIndex=true;
+            const auto changed=callbacks.observeFrameEvent(success.ticket,0x8000,eventFrame,0x60000,eventRead,observe);
+            assert(changed.status==5 && changed.nativeStatus==0 && changed.called && !changed.observed);
+            putEvent(event,4,uint32_t(7));mutateIndex=false;
+            auto stale=eventFrame;++stale.generation;
+            const auto rejected=callbacks.observeFrameEvent(success.ticket,0x8000,stale,0x60000,eventRead,observe);
+            assert(!rejected.called && !rejected.observed && nativeEvents==5);
+            assert(callbacks.withFrame(success.ticket,0x8000,[&](auto& frames) noexcept -> int {
+                return frames.retire(eventFrame,[](const Frame&,bool pending,const auto&) noexcept -> int {
+                    assert(pending);return 0; // Explicit CPU-fixture discard, NOT event completion.
+                });
+            })==0);
+        }
         unsigned configurationCalls=0;
         auto configurationUse=[&](auto&,const TglNativeVeboxRendererView& view) noexcept -> int {
             ++configurationCalls;assert(view.parent.physical==0x8000 && view.renderer==0x30000 &&

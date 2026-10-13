@@ -22395,6 +22395,41 @@ public:
         static_assert(noexcept(observe()) && std::is_same_v<decltype(observe()),int>);
         return withFrame(ticket,physical,[&](auto&) noexcept -> int {return observe();});
     }
+    struct FrameEventObservationResult {
+        int status=5,nativeStatus=5;
+        uint32_t itemStatus=0;
+        bool called=false,observed=false;
+    };
+    // Native event reporting remains admitted while frames are pending. Copy
+    // the receipt under the pool lock, release that lock before native, then
+    // revalidate the SAME ticket/receipt before publishing an observation.
+    // Neither aggregate0 nor itemStatus1 authorizes frame retirement.
+    template<class EventRead,class Observe>
+    FrameEventObservationResult observeFrameEvent(typename Registry::Ticket ticket,uintptr_t physical,
+        typename Registry::FrameTicket frame,uintptr_t batch,EventRead read,Observe observe) noexcept {
+        static_assert(noexcept(observe()) && std::is_same_v<decltype(observe()),int>);
+        FrameEventObservationResult result;
+        result.status=withFrame(ticket,physical,[&](auto& pool) noexcept -> int {
+            TglNativeFrameOutputReceipt receipt;
+            TglNativeFrameEventObservation observation;
+            const int captured=pool.withOutputReceipt(frame,[&](const auto& current) noexcept -> int {
+                if(!observation.capture(current,batch,read)) return 5;
+                receipt=current;return 0;
+            });
+            if(captured) return captured;
+            result.called=true;result.nativeStatus=observe();
+            if(result.nativeStatus) return result.nativeStatus;
+            uint32_t itemStatus=0;
+            if(!observation.observe(read,itemStatus)) return 5;
+            const int same=pool.withOutputReceipt(frame,[&](const auto& current) noexcept -> int {
+                return current.context==receipt.context && current.event==receipt.event &&
+                    current.index==receipt.index ? 0:5;
+            });
+            if(same) return same;
+            result.observed=true;result.itemStatus=itemStatus;return 0;
+        });
+        return result;
+    }
     // Enter before EACH native request preparation: withFrame alone does not
     // exclude shells retained by an earlier asynchronous frame. Factory slot11
     // is a batch (15a99..15ac5), not one preparation. An outer batch admission
