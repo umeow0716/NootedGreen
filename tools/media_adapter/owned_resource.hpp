@@ -14463,6 +14463,24 @@ public:
                     });
             });
     }
+    // Admission VP28 uses the SAME graph and captured original E0/F0, surfaces
+    // and report. Keep the existing initialized catalogue scope through Use;
+    // caller may bind its qualified table and finish admission there. Pointer
+    // identity here does not adopt pointee ownership or authorize submission.
+    template<class Read,class State,class Avs,class Ief,class Emit,class Use>
+    int withSfcAdmissionCallbackAssembly(void* expectedVp,const TglVeboxAdmissionStagesInput& input,
+        uintptr_t source,uintptr_t target,uintptr_t execution,uintptr_t mhw,
+        const TglOwnedVpEntrySet& base,const TglOwnedVpModeState& original,void* renderData,
+        Read read,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+        if(!ownsStorage(expectedVp) || !source || !target || !execution || execution>UINTPTR_MAX-0xd48) return 5;
+        return withInitializedFrameCallbackAssemblyPass(base,source,target,mhw,execution,
+            input.leasedParamsE0,input.leasedParamsF0,original,renderData,read,state,avs,ief,emit,
+            [&](void* actual,const TglOwnedVpEntrySet& entries) noexcept -> int {
+                if(actual!=expectedVp || !ownsStorage(actual)) return 5;
+                static_assert(noexcept(use(actual,entries)) && std::is_same_v<decltype(use(actual,entries)),int>);
+                return use(actual,entries);
+            });
+    }
     template<class Read,class Lines,class Retire,class State,class Avs,class Ief,class Emit,class Invoke>
     int withLeasedResourceCallbackPass(uintptr_t source,uintptr_t target,uintptr_t mhw,
         uintptr_t settings,uintptr_t conditionalSource,uintptr_t parameters,

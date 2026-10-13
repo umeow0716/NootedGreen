@@ -18969,9 +18969,14 @@ int main() {
                     assert(frame.at922 && geometry.frameWidth==geometrySnapshot.frameWidth);
                     acquisitionConsumed=true;return 31;
                 })==31 && acquisitionConsumed);
-            for(unsigned stageFailure=0;stageFailure<11;++stageFailure) {
+            void* admissionVp=nullptr;
+            assert(graph.withResourceOwnerStorage([&](auto& storage) noexcept -> int {
+                admissionVp=storage.bytes.data();return 0;
+            })==0);
+            TglVeboxAdmissionStagesInput sfcInputs;sfcInputs.leasedParamsE0=0x6000;sfcInputs.leasedParamsF0=0x7000;
+            for(unsigned stageFailure=0;stageFailure<12;++stageFailure) {
                 calls=0;unsigned states=0,emits=0;int data=0,command=0;
-                const bool conflict=stageFailure>=3 && stageFailure<=7;
+                const bool conflict=(stageFailure>=3 && stageFailure<=7) || stageFailure==11;
                 TglOwnedVpEntrySet base;
                 const auto admittedFormat=+[](void*,uint32_t) noexcept {return true;};
                 base.compressionFormat=admittedFormat;
@@ -18985,8 +18990,8 @@ int main() {
                 if(stageFailure==5) base.state=+[](void*,void*,void*,void*) noexcept {return 0;};
                 if(stageFailure==6) base.filters=+[](void*,void*,void*,void*) noexcept {};
                 if(stageFailure==7) base.prepare=+[](void*,void*,void*,void*,void*,void*) noexcept {};
-                assert(graph.withInitializedFrameCallbackAssemblyPass(base,0x1000,0x2000,0x3000,0x4000,
-                    0x6000,0x7000,{},&data,mutatingRead,
+                assert(graph.withSfcAdmissionCallbackAssembly(stageFailure==11?static_cast<uint8_t*>(admissionVp)+8:admissionVp,
+                    sfcInputs,0x1000,0x2000,0x4000,0x3000,base,{},&data,mutatingRead,
                     [&](void*,const auto& frame,const auto& geometry,auto&) noexcept {
                         assert(calls==total && !graph.tryReset() && frame.at922 &&
                             geometry.frameWidth==geometrySnapshot.frameWidth);
