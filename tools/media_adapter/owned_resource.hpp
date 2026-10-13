@@ -12139,6 +12139,47 @@ struct TglVeboxAdmissionStagesInput {
 struct TglVeboxAdmissionBorrowedInterfaces {
     uintptr_t os=0,renderHal=0,sku=0,paramsF0=0,paramsE0=0;
 };
+// Native VP setup40 precedes builder129ca0: it must not require an active
+// builder producer pass. Borrow the SAME private child generation, original
+// surface leases, native report and OS/image instead. This acquires nothing
+// and grants no asynchronous retention or GPU completion authority.
+template<class ChildOwner,class ExecutionOwner,class SourceOwner,class TargetOwner>
+class TglLeasedVpStateFrameHealth {
+    ChildOwner& childOwner_;ExecutionOwner& executionOwner_;
+    SourceOwner& sourceOwner_;TargetOwner& targetOwner_;
+    uintptr_t child_,report_,image_,os_;uint64_t generation_;
+    const TglOwnedSurfaceStorage& source_;const TglOwnedSurfaceStorage& target_;
+public:
+    TglLeasedVpStateFrameHealth(ChildOwner& childOwner,ExecutionOwner& executionOwner,
+        SourceOwner& sourceOwner,TargetOwner& targetOwner,void* child,uintptr_t report,
+        uintptr_t image,uintptr_t os,const TglOwnedSurfaceStorage& source,
+        const TglOwnedSurfaceStorage& target) noexcept:
+        childOwner_(childOwner),executionOwner_(executionOwner),sourceOwner_(sourceOwner),targetOwner_(targetOwner),
+        child_(reinterpret_cast<uintptr_t>(child)),report_(report),image_(image),os_(os),
+        generation_(childOwner.allocationGeneration()),source_(source),target_(target) {
+        static_assert(noexcept(childOwner.allocationGeneration()));
+    }
+    bool operator()(uintptr_t source,uintptr_t target) const noexcept {
+        static_assert(noexcept(childOwner_.ownsLifecycleAllocation(nullptr,uint64_t{})) &&
+            noexcept(childOwner_.hasPrivateChildImageLease(uintptr_t{},uintptr_t{})) &&
+            noexcept(childOwner_.hasPrivateSfcRenderDataLease(uintptr_t{},uintptr_t{})) &&
+            noexcept(executionOwner_.hasExecutionLease(uintptr_t{})) &&
+            noexcept(sourceOwner_.hasSurfaceLease(source_)) && noexcept(targetOwner_.hasSurfaceLease(target_)));
+        if(!os_ || !report_ || source!=reinterpret_cast<uintptr_t>(&source_) ||
+           target!=reinterpret_cast<uintptr_t>(&target_) ||
+           !childOwner_.ownsLifecycleAllocation(reinterpret_cast<void*>(child_),generation_) ||
+           !childOwner_.hasPrivateChildImageLease(child_,image_) ||
+           !childOwner_.hasPrivateSfcRenderDataLease(child_,report_) ||
+           !executionOwner_.hasExecutionLease(report_) || !sourceOwner_.hasSurfaceLease(source_) ||
+           !targetOwner_.hasSurfaceLease(target_)) return false;
+        uintptr_t os=0;std::memcpy(&os,reinterpret_cast<const uint8_t*>(child_)+0x10,8);
+        return os==os_;
+    }
+    bool qualifiesImage(uintptr_t image) const noexcept {
+        return image==image_ && (*this)(reinterpret_cast<uintptr_t>(&source_),reinterpret_cast<uintptr_t>(&target_));
+    }
+};
+
 // Original surface/report bytes only. Extra must independently authenticate
 // MHW and nested metadata allocations under their owning frame/image leases.
 // This reader borrows references; it creates no replacement shells and extends no leases.

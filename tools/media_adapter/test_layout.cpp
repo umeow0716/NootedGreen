@@ -24172,6 +24172,20 @@ int main() {
                                                     reinterpret_cast<uintptr_t>(activeChild),packets.execution));
                                                 assert(!activeOwner.hasPrivateSfcRenderDataLease(
                                                     reinterpret_cast<uintptr_t>(activeChild),packets.execution+8));
+                                                TglLeasedVpStateFrameHealth stateHealth(activeOwner,executionLease,activeSource,activeTarget,
+                                                    activeChild,packets.execution,base,os,packets.source,*packets.target);
+                                                const auto originalSource=reinterpret_cast<uintptr_t>(&packets.source);
+                                                const auto originalTarget=reinterpret_cast<uintptr_t>(packets.target);
+                                                assert(stateHealth(originalSource,originalTarget) && stateHealth.qualifiesImage(base));
+                                                assert(!stateHealth(originalSource+8,originalTarget) && !stateHealth.qualifiesImage(base+1));
+                                                TglLeasedVpStateFrameHealth wrongReport(activeOwner,executionLease,activeSource,activeTarget,
+                                                    activeChild,packets.execution+8,base,os,packets.source,*packets.target);
+                                                TglLeasedVpStateFrameHealth wrongOs(activeOwner,executionLease,activeSource,activeTarget,
+                                                    activeChild,packets.execution,base,os+8,packets.source,*packets.target);
+                                                TglLeasedVpStateFrameHealth wrongImage(activeOwner,executionLease,activeSource,activeTarget,
+                                                    activeChild,packets.execution,base+1,os,packets.source,*packets.target);
+                                                assert(!wrongReport(originalSource,originalTarget) && !wrongOs(originalSource,originalTarget) &&
+                                                    !wrongImage(originalSource,originalTarget));
                                                 uintptr_t actualMhw=0;
                                                 std::memcpy(&actualMhw,static_cast<uint8_t*>(activeVp)+0x20,8);
                                                 assert(actualMhw);
@@ -24184,7 +24198,9 @@ int main() {
                                                     return false;
                                                 };
                                                 auto sfcAlignmentRead=[&](uintptr_t address,void* out,size_t size) noexcept {
-                                                    return activeOwner.readLeasedSfcAlignment(activeChild,mhw,address,out,size,sfcObjectRead);
+                                                    return stateHealth(originalSource,originalTarget) &&
+                                                        activeOwner.readLeasedSfcAlignment(activeChild,mhw,address,out,size,sfcObjectRead) &&
+                                                        stateHealth(originalSource,originalTarget);
                                                 };
                                                 TglLeasedVpFrameInputRead originalRead(activeSource,packets.source,
                                                     activeTarget,*packets.target,executionLease,report,sfcAlignmentRead);
