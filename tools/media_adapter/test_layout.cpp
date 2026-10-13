@@ -23780,6 +23780,10 @@ int main() {
                                         put(mhw,0x18,uint16_t(16));put(mhw,0x1a,uint16_t(8));
                                         put(source,0x78,uintptr_t(0x5000));
                                         put(iefInput,0,uint8_t(1));put(iefInput,4,1.0f);
+                                        uintptr_t firstMhw=0,secondMhw=0;
+                                        std::memcpy(&firstMhw,first.bytes.data()+0x20,8);
+                                        std::memcpy(&secondMhw,second.bytes.data()+0x20,8);
+                                        assert(firstMhw && secondMhw);
                                         auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
                                             auto span=[&](uintptr_t base,const auto& bytes) noexcept {
                                                 if(address<base || address-base>bytes.size() ||
@@ -23788,12 +23792,13 @@ int main() {
                                             };
                                             return span(0x1000,source) || span(0x2000,target) ||
                                                 span(reinterpret_cast<uintptr_t>(target.data()),target) ||
-                                                span(0x3000,mhw) || span(0x4000,settings) || span(0x5000,iefInput);
+                                                span(firstMhw,mhw) || span(secondMhw,mhw) ||
+                                                span(0x4000,settings) || span(0x5000,iefInput);
                                         };
                                         int data[2]{},command=0;
                                         const std::array<TglOwnedVpFrameAcquisitionArguments,2> args{{
-                                            {0x1000,0x2000,0x3000,0x4000,0,0x7000,{},data},
-                                            {0x1000,0x2000,0x3000,0x4000,0,0x8000,{},data+1}}};
+                                            {0x1000,0x2000,firstMhw,0x4000,0,0x7000,{},data},
+                                            {0x1000,0x2000,secondMhw,0x4000,0,0x8000,{},data+1}}};
                                         auto releaseCpu=[](void*) noexcept {assert(false);};
                                         for(int scenario:{0,-31,1,2,3,4,5,6,7}) {
                                             const int expected=scenario>0?-17:scenario;
@@ -23911,11 +23916,16 @@ int main() {
                                                     assert(mode==1);return parameters(entry,object,command,&mode);
                                                 }
                                             } commandInvoke{frontendSfc,&command,scenario>0?unsigned(scenario):0};
-                                            const int coreResult=firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
-                                                return tglWithOwnedVpPairedAcquiredFrameCore(firstGraph,first,firstLines.resources(),
+                                            const int coreResult=[&]() noexcept -> int {
+                                                return tglWithOwnedVpPairedDeferredFrameAssembly(firstGraph,first,firstLines.resources(),
                                                     secondGraph,second,secondLines.resources(),args,read,modeRetire,releaseCpu,
-                                                    [&](void* child,const auto& snapshot,const auto& geometry,auto& packet) noexcept -> int {
-                                                        assert(snapshot.regions.scale.scaling && !packet.hasParametersLease());
+                                                    [&](void* child,const auto& snapshot,const auto& geometry,auto& packet,
+                                                        void* originalData,void* originalSource,void* originalTarget,auto ready) noexcept -> int {
+                                                        assert(ready() && snapshot.regions.scale.scaling && !packet.hasParametersLease());
+                                                        const size_t originalIndex=child==first.bytes.data()?0:1;
+                                                        assert(originalData==args[originalIndex].renderData &&
+                                                            reinterpret_cast<uintptr_t>(originalSource)==args[originalIndex].source &&
+                                                            reinterpret_cast<uintptr_t>(originalTarget)==args[originalIndex].target);
                                                         assert(leasedOutputs[child==first.bytes.data()?0:1]);
                                                         assert(acquiredGeometry[child==first.bytes.data()?0:1]==&geometry);
                                                         assert(prefixesPrepared);
@@ -24004,7 +24014,8 @@ int main() {
                                                         iefPackets[index]=parameters.ief;
                                                         ++iefProduced;
                                                     },
-                                                    [&](void* child,void*,void*) noexcept -> int {
+                                                    [&](void* child,void*,void*,const auto& complete,auto ready) noexcept -> int {
+                                                        assert(ready() && complete.hasAllEntries());
                                                         const size_t index=child==first.bytes.data()?0:1;
                                                         auto& graph=index?secondGraph:firstGraph;
                                                         return graph.withCscContext(child,iefPackets[index],cscCaches[index],3,5,0,
@@ -24062,25 +24073,14 @@ int main() {
                                                                 });
                                                             });
                                                     },
-                                                    [&](void* a,const auto& baseA,void* b,const auto& baseB,
-                                                        const auto& acquired,const auto& geometryA,const auto& geometryB,
-                                                        auto& setupA,auto& setupB) noexcept -> int {
-                                                        assert(setupA.owns(a) && setupB.owns(b) &&
-                                                            setupA.data==acquired[0].renderData && setupB.data==acquired[1].renderData);
-                                                        assert(!states && acquired[0].source==args[0].source &&
-                                                            acquired[1].target==args[1].target);
-                                                        acquiredGeometry={&geometryA,&geometryB};
+                                                    [&](const auto& objects,const auto& complete,const auto& acquired,const auto& geometry,
+                                                        auto ready,auto& pa,auto& pb,auto& qa,auto& qb) noexcept -> int {
+                                                        void* a=objects[0];void* b=objects[1];
+                                                        const auto& ea=complete[0];const auto& eb=complete[1];
+                                                        assert(!states && !ready(0) && !ready(1));
+                                                        acquiredGeometry={&geometry[0],&geometry[1]};
                                                         assert(!prefixesPrepared);
-                                                        if(!tglPrepareOwnedVpStatePrefix(acquired[0].frame,geometryA,false,false,statePrefixes[0]) ||
-                                                           !tglPrepareOwnedVpStatePrefix(acquired[1].frame,geometryB,false,false,statePrefixes[1])) return 5;
-                                                        prefixesPrepared=true;
-                                                        const std::array<TglOwnedVpEntrySet,2> base{baseA,baseB};
-                                                        return tglWithOwnedVpPairedCscDispatchEntries(a,b,base,
-                                                            [&](void*,const auto& cscA,auto& pa,void*,const auto& cscB,auto& pb) noexcept -> int {
                                                         phases[0]=&pa;phases[1]=&pb;
-                                                        const std::array<TglOwnedVpEntrySet,2> cscEntries{cscA,cscB};
-                                                        return tglWithOwnedVpPairedPlatformDispatchEntries(a,b,cscEntries,
-                                                            [&](void*,const auto& ea,auto& qa,void*,const auto& eb,auto& qb) noexcept -> int {
                                                         platformPhases[0]=&qa;platformPhases[1]=&qb;
                                                         catalogues[0]=&ea;catalogues[1]=&eb;
                                                         assert(ea.hasAllEntries() && eb.hasAllEntries());
@@ -24106,14 +24106,19 @@ int main() {
                                                             uintptr_t addressPoint=0;std::memcpy(&addressPoint,child,8);
                                                             assert(addressPoint==(i?tableB.addressPoint():tableA.addressPoint()));
                                                             const auto& entries=*reinterpret_cast<const TglOwnedVpEntrySet*>(addressPoint);
-                                                            entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
-                                                            entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x4000));
                                                             const auto transaction=frame.withNativeCommandFrame(roles,0,0,
                                                                 reinterpret_cast<uintptr_t>(commandParents[i]),0x1100,
                                                                 frontendCreatorView.renderHal,0x3300,
                                                                 [&](auto& sourceOwner,auto& targetOwner,auto&,auto& leases) noexcept {
                                                                     assert(leases.target && sourceOwner.hasSurfaceLease(leases.source) &&
                                                                         targetOwner.hasSurfaceLease(*leases.target) && !leasedOutputs[i]);
+                                                                    assert(!ready(i));
+                                                                    entries.prepare(child,reinterpret_cast<void*>(args[i].conditionalSource),
+                                                                        reinterpret_cast<void*>(args[i].parameters),reinterpret_cast<void*>(args[i].source),
+                                                                        reinterpret_cast<void*>(args[i].target),reinterpret_cast<void*>(args[i].settings));
+                                                                    if(!ready(i) || !tglPrepareOwnedVpStatePrefix(acquired[i],geometry[i],false,false,statePrefixes[i])) return
+                                                                        TglOwnedVeboxCommandTransactionResult{5,0,false,false};
+                                                                    prefixesPrepared=true;
                                                                     leasedOutputs[i]=leases.target;
                                                                     outputOwners[i]={&targetOwner,
                                                                         +[](void* context,const TglOwnedSurfaceStorage& s) noexcept {
@@ -24157,10 +24162,8 @@ int main() {
                                                         std::memcpy(&restoredA,a,8);std::memcpy(&restoredB,b,8);
                                                         assert(!restoredA && !restoredB);
                                                         return joined;
-                                                        });
-                                                        });
                                                     });
-                                            });
+                                            }();
                                             if(coreResult!=expected) std::fprintf(stderr,"NV12 core status=%d expected=%d states=%u prefixes=%u reads=%u\n",coreResult,expected,states,unsigned(prefixesPrepared),layoutApi.reads);
                                             assert(coreResult==expected);
                                             const unsigned preparedCount=scenario>0?1:2;
