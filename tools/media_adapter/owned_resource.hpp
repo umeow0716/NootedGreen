@@ -223,6 +223,15 @@ struct TglOwnedVpFactoryContext {
         called=true;return child;
     }
 };
+struct TglOwnedVpFactoryPublication {
+    const TglOwnedVpFactoryContext& context;
+    const uint8_t* field;
+    uintptr_t child;
+    bool operator()() const noexcept {
+        uintptr_t observed=0;std::memcpy(&observed,field,8);
+        return context.called && context.valid && observed==child;
+    }
+};
 template<class Context> struct TglOwnedVpFactoryCallback {
     static void* create(void* parent) noexcept {
         auto* context=TglOwnedScopedContext<Context,TglOwnedVpFactoryContextDomain>::get(parent);
@@ -5042,12 +5051,19 @@ public:
         TglOwnedScopedContext<Context,TglOwnedVpFactoryContextDomain> scope(parent,context);
         if(!scope.bound()) return 5;
         using Callback=TglOwnedVpFactoryCallback<Context>;
-        static_assert(noexcept(use(parent,&Callback::create)),"VP factory consumer ABI");
-        const int result=use(parent,&Callback::create);
-        uintptr_t observed=0;std::memcpy(&observed,field,8);
+        TglOwnedVpFactoryPublication published{context,field,c};
+        int result=0;
+        if constexpr(std::is_invocable_v<Use&,void*,decltype(&Callback::create),decltype(published)>) {
+                static_assert(noexcept(use(parent,&Callback::create,published)),"VP factory publication ABI");
+                result=use(parent,&Callback::create,published);
+        } else {
+                static_assert(noexcept(use(parent,&Callback::create)),"VP factory consumer ABI");
+                result=use(parent,&Callback::create);
+        }
+        const bool admitted=published();
         std::memcpy(field,&previous,8);
         if(result) return result;
-        return context.called && context.valid && observed==c ? 0 : 5;
+        return admitted ? 0 : 5;
     }
     template<class VpOwner,class Use>
     int withBorrowedVpCpuView(VpOwner& vp,bool avsEnabled,Use use) noexcept {
@@ -5094,15 +5110,21 @@ public:
     template<bool Reserved=false,class VpOwner,class Table,class Use>
     int withVpFactoryVtableDispatch(VpOwner& vp,void* child,const Table& table,Use use) noexcept {
         return withVpFactoryFlatDispatch<Reserved>(vp,child,table,
-            [&](void* parent,auto factory) noexcept {
+            [&](void* parent,auto factory,TglOwnedVpFactoryPublication published) noexcept -> int {
                 uintptr_t vptr=0;std::memcpy(&vptr,parent,8);
                 if(vptr!=table_.addressPoint()) return 5;
                 auto& slot=table_.entries[0x1e0/8];
                 const uintptr_t previous=slot;
                 const uintptr_t installed=reinterpret_cast<uintptr_t>(factory);
                 slot=installed;
-                static_assert(noexcept(use(parent)),"native VP factory dispatch ABI");
-                const int result=use(parent);
+                int result=0;
+                if constexpr(std::is_invocable_v<Use&,void*,decltype(published)>) {
+                        static_assert(noexcept(use(parent,published)),"native VP publication ABI");
+                        result=use(parent,published);
+                } else {
+                        static_assert(noexcept(use(parent)),"native VP factory dispatch ABI");
+                        result=use(parent);
+                }
                 uintptr_t observed=0;std::memcpy(&observed,parent,8);
                 const bool intact=observed==vptr && slot==installed;
                 slot=previous;
@@ -5148,14 +5170,14 @@ public:
         static_assert(noexcept(use(nullptr)),"initialized VP consumer ABI");
         if(!request || !metadata || binding.image!=image_ ||
            binding.entry!=image_+0x126740) return 5;
-        return withVpFactoryVtableDispatch<Reserved>(vp,child,table,[&](void* parent) noexcept {
+        return withVpFactoryVtableDispatch<Reserved>(vp,child,table,[&](void* parent,TglOwnedVpFactoryPublication published) noexcept -> int {
             const int result=tglInvokeLeasedVeboxAllocate(binding,*this,parent,request,metadata,invoke);
             if(result) return result;
             uintptr_t linked=0;
             std::memcpy(&linked,static_cast<uint8_t*>(parent)+0x80,8);
             // Factory postvalidation alone happens after use(); reject a
             // successful native call that did not publish this VP BEFORE use.
-            if(linked!=reinterpret_cast<uintptr_t>(child)) return 5;
+            if(linked!=reinterpret_cast<uintptr_t>(child) || !published()) return 5;
             return use(parent);
         });
     }

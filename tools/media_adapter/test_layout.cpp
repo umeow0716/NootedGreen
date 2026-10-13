@@ -26195,6 +26195,21 @@ int main() {
                             &allocationArgument1,&allocationArgument2,
                             [](void*) noexcept -> int {assert(false);return 0;},
                             [](uintptr_t,void*,void*,void*) noexcept -> int {return 0;})==5);
+                        for(int ignoredFactoryFailure:{0,31}) {
+                            assert(owner.withInitializedVp(allocation,graph,child,dispatch,
+                                &allocationArgument1,&allocationArgument2,
+                                [](void*) noexcept -> int {assert(false);return 0;},
+                                [&](uintptr_t,void* parent,void*,void*) noexcept -> int {
+                                    uintptr_t vptr=0,entry=0;std::memcpy(&vptr,parent,8);
+                                    std::memcpy(&entry,reinterpret_cast<void*>(vptr+0x1e0),8);
+                                    auto factory=reinterpret_cast<void*(*)(void*) noexcept>(entry);
+                                    void* created=factory(parent);assert(created==child);
+                                    std::memcpy(static_cast<uint8_t*>(parent)+0x80,&created,8);
+                                    assert(!factory(parent)); // Native fixture ignores this refusal.
+                                    return ignoredFactoryFailure;
+                                })==(ignoredFactoryFailure?ignoredFactoryFailure:5));
+                            uintptr_t link=1;std::memcpy(&link,cpu.bytes.data()+0x80,8);assert(!link);
+                        }
                         auto neverAllocate=[](uintptr_t,void*,void*,void*) noexcept -> int {assert(false);return 0;};
                         assert(tglInvokeLeasedVeboxAllocate(allocation,owner,owner.constructedBase(),
                             &allocationArgument1,&allocationArgument2,neverAllocate)==5);
