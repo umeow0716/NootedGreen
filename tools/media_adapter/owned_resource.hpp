@@ -10792,6 +10792,65 @@ inline TglOwnedVpChromaStatePrefix tglPrepareOwnedVpChromaStatePrefix(
     tglPrepareOwnedSfcOutputChroma(result.packet,frame.color.metadata.target294,targetFormat);
     return result;
 }
+// Outer-owned publication for native +28: construct before the callback,
+// publish once AFTER acquisition, restore only when the enclosing native
+// frame invocation ends. Constructor does not snapshot pre-initialized data.
+// Exact field set matches the existing reference/color/prepared-frame scopes;
+// never restore the whole 920..9c8 window (938/resource fields are not ours).
+// This borrows storage/metadata and acquires no resource or GPU lifetime.
+class TglOwnedVpFramePublication {
+    TglOwnedVpSfcCallerStorage& storage_;
+    inline static constexpr std::array<size_t,18> offsets_{
+        0x988,0x980,0x990,0x9b0,0x998,0x99c,0x923,0x9a4,0x9a8,0x9b8,0x9c0,
+        0x920,0x921,0x922,0x924,0x928,0x92c,0x9a0};
+    inline static constexpr std::array<size_t,18> lengths_{
+        8,8,8,8,4,4,1,4,4,1,8,1,1,1,1,4,4,4};
+    std::array<std::array<uint8_t,8>,18> saved_{};
+    bool attempted_=false,active_=false,invalid_=false;
+public:
+    explicit TglOwnedVpFramePublication(TglOwnedVpSfcCallerStorage& storage) noexcept:storage_(storage) {}
+    TglOwnedVpFramePublication(const TglOwnedVpFramePublication&)=delete;
+    TglOwnedVpFramePublication& operator=(const TglOwnedVpFramePublication&)=delete;
+    ~TglOwnedVpFramePublication() {
+        if(active_) for(size_t i=offsets_.size();i--;)
+            std::memcpy(storage_.bytes.data()+offsets_[i],saved_[i].data(),lengths_[i]);
+    }
+    bool publish(const TglOwnedVpFramePreparation& frame,uintptr_t conditionalSource,
+        uintptr_t parameters,uintptr_t target,uintptr_t sourceA8) noexcept {
+        if(attempted_) {invalid_=true;return false;}
+        attempted_=true;
+        if(!target || (frame.at920 && !conditionalSource)) return false;
+        for(size_t i=0;i<4;++i) {
+            uintptr_t occupied=0;std::memcpy(&occupied,storage_.bytes.data()+offsets_[i],8);
+            if(occupied) return false;
+        }
+        uintptr_t previousReference=0;std::memcpy(&previousReference,storage_.bytes.data()+0x9c0,8);
+        if(frame.color.modes.borrowSourceA8 && (!sourceA8 || previousReference)) return false;
+        for(size_t i=0;i<offsets_.size();++i)
+            std::memcpy(saved_[i].data(),storage_.bytes.data()+offsets_[i],lengths_[i]);
+        const std::array<uintptr_t,4> references{frame.at920?conditionalSource:0,
+            reinterpret_cast<uintptr_t>(storage_.bytes.data()+0x28),parameters,target};
+        for(size_t i=0;i<references.size();++i)
+            std::memcpy(storage_.bytes.data()+offsets_[i],&references[i],8);
+        std::memcpy(storage_.bytes.data()+0x998,&frame.color.modes.state.at998,4);
+        std::memcpy(storage_.bytes.data()+0x99c,&frame.color.modes.state.at99c,4);
+        storage_.bytes[0x923]=frame.color.modes.state.at923;
+        std::memcpy(storage_.bytes.data()+0x9a4,&frame.color.metadata.at9a4,4);
+        std::memcpy(storage_.bytes.data()+0x9a8,&frame.color.metadata.at9a8,4);
+        storage_.bytes[0x9b8]=frame.color.at9b8;
+        if(frame.color.modes.borrowSourceA8) std::memcpy(storage_.bytes.data()+0x9c0,&sourceA8,8);
+        storage_.bytes[0x920]=frame.at920;storage_.bytes[0x921]=frame.regions.scale.scaling;
+        storage_.bytes[0x922]=frame.at922;storage_.bytes[0x924]=frame.at924;
+        std::memcpy(storage_.bytes.data()+0x928,&frame.regions.scale.at928,4);
+        std::memcpy(storage_.bytes.data()+0x92c,&frame.regions.scale.at92c,4);
+        std::memcpy(storage_.bytes.data()+0x9a0,&frame.at9a0,4);
+        active_=true;return true;
+    }
+    bool activeFor(const void* child) const noexcept {
+        return active_ && !invalid_ && child==storage_.bytes.data();
+    }
+};
+
 // One synchronous slot28 view. Leases for source, parameters, target and CSC
 // must enclose this call. Owned target metadata is supplied to use(), not
 // written through the borrowed target. No vtable or object is published here.
@@ -10800,28 +10859,9 @@ int tglWithOwnedVpPreparedFrame(TglOwnedVpSfcCallerStorage& storage,
     const TglOwnedVpFramePreparation& frame,uintptr_t conditionalSource,
     uintptr_t parameters,uintptr_t target,uintptr_t sourceA8,Use use) noexcept {
     static_assert(noexcept(use(static_cast<void*>(nullptr),frame.color.metadata)),"VP frame scope ABI");
-    if(!target || (frame.at920 && !conditionalSource)) return 5;
-    return tglWithOwnedVpFrameReferences(storage,conditionalSource,parameters,target,frame.at920,
-        [&](void*) noexcept {
-            return tglWithOwnedVpFrameColor(storage,frame.color,sourceA8,[&](void* child) noexcept {
-                constexpr std::array<size_t,7> offsets{0x920,0x921,0x922,0x924,0x928,0x92c,0x9a0};
-                constexpr std::array<size_t,7> lengths{1,1,1,1,4,4,4};
-                std::array<std::array<uint8_t,4>,7> saved{};
-                for(size_t i=0;i<offsets.size();++i)
-                    std::memcpy(saved[i].data(),storage.bytes.data()+offsets[i],lengths[i]);
-                storage.bytes[0x920]=frame.at920;
-                storage.bytes[0x921]=frame.regions.scale.scaling;
-                storage.bytes[0x922]=frame.at922;
-                storage.bytes[0x924]=frame.at924;
-                std::memcpy(storage.bytes.data()+0x928,&frame.regions.scale.at928,4);
-                std::memcpy(storage.bytes.data()+0x92c,&frame.regions.scale.at92c,4);
-                std::memcpy(storage.bytes.data()+0x9a0,&frame.at9a0,4);
-                const int result=use(child,frame.color.metadata);
-                for(size_t i=0;i<offsets.size();++i)
-                    std::memcpy(storage.bytes.data()+offsets[i],saved[i].data(),lengths[i]);
-                return result;
-            });
-        });
+    TglOwnedVpFramePublication publication(storage);
+    if(!publication.publish(frame,conditionalSource,parameters,target,sourceA8)) return 5;
+    return use(storage.bytes.data(),frame.color.metadata);
 }
 // Compose acquisition, owned frame publication and +40 producer ordering.
 // The caller retains all descriptor/image leases for the complete call and

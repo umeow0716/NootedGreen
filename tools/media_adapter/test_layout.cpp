@@ -20572,6 +20572,48 @@ int main() {
         assert(tglWithOwnedVpPreparedFrame(storage,frame,0x1000,0x2000,0,0x7000,use)==5);
         assert(tglWithOwnedVpPreparedFrame(storage,frame,0x1000,0x2000,0x3000,0,use)==5);
         assert(calls==1 && storage.bytes==original);
+        for(int nativeResult:{0,-31}) {
+            auto expected=storage.bytes;
+            {
+                TglOwnedVpFramePublication publication(storage);
+                assert(!publication.activeFor(storage.bytes.data()) && storage.bytes==expected);
+                // The outer scope predates initialization: save post-init
+                // values only when the native prepare callback publishes.
+                const uint32_t initializedRotation=11;
+                std::memcpy(storage.bytes.data()+0x9a0,&initializedRotation,4);
+                std::memcpy(expected.data()+0x9a0,&initializedRotation,4);
+                auto nativePrepare=[&]() noexcept {
+                    return publication.publish(frame,0x1000,0x2000,0x3000,0x7000);
+                };
+                assert(nativePrepare()); // Callback has returned; publication remains live.
+                assert(publication.activeFor(storage.bytes.data()) &&
+                    !publication.activeFor(storage.bytes.data()+8));
+                {
+                    TglOwnedVpFramePublication nested(storage);
+                    const auto live=storage.bytes;
+                    assert(!nested.publish(frame,0x1000,0x2000,0x3000,0x7000));
+                    assert(storage.bytes==live && publication.activeFor(storage.bytes.data()));
+                }
+                auto nativeSetupSend=[&]() noexcept -> int {
+                    assert(publication.activeFor(storage.bytes.data()));
+                    uintptr_t reference=0;uint32_t rotation=0;
+                    std::memcpy(&reference,storage.bytes.data()+0x9c0,8);
+                    std::memcpy(&rotation,storage.bytes.data()+0x9a0,4);
+                    assert(reference==0x7000 && rotation==3 && storage.bytes[0x923]==1);
+                    // Unrelated owned state/performance fields must survive
+                    // metadata restoration; never snapshot the whole window.
+                    const uintptr_t state=0x65000,performance=0x66000;
+                    std::memcpy(storage.bytes.data()+0x938,&state,8);std::memcpy(expected.data()+0x938,&state,8);
+                    std::memcpy(storage.bytes.data()+0x9c8,&performance,8);std::memcpy(expected.data()+0x9c8,&performance,8);
+                    return nativeResult;
+                };
+                assert(nativeSetupSend()==nativeResult);
+                const auto live=storage.bytes;
+                assert(!nativePrepare() && !publication.activeFor(storage.bytes.data()));
+                assert(storage.bytes==live); // Duplicate revokes admission, not cleanup responsibility.
+            }
+            assert(storage.bytes==expected);
+        }
     }
     {
         TglOwnedVpFramePreparationInput input;
