@@ -695,6 +695,7 @@ static void testTrackedCpuOwner() {
             bool hasExecutionLease(uintptr_t value) const noexcept {return live && value==identity;}
         } execution;
         TglVeboxAdmissionBorrowedInterfaces expected{0x100,0x200,0x300,0};
+        expected.paramsE0=0x556600;std::memcpy(params.data()+0xe0,&expected.paramsE0,8);
         std::memcpy(base.data()+0x10,&expected.os,8);
         std::memcpy(base.data()+0x18,&expected.renderHal,8);
         std::memcpy(base.data()+0x20,&expected.sku,8);
@@ -708,7 +709,7 @@ static void testTrackedCpuOwner() {
             if(!allow) return false;
             if(address==0x300 && n==8) {uint64_t sku=uint64_t{1}<<12;std::memcpy(out,&sku,8);return true;}
             if((address==pa+0x10 && n==8) || (address==pp+0x98 && n==8) ||
-               (address==pp+0xf0 && n==8) || (address==pp+0x138 && n==1) ||
+               (address==pp+0xf0 && n==8) || (address==pp+0xe0 && n==8) || (address==pp+0x138 && n==1) ||
                (address==pp+0x10c && n==4)) {std::memcpy(out,reinterpret_cast<void*>(address),n);return true;}
             assert(false);return false;
         };
@@ -721,6 +722,7 @@ static void testTrackedCpuOwner() {
         allow=false;assert(!capture() && input.params10c==0xabcdef);allow=true;
         ++expected.renderHal;assert(!capture() && input.params10c==0xabcdef);--expected.renderHal;
         ++expected.paramsF0;assert(!capture() && input.params10c==0xabcdef);--expected.paramsF0;
+        ++expected.paramsE0;assert(!capture() && input.params10c==0xabcdef);--expected.paramsE0;
         assert(!tglReadLeasedVeboxAdmissionInputs(input,owner,execution,base.data(),
             UINTPTR_MAX,pa,source,target,expected,1,read) && input.params10c==0xabcdef);
         assert(!tglReadLeasedVeboxAdmissionInputs(input,owner,execution,base.data(),
@@ -731,6 +733,7 @@ static void testTrackedCpuOwner() {
         p=reinterpret_cast<uintptr_t>(&source);std::memcpy(pass.data()+0x10,&p,8);
         assert(capture() && input.prefix.sourceWidth==1920 && input.prefix.params138==1);
         assert(input.prefix.sku0==(uint64_t{1}<<12) && input.mmc==1 && input.pipe==1);
+        assert(input.leasedParamsE0==expected.paramsE0 && input.leasedParamsF0==expected.paramsF0);
         std::array<uint8_t,0xd48> nativeExecution{};
         execution.identity=reinterpret_cast<uintptr_t>(nativeExecution.data());
         std::memcpy(base.data()+0x88,&execution.identity,8);
@@ -23772,6 +23775,8 @@ int main() {
                                     std::memcpy(pass.data()+0x10,&root,8);std::memcpy(params.data()+0x98,&peer,8);
                                     std::memcpy(params.data()+8,&root,8);
                                     TglVeboxAdmissionBorrowedInterfaces interfaces;
+                                    interfaces.paramsE0=0x556600;
+                                    std::memcpy(params.data()+0xe0,&interfaces.paramsE0,8);
                                     auto* bytes=static_cast<uint8_t*>(child);
                                     std::array<uint8_t,16> savedDependencies{};
                                     std::memcpy(savedDependencies.data(),bytes+0x18,savedDependencies.size());
@@ -23877,7 +23882,8 @@ int main() {
                                         return tglRunCapturedSelectedVeboxAdmissionStages(owner,executionLease,child,
                                             params,pass,packets.source,*packets.target,interfaces,reportBytes,readInput,reset,
                                             selectPipe,historyStage,
-                                            featureStage,[&](auto&,auto finish) noexcept -> bool {
+                                            featureStage,[&](auto&,const auto& captured,auto finish) noexcept -> bool {
+                                                assert(captured.leasedParamsE0==interfaces.paramsE0 && captured.leasedParamsF0==0);
                                                 assert(!sfcScopeLive);sfcScopeLive=true;
                                                 const bool result=skipSfcFinish?true:finish();
                                                 if(repeatSfcFinish) assert(!finish());
@@ -24700,6 +24706,7 @@ int main() {
                             const auto passBase=reinterpret_cast<uintptr_t>(admissionPass.data());
                             const bool valid=(p==passBase+0x10 && n==8) ||
                                 (p==paramsBase+0x98 && n==8) || (p==paramsBase+0xf0 && n==8) ||
+                                (p==paramsBase+0xe0 && n==8) ||
                                 (p==paramsBase+0x138 && n==1) || (p==paramsBase+0x10c && n==4) ||
                                 (p==interfaces.sku && n==8);
                             if(valid) std::memcpy(out,reinterpret_cast<const void*>(p),n);

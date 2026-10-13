@@ -11985,10 +11985,10 @@ struct TglVeboxAdmissionStagesInput {
     TglVeboxAdmissionPrefixInput prefix;
     uint32_t pipe=0,params10c=0,source124=0;
     uint8_t mmc=0;
-    uintptr_t leasedParamsF0=0;
+    uintptr_t leasedParamsF0=0,leasedParamsE0=0;
 };
 struct TglVeboxAdmissionBorrowedInterfaces {
-    uintptr_t os=0,renderHal=0,sku=0,paramsF0=0;
+    uintptr_t os=0,renderHal=0,sku=0,paramsF0=0,paramsE0=0;
 };
 // Read only named admission inputs. Context authenticates params/pass and
 // retains their owners; source/target and interfaces are the same frame's
@@ -12004,7 +12004,7 @@ bool tglReadLeasedVeboxAdmissionInputs(TglVeboxAdmissionStagesInput& output,
        !params || params>UINTPTR_MAX-0x139 || !pass || pass>UINTPTR_MAX-0x18 ||
        !expected.os || !expected.renderHal || !expected.sku || pipe>2) return false;
     const auto* base=static_cast<const uint8_t*>(child);
-    uintptr_t os=0,renderHal=0,sku=0,execution=0,sourceLink=0,targetLink=0,f0=0;
+    uintptr_t os=0,renderHal=0,sku=0,execution=0,sourceLink=0,targetLink=0,f0=0,e0=0;
     std::memcpy(&os,base+0x10,8);std::memcpy(&renderHal,base+0x18,8);
     std::memcpy(&sku,base+0x20,8);std::memcpy(&execution,base+0x88,8);
     if(os!=expected.os || renderHal!=expected.renderHal || sku!=expected.sku ||
@@ -12013,10 +12013,11 @@ bool tglReadLeasedVeboxAdmissionInputs(TglVeboxAdmissionStagesInput& output,
     if(!read(pass+0x10,&sourceLink,8) || sourceLink!=reinterpret_cast<uintptr_t>(&source) ||
        !read(params+0x98,&targetLink,8) || targetLink!=reinterpret_cast<uintptr_t>(&target) ||
        !read(params+0xf0,&f0,8) || f0!=expected.paramsF0 ||
+       !read(params+0xe0,&e0,8) || e0!=expected.paramsE0 ||
        !read(params+0x138,&candidate.prefix.params138,1) ||
        !read(params+0x10c,&candidate.params10c,4) || !read(sku,&candidate.prefix.sku0,8)) return false;
     candidate.prefix.os=candidate.prefix.renderHal=candidate.prefix.execution=candidate.prefix.source=true;
-    candidate.mmc=base[0x1ba9];candidate.pipe=pipe;candidate.leasedParamsF0=f0;
+    candidate.mmc=base[0x1ba9];candidate.pipe=pipe;candidate.leasedParamsF0=f0;candidate.leasedParamsE0=e0;
     std::memcpy(&candidate.prefix.sourceWidth,source.prefix.data()+0xd8,4);
     std::memcpy(&candidate.prefix.sourceHeight,source.prefix.data()+0xdc,4);
     std::memcpy(&candidate.source124,source.prefix.data()+0x124,4);
@@ -12088,9 +12089,19 @@ bool tglRunSelectedVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& inpu
             if(!sfc(execution)) return false;
             admitted=true;
         } else {
-            static_assert(noexcept(sfc(execution,finishSfc)) &&
-                std::is_same_v<decltype(sfc(execution,finishSfc)),bool>,"scoped SFC completion ABI");
-            const bool done=sfc(execution,finishSfc);
+            auto invokeScoped=[&](auto& stage,auto finish) noexcept -> bool {
+                if constexpr(std::is_invocable_v<decltype(stage),Execution&,
+                    const TglVeboxAdmissionStagesInput&,decltype(finish)>) {
+                    static_assert(noexcept(stage(execution,input,finish)) &&
+                        std::is_same_v<decltype(stage(execution,input,finish)),bool>);
+                    return stage(execution,input,finish);
+                } else {
+                    static_assert(noexcept(stage(execution,finish)) &&
+                        std::is_same_v<decltype(stage(execution,finish)),bool>);
+                    return stage(execution,finish);
+                }
+            };
+            const bool done=invokeScoped(sfc,finishSfc);
             accepted=done && finished && !finishRepeated && accepted;
             return accepted;
         }
