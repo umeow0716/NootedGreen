@@ -19587,6 +19587,39 @@ int main() {
                             })==(earlyResult?earlyResult:5));
                         assert(deferredUses==1 && !deferredReads && !passStates && !passAvs && !passIefCalls);
                     }
+                    for(int sendResult:{0,31}) {
+                        unsigned deferredEmits=0;
+                        uint64_t beforeTarget=0;
+                        std::memcpy(&beforeTarget,storage->bytes.data()+0x9b0,8);
+                        assert(graph.withDeferredFrameCallbackAssemblyPass({},0x1000,0x2000,0x3000,0x4000,
+                            0,0x4000,{},passData.data(),read,
+                            [&](void* c,const auto& f,const auto& g,auto& owner,
+                                void* d,void* s,void* t,auto ready) noexcept -> int {
+                                assert(ready());return makeState(c,f,g,owner,d,s,t);
+                            },makeAvs,makeIef,
+                            [&](void* c,void* d,void* command,const auto& entries,auto ready) noexcept -> int {
+                                assert(ready() && c==storage->bytes.data() && d==passData.data() && command);
+                                assert(entries.prepare && entries.setup && entries.send && passIefReady);
+                                ++deferredEmits;return sendResult;
+                            },[&](void* child,const auto& entries,const auto&,const auto&,auto ready) noexcept -> int {
+                                assert(!ready());
+                                entries.prepare(child,nullptr,reinterpret_cast<void*>(0x4000),
+                                    reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),
+                                    reinterpret_cast<void*>(0x4000));
+                                assert(ready());
+                                const int status=entries.setup(child,reinterpret_cast<void*>(0x1000),
+                                    reinterpret_cast<void*>(0x2000),passData.data());
+                                if(status) return status;
+                                unsigned command=0;
+                                return entries.send(child,passData.data(),&command);
+                            })==sendResult);
+                        uint64_t afterTarget=0;
+                        std::memcpy(&afterTarget,storage->bytes.data()+0x9b0,8);
+                        assert(afterTarget==beforeTarget && deferredEmits==1 && passStates==1 && passAvs==1);
+                        // The native math count spans the coefficient cache
+                        // lifetime; later identical frames may legitimately hit it.
+                        passStates=passAvs=passIefCalls=stateDataReads=0;
+                    }
                     assert(graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
                       0,0x4000,{},passData.data(),read,makeState,makeAvs,makeIef,
                       [&](void* leasedChild,void*,void*,const TglOwnedVpEntrySet& passEntries) noexcept {
