@@ -12043,15 +12043,15 @@ bool tglRunSelectedVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& inpu
     static_assert(noexcept(feature(execution)) &&
         (std::is_same_v<decltype(feature(execution)),void> || std::is_same_v<decltype(feature(execution)),bool>),
         "native170 void or owned checked bool stage (not integer status)");
-    static_assert(noexcept(sfc(execution)) && std::is_same_v<decltype(sfc(execution)),bool>,
-        "checked complete SFC stage ABI");
     if(tglPrepareVeboxAdmissionPrefix(input.prefix,pass)!=TglVeboxAdmissionPrefixResult::Continue)
         return false;
     if(!reset()) return false;
     // Acquire VP/resource scopes only AFTER reset. The continuation must run
     // exactly once and cannot turn a rejected stage into successful admission.
     bool invoked=false,repeated=false,accepted=false;
-    auto continueAdmission=[&]() noexcept -> bool {
+    auto continueAdmission=[&](auto&&... completion) noexcept -> bool {
+    static_assert(sizeof...(completion)<=1 && (noexcept(completion()) && ...) &&
+        (std::is_same_v<decltype(completion()),bool> && ...),"single checked frame completion ABI");
     if(invoked) {repeated=true;return false;}
     invoked=true;
     // ICL PRIMARY68 at1fbaec..1fbb08 observes reset and updates pass08.
@@ -12071,12 +12071,31 @@ bool tglRunSelectedVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& inpu
     }
     if(!tglApplyVeboxAdmissionSampleFallback(execution,pass,input.source124,admitted)) return false;
     uint32_t pipe=0;std::memcpy(&pipe,execution.data()+0xa0c,4);
+    bool finished=false,finishRepeated=false;
+    auto finishAdmission=[&]() noexcept -> bool {
+        if(finished) {finishRepeated=true;accepted=false;return false;}
+        finished=true;
+        accepted=tglVeboxAdmissionResult(input.prefix.params138,tglAdmissionPassFlags(pass),admitted);
+        if(!accepted) return false;
+        if constexpr(sizeof...(completion)) accepted=(completion(),...);
+        return accepted;
+    };
     if(pipe==1) {
-        if(!sfc(execution)) return false;
-        admitted=true;
+        auto finishSfc=[&]() noexcept -> bool {admitted=true;return finishAdmission();};
+        if constexpr(std::is_invocable_v<Sfc&,Execution&>) {
+            static_assert(noexcept(sfc(execution)) && std::is_same_v<decltype(sfc(execution)),bool>,
+                "checked complete SFC stage ABI");
+            if(!sfc(execution)) return false;
+            admitted=true;
+        } else {
+            static_assert(noexcept(sfc(execution,finishSfc)) &&
+                std::is_same_v<decltype(sfc(execution,finishSfc)),bool>,"scoped SFC completion ABI");
+            const bool done=sfc(execution,finishSfc);
+            accepted=done && finished && !finishRepeated && accepted;
+            return accepted;
+        }
     }
-    accepted=tglVeboxAdmissionResult(input.prefix.params138,tglAdmissionPassFlags(pass),admitted);
-    return accepted;
+    return finishAdmission();
     };
     static_assert(noexcept(scope(continueAdmission)) &&
         std::is_same_v<decltype(scope(continueAdmission)),bool>,"checked synchronous admission scope ABI");
@@ -22895,7 +22914,11 @@ public:
                             TglOwnedVeboxCommandTransactionResult consumed;
                             const int status=executionOwner.withLeasedFeatureReport(expectedExecution,expectedTarget,
                                 [&]() noexcept -> int {
-                                    if(!runAdmission() || !identities()) return 5;
+                                    bool completed=false;
+                                    auto complete=[&]() noexcept -> bool {
+                                    if(completed) {repeated=true;return false;}
+                                    completed=true;
+                                    if(!identities()) return false;
                                     accepted=true;
                                     static_assert(noexcept(consume(actualOwner,actualChild,vp,graph,lines,
                                         actualSource,actualTarget,dn,actualPackets)) &&
@@ -22905,6 +22928,13 @@ public:
                                         actualSource,actualTarget,dn,actualPackets);
                                     // Preserve asynchronous retention before report60 detaches.
                                     backing_.retention().observe(consumed);
+                                    return true;
+                                    };
+                                    bool admitted=false;
+                                    if constexpr(std::is_invocable_v<decltype(runAdmission)&,decltype(complete)>)
+                                        admitted=runAdmission(complete);
+                                    else admitted=runAdmission() && complete();
+                                    if((!admitted || !accepted || repeated) && !consumed.status) consumed.status=5;
                                     return consumed.status;
                                 });
                             consumed.status=status;return consumed;

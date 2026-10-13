@@ -23762,6 +23762,7 @@ int main() {
                                 std::memcpy(source.prefix.data()+0xdc,&admissionHeight,4);
                                 unsigned admissionResets=0,admissionConsumes=0,admissionFeatures=0;
                                 bool fixtureDependencies=false,admissionFeatureCode=true,usePlatformPolicy=false;
+                                bool sfcScopeLive=false,skipSfcFinish=false,repeatSfcFinish=false;
                                 auto admitFrame=[&](auto& owner,void* child,auto& sourceOwner,auto& targetOwner,auto& parameters,auto& packets,
                                     auto& backing,auto enterResources) noexcept -> bool {
                                     std::array<uint8_t,0x139> params{};params[0x138]=1;
@@ -23876,7 +23877,12 @@ int main() {
                                         return tglRunCapturedSelectedVeboxAdmissionStages(owner,executionLease,child,
                                             params,pass,packets.source,*packets.target,interfaces,reportBytes,readInput,reset,
                                             selectPipe,historyStage,
-                                            featureStage,[](auto&) noexcept {return true;},enterResources)?0:5;
+                                            featureStage,[&](auto&,auto finish) noexcept -> bool {
+                                                assert(!sfcScopeLive);sfcScopeLive=true;
+                                                const bool result=skipSfcFinish?true:finish();
+                                                if(repeatSfcFinish) assert(!finish());
+                                                sfcScopeLive=false;return result;
+                                            },enterResources)?0:5;
                                     });
                                     std::memcpy(bytes+0x90,&savedHistory,8);
                                     std::memcpy(bytes+0x18,savedDependencies.data(),savedDependencies.size());
@@ -23884,6 +23890,7 @@ int main() {
                                 };
                                 auto consumeAdmitted=[&](auto&,void*,void*,auto&,auto&,auto&,auto&,auto&,auto& packets) noexcept {
                                     assert(executionLease.hasLeasedFeatureReport(packets.execution,packets.target));
+                                    assert(sfcScopeLive);
                                     ++admissionConsumes;TglOwnedVeboxCommandTransactionResult result;result.status=-93;return result;
                                 };
                                 const auto missingDependencies=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
@@ -23893,6 +23900,7 @@ int main() {
                                 const auto admitted=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
                                     executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
                                 assert(admitted.status==-93 && admissionResets==1 && admissionConsumes==1 && admissionFeatures==1);
+                                assert(!sfcScopeLive);
                                 assert(!executionLease.hasLeasedFeatureReport(
                                     reinterpret_cast<uintptr_t>(executionBackend.bytes.data()),&source));
                                 uintptr_t detachedTarget=1;
@@ -23912,10 +23920,20 @@ int main() {
                                 uint32_t selectedPipe=UINT32_MAX;
                                 std::memcpy(&selectedPipe,executionBackend.bytes.data()+0xa0c,4);
                                 assert(selectedPipe==0); // composition fallback must NOT consume a VEBOX-only request
+                                usePlatformPolicy=false;skipSfcFinish=true;
+                                const auto skippedSfc=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
+                                    executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
+                                assert(skippedSfc.status==5 && admissionResets==4 && admissionConsumes==1 && admissionFeatures==3 && !sfcScopeLive);
+                                skipSfcFinish=false;repeatSfcFinish=true;
+                                const auto replayedSfc=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
+                                    executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
+                                // Preserve exact nonzero consumer result, but never consume twice.
+                                assert(replayedSfc.status==-93 && admissionResets==5 && admissionConsumes==2 && admissionFeatures==4 && !sfcScopeLive);
+                                repeatSfcFinish=false;
                                 admissionWidth=63;std::memcpy(source.prefix.data()+0xd8,&admissionWidth,4);
                                 const auto denied=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
                                     executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
-                                assert(denied.status==5 && admissionResets==3 && admissionConsumes==1 && admissionFeatures==2);
+                                assert(denied.status==5 && admissionResets==5 && admissionConsumes==2 && admissionFeatures==4);
                                 std::memcpy(source.prefix.data()+0xd8,savedDimensions.data(),8);
                                 std::memcpy(source.prefix.data()+0x130,&savedFormat,4);
                             }
