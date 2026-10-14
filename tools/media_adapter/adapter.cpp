@@ -48,6 +48,7 @@ bool retainOwnedHookImage() {
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept;
 bool executableMemory(uintptr_t address,size_t length) noexcept;
 bool writableDataMemory(uintptr_t address,size_t length) noexcept;
+bool leafMemoryPermissions(uintptr_t address,size_t length,vm_prot_t required,vm_prot_t forbidden) noexcept;
 bool ownedExecutableMemory(uintptr_t address,size_t length) noexcept;
 struct NativeDataPointerWriter {
     bool operator()(uintptr_t address,uintptr_t value) const noexcept {
@@ -1327,6 +1328,54 @@ struct NativeAdmissionReset {
 };
 using NativeAdmissionParams=TglBorrowedVeboxAdmissionPacketView<0x139>;
 using NativeAdmissionPass=TglBorrowedVeboxAdmissionPacketView<0x18,8>;
+class NativeAdmissionPacketScope {
+    NativeCoreFrameDataScope& core_;
+    const TglVeboxAdmissionBorrowedInterfaces interfaces_;
+    uintptr_t parameters_,passAddress_;
+    NativeAdmissionParams params_;
+    NativeAdmissionPass pass_;
+    TglBorrowedVeboxByteView<12> fill_;
+    TglBorrowedVeboxByteView<8> alpha_;
+    bool attempted_=false;
+    bool same() const noexcept {
+        if(!core_.live() || !params_.data() || !pass_.data())return false;
+        uintptr_t source=0,target=0,e0=0,f0=0;
+        return readMemory(parameters_+8,&source,8) && source==reinterpret_cast<uintptr_t>(&core_.source) &&
+            readMemory(parameters_+0x98,&target,8) && target==reinterpret_cast<uintptr_t>(&core_.target) &&
+            readMemory(parameters_+0xe0,&e0,8) && e0==interfaces_.paramsE0 &&
+            readMemory(parameters_+0xf0,&f0,8) && f0==interfaces_.paramsF0 && core_.live();
+    }
+public:
+    NativeAdmissionPacketScope(NativeCoreFrameDataScope& core,
+        const TglVeboxAdmissionBorrowedInterfaces& interfaces,uintptr_t parameters,uintptr_t pass) noexcept
+        :core_(core),interfaces_(interfaces),parameters_(parameters),passAddress_(pass) {}
+    NativeAdmissionPacketScope(const NativeAdmissionPacketScope&)=delete;
+    NativeAdmissionPacketScope& operator=(const NativeAdmissionPacketScope&)=delete;
+    template<class Use> int run(Use use) noexcept {
+        static_assert(noexcept(use(params_,pass_,fill_,alpha_)) &&
+            std::is_same_v<decltype(use(params_,pass_,fill_,alpha_)),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        if(attempted_ || !core_.live())return 5;
+        attempted_=true;
+        auto readable=[](uintptr_t p,size_t n) noexcept {
+            return leafMemoryPermissions(p,n,VM_PROT_READ,VM_PROT_EXECUTE);
+        };
+        if(!params_.bind(parameters_,0x139,readable,&writableDataMemory) ||
+            !pass_.bind(passAddress_,0x18,readable,&writableDataMemory) ||
+            (passAddress_<parameters_+params_.size() && parameters_<passAddress_+pass_.size()) || !same() ||
+            (interfaces_.paramsE0 && !fill_.bind(interfaces_.paramsE0,12,readable,&writableDataMemory)) ||
+            (interfaces_.paramsF0 && !alpha_.bind(interfaces_.paramsF0,8,readable,&writableDataMemory)))return 5;
+        // Original synchronous packet lifetime belongs to the enclosing native
+        // call; these views neither retain pointers beyond it nor own copies.
+        const int status=use(params_,pass_,fill_,alpha_);
+        if(status)return status;
+        return same()?0:5;
+    }
+};
+template int NativeAdmissionPacketScope::run<int(*)(NativeAdmissionParams&,NativeAdmissionPass&,
+    TglBorrowedVeboxByteView<12>&,TglBorrowedVeboxByteView<8>&) noexcept>(
+    int(*)(NativeAdmissionParams&,NativeAdmissionPass&,TglBorrowedVeboxByteView<12>&,
+        TglBorrowedVeboxByteView<8>&) noexcept) noexcept;
 struct NativeAdmissionFrameDataScope {
     NativeCoreFrameDataScope& core;NativeAdmissionParams& params;NativeAdmissionPass& pass;
     const TglVeboxAdmissionBorrowedInterfaces& interfaces;
