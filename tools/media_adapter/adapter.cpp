@@ -2635,13 +2635,14 @@ struct NativeRetainedFrontendRuntime {
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* scope,UseGraph use) noexcept {
         return run(frame,roles,sourceIndex,targetIndex,temporal,scope,use);
     }
-    struct VpFrontend {
+    template<class SurfaceOwner> struct VpFrontendFor {
         NativeRendererCpuAssembly& assembly;const TglNativeCreatedVeboxRendererView& pinned;
         size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
-        NativeSourceGraph& sourceGraph;NativeContextSurfaceOwner* secondary;
-        NativeContextSurfaceOwner* previous;NativeDenoiseParameters& denoise;
+        NativeAdmissionSourceGraphFor<SurfaceOwner>& sourceGraph;SurfaceOwner* secondary;
+        SurfaceOwner* previous;NativeDenoiseParameters& denoise;
         NativeModeRetirementAuthority& retirement;
     };
+    using VpFrontend=VpFrontendFor<NativeContextSurfaceOwner>;
     struct VpRequest {
         using Use=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeCoreFrameDataScope&,
             NativeVpGraph&,TglNativeVpLineResourceStorage&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&,
@@ -2651,9 +2652,10 @@ struct NativeRetainedFrontendRuntime {
         NativeModeRetirementAuthority& retirement;
         void* context;Use use;
     };
-    using AdmissionInputUse=int(*)(void*,const NativeAdmissionFrameAssembly::Inputs&) noexcept;
+    template<class SurfaceOwner> using AdmissionInputUseFor=int(*)(void*,const typename NativeAdmissionFrameAssemblyFor<SurfaceOwner>::Inputs&) noexcept;
+    using AdmissionInputUse=AdmissionInputUseFor<NativeContextSurfaceOwner>;
     using PacketInputUse=int(*)(void*,TglOwnedVeboxPacketLeases&) noexcept;
-    static int withPacketInputs(VpFrontend& frontend,NativeCoreFrameDataScope& core,
+    template<class SurfaceOwner> static int withPacketInputs(VpFrontendFor<SurfaceOwner>& frontend,NativeCoreFrameDataScopeFor<SurfaceOwner>& core,
         void* context,PacketInputUse use) noexcept {
         if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
             frontend.childIndex>1 || !core.live() || frontend.pinned.image!=core.image ||
@@ -2665,10 +2667,11 @@ struct NativeRetainedFrontendRuntime {
             [&](TglOwnedVeboxPacketLeases& leases) noexcept -> int {return use(context,leases);});
         return status?status:core.live()?0:5;
     }
-    using AllocationInputUse=int(*)(void*,NativeModeAllocationPlan&) noexcept;
-    static int withAllocationInputs(VpFrontend& frontend,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
+    template<class SurfaceOwner> using AllocationInputUseFor=int(*)(void*,NativeModeAllocationPlanFor<SurfaceOwner>&) noexcept;
+    using AllocationInputUse=AllocationInputUseFor<NativeContextSurfaceOwner>;
+    template<class SurfaceOwner> static int withAllocationInputs(VpFrontendFor<SurfaceOwner>& frontend,NativeCoreFrameDataScopeFor<SurfaceOwner>& core,NativeVpGraph& graph,
         TglNativeVpLineResourceStorage& lines,bool alignDi64,
-        void* context,AllocationInputUse use) noexcept {
+        void* context,AllocationInputUseFor<SurfaceOwner> use) noexcept {
         if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
             frontend.childIndex>1 || !core.live() || frontend.pinned.image!=core.image ||
             frontend.pinned.originalChildren[frontend.childIndex]!=core.child ||
@@ -2676,7 +2679,7 @@ struct NativeRetainedFrontendRuntime {
             frontend.assembly.backing().retention()())return 5;
         NativeSfcReleaseSelection selection{core.childOwner,reinterpret_cast<void*>(core.child),
             frontend.interfaces.renderHal,frontend.interfaces.sku,graph};
-        NativeModeAllocationPlan allocation{frontend.assembly.backing().command().backing(),lines.resources(),
+        NativeModeAllocationPlanFor<SurfaceOwner> allocation{frontend.assembly.backing().command().backing(),lines.resources(),
             selection,frontend.retirement,core.sourceOwner,core.targetOwner,frontend.secondary,frontend.previous,
             // Exact ICL1f7990 initializes each STMM only when allocator's
             // changed flag is set; owner.ensure already implements that lane.
@@ -2684,33 +2687,40 @@ struct NativeRetainedFrontendRuntime {
         const int status=use(context,allocation);
         return status?status:(core.live() && graph.ownsStorage(core.vp.bytes.data())?0:5);
     }
-    using PolicyInputUse=int(*)(void*,NativeOutputPipeFrameScope&) noexcept;
-    static int withPolicyInputs(NativeCoreFrameDataScope& core,NativeAdmissionParams& params,
+    template<class SurfaceOwner> using PolicyInputUseFor=int(*)(void*,NativeOutputPipeFrameScopeFor<SurfaceOwner>&) noexcept;
+    using PolicyInputUse=PolicyInputUseFor<NativeContextSurfaceOwner>;
+    template<class SurfaceOwner> static int withPolicyInputs(NativeCoreFrameDataScopeFor<SurfaceOwner>& core,NativeAdmissionParams& params,
         NativeAdmissionPass& pass,NativeFrameDataRead& read,const TglVeboxAdmissionBorrowedInterfaces& interfaces,
         const TglOwnedGen12SurfaceFeatures& sourceFeatures,const TglOwnedGen12SurfaceFeatures& targetFeatures,
         TglVeboxPipeAcquisition& acquisition,int& decompressionStatus,
-        NativeTargetDecompression& decompression,void* context,PolicyInputUse use) noexcept {
+        NativeTargetDecompressionFor<SurfaceOwner>& decompression,void* context,PolicyInputUseFor<SurfaceOwner> use) noexcept {
         if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
             !core.live() || !params.data() || !pass.data() || !acquisition.healthy() ||
             sourceFeatures.surface!=&core.source || targetFeatures.surface!=&core.target ||
             sourceFeatures.frame!=&acquisition || targetFeatures.frame!=&acquisition)return 5;
         uintptr_t source=0,target=0,di=0,fill=0;
         const auto parameters=reinterpret_cast<uintptr_t>(params.data());
-        if(!read(parameters+8,&source,8) || source!=reinterpret_cast<uintptr_t>(&core.source) ||
-            !read(parameters+0x98,&target,8) || target!=reinterpret_cast<uintptr_t>(&core.target) ||
+        bool roots=false;
+        if constexpr(std::is_same_v<SurfaceOwner,NativeTemporarySurfaceOwner>) {
+            source=reinterpret_cast<uintptr_t>(&core.source);target=reinterpret_cast<uintptr_t>(&core.target);
+            roots=tglMatchNativePerPassSelectedRoots(parameters,params.size(),
+                reinterpret_cast<uintptr_t>(pass.data()),0x40,source,target,read);
+        } else roots=read(parameters+8,&source,8) && source==reinterpret_cast<uintptr_t>(&core.source) &&
+            read(parameters+0x98,&target,8) && target==reinterpret_cast<uintptr_t>(&core.target);
+        if(!roots ||
             !read(source+0x88,&di,8) || !read(parameters+0xe0,&fill,8) ||
             fill!=interfaces.paramsE0 || !core.live())return 5;
-        NativeTwoPassCscHealth health{core.childOwner,core.executionOwner,core.sourceOwner,core.targetOwner,
+        NativeTwoPassCscHealthFor<SurfaceOwner> health{core.childOwner,core.executionOwner,core.sourceOwner,core.targetOwner,
             core.source,core.target,core.image,core.child,core.execution,core.generation};
-        NativeOutputPipeFrameScope policy{health,read,core.vp,parameters,di,fill,sourceFeatures,targetFeatures,
+        NativeOutputPipeFrameScopeFor<SurfaceOwner> policy{health,read,core.vp,parameters,di,fill,sourceFeatures,targetFeatures,
             pass.data()[8],acquisition,decompressionStatus,decompression};
         const int status=use(context,policy);
         return status?status:(core.live() && acquisition.healthy()?0:5);
     }
-    static int withAdmissionInputs(VpFrontend& frontend,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
+    template<class SurfaceOwner> static int withAdmissionInputs(VpFrontendFor<SurfaceOwner>& frontend,NativeCoreFrameDataScopeFor<SurfaceOwner>& core,NativeVpGraph& graph,
         NativeAdmissionParams& params,NativeAdmissionPass& pass,NativeFrameDataRead& read,
         const TglOwnedVpEntrySet& catalogue,const TglOwnedVpModeState& mode,
-        void* context,AdmissionInputUse use) noexcept {
+        void* context,AdmissionInputUseFor<SurfaceOwner> use) noexcept {
         if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
             frontend.childIndex>1 || !core.live() || core.image!=frontend.pinned.image ||
             frontend.pinned.originalChildren[frontend.childIndex]!=core.child ||
@@ -2722,7 +2732,7 @@ struct NativeRetainedFrontendRuntime {
             !read(linkedVp+0x20,&mhw,8) || !mhw || !core.live())return 5;
         // Native12c010 obtains +48's report and passes that SAME report as
         // VP40's renderData argument, not a caller-provided substitute.
-        NativeAdmissionFrameAssembly::Inputs inputs{core.childOwner,core.executionOwner,
+        typename NativeAdmissionFrameAssemblyFor<SurfaceOwner>::Inputs inputs{core.childOwner,core.executionOwner,
             frontend.assembly.backing(),frontend.retirement,core.sourceOwner,core.targetOwner,
             frontend.sourceGraph,frontend.denoise,core.source,core.target,feature,params,pass,
             frontend.interfaces,catalogue,mode,frontend.childIndex,reinterpret_cast<void*>(core.child),
@@ -2820,6 +2830,21 @@ struct NativeRetainedFrontendRuntime {
         return result;
     }
 };
+using NativeTemporaryFrontend=NativeRetainedFrontendRuntime::VpFrontendFor<NativeTemporarySurfaceOwner>;
+template int NativeRetainedFrontendRuntime::withPacketInputs<NativeTemporarySurfaceOwner>(
+    NativeTemporaryFrontend&,NativeCoreFrameDataScopeFor<NativeTemporarySurfaceOwner>&,void*,PacketInputUse) noexcept;
+template int NativeRetainedFrontendRuntime::withAllocationInputs<NativeTemporarySurfaceOwner>(
+    NativeTemporaryFrontend&,NativeCoreFrameDataScopeFor<NativeTemporarySurfaceOwner>&,NativeVpGraph&,
+    TglNativeVpLineResourceStorage&,bool,void*,AllocationInputUseFor<NativeTemporarySurfaceOwner>) noexcept;
+template int NativeRetainedFrontendRuntime::withAdmissionInputs<NativeTemporarySurfaceOwner>(
+    NativeTemporaryFrontend&,NativeCoreFrameDataScopeFor<NativeTemporarySurfaceOwner>&,NativeVpGraph&,
+    NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&,const TglOwnedVpEntrySet&,
+    const TglOwnedVpModeState&,void*,AdmissionInputUseFor<NativeTemporarySurfaceOwner>) noexcept;
+template int NativeRetainedFrontendRuntime::withPolicyInputs<NativeTemporarySurfaceOwner>(
+    NativeCoreFrameDataScopeFor<NativeTemporarySurfaceOwner>&,NativeAdmissionParams&,NativeAdmissionPass&,
+    NativeFrameDataRead&,const TglVeboxAdmissionBorrowedInterfaces&,const TglOwnedGen12SurfaceFeatures&,
+    const TglOwnedGen12SurfaceFeatures&,TglVeboxPipeAcquisition&,int&,NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>&,
+    void*,PolicyInputUseFor<NativeTemporarySurfaceOwner>) noexcept;
 // Join the concrete original-frame producers in one synchronous execution.
 // Missing metadata/retirement producers are not supplied by this assembler.
 // This is the LOWER admission+Render chain, not a renderer virtual+50 hook.
