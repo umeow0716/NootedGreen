@@ -26105,6 +26105,10 @@ public:
             flushEntered_=true;flushContext_=observation.context;flushNativeContext_=observation.nativeContext;
             // a893 can fail during buffer refresh AFTER submitting commands.
             flushUncertain_=flushUncertain_ || !observation.observed || observation.nativeStatus!=0;
+            // A later native submit can overwrite the previous consumed reset
+            // report with zero. Historical loss belongs to this retained frame
+            // even when the new submit succeeds or its post-read fails.
+            lossFlags_|=observation.flagsBefore&0x60000000U;
             if(observation.observed)lossFlags_|=observation.flagsAfter&0x60000000U;
         }
         return observation;
