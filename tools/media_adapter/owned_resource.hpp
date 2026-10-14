@@ -22161,6 +22161,24 @@ public:
             !state_->nativeParentMatches())return 5;
         return state_->table.dispatchScopedItem(physicalScope,state_->context,request,outputSlot,state_->read,invoke);
     }
+    template<class OwnerLease,class Scope,class Invoke>
+    int dispatchScopedFrameWithReceipt(const OwnerLease& lease,Scope& physicalScope,uintptr_t request,
+        uintptr_t outputSlot,Invoke invoke,TglNativeFrameOutputReceipt& receipt) noexcept {
+        // A live association is never overwritten, even on refused dispatch.
+        if(receipt.valid)return 5;
+        receipt={};
+        return dispatchScopedFrame(lease,physicalScope,request,outputSlot,
+            [&](uintptr_t entry,uintptr_t context,uintptr_t input,uintptr_t output,Scope& active) noexcept -> int {
+                const int result=invoke(entry,context,input,output,active);
+                uintptr_t event=0;uint32_t index=0;
+                if(result==0 && state_->read(output,&event,sizeof(event)) && event &&
+                    event<=UINTPTR_MAX-8 && state_->read(event+4,&index,sizeof(index)))
+                    receipt={context,event,index,true};
+                // Keep native result and all ownership on missing lineage;
+                // an output event is NOT a GPU completion/quiescence proof.
+                return result;
+            });
+    }
     template<class ExclusiveLease,class ScopeAdmit,class OwnedExecutable>
     bool publishFrame(const ExclusiveLease& lease,uintptr_t hook,ScopeAdmit scope,OwnedExecutable ownedExecutable) noexcept {
         if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;

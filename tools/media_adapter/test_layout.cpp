@@ -14445,6 +14445,8 @@ static void testRetainedVeboxFrames() {
             bool nativeRemoved=false;
             auto ownerRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
                 assert(!nativeRemoved); // No native-object read after successful removal.
+                if(address==0x66000 && bytes==8) {const uintptr_t event=0x77000;std::memcpy(out,&event,8);return true;}
+                if(address==0x77004 && bytes==4) {const uint32_t index=9;std::memcpy(out,&index,4);return true;}
                 if(bytes==8) {
                     uintptr_t value=0;
                     if(address==context+0x128)value=actualParent;
@@ -14513,8 +14515,14 @@ static void testRetainedVeboxFrames() {
                     };
                     actualParent+=8;assert(owner->dispatchScopedFrame(pin,active,0x55000,0x66000,invoke)==5 && !calls);
                     actualParent-=8;
-                    return owner->dispatchScopedFrame(pin,active,0x55000,0x66000,invoke);
-                })==0 && calls==1);
+                    assert(owner->dispatchScopedFrame(pin,active,0x55000,0x66000,invoke)==0);
+                    TglNativeFrameOutputReceipt receipt;
+                    assert(owner->dispatchScopedFrameWithReceipt(pin,active,0x55000,0x66000,invoke,receipt)==0);
+                    assert(receipt.valid && receipt.context==context && receipt.event==0x77000 && receipt.index==9);
+                    assert(owner->dispatchScopedFrameWithReceipt(pin,active,0x55000,0x66000,invoke,receipt)==5);
+                    assert(receipt.valid && receipt.event==0x77000 && receipt.index==9);
+                    return 0;
+                })==0 && calls==2);
                 assert(codecs.prepareRemoval(base,physical,ticket.generation,removed,
                     [](const auto&,uint32_t) noexcept -> int {assert(false);return 0;})==5);
                 assert(physicals.destroy(ticket,base,physical,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
