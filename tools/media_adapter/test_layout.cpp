@@ -17234,6 +17234,25 @@ int main() {
         assert(!TglNativeVeboxSetupHints::initialize(hints,UINTPTR_MAX,read,qualify,executable));
     }
     {
+        for(int mode=0;mode<4;++mode) {
+            TglOwnedVeboxProducerPass borrowed;unsigned builds=0,submissions=0;
+            auto prepare=[&]() noexcept -> int {
+                ++builds;
+                if(mode==1)return 31;
+                if(mode==2)assert(borrowed.withBorrowedBuilder([]() noexcept -> int {return 0;})==5);
+                return borrowed.gate([]() noexcept -> int {return 0;});
+            };
+            assert(borrowed.withBorrowedBuilder(prepare)==5 && !builds);
+            const int result=borrowed.withBuilder([&]() noexcept -> int {
+                const int prepared=borrowed.withBorrowedBuilder(prepare);
+                if(mode==3)assert(borrowed.withBorrowedBuilder(prepare)==5 && builds==1);
+                if(prepared)return prepared;
+                return borrowed.withSubmission(0,[&]() noexcept -> int {++submissions;return 0;});
+            });
+            assert(result==(mode==1?31:mode==2?5:0));
+            assert(builds==1 && submissions==unsigned(mode==0 || mode==3));
+            assert(borrowed.withBorrowedBuilder(prepare)==5 && builds==1);
+        }
         TglOwnedVeboxProducerPass pass;unsigned submits=0;
         auto submit=[&]() noexcept -> int {++submits;return 31;};
         assert(pass.submissionStatus(0)==5 && pass.withSubmission(0,submit)==5 && submits==0);
@@ -32081,6 +32100,17 @@ int main() {
                         assert(owned.status==(acquire?emitted:31) && owned.acquired==acquire &&
                             owned.writtenBack==acquire);
                         for(auto byte:scratch.unusedSetupArgument)assert(!byte);
+                        TglOwnedVeboxCommandTransactionResult borrowedCommand;
+                        const int borrowedStatus=packets.pass.withBuilder([&]() noexcept -> int {
+                            borrowedCommand=tglWithCapturedOwnedNativeVeboxCommandTransaction(
+                                sourceLease,childLease,capturedExecution,actualChild,address,source,packets,
+                                setupBinding,binding,nativeImage,osAddress,scratch,ownedRead,qualified,ownedExecutable,
+                                acquireCommand,emitCommand,publishCommand,true);
+                            return borrowedCommand.status;
+                        });
+                        assert(borrowedStatus==(acquire?emitted:31) &&
+                            borrowedCommand.status==borrowedStatus && borrowedCommand.acquired==acquire &&
+                            borrowedCommand.writtenBack==acquire);
                     }
                 }
                 for(int preparation : {0,31,-7}) for(int result : {0,31,-7}) {

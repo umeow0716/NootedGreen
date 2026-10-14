@@ -2657,11 +2657,12 @@ struct NativeVeboxSendSubmissionStage {
             (void)context.pass.record(5);context.retention.observe(context.command);return 5;
         }
         context.buildAttempted=true;
-        if(!context.entered || !context.pass.acceptsProducer() ||
+        if(!context.entered || &packets.pass!=&context.pass || !context.pass.acceptsProducer() ||
             !context.tail.matchesChild(reinterpret_cast<uintptr_t>(child),&readMemory))return 5;
         context.command=tglWithCapturedOwnedNativeVeboxCommandTransaction(
             sourceOwner,childOwner,executionOwner,child,execution,source,packets,setup,builder,
-            context.image,os,context.scratch,&readMemory,NativeTglImageAdmission{context.image},&executableMemory);
+            context.image,os,context.scratch,&readMemory,NativeTglImageAdmission{context.image},&executableMemory,
+            TglNativeVeboxSetupInvoker{},TglNativeVeboxBuilderInvoker{},TglNativeCommandHeaderWritebackInvoker{},true);
         context.retention.observe(context.command);
         if(context.command.status) {
             (void)context.pass.record(context.command.status);

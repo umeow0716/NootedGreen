@@ -12998,13 +12998,23 @@ int tglPrepareNativeLeasedOwnedVpCpuState(const TglOwnedVpFramePreparation& fram
 // so an early failed producer cannot be followed by native command emission.
 // Caller serializes begin/record/gate/close; this is NOT a GPU fence owner.
 class TglOwnedVeboxProducerPass {
-    bool active_=false,gated_=false,busy_=false,builder_=false,submitted_=false;
+    bool active_=false,gated_=false,busy_=false,builder_=false,submitted_=false,borrowedBuilder_=false;
     int firstError_=0;
 public:
     TglOwnedVeboxProducerPass()=default;
     TglOwnedVeboxProducerPass(const TglOwnedVeboxProducerPass&)=delete;
     TglOwnedVeboxProducerPass& operator=(const TglOwnedVeboxProducerPass&)=delete;
     bool acceptsProducer() const noexcept {return active_ && !gated_ && !busy_ && !firstError_;}
+    template<class Invoke> int withBorrowedBuilder(Invoke invoke) noexcept {
+        static_assert(noexcept(invoke()) && std::is_same_v<decltype(invoke()),int>);
+        if(!builder_ || !acceptsProducer())return 5;
+        if(borrowedBuilder_) {if(!firstError_)firstError_=5;return 5;}
+        borrowedBuilder_=true;
+        const int status=invoke();
+        borrowedBuilder_=false;
+        if(status && !firstError_)firstError_=status;
+        return firstError_?firstError_:status;
+    }
     // Enclose the full authenticated native129ca0 invocation (all arguments
     // and their leases are supplied by the owning caller). Never reset the
     // latch between callbacks, including native early exits before slot70.
@@ -23587,7 +23597,8 @@ template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Context,
     class Setup,class Build>
 int tglWithCapturedVeboxPreparedBuilder(SourceOwner& sourceOwner,ChildOwner& childOwner,
     ExecutionOwner& executionOwner,void* child,uintptr_t execution,
-    const TglOwnedSurfaceStorage& source,Context& context,Setup setup,Build build) noexcept {
+    const TglOwnedSurfaceStorage& source,Context& context,Setup setup,Build build,
+    bool borrowBuilder=false) noexcept {
     static_assert(noexcept(setup(static_cast<void*>(nullptr))) &&
         noexcept(build(static_cast<void*>(nullptr))) &&
         std::is_same_v<decltype(setup(static_cast<void*>(nullptr))),int> &&
@@ -23608,10 +23619,11 @@ int tglWithCapturedVeboxPreparedBuilder(SourceOwner& sourceOwner,ChildOwner& chi
     };
     return guarded([&](void* active) noexcept -> int {
         const auto run=[&]() noexcept -> int {
-            return context.pass.withBuilder([&]() noexcept -> int {
+            auto stages=[&]() noexcept -> int {
                 const int configured=guarded(setup);
                 return configured?configured:guarded(build);
-            });
+            };
+            return borrowBuilder?context.pass.withBorrowedBuilder(stages):context.pass.withBuilder(stages);
         };
         // Complete frame hooks already bind this exact producer. Borrow that
         // binding without clearing it on return; the pass still rejects an
@@ -23631,13 +23643,14 @@ int tglWithCapturedNativeVeboxBuilder(SourceOwner& sourceOwner,ChildOwner& child
     const TglOwnedSurfaceStorage& source,Context& context,
     const TglNativeVeboxSetupBinding& setup,const TglNativeVeboxBuilderBinding& builder,
     TglOwnedVeboxBuilderScratch& scratch,void* auxiliary,int32_t& consumed,Read read,
-    SetupInvoke setupInvoke=SetupInvoke{},BuildInvoke buildInvoke=BuildInvoke{}) noexcept {
+    SetupInvoke setupInvoke=SetupInvoke{},BuildInvoke buildInvoke=BuildInvoke{},
+    bool borrowBuilder=false) noexcept {
     return tglWithCapturedVeboxPreparedBuilder(sourceOwner,childOwner,executionOwner,
         child,execution,source,context,[&](void* active) noexcept -> int {
             return setup.call(reinterpret_cast<uintptr_t>(active),scratch,auxiliary,consumed,read,setupInvoke);
         },[&](void*) noexcept -> int {
             return builder.call(context.leases,scratch,read,buildInvoke);
-        });
+        },borrowBuilder);
 }
 
 // Adapt the allocation chain's int consumer ABI to a typed command result.
@@ -26017,7 +26030,7 @@ TglOwnedVeboxCommandTransactionResult tglWithCapturedNativeVeboxCommandTransacti
     uintptr_t image,uintptr_t os,TglOwnedVeboxBuilderScratch& scratch,
     void* auxiliary,Read read,Qualify qualify,Executable executable,
     SetupInvoke setupInvoke=SetupInvoke{},BuildInvoke buildInvoke=BuildInvoke{},
-    WritebackInvoke writebackInvoke=WritebackInvoke{}) noexcept {
+    WritebackInvoke writebackInvoke=WritebackInvoke{},bool borrowBuilder=false) noexcept {
     const auto sameOs=[&]() noexcept {
         uintptr_t linked=0;const uintptr_t address=reinterpret_cast<uintptr_t>(child);
         return address && address<=UINTPTR_MAX-0x18 && os &&
@@ -26028,7 +26041,7 @@ TglOwnedVeboxCommandTransactionResult tglWithCapturedNativeVeboxCommandTransacti
         child,execution,source,[&](int32_t& remaining) noexcept -> int {
             return tglWithCapturedNativeVeboxBuilder(sourceOwner,childOwner,executionOwner,
                 child,execution,source,context,setup,builder,scratch,auxiliary,remaining,
-                read,setupInvoke,buildInvoke);
+                read,setupInvoke,buildInvoke,borrowBuilder);
         },[&](int status,int32_t remaining) noexcept -> bool {
             return sameOs() && tglWritebackNativeVeboxCommandResult(image,os,scratch,
                 status,remaining,read,qualify,executable,writebackInvoke);
@@ -26047,13 +26060,14 @@ TglOwnedVeboxCommandTransactionResult tglWithCapturedOwnedNativeVeboxCommandTran
     const TglNativeVeboxSetupBinding& setup,const TglNativeVeboxBuilderBinding& builder,
     uintptr_t image,uintptr_t os,TglOwnedVeboxBuilderScratch& scratch,
     Read read,Qualify qualify,Executable executable,
-    SetupInvoke setupInvoke={},BuildInvoke buildInvoke={},WritebackInvoke writebackInvoke={}) noexcept {
+    SetupInvoke setupInvoke={},BuildInvoke buildInvoke={},WritebackInvoke writebackInvoke={},
+    bool borrowBuilder=false) noexcept {
     if(!TglNativeVeboxSetupHints::initialize(scratch.setup,image,read,qualify,executable))return {};
     scratch.unusedSetupArgument.fill(0);
     return tglWithCapturedNativeVeboxCommandTransaction(sourceOwner,childOwner,executionOwner,
         child,execution,source,context,setup,builder,image,os,scratch,
         scratch.unusedSetupArgument.data(),read,qualify,executable,
-        setupInvoke,buildInvoke,writebackInvoke);
+        setupInvoke,buildInvoke,writebackInvoke,borrowBuilder);
 }
 
 // Bind the existing native setup/builder/rewind/writeback transaction to the
