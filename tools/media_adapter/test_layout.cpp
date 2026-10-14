@@ -4245,6 +4245,37 @@ static void testVeboxHardwareBinding() {
             auto executable=[](uintptr_t p,size_t n) noexcept {return p==entry && n==21;};
             TglNativeVideoBufferFlushBinding binding;
             unsigned calls=0;
+            {
+                assert(binding.resolve(image,read,qualified,executable));
+                uintptr_t nativeContext=0x3000;uint32_t flags=0;bool readable=true;
+                auto reportRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+                    if(!readable)return false;
+                    if(p==context+8 && n==8){std::memcpy(out,&nativeContext,8);return true;}
+                    if(p==context+0x54 && n==4){std::memcpy(out,&flags,4);return true;}
+                    return read(p,out,n);
+                };
+                for(unsigned mode=0;mode<6;++mode) {
+                    nativeContext=0x3000;flags=0;readable=true;calls=0;
+                    auto invoke=[&](uintptr_t e,uintptr_t c,uint8_t kind) noexcept -> uint32_t {
+                        assert(e==entry && c==context && kind==2);++calls;
+                        if(mode==1)flags=0x40000000;
+                        if(mode==2)flags=0x20000000;
+                        if(mode==4)nativeContext+=8;
+                        if(mode==5)readable=false;
+                        return mode==3?31:0;
+                    };
+                    const auto observation=binding.observeFlush(context,reportRead,invoke);
+                    assert(observation.called && calls==1 && observation.nativeStatus==(mode==3?31U:0U));
+                    assert(observation.observed==(mode!=4 && mode!=5));
+                    assert(observation.lossBitsObserved()==(mode==1 || mode==2));
+                    assert(!observation.flagsBefore);
+                }
+                calls=0;readable=false;
+                const auto denied=binding.observeFlush(context,reportRead,
+                    [&](uintptr_t,uintptr_t,uint8_t) noexcept -> uint32_t {++calls;return 0;});
+                assert(!denied.called && !denied.observed && !calls);
+                binding={};
+            }
             for(uint32_t result:{0u,0xe00002e9u,0xffffffffu}) {
                 auto invoke=[&](uintptr_t e,uintptr_t c,uint8_t kind) noexcept {
                     assert(e==entry && c==context && kind==2);++calls;return result;

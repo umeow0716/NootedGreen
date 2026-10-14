@@ -17076,6 +17076,10 @@ public:
 // OS2d0/64df0 calls a9dc(context,2) only after command/sideband bounds demand
 // a flush. a9dc finalizes both buffers, then a893 sets class-used lengths and
 // calls SubmitDataBuffers(context8,flags50,&flags54,&error). Native a893
+// Sealed framework1833 success+2bc copies native output+8 to argument3;
+// +2c3 copies output+4 to argument4, +2d0/+2dd copy+0c/+10 to args5/6.
+// Verified capture instruction encodings/relative displacements, not a new
+// capture or a guessed ABI. Native success does not discard these reports.
 // rejects error/flag20000000 and refreshes buffer resources on success. Do
 // not replace this with FinishFenceEvent or call it twice per native flush.
 // Family affectedByHardwareReset ae6e sets context638 bits20000000 (affected)
@@ -17102,6 +17106,11 @@ struct TglNativeVideoBufferFlushInvoker {
 class TglNativeVideoBufferFlushBinding {
     uintptr_t entry_=0;
 public:
+    struct Observation {
+        uint32_t nativeStatus=5,flagsBefore=0,flagsAfter=0;
+        bool called=false,observed=false;
+        bool lossBitsObserved() const noexcept {return observed && (flagsAfter&0x60000000U);}
+    };
     template<class Read,class Qualify,class Executable>
     bool resolve(uintptr_t image,Read read,Qualify qualify,Executable executable) noexcept {
         entry_=0;
@@ -17119,6 +17128,25 @@ public:
         static_assert(noexcept(invoke(uintptr_t{},uintptr_t{},uint8_t{})),"native flush result ABI");
         if(!entry_ || !context || context>UINTPTR_MAX-0xe4) return 5;
         return invoke(entry_,context,2);
+    }
+    // Caller holds the native context's exclusive producer/lifetime lease.
+    // a9dc always calls a893; a8eb lends context54 to the native submit flags
+    // output. Preserve that consumed report before another submit overwrites
+    // it. Flags after an error are raw/stale-capable, not a fresh report.
+    // In particular40000000 is observable even though a903 tests only20000000.
+    // This is NOT a fence, reset epoch or retirement authorization.
+    template<class Read,class Invoke=TglNativeVideoBufferFlushInvoker>
+    Observation observeFlush(uintptr_t context,Read read,Invoke invoke=Invoke{}) const noexcept {
+        static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})));
+        Observation result;uintptr_t nativeContext=0,afterContext=0;
+        if(!entry_ || !context || context>UINTPTR_MAX-0xe4 ||
+           !read(context+8,&nativeContext,8) || !nativeContext ||
+           !read(context+0x54,&result.flagsBefore,4)) return result;
+        result.called=true;result.nativeStatus=flush(context,invoke);
+        uint32_t flags=0;
+        if(!read(context+8,&afterContext,8) || afterContext!=nativeContext ||
+           !read(context+0x54,&flags,4)) return result;
+        result.flagsAfter=flags;result.observed=true;return result;
     }
 };
 struct TglVeboxCompletionWriteSnapshot {
