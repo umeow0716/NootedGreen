@@ -16909,6 +16909,38 @@ static void testActualNv12LayoutSnapshot() {
     assert(uvRow==32);
 }
 int main() {
+    {
+        std::array<uint8_t,0x139> parameters{};std::array<uint8_t,0x60> pass{};
+        const uintptr_t p=0x1000,q=0x2000,source=0x3000,target=0x4000;
+        const uint32_t sourceIndex=3,targetIndex=16;
+        std::memcpy(pass.data()+0xc,&sourceIndex,4);std::memcpy(pass.data()+0x30,&targetIndex,4);
+        std::memcpy(pass.data()+0x10,&source,8);std::memcpy(pass.data()+0x38,&target,8);
+        std::memcpy(parameters.data()+8+sourceIndex*8,&source,8);
+        std::memcpy(parameters.data()+8+targetIndex*8,&target,8);
+        size_t calls=0,mutate=SIZE_MAX;
+        auto read=[&](uintptr_t at,void* out,size_t size) noexcept {
+            if(++calls==mutate) {const uint32_t changed=2;std::memcpy(pass.data()+0xc,&changed,4);}
+            if(at>=p && at-p<=parameters.size() && size<=parameters.size()-(at-p)) {
+                std::memcpy(out,parameters.data()+at-p,size);return true;
+            }
+            if(at>=q && at-q<=pass.size() && size<=pass.size()-(at-q)) {
+                std::memcpy(out,pass.data()+at-q,size);return true;
+            }
+            return false;
+        };
+        assert(tglMatchNativePerPassSelectedRoots(p,parameters.size(),q,pass.size(),source,target,read));
+        assert(calls==12);
+        assert(!tglMatchNativePerPassSelectedRoots(p,parameters.size(),q,pass.size(),target,source,read));
+        calls=0;mutate=7;
+        assert(!tglMatchNativePerPassSelectedRoots(p,parameters.size(),q,pass.size(),source,target,read));
+        std::memcpy(pass.data()+0xc,&sourceIndex,4);mutate=SIZE_MAX;
+        const uint32_t invalid=17;std::memcpy(pass.data()+0x30,&invalid,4);
+        assert(!tglMatchNativePerPassSelectedRoots(p,parameters.size(),q,pass.size(),source,target,read));
+        calls=0;
+        assert(!tglMatchNativePerPassSelectedRoots(p,0x8f,q,pass.size(),source,target,read) && !calls);
+        assert(!tglMatchNativePerPassSelectedRoots(p,parameters.size(),q,0x3f,source,target,read) && !calls);
+        assert(!tglMatchNativePerPassSelectedRoots(UINTPTR_MAX-4,0x139,q,pass.size(),source,target,read) && !calls);
+    }
     for(unsigned publish=0;publish<2;++publish)for(unsigned rotate=0;rotate<2;++rotate)
         for(int status:{0,31}) {
             std::array<uint8_t,0x139> parameters{};std::array<uint8_t,0x60> pass{};

@@ -13649,6 +13649,27 @@ bool tglCopyNativePerPassParameterFields(std::array<uint8_t,DestinationBytes>& d
     }
 }
 
+// Exact1b1ed0 selected-root relation, NOT a memory/ownership grant. Caller
+// supplies bounded readable packet ranges and independently leased roots.
+template<class Read> bool tglMatchNativePerPassSelectedRoots(uintptr_t parameters,size_t parameterBytes,
+    uintptr_t pass,size_t passBytes,uintptr_t source,uintptr_t target,Read read) noexcept {
+    if(!parameters || !pass || !source || !target || parameterBytes<0x90 || passBytes<0x40 ||
+        parameters>UINTPTR_MAX-parameterBytes || pass>UINTPTR_MAX-passBytes)return false;
+    struct Snapshot {std::array<uint32_t,2> indices{};std::array<uintptr_t,4> roots{};};
+    auto capture=[&](Snapshot& state) noexcept {
+        return read(pass+0xc,&state.indices[0],4) && read(pass+0x30,&state.indices[1],4) &&
+            state.indices[0]<17 && state.indices[1]<17 &&
+            read(pass+0x10,&state.roots[0],8) && read(pass+0x38,&state.roots[1],8) &&
+            read(parameters+8+size_t{state.indices[0]}*8,&state.roots[2],8) &&
+            read(parameters+8+size_t{state.indices[1]}*8,&state.roots[3],8);
+    };
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})));
+    Snapshot first,second;
+    return capture(first) && first.roots[0]==source && first.roots[1]==target &&
+        first.roots[2]==source && first.roots[3]==target && capture(second) &&
+        first.indices==second.indices && first.roots==second.roots;
+}
+
 // Exact131d10 AFTER the sample134==2 branch called12d280. Failure has no
 // handoff; success may move root18->10 and toggle40, then publish root10
 // into selected source array. This moves CPU pointers only, not ownership.

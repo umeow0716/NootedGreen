@@ -1457,8 +1457,11 @@ struct NativeAdmissionReset {
 };
 using NativeAdmissionParams=TglBorrowedVeboxAdmissionPacketView<0x139>;
 using NativeAdmissionPass=TglBorrowedVeboxAdmissionPacketView<0x18,8>;
-class NativeAdmissionPacketScope {
-    NativeCoreFrameDataScope& core_;
+template<class SurfaceOwner> class NativeAdmissionPacketScopeFor {
+    static_assert(std::is_same_v<SurfaceOwner,NativeContextSurfaceOwner> ||
+        std::is_same_v<SurfaceOwner,NativeTemporarySurfaceOwner>);
+    static constexpr bool temporary=std::is_same_v<SurfaceOwner,NativeTemporarySurfaceOwner>;
+    NativeCoreFrameDataScopeFor<SurfaceOwner>& core_;
     const TglVeboxAdmissionBorrowedInterfaces interfaces_;
     uintptr_t parameters_,passAddress_;
     NativeAdmissionParams params_;
@@ -1469,17 +1472,22 @@ class NativeAdmissionPacketScope {
     bool same() const noexcept {
         if(!core_.live() || !params_.data() || !pass_.data())return false;
         uintptr_t source=0,target=0,e0=0,f0=0;
-        return readMemory(parameters_+8,&source,8) && source==reinterpret_cast<uintptr_t>(&core_.source) &&
-            readMemory(parameters_+0x98,&target,8) && target==reinterpret_cast<uintptr_t>(&core_.target) &&
+        bool roots=false;
+        if constexpr(temporary)roots=tglMatchNativePerPassSelectedRoots(parameters_,params_.size(),
+            passAddress_,0x40,reinterpret_cast<uintptr_t>(&core_.source),
+            reinterpret_cast<uintptr_t>(&core_.target),&readMemory);
+        else roots=readMemory(parameters_+8,&source,8) && source==reinterpret_cast<uintptr_t>(&core_.source) &&
+            readMemory(parameters_+0x98,&target,8) && target==reinterpret_cast<uintptr_t>(&core_.target);
+        return roots &&
             readMemory(parameters_+0xe0,&e0,8) && e0==interfaces_.paramsE0 &&
             readMemory(parameters_+0xf0,&f0,8) && f0==interfaces_.paramsF0 && core_.live();
     }
 public:
-    NativeAdmissionPacketScope(NativeCoreFrameDataScope& core,
+    NativeAdmissionPacketScopeFor(NativeCoreFrameDataScopeFor<SurfaceOwner>& core,
         const TglVeboxAdmissionBorrowedInterfaces& interfaces,uintptr_t parameters,uintptr_t pass) noexcept
         :core_(core),interfaces_(interfaces),parameters_(parameters),passAddress_(pass) {}
-    NativeAdmissionPacketScope(const NativeAdmissionPacketScope&)=delete;
-    NativeAdmissionPacketScope& operator=(const NativeAdmissionPacketScope&)=delete;
+    NativeAdmissionPacketScopeFor(const NativeAdmissionPacketScopeFor&)=delete;
+    NativeAdmissionPacketScopeFor& operator=(const NativeAdmissionPacketScopeFor&)=delete;
     template<class Use> int run(Use use) noexcept {
         static_assert(noexcept(use(params_,pass_,fill_,alpha_)) &&
             std::is_same_v<decltype(use(params_,pass_,fill_,alpha_)),int>);
@@ -1489,9 +1497,10 @@ public:
         auto readable=[](uintptr_t p,size_t n) noexcept {
             return leafMemoryPermissions(p,n,VM_PROT_READ,VM_PROT_EXECUTE);
         };
+        if constexpr(temporary)if(passAddress_>UINTPTR_MAX-0x40 || !readable(passAddress_,0x40))return 5;
         if(!params_.bind(parameters_,0x139,readable,&writableDataMemory) ||
             !pass_.bind(passAddress_,0x18,readable,&writableDataMemory) ||
-            (passAddress_<parameters_+params_.size() && parameters_<passAddress_+pass_.size()) || !same() ||
+            (passAddress_<parameters_+params_.size() && parameters_<passAddress_+(temporary?0x40:pass_.size())) || !same() ||
             (interfaces_.paramsE0 && !fill_.bind(interfaces_.paramsE0,12,readable,&writableDataMemory)) ||
             (interfaces_.paramsF0 && !alpha_.bind(interfaces_.paramsF0,8,readable,&writableDataMemory)))return 5;
         // Original synchronous packet lifetime belongs to the enclosing native
@@ -1501,6 +1510,12 @@ public:
         return same()?0:5;
     }
 };
+using NativeAdmissionPacketScope=NativeAdmissionPacketScopeFor<NativeContextSurfaceOwner>;
+template class NativeAdmissionPacketScopeFor<NativeTemporarySurfaceOwner>;
+template int NativeAdmissionPacketScopeFor<NativeTemporarySurfaceOwner>::run<
+    int(*)(NativeAdmissionParams&,NativeAdmissionPass&,TglBorrowedVeboxByteView<12>&,
+        TglBorrowedVeboxByteView<8>&) noexcept>(int(*)(NativeAdmissionParams&,NativeAdmissionPass&,
+        TglBorrowedVeboxByteView<12>&,TglBorrowedVeboxByteView<8>&) noexcept) noexcept;
 template int NativeAdmissionPacketScope::run<int(*)(NativeAdmissionParams&,NativeAdmissionPass&,
     TglBorrowedVeboxByteView<12>&,TglBorrowedVeboxByteView<8>&) noexcept>(
     int(*)(NativeAdmissionParams&,NativeAdmissionPass&,TglBorrowedVeboxByteView<12>&,
