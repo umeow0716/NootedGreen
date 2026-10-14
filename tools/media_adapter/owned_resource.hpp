@@ -1959,6 +1959,30 @@ struct TglNativeVeboxRendererView {
 // Unlike resolveQualified above this does NOT require an already-published
 // context. It is a read-only snapshot under the creator/physical lifetime;
 // it grants neither child publication nor native-init/cleanup authority.
+// Exact primary address-point extent: the following word is RTTI, not a
+// thirteenth callback. Keep this admission separate from publication authority.
+struct TglNativePrimaryRendererTable {
+    static constexpr size_t slotCount=12;
+    static constexpr size_t temporaryPassSlot=10; // +50, native1b1ed0
+    static constexpr std::array<uintptr_t,slotCount> offsets{{
+        0x1c9190,0x1c91b0,0x1b17a0,0x1b1bc0,0x132510,0x131fa0,
+        0x1e6890,0x1306a0,0x131520,0x132500,0x1b1ed0,0x133580}};
+    template<class Read,class Executable>
+    static bool capture(uintptr_t image,Read read,Executable executable,
+        std::array<uintptr_t,slotCount>& output) noexcept {
+        if(!image || image>UINTPTR_MAX-0x811e00) return false;
+        std::array<uintptr_t,slotCount> candidate{};
+        uintptr_t offsetToTop=1,type=0,next=0;
+        if(!read(image+0x75bb90,&offsetToTop,8) || offsetToTop!=0 ||
+           !read(image+0x75bb98,&type,8) || type!=image+0x75bc00 ||
+           !read(image+0x75bba0,candidate.data(),sizeof(candidate)) ||
+           !read(image+0x75bc00,&next,8) || next!=image+0x811e00) return false;
+        for(size_t i=0;i<slotCount;++i)
+            if(candidate[i]!=image+offsets[i] || !executable(candidate[i],1)) return false;
+        output=candidate;return true;
+    }
+};
+
 struct TglNativeCreatedVeboxRendererView {
     uintptr_t image=0,creator=0,renderer=0,configuration=0;
     std::array<uintptr_t,3> originalChildren{}; // 910/918/native920

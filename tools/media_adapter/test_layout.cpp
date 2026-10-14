@@ -17081,6 +17081,33 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        constexpr uintptr_t image=0x10000000;
+        using Table=TglNativePrimaryRendererTable;
+        std::array<uintptr_t,15> words{};
+        words[1]=image+0x75bc00;
+        for(size_t i=0;i<Table::slotCount;++i) words[i+2]=image+Table::offsets[i];
+        words[14]=image+0x811e00;
+        auto read=[&](uintptr_t at,void* out,size_t n) noexcept {
+            if(at<image+0x75bb90 || n>sizeof(words) ||
+               at-(image+0x75bb90)>sizeof(words)-n) return false;
+            std::memcpy(out,reinterpret_cast<const unsigned char*>(words.data())+
+                at-(image+0x75bb90),n);return true;
+        };
+        auto executable=[](uintptr_t,size_t) noexcept {return true;};
+        std::array<uintptr_t,12> output{};
+        assert(Table::capture(image,read,executable,output));
+        assert(output[Table::temporaryPassSlot]==image+0x1b1ed0);
+        const auto saved=output;
+        words[12]++;assert(!Table::capture(image,read,executable,output));
+        assert(output==saved);words[12]--;
+        words[14]++;assert(!Table::capture(image,read,executable,output));
+        words[14]--;words[0]=8;
+        assert(!Table::capture(image,read,executable,output));words[0]=0;
+        assert(!Table::capture(image,read,[](uintptr_t,size_t) noexcept {return false;},output));
+        assert(!Table::capture(UINTPTR_MAX,read,executable,output));
+        assert(output==saved);
+    }
+    {
         std::array<uint8_t,0x139> parameters{};std::array<uint8_t,0x60> pass{};
         const uintptr_t p=0x1000,q=0x2000,source=0x3000,target=0x4000;
         const uint32_t sourceIndex=3,targetIndex=16;
