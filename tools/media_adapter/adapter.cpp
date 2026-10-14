@@ -157,6 +157,17 @@ struct Entry {
     // its DN owner; borrowing a backend from this factory-lifetime Entry would
     // leave a dangling reference when the native factory table is destroyed.
     TglTrackedCpuBinding nativeCpu;
+    using SurfaceApi=TglDarwinStmmSurfaceApi;
+    template<class ParentLease>
+    bool rendererResourceEnvironment(const TglNativeBorrowedVphalMhwLease<ParentLease>& parent,
+        TglNativeVphalResourceEnvironment& output) const noexcept {
+        output={};
+        const auto* view=parent.view();
+        if(!nativeCpu.image || !view || view->renderer.image!=nativeCpu.image)return false;
+        // Same qualified native image and parent-pinned OS/MHW roots. This
+        // returns value bindings only; caller must retain parent through use.
+        return output.resolve(parent,&readMemory,NativeTglImageAdmission{nativeCpu.image},&executableMemory);
+    }
     auto frontendCpuEnvironment() const noexcept {
         // Entirely value-owned: no Entry pointer/reference escapes into frames.
         return TglNativeFrontendCpuEnvironment<decltype(&readMemory),NativeTglImageAdmission,
