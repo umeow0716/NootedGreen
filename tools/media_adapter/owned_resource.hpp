@@ -13292,6 +13292,30 @@ int tglWithOwnedVeboxAllocationFrame(SurfaceOwner& sourceOwner,ChildOwner& child
     return sourceLeased?result:5;
 }
 
+// Exact ICL1f839b..1f83d8: pipe2 copies source50/58 to report60's
+// output50/58, with no arithmetic or native call. Both ORIGINAL surfaces must
+// already be leased; mutable output is supplied by its real owner scope.
+template<class SourceOwner,class TargetOwner,class ChildOwner,class ExecutionOwner,class Read>
+int tglCopyCapturedVeboxDirectRectangle(SourceOwner& input,const TglOwnedSurfaceStorage& source,
+    TargetOwner& outputOwner,TglOwnedSurfaceStorage& output,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,void* child,uintptr_t execution,Read read) noexcept {
+    return tglRunCapturedVeboxAllocation(input,childOwner,executionOwner,child,execution,source,
+        [&](void*,uintptr_t report,const auto&) noexcept -> int {
+            if(report>UINTPTR_MAX-0xa10)return 5;
+            auto admitted=[&]() noexcept {
+                uint32_t pipe=0;uintptr_t actual=0;
+                return outputOwner.hasSurfaceLease(output) &&
+                    read(report+0xa0c,&pipe,4) && pipe==2 && read(report+0x60,&actual,8) &&
+                    actual==reinterpret_cast<uintptr_t>(&output);
+            };
+            if(!admitted())return 5;
+            std::array<uint8_t,16> rectangle{};
+            std::memcpy(rectangle.data(),source.prefix.data()+0x50,rectangle.size());
+            std::memcpy(output.prefix.data()+0x50,rectangle.data(),rectangle.size());
+            return admitted()?0:5; // failure never claims metadata rollback
+        });
+}
+
 // TGL mode0 12c1cd calls +58 with only child in RDI and consumes EAX.
 // Allocation precedes builder admission: do not gate it on producer-pass state.
 // Context owns the complete allocation transaction and must unwind failures

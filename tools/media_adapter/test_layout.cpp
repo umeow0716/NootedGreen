@@ -156,6 +156,41 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        for(unsigned scenario=0;scenario<5;++scenario) {
+            TestFeatureSurfaceOwner input,output;
+            input.storage.prefix.fill(0x31);output.storage.prefix.fill(0xa7);
+            auto expected=output.storage;
+            if(!scenario)std::memcpy(expected.prefix.data()+0x50,input.storage.prefix.data()+0x50,16);
+            TestFeatureExecutionOwner execution;
+            alignas(8) std::array<uint8_t,0x1bc0> bytes{};
+            TestVeboxChildLease child{bytes.data()};
+            const uintptr_t report=reinterpret_cast<uintptr_t>(execution.bytes.data());
+            const uintptr_t source=reinterpret_cast<uintptr_t>(&input.storage);
+            uintptr_t target=reinterpret_cast<uintptr_t>(&output.storage);
+            if(scenario==2)target=0;
+            const uint32_t pipe=scenario==1?1:2;
+            std::memcpy(bytes.data()+0x88,&report,8);std::memcpy(bytes.data()+0x1b0,&source,8);
+            std::memcpy(execution.bytes.data()+0x60,&target,8);std::memcpy(execution.bytes.data()+0xa0c,&pipe,4);
+            auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+                if(scenario==3 || address<report || address-report>execution.bytes.size() ||
+                    size>execution.bytes.size()-(address-report))return false;
+                std::memcpy(out,execution.bytes.data()+(address-report),size);return true;
+            };
+            int status=5;
+            assert(input.withPeerSurface(output,[&](auto& src,auto& dst) noexcept {
+                status=child.withPrivateChild([&](void* actual) noexcept -> int {
+                    return execution.withExecution([&](uintptr_t active) noexcept -> int {
+                        if(scenario==4)output.deny=true;
+                        return tglCopyCapturedVeboxDirectRectangle(input,src,output,dst,child,execution,actual,active,read);
+                    });
+                });
+            }));
+            assert(status==(scenario?5:0));
+            assert(output.storage.prefix==expected.prefix && output.storage.resource==expected.resource &&
+                output.storage.tail==expected.tail);
+        }
+    }
+    {
         struct Backend {
             std::array<uint8_t,0xd48> bytes{};bool valid=true;int status=0;
             unsigned creates=0,destroys=0,initializes=0;
