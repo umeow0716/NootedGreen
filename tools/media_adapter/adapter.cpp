@@ -436,6 +436,7 @@ struct NativeVpAvsProducer {
                 if(scalar.state()!=prefix) {ready=false;return result?result:5;}
                 return result;
             },&phaseSourceSiting);
+        if(status)ready=false;
         return status;
     }
 };
@@ -760,7 +761,8 @@ struct NativeVpPreparedCallbacks {
     bool sameOwners() const noexcept {
         return &packet.scalar==&scalar && &avs.scalar==&scalar && &filters.scalar==&scalar &&
             &emission.scalar==&scalar && &avs.parameters==&commands &&
-            &filters.parameters==&commands && emission.avs==&avs && scalar.vp==vp.bytes.data();
+            &filters.parameters==&commands && emission.avs==&avs && scalar.vp==vp.bytes.data() &&
+            &emission.catalogue==&catalogue && &packet.targetOwner==&emission.targetOwner;
     }
     int state(void* actual,const TglOwnedVpFramePreparation& frame,
         NativeVpNv12PacketScope::StateOwner& owner,void* data,void* source,void* target) noexcept {
@@ -800,6 +802,9 @@ struct NativeVpPreparedCallbacks {
         if(assemblyAttempted || !sameOwners() || !scope || !use || !renderData ||
             scalar.attempted || packet.attempted || avs.attempted || filters.attempted || emission.attempted)
             return fail(5);
+        uintptr_t originalSourceA8=0;
+        std::memcpy(&originalSourceA8,scalar.source.prefix.data()+0xa8,8);
+        if(sourceA8!=originalSourceA8)return fail(5);
         assemblyAttempted=true;
         const int result=graph.withPreparedCallbackAssemblyPass(catalogue,frame,scalar.conditionalSource,
             scalar.settings,reinterpret_cast<uintptr_t>(&scalar.target),sourceA8,
