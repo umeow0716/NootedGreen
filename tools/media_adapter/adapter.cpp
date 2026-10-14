@@ -828,16 +828,16 @@ template int NativeVpNv12PacketScope::run<int(*)(TglOwnedSfcCommandParameters&) 
     int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
 template int NativeVpNv12PacketScope::withPreparedInputs<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
     int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
-struct NativeVpCommandEmission {
-    NativeVpScalarStateProducer& scalar;NativeRendererChildOwner& childOwner;
-    NativeFrameDataRead& dataRead;NativeContextSurfaceOwner& targetOwner;
+template<class SurfaceOwner> struct NativeVpCommandEmissionFor {
+    NativeVpScalarStateProducerFor<SurfaceOwner>& scalar;NativeRendererChildOwner& childOwner;
+    NativeFrameDataRead& dataRead;SurfaceOwner& targetOwner;
     const TglSfcMhwBinding& binding;const TglNativeSfcOutputUsageBinding& usage;
     const TglOwnedVpEntrySet& catalogue;
-    void* parent;void* command;NativeVpAvsProducer* avs;
+    void* parent;void* command;NativeVpAvsProducerFor<SurfaceOwner>* avs;
     bool attempted=false;
     int run(void* actual,const TglOwnedVpFramePreparation& frame,
         const TglOwnedSfcCommandParameters& parameters) noexcept {
-        const auto* packet=NativeVpPacketPublication::get(actual);
+        const auto* packet=NativeVpPacketPublicationFor<SurfaceOwner>::get(actual);
         const auto* prefix=scalar.state();
         if(attempted || !prefix || actual!=scalar.vp || !packet || packet->scalar!=&scalar ||
             packet->parameters!=&parameters || &dataRead!=&scalar.dataRead || !command ||
@@ -871,12 +871,14 @@ struct NativeVpCommandEmission {
         return status?status:(scalar.state()==prefix && targetOwner.hasSurfaceLease(scalar.target)?0:5);
     }
 };
+using NativeVpCommandEmission=NativeVpCommandEmissionFor<NativeContextSurfaceOwner>;
 // Per-frame callbacks for the graph's existing two-phase producer context.
 // Own no allocation; the enclosing graph/frame must retain every referenced
 // owner until both setup and send (or qualified failure retirement) finish.
-struct NativeVpPreparedCallbacks {
-    NativeVpScalarStateProducer& scalar;NativeVpNv12PacketScope& packet;
-    NativeVpAvsProducer& avs;NativeVpIefCscProducer& filters;NativeVpCommandEmission& emission;
+template<class SurfaceOwner> struct NativeVpPreparedCallbacksFor {
+    NativeVpScalarStateProducerFor<SurfaceOwner>& scalar;NativeVpNv12PacketScopeFor<SurfaceOwner>& packet;
+    NativeVpAvsProducerFor<SurfaceOwner>& avs;NativeVpIefCscProducerFor<SurfaceOwner>& filters;
+    NativeVpCommandEmissionFor<SurfaceOwner>& emission;
     TglOwnedVpSfcCallerStorage& vp;TglNativeVpLineResourceStorage& lines;const TglOwnedVpEntrySet& catalogue;
     TglOwnedSfcCommandParameters& commands;
     void* renderData;
@@ -891,7 +893,7 @@ struct NativeVpPreparedCallbacks {
             &emission.catalogue==&catalogue && &packet.targetOwner==&emission.targetOwner;
     }
     int state(void* actual,const TglOwnedVpFramePreparation& frame,const TglOwnedVpRegionInput& capturedGeometry,
-        NativeVpNv12PacketScope::StateOwner& owner,void* data,void* source,void* target) noexcept {
+        typename NativeVpNv12PacketScopeFor<SurfaceOwner>::StateOwner& owner,void* data,void* source,void* target) noexcept {
         if(error)return error;
         if(!sameOwners() || data!=renderData || !data || source!=&scalar.source || target!=&scalar.target ||
             actual!=scalar.vp)return fail(5);
@@ -902,7 +904,8 @@ struct NativeVpPreparedCallbacks {
         if(!result) {capturedFrame=frame;frameCaptured=true;}
         return fail(result);
     }
-    int prepareAvs(void* actual,const TglOwnedVpFramePreparation& frame,NativeVpAvsProducer::Owner& owner) noexcept {
+    int prepareAvs(void* actual,const TglOwnedVpFramePreparation& frame,
+        typename NativeVpAvsProducerFor<SurfaceOwner>::Owner& owner) noexcept {
         if(error)return error;
         return fail(sameOwners()?avs.prepare(actual,frame,owner,packet):5);
     }
@@ -958,13 +961,14 @@ struct NativeVpPreparedCallbacks {
         return fail(result?result:error);
     }
 };
+using NativeVpPreparedCallbacks=NativeVpPreparedCallbacksFor<NativeContextSurfaceOwner>;
 // Concrete per-frame VP assembly. CPU caches belong to the enclosing frame
 // scope; GPU resources remain the original graph's borrowed owners.
-class NativeVpProducerFrame {
+template<class SurfaceOwner> class NativeVpProducerFrameFor {
 public:
     struct Inputs {
-        const NativeVpScalarStateProducer& seed;
-        NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+        const NativeVpScalarStateProducerFor<SurfaceOwner>& seed;
+        SurfaceOwner& sourceOwner;SurfaceOwner& targetOwner;
         NativeRendererChildOwner& childOwner;
         TglOwnedSfcAvsTables& avsCache;TglOwnedVpCscCache& cscCache;
         TglOwnedSfcCommandParameters& commands;
@@ -974,16 +978,16 @@ public:
         void* parent;void* renderData;uintptr_t performance;
     };
 private:
-    NativeVpScalarStateProducer scalar_;
-    NativeNv12OutputQuery::State output_{};
-    NativeVpNv12PacketScope packet_;
-    NativeVpAvsProducer avs_;
-    NativeVpIefCscProducer filters_;
-    NativeVpCommandEmission emission_;
-    NativeVpPreparedCallbacks callbacks_;
+    NativeVpScalarStateProducerFor<SurfaceOwner> scalar_;
+    typename NativeNv12OutputQueryFor<SurfaceOwner>::State output_{};
+    NativeVpNv12PacketScopeFor<SurfaceOwner> packet_;
+    NativeVpAvsProducerFor<SurfaceOwner> avs_;
+    NativeVpIefCscProducerFor<SurfaceOwner> filters_;
+    NativeVpCommandEmissionFor<SurfaceOwner> emission_;
+    NativeVpPreparedCallbacksFor<SurfaceOwner> callbacks_;
     bool attempted_=false;
 public:
-    explicit NativeVpProducerFrame(const Inputs& in) noexcept
+    explicit NativeVpProducerFrameFor(const Inputs& in) noexcept
         :scalar_(in.seed),packet_(scalar_,in.targetOwner,{in.targetOwner,scalar_.target,output_}),
          avs_{scalar_,scalar_.dataRead,in.avsCache,in.commands,in.performance},
          filters_{scalar_,scalar_.dataRead,in.sourceOwner,in.commands,in.cscCache},
@@ -991,11 +995,11 @@ public:
              in.catalogue,in.parent,nullptr,&avs_},
          callbacks_{scalar_,packet_,avs_,filters_,emission_,in.vp,in.lines,in.catalogue,
              in.commands,in.renderData} {}
-    NativeVpProducerFrame(const NativeVpProducerFrame&)=delete;
-    NativeVpProducerFrame& operator=(const NativeVpProducerFrame&)=delete;
+    NativeVpProducerFrameFor(const NativeVpProducerFrameFor&)=delete;
+    NativeVpProducerFrameFor& operator=(const NativeVpProducerFrameFor&)=delete;
     template<class Use> int run(Use use) noexcept {
-        static_assert(noexcept(use(std::declval<NativeVpPreparedCallbacks&>())) &&
-            std::is_same_v<decltype(use(std::declval<NativeVpPreparedCallbacks&>())),int>);
+        static_assert(noexcept(use(std::declval<NativeVpPreparedCallbacksFor<SurfaceOwner>&>())) &&
+            std::is_same_v<decltype(use(std::declval<NativeVpPreparedCallbacksFor<SurfaceOwner>&>())),int>);
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         if(attempted_ || scalar_.attempted || scalar_.ready || scalar_.busy ||
             !callbacks_.sameOwners() ||
@@ -1006,12 +1010,19 @@ public:
         return status?status:callbacks_.error;
     }
 };
+using NativeVpProducerFrame=NativeVpProducerFrameFor<NativeContextSurfaceOwner>;
+template struct NativeVpCommandEmissionFor<NativeTemporarySurfaceOwner>;
+template struct NativeVpPreparedCallbacksFor<NativeTemporarySurfaceOwner>;
+template class NativeVpProducerFrameFor<NativeTemporarySurfaceOwner>;
+template int NativeVpProducerFrameFor<NativeTemporarySurfaceOwner>::run<
+    int(*)(NativeVpPreparedCallbacksFor<NativeTemporarySurfaceOwner>&) noexcept>(
+    int(*)(NativeVpPreparedCallbacksFor<NativeTemporarySurfaceOwner>&) noexcept) noexcept;
 template int NativeVpProducerFrame::run<int(*)(NativeVpPreparedCallbacks&) noexcept>(
     int(*)(NativeVpPreparedCallbacks&) noexcept) noexcept;
-class NativeVpProducerInputScope {
+template<class SurfaceOwner> class NativeVpProducerInputScopeFor {
 public:
     struct Inputs {
-        NativeCoreFrameDataScope& core;NativeFrameDataRead& read;
+        NativeCoreFrameDataScopeFor<SurfaceOwner>& core;NativeFrameDataRead& read;
         const TglNativeCreatedVeboxRendererView& pinned;
         const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         TglNativeVpLineResourceStorage& lines;const TglOwnedVpEntrySet& catalogue;
@@ -1023,9 +1034,9 @@ private:
     TglOwnedVpCscCache cscCache_;
     TglOwnedSfcCommandParameters commands_;
 public:
-    explicit NativeVpProducerInputScope(Inputs& in) noexcept:in_(in) {}
-    NativeVpProducerInputScope(const NativeVpProducerInputScope&)=delete;
-    NativeVpProducerInputScope& operator=(const NativeVpProducerInputScope&)=delete;
+    explicit NativeVpProducerInputScopeFor(Inputs& in) noexcept:in_(in) {}
+    NativeVpProducerInputScopeFor(const NativeVpProducerInputScopeFor&)=delete;
+    NativeVpProducerInputScopeFor& operator=(const NativeVpProducerInputScopeFor&)=delete;
     template<class Use> TglOwnedVeboxCommandTransactionResult run(Use use) noexcept {
         TglOwnedVeboxCommandTransactionResult result;auto& in=in_;auto& core=in.core;
         if constexpr(std::is_pointer_v<Use>)if(!use)return result;
@@ -1046,12 +1057,12 @@ public:
         if(!in.read(vp+0x998,&original.at998,4) || !in.read(vp+0x99c,&original.at99c,4) ||
             !in.read(vp+0x923,&flag,1) || !in.read(in.pinned.configuration,&performance,8) || !core.live())return result;
         original.at923=bool(flag&1);
-        NativeVpScalarStateProducer seed{health,in.read,core.source,core.target,fill,compression,fillCache_,
+        NativeVpScalarStateProducerFor<SurfaceOwner> seed{health,in.read,core.source,core.target,fill,compression,fillCache_,
             core.image,core.execution,in.interfaces.paramsE0,in.interfaces.paramsF0,core.vp.bytes.data()};
-        NativeVpProducerFrame::Inputs inputs{seed,core.sourceOwner,core.targetOwner,core.childOwner,
+        typename NativeVpProducerFrameFor<SurfaceOwner>::Inputs inputs{seed,core.sourceOwner,core.targetOwner,core.childOwner,
             avsCache_,cscCache_,commands_,commands,usage,in.catalogue,core.vp,in.lines,
             reinterpret_cast<void*>(core.child),reinterpret_cast<void*>(core.execution),performance};
-        NativeVpProducerFrame producers(inputs);
+        NativeVpProducerFrameFor<SurfaceOwner> producers(inputs);
         static_assert(noexcept(use(producers,original)) &&
             std::is_same_v<decltype(use(producers,original)),TglOwnedVeboxCommandTransactionResult>);
         result=use(producers,original);
@@ -1059,6 +1070,11 @@ public:
         return result;
     }
 };
+using NativeVpProducerInputScope=NativeVpProducerInputScopeFor<NativeContextSurfaceOwner>;
+using NativeTemporaryVpProducerInputUse=TglOwnedVeboxCommandTransactionResult(*)(
+    NativeVpProducerFrameFor<NativeTemporarySurfaceOwner>&,const TglOwnedVpModeState&) noexcept;
+template TglOwnedVeboxCommandTransactionResult NativeVpProducerInputScopeFor<NativeTemporarySurfaceOwner>::run<
+    NativeTemporaryVpProducerInputUse>(NativeTemporaryVpProducerInputUse) noexcept;
 using NativeVpProducerInputUse=TglOwnedVeboxCommandTransactionResult(*)(NativeVpProducerFrame&,
     const TglOwnedVpModeState&) noexcept;
 template TglOwnedVeboxCommandTransactionResult NativeVpProducerInputScope::run<NativeVpProducerInputUse>(
