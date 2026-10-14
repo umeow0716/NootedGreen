@@ -13460,6 +13460,27 @@ bool tglCopyNativePerPassScalars(std::array<uint8_t,DestinationBytes>& destinati
     }
 }
 
+// Exact1b20d0/1b2530 non-surface-array fields. Nested interface pointers
+// (e.g. e0/f0) retain their original borrowed lifetime; this is NOT a deep
+// clone. The 17/8 surface pointer arrays are handled by the temporary owner.
+template<size_t DestinationBytes,size_t SourceBytes>
+bool tglCopyNativePerPassParameterFields(std::array<uint8_t,DestinationBytes>& destination,
+    const std::array<uint8_t,SourceBytes>& source) noexcept {
+    if constexpr(DestinationBytes<0x130 || SourceBytes<0x130)return false;
+    else {
+        struct Field {size_t offset,size;};
+        constexpr std::array<Field,9> fields{{{0,4},{0x90,4},{0xd8,8},{0xe0,8},
+            {0xf0,8},{0x100,8},{0x10c,4},{0x11c,4},{0x128,8}}};
+        constexpr std::array<size_t,6> flags{{0xe8,0xe9,0xf8,0x108,0x110,0x120}};
+        // Snapshot preserves same-array behavior without touching gap bytes.
+        const auto snapshot=source;
+        for(const auto& field:fields)
+            std::memcpy(destination.data()+field.offset,snapshot.data()+field.offset,field.size);
+        for(const auto offset:flags)destination[offset]=snapshot[offset]&1;
+        return true;
+    }
+}
+
 // Resolve the original child-owned history on each admission, under the same
 // child lease. Caller's region validators must also hold its allocation live;
 // readable/writable permission alone is not an ownership grant.

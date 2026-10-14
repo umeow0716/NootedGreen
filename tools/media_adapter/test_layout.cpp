@@ -16717,6 +16717,24 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        std::array<uint8_t,0x139> source,destination;
+        source.fill(0xfe);destination.fill(0xa5);
+        assert(tglCopyNativePerPassParameterFields(destination,source));
+        for(size_t i=0;i<destination.size();++i) {
+            const bool flag=i==0xe8 || i==0xe9 || i==0xf8 || i==0x108 || i==0x110 || i==0x120;
+            const bool field=i<4 || (i>=0x90 && i<0x94) || (i>=0xd8 && i<0xe8) ||
+                (i>=0xf0 && i<0xf8) || (i>=0x100 && i<0x108) ||
+                (i>=0x10c && i<0x110) || (i>=0x11c && i<0x120) || (i>=0x128 && i<0x130);
+            assert(destination[i]==(flag?0:(field?0xfe:0xa5)));
+        }
+        assert(tglCopyNativePerPassParameterFields(source,source));
+        assert(source[0xe8]==0 && source[8]==0xfe && source[0x98]==0xfe);
+        std::array<uint8_t,0x12f> shortInput{};
+        const auto saved=destination;
+        assert(!tglCopyNativePerPassParameterFields(destination,shortInput) && destination==saved);
+        assert(!tglCopyNativePerPassParameterFields(shortInput,source));
+    }
+    {
         struct Backend {
             size_t calls=0,live=0,fail=SIZE_MAX;
             uintptr_t allocate(size_t n) noexcept {
