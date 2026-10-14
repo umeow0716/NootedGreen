@@ -1857,7 +1857,17 @@ template<class SurfaceOwner> struct NativeLeasedVpFrameInputScopeFor {
             NativeAdmissionPass& pass,NativeFrameDataRead& read) noexcept -> TglOwnedVeboxCommandTransactionResult {
             TglOwnedVeboxCommandTransactionResult result;
             if(!in.resetAuthority)return result;
-            const int status=graph.withResourceCatalogue(catalogue,lines.resources(),*in.resetAuthority,
+            auto retire=[&]() noexcept -> int {return (*in.resetAuthority)();};
+            auto detach=[&](void* vp) noexcept -> int {
+                if(vp!=core.vp.bytes.data())return 5;
+                return core.childOwner.confirmDetachedVpStorage(
+                    reinterpret_cast<void*>(core.child),core.generation);
+            };
+            TglOwnedEmbeddedVpLifetimeContext lifetime(core.vp.bytes.data(),graph,
+                in.assembly.backing(),in.index,retire,detach);
+            const int status=tglWithOwnedVpLifetimeAssemblyEntries(core.vp.bytes.data(),lifetime,catalogue,
+                [&](void*,const TglOwnedVpEntrySet& lifecycle) noexcept -> int {
+                return graph.withResourceCatalogue(lifecycle,lines.resources(),*in.resetAuthority,
                 [&](void* child,const TglOwnedVpEntrySet& resources) noexcept -> int {
                     if(child!=core.vp.bytes.data())return 5;
                     return tglWithOwnedVpAdmissionEntries(core.vp,read,
@@ -1871,7 +1881,7 @@ template<class SurfaceOwner> struct NativeLeasedVpFrameInputScopeFor {
                                     if(modeChild!=child)return 5;
                                     return tglWithOwnedVpPhaseDispatchEntries(child,modes,
                                         [&](void* actual,const TglOwnedVpEntrySet& phase,auto&,auto&) noexcept -> int {
-                                            if(actual!=child)return 5;
+                                            if(actual!=child || phase.missingMask())return 5;
                                             typename NativeVpProducerInputScopeFor<SurfaceOwner>::Inputs inputs{
                                                 core,read,in.pinned,in.interfaces,lines,phase};
                                             NativeVpProducerInputScopeFor<SurfaceOwner> producers(inputs);
@@ -1883,6 +1893,7 @@ template<class SurfaceOwner> struct NativeLeasedVpFrameInputScopeFor {
                                         });
                                 });
                         });
+                });
                 });
             if(!result.status && status)result.status=status;
             return result;

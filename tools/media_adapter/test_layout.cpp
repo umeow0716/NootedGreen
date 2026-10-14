@@ -22263,6 +22263,12 @@ int main() {
                         ++detaches;return detachStatus;
                     };
                     TglOwnedEmbeddedVpLifetimeContext lifetime(child,*actualGraph,embedded,0,retire,detach);
+                    assert(embedded.withVpResources([&](auto&,auto&,auto&) noexcept -> int {
+                        return tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,{},
+                            [&](void* p,const auto& entries) noexcept -> int {
+                                entries.destroy(p);return 0;
+                            });
+                    })==5 && !lifetime.destroyed() && !detaches && !retireCalls);
                     assert(tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,{},
                         [&](void* p,const auto& entries) noexcept -> int {
                             assert(entries.destroy && entries.deletingDestroy);
@@ -30968,8 +30974,14 @@ int main() {
                 result=0;
                 assert(initialize()==TglOwnedBaseConstruction::ConstructedSuccess && nativeCalls==2);
                 assert(owned.constructedBase()==cpu.bytes.data());
+                assert(owned.confirmDetachedVpStorage(cpu.bytes.data(),owned.allocationGeneration())==0);
+                assert(owned.confirmDetachedVpStorage(cpu.bytes.data(),owned.allocationGeneration()+1)==5);
+                assert(owned.withPrivateChild([&](void* parent) noexcept -> int {
+                    return owned.confirmDetachedVpStorage(parent,owned.allocationGeneration());
+                })==5);
                 uintptr_t borrowedVp=0x123400;
                 std::memcpy(cpu.bytes.data()+0x80,&borrowedVp,8);
+                assert(owned.confirmDetachedVpStorage(cpu.bytes.data(),owned.allocationGeneration())==5);
                 assert(!owned.destroyInPlace() && cleanups==1 && destroys==1 && cpu.releases==1);
                 assert(owned.ownsLifecycleAllocation(cpu.bytes.data(),owned.allocationGeneration()));
                 borrowedVp=0; // CPU fixture of completed factory-scope restoration, not forced runtime detach.

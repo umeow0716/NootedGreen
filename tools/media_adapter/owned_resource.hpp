@@ -5150,6 +5150,16 @@ public:
         return child && generation && generation==allocationGeneration_ &&
             reinterpret_cast<uintptr_t>(child)==storage_.get();
     }
+    // Embedded VP deletion acknowledges an already detached parent link.
+    // Only the owning base allocation may attest it; no native allocation
+    // accounting or borrowed-field mutation is performed here.
+    int confirmDetachedVpStorage(void* parent,uint64_t generation) const noexcept {
+        if(!ownsLifecycleAllocation(parent,generation) ||
+            hasPrivateChildLease(reinterpret_cast<uintptr_t>(parent)))return 5;
+        uintptr_t linked=0;
+        std::memcpy(&linked,static_cast<const uint8_t*>(parent)+0x80,8);
+        return linked?5:0;
+    }
     // Exact133690 establishes child+8=renderer+2cb0. Caller authenticates
     // renderer lifetime/generation and excludes pending frames before binding.
     // Never replace an unexplained nonnull native configuration pointer.
