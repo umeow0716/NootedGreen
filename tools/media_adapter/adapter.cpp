@@ -2298,12 +2298,12 @@ using NativeVeboxControlPolicy=TglOwnedDiIecpControlPolicyReader<NativeFrameData
 using NativeVeboxLivePacketFrame=TglOwnedVeboxLivePacketContext<NativeDiIecpCapture,NativeFrameDataRead,
     NativeFrameSurfaceRoleAdmission,NativeFrameSurfaceAdmission,TglNativeDiIecpRegistration,
     TglNativeDiIecpControl<NativeVeboxControlPolicy>>;
-struct NativeVeboxPacketBridge : TglOwnedVeboxNativePacketBridge<NativeVeboxLivePacketFrame,NativeStackPacketAdmission> {
+template<class SurfaceOwner> struct NativeVeboxPacketBridgeFor : TglOwnedVeboxNativePacketBridge<NativeVeboxLivePacketFrame,NativeStackPacketAdmission> {
     using Base=TglOwnedVeboxNativePacketBridge<NativeVeboxLivePacketFrame,NativeStackPacketAdmission>;
-    NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+    SurfaceOwner& sourceOwner;SurfaceOwner& targetOwner;
     NativeRendererChildOwner& childOwner;uintptr_t image;
-    NativeVeboxPacketBridge(NativeVeboxLivePacketFrame& frame,NativeStackPacketAdmission admit,
-        NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
+    NativeVeboxPacketBridgeFor(NativeVeboxLivePacketFrame& frame,NativeStackPacketAdmission admit,
+        SurfaceOwner& source,SurfaceOwner& target,
         NativeRendererChildOwner& child,uintptr_t nativeImage) noexcept
         :Base(frame,admit),sourceOwner(source),targetOwner(target),childOwner(child),image(nativeImage) {}
     int state(bool di,void* packet) noexcept {
@@ -2319,15 +2319,18 @@ struct NativeVeboxPacketBridge : TglOwnedVeboxNativePacketBridge<NativeVeboxLive
         });
     }
 };
-using NativeVeboxProducerTypes=TglOwnedVeboxFrameProducerTypes<NativeVeboxPacketBridge,NativeRendererChildOwner,
-    NativeExecutionOwner,decltype(&readMemory),TglNativeDndiStackAdmission,NativeVeboxCscProducer>;
-using NativeVeboxProducerResolve=typename NativeVeboxProducerTypes::Resolve;
-struct NativeVeboxFrameCapabilityScope {
-    using Use=NativeAdmissionStages::Result(*)(void*,NativeVeboxLivePacketFrame&) noexcept;
-    static NativeAdmissionStages::Result run(NativeRendererCpuAssembly& assembly,
-        const TglNativeVphalMhwView& view,NativeRetainedDiIecpCapture& capture,
+using NativeVeboxPacketBridge=NativeVeboxPacketBridgeFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> using NativeVeboxProducerTypesFor=TglOwnedVeboxFrameProducerTypes<NativeVeboxPacketBridgeFor<SurfaceOwner>,NativeRendererChildOwner,
+    NativeExecutionOwner,decltype(&readMemory),TglNativeDndiStackAdmission,NativeVeboxCscProducerFor<SurfaceOwner>>;
+using NativeVeboxProducerTypes=NativeVeboxProducerTypesFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> using NativeVeboxProducerResolveFor=typename NativeVeboxProducerTypesFor<SurfaceOwner>::Resolve;
+using NativeVeboxProducerResolve=NativeVeboxProducerResolveFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeVeboxFrameCapabilityScopeFor {
+    using Use=typename NativeAdmissionStagesFor<SurfaceOwner>::Result(*)(void*,NativeVeboxLivePacketFrame&) noexcept;
+    static typename NativeAdmissionStagesFor<SurfaceOwner>::Result run(NativeRendererCpuAssembly& assembly,
+        const TglNativeVphalMhwView& view,NativeRetainedDiIecpCaptureFor<SurfaceOwner>& capture,
         TglOwnedVeboxPacketLeases leases,void* scope,Use use) noexcept {
-        NativeAdmissionStages::Result result;
+        typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
         auto& planner=capture.planner;
         if(!scope || !use || capture.busy || capture.active || !leases.target ||
             leases.child!=reinterpret_cast<uintptr_t>(planner.child) || leases.execution!=planner.execution ||
@@ -2341,8 +2344,8 @@ struct NativeVeboxFrameCapabilityScope {
             NativeTglImageAdmission{view.renderer.image},&executableMemory,
             [&](const TglNativeDiIecpServices& services) noexcept -> int {
                 NativeVeboxLivePacketFrame frame{{},leases,disableTemporalDenoise,capture.capability(),capture.read,
-                    {&capture,&NativeRetainedDiIecpCapture::admitRole},
-                    {&capture,&NativeRetainedDiIecpCapture::admitDi},
+                    {&capture,&NativeRetainedDiIecpCaptureFor<SurfaceOwner>::admitRole},
+                    {&capture,&NativeRetainedDiIecpCaptureFor<SurfaceOwner>::admitDi},
                     TglNativeDiIecpRegistration{services},
                     TglNativeDiIecpControl<NativeVeboxControlPolicy>{services,
                         {leases.child,leases.execution,leases.target,capture.read}}};
@@ -2352,15 +2355,16 @@ struct NativeVeboxFrameCapabilityScope {
         return result;
     }
 };
-struct NativeVeboxPacketProducerScope {
+using NativeVeboxFrameCapabilityScope=NativeVeboxFrameCapabilityScopeFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeVeboxPacketProducerScopeFor {
     struct DnRead {
-        NativeContextSurfaceOwner& owner;NativeDenoiseParameters& parameters;
+        SurfaceOwner& owner;NativeDenoiseParameters& parameters;
         const TglOwnedSurfaceStorage& source;
         static bool resolve(void* context,const TglOwnedSurfaceStorage& actual,uintptr_t& output) noexcept {
             auto* self=static_cast<DnRead*>(context);
             if(!self || &actual!=&self->source || !self->owner.hasSurfaceLease(actual))return false;
             uintptr_t pointer=0;std::memcpy(&pointer,actual.prefix.data()+0x90,8);
-            if(pointer && (!self->parameters.hasNativeReleaseSlot(actual.prefix.data()+0x90) ||
+            if(pointer && (!tglHasNativeDenoiseAdmissionGrant(self->owner,actual,self->parameters) ||
                 pointer!=self->parameters.get() || self->parameters.size()<8))return false;
             output=pointer;return true;
         }
@@ -2368,14 +2372,14 @@ struct NativeVeboxPacketProducerScope {
     // Construction and execution name this SAME resolver specialization.
     // This is only the producer portion, never a complete publishable table.
     static std::array<uintptr_t,20> producerHooks(std::array<uintptr_t,20> hooks) noexcept {
-        hooks=tglBindOwnedVeboxKernelSetupHook<NativeVeboxProducerResolve>(hooks);
-        hooks=tglBindOwnedVeboxProducerHooks<NativeVeboxProducerResolve>(hooks);
-        hooks=tglBindOwnedVeboxCscHook<NativeVeboxProducerResolve>(hooks);
-        return tglBindOwnedVeboxDndiHook<NativeVeboxProducerResolve>(hooks);
+        hooks=tglBindOwnedVeboxKernelSetupHook<NativeVeboxProducerResolveFor<SurfaceOwner>>(hooks);
+        hooks=tglBindOwnedVeboxProducerHooks<NativeVeboxProducerResolveFor<SurfaceOwner>>(hooks);
+        hooks=tglBindOwnedVeboxCscHook<NativeVeboxProducerResolveFor<SurfaceOwner>>(hooks);
+        return tglBindOwnedVeboxDndiHook<NativeVeboxProducerResolveFor<SurfaceOwner>>(hooks);
     }
-    static NativeAdmissionStages::Result run(NativeVeboxLivePacketFrame& frame,NativeDenoiseParameters& parameters,
-        NativeVeboxCscProducer csc,NativeAllocatedAdmissionRender& render) noexcept {
-        NativeAdmissionStages::Result result;
+    static typename NativeAdmissionStagesFor<SurfaceOwner>::Result run(NativeVeboxLivePacketFrame& frame,NativeDenoiseParameters& parameters,
+        NativeVeboxCscProducerFor<SurfaceOwner> csc,NativeAllocatedAdmissionRenderFor<SurfaceOwner>& render) noexcept {
+        typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
         auto& admission=render.render.admission;auto& child=admission.reset.childOwner;
         auto& execution=admission.reset.executionOwner;
         const auto& leases=frame.leases;
@@ -2386,18 +2390,18 @@ struct NativeVeboxPacketProducerScope {
             &csc.health.target!=leases.target || frame.read.scope!=admission.read.scope ||
             frame.read.resolve!=admission.read.resolve || &parameters!=&admission.feature.parameters)return result;
         DnRead dn{admission.feature.sourceOwner,parameters,leases.source};
-        NativeVeboxPacketBridge bridge(frame,NativeStackPacketAdmission{},
+        NativeVeboxPacketBridgeFor<SurfaceOwner> bridge(frame,NativeStackPacketAdmission{},
             admission.feature.sourceOwner,admission.feature.targetOwner,child,render.render.binding.image);
         const int status=tglWithOwnedVeboxFrameProducers(bridge,child,execution,0,&readMemory,
             TglNativeDndiStackAdmission{},csc,[&](void* object,auto& producer) noexcept -> int {
-                static_assert(std::is_same_v<std::remove_reference_t<decltype(producer)>,NativeVeboxProducerTypes::Context>);
-                if(object!=admission.reset.child || NativeVeboxProducerResolve::get(object)!=&producer)return 5;
+                static_assert(std::is_same_v<std::remove_reference_t<decltype(producer)>,typename NativeVeboxProducerTypesFor<SurfaceOwner>::Context>);
+                if(object!=admission.reset.child || NativeVeboxProducerResolveFor<SurfaceOwner>::get(object)!=&producer)return 5;
                 producer.frame.frame.parameterScope=&dn;
                 producer.frame.frame.parameterRead=&DnRead::resolve;
                 std::array<uintptr_t,20> hooks{};
                 using Lifetime=TglOwnedVeboxScopedLifetimeResolve<NativeRendererChildLifetime>;
-                if(!tglBuildOwnedVeboxCompleteHooks<Lifetime,NativeAdmissionResolve,NativeAllocationResolve,
-                    NativeVeboxProducerResolve,NativeModeReleaseScope,TglOwnedFormatReader>(object,hooks) ||
+                if(!tglBuildOwnedVeboxCompleteHooks<Lifetime,NativeAdmissionResolveFor<SurfaceOwner>,NativeAllocationResolveFor<SurfaceOwner>,
+                    NativeVeboxProducerResolveFor<SurfaceOwner>,NativeModeReleaseScope,TglOwnedFormatReader>(object,hooks) ||
                     !child.matchesPrivateVtableHooks(hooks))return 5;
                 return producer.pass.withBuilder([&]() noexcept -> int {result=render.run();return result.status;});
             });
@@ -2405,34 +2409,37 @@ struct NativeVeboxPacketProducerScope {
         return result;
     }
 };
-struct NativeCompleteFrameConsumer {
+using NativeVeboxPacketProducerScope=NativeVeboxPacketProducerScopeFor<NativeContextSurfaceOwner>;
+template struct NativeVeboxFrameCapabilityScopeFor<NativeTemporarySurfaceOwner>;
+template struct NativeVeboxPacketProducerScopeFor<NativeTemporarySurfaceOwner>;
+template<class SurfaceOwner> struct NativeCompleteFrameConsumerFor {
     NativeRendererCpuAssembly& assembly;const TglNativeVphalMhwView& view;
-    NativeRetainedDiIecpCapture& capture;TglOwnedVeboxPacketLeases leases;
-    NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
-    NativeAllocatedAdmissionRender& render;
+    NativeRetainedDiIecpCaptureFor<SurfaceOwner>& capture;TglOwnedVeboxPacketLeases leases;
+    NativeDenoiseParameters& parameters;NativeVeboxCscProducerFor<SurfaceOwner> csc;
+    NativeAllocatedAdmissionRenderFor<SurfaceOwner>& render;
     bool attempted=false;
-    NativeAdmissionStages::Result run() noexcept {
-        NativeAdmissionStages::Result result;
+    typename NativeAdmissionStagesFor<SurfaceOwner>::Result run() noexcept {
+        typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
         auto& admission=render.render.admission;
         if(attempted || &capture.planner!=&render.planner || &capture.read!=&admission.read ||
             capture.parameters!=&parameters || &parameters!=&admission.feature.parameters ||
             &admission.reset.backing!=&assembly.backing() || view.renderer.image!=render.render.binding.image ||
             assembly.backing().retention()())return result;
         attempted=true;
-        return NativeVeboxFrameCapabilityScope::run(assembly,view,capture,leases,this,
-            [](void* context,NativeVeboxLivePacketFrame& frame) noexcept -> NativeAdmissionStages::Result {
-                auto& self=*static_cast<NativeCompleteFrameConsumer*>(context);
-                return NativeVeboxPacketProducerScope::run(frame,self.parameters,self.csc,self.render);
+        return NativeVeboxFrameCapabilityScopeFor<SurfaceOwner>::run(assembly,view,capture,leases,this,
+            [](void* context,NativeVeboxLivePacketFrame& frame) noexcept -> typename NativeAdmissionStagesFor<SurfaceOwner>::Result {
+                auto& self=*static_cast<NativeCompleteFrameConsumerFor*>(context);
+                return NativeVeboxPacketProducerScopeFor<SurfaceOwner>::run(frame,self.parameters,self.csc,self.render);
             });
     }
     static TglOwnedVeboxCommandTransactionResult consume(void* context,NativeRendererCpuAssembly& cpu,
         const TglNativeCreatedVeboxRendererView& pinned,
-        NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
-        NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,NativeDenoiseParameters& dn,
+        SurfaceOwner& source,SurfaceOwner& target,
+        SurfaceOwner*,SurfaceOwner*,NativeDenoiseParameters& dn,
         NativeRendererChildLifetime& first,NativeRendererChildLifetime& second) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
         if(!context)return result;
-        auto& self=*static_cast<NativeCompleteFrameConsumer*>(context);
+        auto& self=*static_cast<NativeCompleteFrameConsumerFor*>(context);
         auto& admission=self.render.render.admission;
         using Life=TglOwnedVeboxScopedContext<NativeRendererChildLifetime>;
         auto* current=Life::get(admission.reset.child);
@@ -2449,6 +2456,8 @@ struct NativeCompleteFrameConsumer {
         return result;
     }
 };
+using NativeCompleteFrameConsumer=NativeCompleteFrameConsumerFor<NativeContextSurfaceOwner>;
+template struct NativeCompleteFrameConsumerFor<NativeTemporarySurfaceOwner>;
 // Construct the real per-frame execution objects inside the caller's original
 // surface/data/mode leases. Every reference below survives through native
 // Render; nothing is published as a dangling callback or copied to a fixture.
