@@ -15591,6 +15591,9 @@ static void testRetainedVeboxFrames() {
         unsigned synchronousCalls=0;
         assert(callbacks.withFrameScope(success.ticket,0x8000,[&](auto& scope) noexcept -> int {
             assert(!scope.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
+            assert(!scope.runContextRootFrame([](Frame&) noexcept {
+                assert(false);return TglOwnedVeboxCommandTransactionResult{};
+            }).acquired);
             return scope.withNativeRequestItem(0x20000,[&](auto& active) noexcept -> int {
                 ++synchronousCalls;
                 assert(callbacks.withFrameScope(success.ticket,0x8000,[](auto&) noexcept -> int {assert(false);return 0;})==5);
@@ -15598,6 +15601,13 @@ static void testRetainedVeboxFrames() {
                 synchronousRootFrame=active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
                 assert(synchronousRootFrame.generation);
                 assert(!active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
+                const auto unsubmitted=active.runContextRootFrame([](Frame& frame) noexcept {
+                    assert(frame.roots.parent.physical==0x8000);
+                    return TglOwnedVeboxCommandTransactionResult{31,0,false,false};
+                });
+                assert(unsubmitted.status==31 && !unsubmitted.acquired);
+                assert(!active.bindContextRootFrameOutput({0x20008,0x62000,7,true}));
+                assert(!active.bindContextRootFrameOutput({0x20000,0x62000,7,true})); // No acquired work.
                 return 31;
             });
         })==31 && synchronousCalls==1 && rootDestroyed==1);

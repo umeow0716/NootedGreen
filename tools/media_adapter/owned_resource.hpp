@@ -21658,6 +21658,7 @@ public:
     class Scope {
         friend class TglOwnedVeboxPhysicalFrameRegistry;
         Pool& frames_;uintptr_t physical_,context_=0;Entry& entry_;
+        FrameTicket requestFrame_{};
         explicit Scope(Entry& entry) noexcept
             :frames_(entry.frames),physical_(entry.physical),entry_(entry) {}
     public:
@@ -21678,7 +21679,7 @@ public:
             if(!context || context_) return 5;
             return frames_.withNativeRequestItem([&]() noexcept -> int {
                 context_=context;
-                struct Reset {uintptr_t& value;~Reset(){value=0;}} reset{context_};
+                struct Reset {uintptr_t& value;FrameTicket& frame;~Reset(){value=0;frame={};}} reset{context_,requestFrame_};
                 return invoke(*this);
             });
         }
@@ -21687,7 +21688,19 @@ public:
             if(!context_ || !frames_.emptyForNativeRequest()) return {};
             TglNativeContextInputRoots roots;
             if(!roots.resolve(context_,read,admit) || roots.parent.physical!=physical_) return {};
-            return frames_.create(static_cast<const TglNativeContextInputRoots&>(roots),std::forward<Args>(args)...);
+            requestFrame_=frames_.create(static_cast<const TglNativeContextInputRoots&>(roots),std::forward<Args>(args)...);
+            return requestFrame_;
+        }
+        // Execute only the frame created by this active native request. Never
+        // reenter physical registry or accept an independently supplied ticket.
+        template<class Invoke>
+        TglOwnedVeboxCommandTransactionResult runContextRootFrame(Invoke invoke) noexcept {
+            if(!context_ || !requestFrame_.generation)return {};
+            return frames_.run(requestFrame_,invoke);
+        }
+        bool bindContextRootFrameOutput(const TglNativeFrameOutputReceipt& receipt) noexcept {
+            return context_ && requestFrame_.generation && receipt.context==context_ &&
+                frames_.bindOutputReceipt(requestFrame_,receipt);
         }
     };
 private:
