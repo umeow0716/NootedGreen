@@ -2047,9 +2047,9 @@ struct TglNativeCreatedVeboxRendererView {
     uintptr_t image=0,creator=0,renderer=0,configuration=0;
     std::array<uintptr_t,3> originalChildren{}; // 910/918/native920
 private:
-    template<class Read,class Admit,class Qualify,class Executable,class TableAdmit>
+    template<class Read,class Admit,class Qualify,class Executable,class TableAdmit,class RendererAdmit>
     bool resolveTable(uintptr_t base,uintptr_t object,Read read,Admit admit,
-        Qualify qualify,Executable executable,TableAdmit tableAdmit) noexcept {
+        Qualify qualify,Executable executable,TableAdmit tableAdmit,RendererAdmit rendererAdmit) noexcept {
         *this={};
         uintptr_t creatorTable=0,create=0,result=0,rendererTable=0,init=0,frame=0;
         std::array<uintptr_t,3> children{};
@@ -2059,7 +2059,7 @@ private:
            !read(creatorTable+0x18,&create,8) || create!=base+0x1e6610 || !executable(create,1) ||
            !read(object+0x68,&result,8) || !result || (result&7) ||
            result>UINTPTR_MAX-0x2cb8 || !admit(result,0x2cb8) ||
-           !read(result,&rendererTable,8) || rendererTable!=base+0x75bba0 ||
+           !read(result,&rendererTable,8) || !rendererAdmit(result,rendererTable) ||
            !read(rendererTable+0x20,&init,8) || init!=base+0x132510 || !executable(init,1) ||
            !read(rendererTable+0x28,&frame,8) || frame!=base+0x131fa0 || !executable(frame,1) ||
            !read(result+0x910,children.data(),sizeof(children)) || !children[2]) return false;
@@ -2071,7 +2071,8 @@ public:
     bool resolve(uintptr_t base,uintptr_t object,Read read,Admit admit,
         Qualify qualify,Executable executable) noexcept {
         return resolveTable(base,object,read,admit,qualify,executable,
-            [base](uintptr_t table) noexcept {return table==base+0x75bb58;});
+            [base](uintptr_t table) noexcept {return table==base+0x75bb58;},
+            [base](uintptr_t,uintptr_t table) noexcept {return table==base+0x75bba0;});
     }
     // Used AFTER the same VPHAL owner's lifetime table is published. Never
     // admit arbitrary private tables or the call-only creator wrapper table.
@@ -2084,6 +2085,21 @@ public:
             [&](uintptr_t table) noexcept {
                 return lifetime.object()==object && lifetime.source()==base+0x75bb58 &&
                     lifetime.publication()==Publication::Published && table==lifetime.addressPoint();
+            },[base](uintptr_t,uintptr_t table) noexcept {return table==base+0x75bba0;});
+    }
+    template<class Lifetime,class Read,class Admit,class Qualify,class Executable>
+    bool resolveOwnedRenderer(uintptr_t base,uintptr_t object,const Lifetime& lifetime,
+        const TglOwnedPrimaryRendererTable& rendererOwner,Read read,Admit admit,
+        Qualify qualify,Executable executable) noexcept {
+        using Publication=typename Lifetime::Publication;
+        return resolveTable(base,object,read,admit,qualify,executable,
+            [&](uintptr_t table) noexcept {
+                return lifetime.object()==object && lifetime.source()==base+0x75bb58 &&
+                    lifetime.publication()==Publication::Published && table==lifetime.addressPoint();
+            },[&](uintptr_t renderer,uintptr_t table) noexcept {
+                return rendererOwner.object()==renderer && rendererOwner.source()==base+0x75bba0 &&
+                    rendererOwner.publication()==TglOwnedPrimaryRendererTable::Publication::Published &&
+                    table==rendererOwner.addressPoint();
             });
     }
 };

@@ -18817,6 +18817,43 @@ int main() {
                     TglOwnedVphalLifetimeTable unrelated;
                     assert(!publishedView.resolveOwned(image,creatorAddress,unrelated,publishedRead,
                         creatorAdmit,qualify,creatorExecutable));
+                    {
+                        TglOwnedPrimaryRendererTable rendererOwner,foreignOwner;
+                        std::array<uintptr_t,15> exact{};
+                        exact[1]=image+0x75bc00;exact[14]=image+0x811e00;
+                        for(size_t i=0;i<12;++i) exact[i+2]=image+TglNativePrimaryRendererTable::offsets[i];
+                        auto mainRead=[&](uintptr_t at,void* out,size_t n) noexcept {
+                            const auto start=image+0x75bb90;
+                            if(at>=start && at-start<=sizeof(exact) && n<=sizeof(exact)-(at-start)) {
+                                std::memcpy(out,reinterpret_cast<const uint8_t*>(exact.data())+at-start,n);return true;
+                            }
+                            const auto owned=rendererOwner.addressPoint();
+                            if(owned && at>=owned && at-owned<=96 && n<=96-(at-owned)) {
+                                std::memcpy(out,reinterpret_cast<const void*>(at),n);return true;
+                            }
+                            return publishedRead(at,out,n);
+                        };
+                        assert(rendererOwner.build(image,0xf200,mainRead,qualify,
+                            [](uintptr_t,size_t) noexcept {return true;},
+                            [](uintptr_t at,size_t) noexcept {return at==0xf200;}));
+                        auto mainWrite=[&](uintptr_t at,uintptr_t value) noexcept {
+                            if(at!=r) return false;put(r,0,value);return true;
+                        };
+                        assert(rendererOwner.publish(r,mainRead,mainWrite,admit));
+                        assert(!publishedView.resolveOwned(image,creatorAddress,lifetime,mainRead,
+                            creatorAdmit,qualify,creatorExecutable));
+                        assert(publishedView.resolveOwnedRenderer(image,creatorAddress,lifetime,rendererOwner,
+                            mainRead,creatorAdmit,qualify,creatorExecutable));
+                        assert(!publishedView.resolveOwnedRenderer(image,creatorAddress,lifetime,foreignOwner,
+                            mainRead,creatorAdmit,qualify,creatorExecutable));
+                        assert(!publishedView.resolveOwnedRenderer(image,creatorAddress,unrelated,rendererOwner,
+                            mainRead,creatorAdmit,qualify,creatorExecutable));
+                        assert(rendererOwner.detach(mainRead,mainWrite,admit));
+                        assert(!publishedView.resolveOwnedRenderer(image,creatorAddress,lifetime,rendererOwner,
+                            mainRead,creatorAdmit,qualify,creatorExecutable));
+                        assert(publishedView.resolveOwned(image,creatorAddress,lifetime,publishedRead,
+                            creatorAdmit,qualify,creatorExecutable));
+                    }
                     struct VphalChildren {
                         bool allow=false,detached=false,destroyed=false;
                         uint64_t expectedGeneration=7;
