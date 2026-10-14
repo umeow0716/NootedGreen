@@ -1824,27 +1824,30 @@ using NativeLeasedFrameInputUse=TglOwnedVeboxCommandTransactionResult(*)(NativeC
     NativeVpGraph&,TglNativeVpLineResourceStorage&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&) noexcept;
 template TglOwnedVeboxCommandTransactionResult NativeLeasedFrameInputScope::run<NativeLeasedFrameInputUse>(
     NativeLeasedFrameInputScope::Inputs&,NativeLeasedFrameInputUse) noexcept;
-// One synchronous join: original packet/surface leases and the closed reader
+// One synchronous join: qualified packet/surface leases and the closed reader
 // enclose the actual VP producers. No caller-supplied replacement geometry,
 // compression flags or detached producer scope crosses this boundary.
-struct NativeLeasedVpFrameInputScope {
-    using Use=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeCoreFrameDataScope&,
+template<class SurfaceOwner> struct NativeLeasedVpFrameInputScopeFor {
+    using Use=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeCoreFrameDataScopeFor<SurfaceOwner>&,
         NativeVpGraph&,TglNativeVpLineResourceStorage&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&,
-        NativeVpProducerFrame&,const TglOwnedVpModeState&) noexcept;
-    static TglOwnedVeboxCommandTransactionResult run(NativeLeasedFrameInputScope::Inputs& in,
+        NativeVpProducerFrameFor<SurfaceOwner>&,const TglOwnedVpModeState&) noexcept;
+    static TglOwnedVeboxCommandTransactionResult run(typename NativeLeasedFrameInputScopeFor<SurfaceOwner>::Inputs& in,
         const TglOwnedVpEntrySet& catalogue,void* context,Use use) noexcept {
         if(!use)return {};
-        return NativeLeasedFrameInputScope::run(in,[&](NativeCoreFrameDataScope& core,
+        return NativeLeasedFrameInputScopeFor<SurfaceOwner>::run(in,[&](NativeCoreFrameDataScopeFor<SurfaceOwner>& core,
             NativeVpGraph& graph,TglNativeVpLineResourceStorage& lines,NativeAdmissionParams& params,
             NativeAdmissionPass& pass,NativeFrameDataRead& read) noexcept -> TglOwnedVeboxCommandTransactionResult {
-            NativeVpProducerInputScope::Inputs inputs{core,read,in.pinned,in.interfaces,lines,catalogue};
-            NativeVpProducerInputScope producers(inputs);
-            return producers.run([&](NativeVpProducerFrame& vp,const TglOwnedVpModeState& original) noexcept {
+            typename NativeVpProducerInputScopeFor<SurfaceOwner>::Inputs inputs{core,read,in.pinned,in.interfaces,lines,catalogue};
+            NativeVpProducerInputScopeFor<SurfaceOwner> producers(inputs);
+            return producers.run([&](NativeVpProducerFrameFor<SurfaceOwner>& vp,const TglOwnedVpModeState& original) noexcept {
                 return use(context,core,graph,lines,params,pass,read,vp,original);
             });
         });
     }
 };
+using NativeLeasedVpFrameInputScope=NativeLeasedVpFrameInputScopeFor<NativeContextSurfaceOwner>;
+using NativeTemporaryVpFrameInputScope=NativeLeasedVpFrameInputScopeFor<NativeTemporarySurfaceOwner>;
+template struct NativeLeasedVpFrameInputScopeFor<NativeTemporarySurfaceOwner>;
 template<class SurfaceOwner> using NativeAdmissionSourceGraphFor=std::conditional_t<
     std::is_same_v<SurfaceOwner,NativeContextSurfaceOwner>,NativeSourceGraph,NativeTemporaryHistoryGraph>;
 template<class SurfaceOwner> struct NativeAdmissionStagesFor {
