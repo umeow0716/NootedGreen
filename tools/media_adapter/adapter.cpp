@@ -499,9 +499,14 @@ struct NativeNv12OutputQuery {
 };
 struct NativeVpNv12PacketScope {
     using CpuBackend=TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>;
+    using StateOwner=TglOwnedSfcStateParameters<CpuBackend>;
     NativeVpScalarStateProducer& scalar;NativeContextSurfaceOwner& targetOwner;
     NativeNv12OutputQuery query;
     bool attempted=false;
+    NativeVpNv12PacketScope(NativeVpScalarStateProducer& producer,NativeContextSurfaceOwner& target,
+        NativeNv12OutputQuery outputQuery) noexcept:scalar(producer),targetOwner(target),query(outputQuery) {}
+    NativeVpNv12PacketScope(const NativeVpNv12PacketScope&)=delete;
+    NativeVpNv12PacketScope& operator=(const NativeVpNv12PacketScope&)=delete;
     template<class Use> int run(TglOwnedVpSfcCallerStorage& vp,TglOwnedSfcStateParameters<CpuBackend>& state,
         TglNativeVpLineResourceStorage& lines,const TglOwnedVpEntrySet& catalogue,
         TglOwnedSfcCommandParameters& parameters,bool rgbAdaptive,bool eightTapChroma,
@@ -542,11 +547,79 @@ struct NativeVpNv12PacketScope {
                 });
             });
     }
+private:
+    StateOwner* preparedState_=nullptr;
+    TglOwnedVpSfcCallerStorage* preparedVp_=nullptr;
+    TglNativeVpLineResourceStorage* preparedLines_=nullptr;
+    TglOwnedSfcCommandParameters* preparedCommands_=nullptr;
+    const uint8_t* preparedData_=nullptr;
+    uint32_t input_=0,scaled_=0;
+    bool preparedForSend_=false,sendAttempted_=false;
+    std::array<uint32_t,13> layout_{};
+    static std::array<uint32_t,13> layout(const TglOwnedSurfaceStorage& surface) noexcept {
+        constexpr std::array<size_t,13> offsets{0xe0,0xf0,0xf4,0xf8,0x100,0x104,0x108,0x110,0x114,0x118,0x130,0xd8,0xdc};
+        std::array<uint32_t,13> out{};
+        for(size_t i=0;i<offsets.size();++i)std::memcpy(&out[i],surface.prefix.data()+offsets[i],4);
+        return out;
+    }
+public:
+    // Setup materializes owned packet/resources only. No borrowed coefficient
+    // pointers or scope addresses survive this call; graph/frame ownership
+    // retains the allocations until send or qualified retirement.
+    int prepare(TglOwnedVpSfcCallerStorage& vp,StateOwner& state,TglNativeVpLineResourceStorage& lines,
+        const TglOwnedVpEntrySet& catalogue,TglOwnedSfcCommandParameters& parameters,
+        bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,TglOwnedSfcCompressionMode mode) noexcept {
+        const int status=run(vp,state,lines,catalogue,parameters,rgbAdaptive,eightTapChroma,compressionEnabled,mode,
+            [&](TglOwnedSfcCommandParameters& commands) noexcept -> int {
+                preparedState_=&state;preparedVp_=&vp;preparedLines_=&lines;preparedCommands_=&commands;
+                preparedData_=state.data();layout_=layout(scalar.target);
+                std::memcpy(&input_,commands.state.data()+0x30,4);std::memcpy(&scaled_,commands.state.data()+0x4c,4);
+                return preparedData_?0:5;
+            });
+        preparedForSend_=status==0;return status;
+    }
+    template<class Use> int withPreparedInputs(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<TglOwnedSfcCommandParameters&>())) &&
+            std::is_same_v<decltype(use(std::declval<TglOwnedSfcCommandParameters&>())),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        if(!preparedForSend_ || sendAttempted_ || !preparedState_ || !preparedVp_ || !preparedLines_ ||
+            !preparedCommands_ || !scalar.state() || !query.state.result.ready() ||
+            !targetOwner.hasSurfaceLease(scalar.target) || layout(scalar.target)!=layout_ ||
+            !preparedState_->hasParametersLease() ||
+            static_cast<const StateOwner&>(*preparedState_).data()!=preparedData_ ||
+            !preparedLines_->lines().boundToVp(*preparedVp_) || preparedCommands_->filtersInUse)return 5;
+        sendAttempted_=true;
+        return preparedState_->withPublishedVpParameters(*preparedVp_,[&](const uint8_t* data) noexcept -> int {
+            if(data!=preparedData_)return 5;
+            return preparedLines_->resources().withCommandResources(input_,scaled_,
+                [&](const auto& avs,const auto& ief,const auto* sfd) noexcept -> int {
+                    return targetOwner.withMutableSurface([&](TglOwnedSurfaceStorage& output) noexcept -> int {
+                        if(&output!=&scalar.target || !scalar.state() || layout(output)!=layout_)return 5;
+                        const std::array<uintptr_t,3> expected{reinterpret_cast<uintptr_t>(output.resource.data()),
+                            reinterpret_cast<uintptr_t>(avs.resource.data()),reinterpret_cast<uintptr_t>(ief.resource.data())};
+                        for(size_t i=0;i<expected.size();++i) {
+                            uintptr_t actual=0;std::memcpy(&actual,data+0x90+i*8,8);if(actual!=expected[i])return 5;
+                        }
+                        uintptr_t row=0;std::memcpy(&row,data+0xe0,8);
+                        if(row!=(sfd?reinterpret_cast<uintptr_t>(sfd->data()):0))return 5;
+                        const auto saved=preparedCommands_->state;
+                        std::memcpy(preparedCommands_->state.data(),data,saved.size());
+                        NativeVpPacketContext context{&scalar,preparedCommands_};
+                        NativeVpPacketPublication scope(scalar.vp,context);
+                        const int status=scope.bound()?use(*preparedCommands_):5;
+                        preparedCommands_->state=saved;
+                        return status?status:(scalar.state() && targetOwner.hasSurfaceLease(output) && layout(output)==layout_?0:5);
+                    });
+                });
+        });
+    }
 };
 template int NativeVpNv12PacketScope::run<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
     TglOwnedVpSfcCallerStorage&,TglOwnedSfcStateParameters<NativeVpNv12PacketScope::CpuBackend>&,
     TglNativeVpLineResourceStorage&,const TglOwnedVpEntrySet&,TglOwnedSfcCommandParameters&,
     bool,bool,bool,TglOwnedSfcCompressionMode,int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
+template int NativeVpNv12PacketScope::withPreparedInputs<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
+    int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
 struct NativeVpCommandEmission {
     NativeVpScalarStateProducer& scalar;NativeRendererChildOwner& childOwner;
     NativeFrameDataRead& dataRead;NativeContextSurfaceOwner& targetOwner;
