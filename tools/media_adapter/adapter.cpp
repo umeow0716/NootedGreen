@@ -2461,25 +2461,25 @@ template struct NativeCompleteFrameConsumerFor<NativeTemporarySurfaceOwner>;
 // Construct the real per-frame execution objects inside the caller's original
 // surface/data/mode leases. Every reference below survives through native
 // Render; nothing is published as a dangling callback or copied to a fixture.
-struct NativeFrameExecutionAssembly {
+template<class SurfaceOwner> struct NativeFrameExecutionAssemblyFor {
     struct Inputs {
         NativeRendererCpuAssembly& assembly;const TglNativeVphalMhwView& view;
-        NativeVpProducerFrame& vp;NativeAdmissionStages& admission;
-        NativeAllocationPlanner& planner;NativeModeReleaseContext& mode;
+        NativeVpProducerFrameFor<SurfaceOwner>& vp;NativeAdmissionStagesFor<SurfaceOwner>& admission;
+        NativeAllocationPlannerFor<SurfaceOwner>& planner;NativeModeReleaseContext& mode;
         const TglVeboxRenderBinding& binding;void* argument;
         TglOwnedVeboxPacketLeases leases;
-        NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
+        NativeDenoiseParameters& parameters;NativeVeboxCscProducerFor<SurfaceOwner> csc;
     };
-    static NativeAdmissionStages::Result run(Inputs& in) noexcept {
-        NativeAdmissionStages::Result result;
+    static typename NativeAdmissionStagesFor<SurfaceOwner>::Result run(Inputs& in) noexcept {
+        typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
         if(!in.admission.read.scope || !in.admission.read.resolve ||
             &in.planner.childOwner!=&in.admission.reset.childOwner ||
             &in.parameters!=&in.admission.feature.parameters)return result;
-        const int status=in.vp.run([&](NativeVpPreparedCallbacks& callbacks) noexcept -> int {
-            NativePreparedAdmissionRender prepared{callbacks,in.admission,in.binding,in.argument};
-            NativeAllocatedAdmissionRender allocated{prepared,in.planner,in.mode};
-            NativeRetainedDiIecpCapture capture{in.planner,in.admission.read,in.view.renderer.image,&in.parameters};
-            NativeCompleteFrameConsumer consumer{in.assembly,in.view,capture,in.leases,in.parameters,
+        const int status=in.vp.run([&](NativeVpPreparedCallbacksFor<SurfaceOwner>& callbacks) noexcept -> int {
+            NativePreparedAdmissionRenderFor<SurfaceOwner> prepared{callbacks,in.admission,in.binding,in.argument};
+            NativeAllocatedAdmissionRenderFor<SurfaceOwner> allocated{prepared,in.planner,in.mode};
+            NativeRetainedDiIecpCaptureFor<SurfaceOwner> capture{in.planner,in.admission.read,in.view.renderer.image,&in.parameters};
+            NativeCompleteFrameConsumerFor<SurfaceOwner> consumer{in.assembly,in.view,capture,in.leases,in.parameters,
                 in.csc,allocated};
             result=consumer.run();
             return result.status;
@@ -2488,31 +2488,33 @@ struct NativeFrameExecutionAssembly {
         return result;
     }
 };
-struct NativeModeFrameExecution {
+using NativeFrameExecutionAssembly=NativeFrameExecutionAssemblyFor<NativeContextSurfaceOwner>;
+template struct NativeFrameExecutionAssemblyFor<NativeTemporarySurfaceOwner>;
+template<class SurfaceOwner> struct NativeModeFrameExecutionFor {
     struct Inputs {
         NativeRendererCpuAssembly& assembly;const TglNativeVphalMhwView& view;
-        NativeVpProducerFrame& vp;NativeAdmissionFrameAssembly& admission;
-        NativeModeAllocationPlan& allocation;
+        NativeVpProducerFrameFor<SurfaceOwner>& vp;NativeAdmissionFrameAssemblyFor<SurfaceOwner>& admission;
+        NativeModeAllocationPlanFor<SurfaceOwner>& allocation;
         const TglVeboxRenderBinding& binding;void* argument;
         TglOwnedVeboxPacketLeases leases;
-        NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
+        NativeDenoiseParameters& parameters;NativeVeboxCscProducerFor<SurfaceOwner> csc;
     };
-    static NativeAdmissionStages::Result run(Inputs& in) noexcept {
-        NativeAdmissionStages::Result result;
-        const int status=in.admission.run([&](NativeAdmissionStages& stages) noexcept -> int {
+    static typename NativeAdmissionStagesFor<SurfaceOwner>::Result run(Inputs& in) noexcept {
+        typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
+        const int status=in.admission.run([&](NativeAdmissionStagesFor<SurfaceOwner>& stages) noexcept -> int {
             auto& plan=in.allocation;
             if(&plan.retirement!=&stages.reset.retirement || plan.selection.child!=stages.reset.child ||
                 &plan.selection.owner!=&stages.reset.childOwner || plan.report!=stages.reset.execution ||
                 &plan.execution!=&stages.reset.executionOwner || &plan.input!=&stages.feature.sourceOwner ||
                 &plan.target!=&stages.feature.targetOwner || &plan.source!=&stages.feature.source)return 5;
-            struct Call {Inputs& in;NativeAdmissionStages& stages;};
+            struct Call {Inputs& in;NativeAdmissionStagesFor<SurfaceOwner>& stages;};
             Call call{in,stages};
-            result=plan.run(&call,[](void* context,NativeAllocationPlanner& planner,
-                NativeModeReleaseContext& mode) noexcept -> NativeAdmissionStages::Result {
+            result=plan.run(&call,[](void* context,NativeAllocationPlannerFor<SurfaceOwner>& planner,
+                NativeModeReleaseContext& mode) noexcept -> typename NativeAdmissionStagesFor<SurfaceOwner>::Result {
                 auto& call=*static_cast<Call*>(context);auto& in=call.in;
-                NativeFrameExecutionAssembly::Inputs execution{in.assembly,in.view,in.vp,call.stages,
+                typename NativeFrameExecutionAssemblyFor<SurfaceOwner>::Inputs execution{in.assembly,in.view,in.vp,call.stages,
                     planner,mode,in.binding,in.argument,in.leases,in.parameters,in.csc};
-                return NativeFrameExecutionAssembly::run(execution);
+                return NativeFrameExecutionAssemblyFor<SurfaceOwner>::run(execution);
             });
             return result.status;
         });
@@ -2520,17 +2522,20 @@ struct NativeModeFrameExecution {
         return result;
     }
 };
-struct NativePolicyFrameExecution {
+using NativeModeFrameExecution=NativeModeFrameExecutionFor<NativeContextSurfaceOwner>;
+template struct NativeModeFrameExecutionFor<NativeTemporarySurfaceOwner>;
+template<class SurfaceOwner> struct NativePolicyFrameExecutionFor {
     struct Inputs {
         NativeRendererCpuAssembly& assembly;const TglNativeVphalMhwView& view;
-        NativeVpProducerFrame& vp;NativeOutputPipeFrameScope& policy;NativeFrameDataRead& read;
-        const NativeAdmissionFrameAssembly::Inputs& admission;NativeModeAllocationPlan& allocation;
+        NativeVpProducerFrameFor<SurfaceOwner>& vp;NativeOutputPipeFrameScopeFor<SurfaceOwner>& policy;NativeFrameDataRead& read;
+        const typename NativeAdmissionFrameAssemblyFor<SurfaceOwner>::Inputs& admission;
+        NativeModeAllocationPlanFor<SurfaceOwner>& allocation;
         const TglVeboxRenderBinding& binding;void* argument;
         TglOwnedVeboxPacketLeases leases;
-        NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
+        NativeDenoiseParameters& parameters;NativeVeboxCscProducerFor<SurfaceOwner> csc;
     };
-    static NativeAdmissionStages::Result run(Inputs& in) noexcept {
-        NativeAdmissionStages::Result result;
+    static typename NativeAdmissionStagesFor<SurfaceOwner>::Result run(Inputs& in) noexcept {
+        typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
         const auto& a=in.admission;auto& p=in.policy;
         if(&p.read!=&in.read || &p.health.childOwner!=&a.childOwner ||
             &p.health.executionOwner!=&a.executionOwner || &p.health.sourceOwner!=&a.sourceOwner ||
@@ -2538,17 +2543,19 @@ struct NativePolicyFrameExecution {
             p.health.execution!=a.execution || &p.health.source!=&a.source || &p.health.target!=&a.target ||
             !a.params.data() || !a.pass.data() || p.parameters!=reinterpret_cast<uintptr_t>(a.params.data()) ||
             &p.compositionNeeded!=a.pass.data()+8 || p.vp.bytes.data()!=a.vp || &in.parameters!=&a.parameters)return result;
-        const int status=p.run([&](NativeOutputPipeSelector& selector) noexcept -> int {
-            NativeAdmissionFrameAssembly admission(a,selector,in.read);
-            NativeModeFrameExecution::Inputs mode{in.assembly,in.view,in.vp,admission,in.allocation,
+        const int status=p.run([&](NativeOutputPipeSelectorFor<SurfaceOwner>& selector) noexcept -> int {
+            NativeAdmissionFrameAssemblyFor<SurfaceOwner> admission(a,selector,in.read);
+            typename NativeModeFrameExecutionFor<SurfaceOwner>::Inputs mode{in.assembly,in.view,in.vp,admission,in.allocation,
                 in.binding,in.argument,in.leases,in.parameters,in.csc};
-            result=NativeModeFrameExecution::run(mode);
+            result=NativeModeFrameExecutionFor<SurfaceOwner>::run(mode);
             return result.status;
         });
         if(status){result.status=status;result.admitted=false;}
         return result;
     }
 };
+using NativePolicyFrameExecution=NativePolicyFrameExecutionFor<NativeContextSurfaceOwner>;
+template struct NativePolicyFrameExecutionFor<NativeTemporarySurfaceOwner>;
 struct NativeRendererCompleteHooks {
     using LifetimeResolve=TglOwnedVeboxScopedLifetimeResolve<NativeRendererChildLifetime>;
     static int install(NativeRendererCpuAssembly& assembly,const TglNativeVphalMhwView& view) noexcept {
