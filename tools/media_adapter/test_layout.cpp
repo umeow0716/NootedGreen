@@ -15740,6 +15740,20 @@ static void testRetainedVeboxFrames() {
                                     assert(dn.hasNativeReleaseAlias(copy.prefix.data()+0x90));
                                     assert(tglHasNativeDenoiseAdmissionGrant(derived,copy,dn));
                                     assert(tglHasNativeDenoiseAdmissionGrant(sidecar,original,dn));
+                                    TglOwnedSurfaceStorage first{},second{};
+                                    const std::array<TglOwnedSurfaceStorage*,2> metadata{&first,&second};
+                                    bool observed=false;
+                                    assert(derived.withBorrowedDenoiseMetadataGroup(copy,dn,metadata,
+                                        [&](const auto& source,const auto& views) noexcept {
+                                            assert(&source==&copy && views[0]==&first && views[1]==&second);
+                                            uintptr_t pointer=0;std::memcpy(&pointer,first.prefix.data()+0x90,8);
+                                            assert(pointer==dnAddress);observed=true;
+                                            assert(!derived.withBorrowedDenoiseMetadataGroup(copy,dn,metadata,
+                                                [](const auto&,const auto&) noexcept {assert(false);}));
+                                        }));
+                                    uintptr_t cleared=1;std::memcpy(&cleared,first.prefix.data()+0x90,8);
+                                    assert(observed && !cleared);
+                                    std::memcpy(&cleared,second.prefix.data()+0x90,8);assert(!cleared);
                                     assert(!derived.withNativeDenoiseParameters(copy,dn,[]() noexcept {assert(false);}));
                                 })); // unchanged alias leaves original transaction/storage intact
                                 assert(!dn.hasNativeReleaseAlias(copy.prefix.data()+0x90));

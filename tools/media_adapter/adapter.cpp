@@ -2225,8 +2225,8 @@ struct NativeFrameSurfaceAdmission {
         return scope && admit && ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1)?admit(scope,surface):5;
     }
 };
-struct NativeRetainedDiIecpCapture {
-    NativeAllocationPlanner& planner;NativeFrameDataRead& read;
+template<class SurfaceOwner> struct NativeRetainedDiIecpCaptureFor {
+    NativeAllocationPlannerFor<SurfaceOwner>& planner;NativeFrameDataRead& read;
     uintptr_t image;NativeDenoiseParameters* parameters;
     bool busy=false;
     const TglDiIecpInputs* active=nullptr;uint64_t generation=0;
@@ -2237,7 +2237,7 @@ struct NativeRetainedDiIecpCapture {
             tglValidateOriginalDiIecpLeases(*active,planner.input,planner.source,planner.target,planner.previous);
     }
     static int admitRole(void* context,const TglOwnedSurfaceStorage& surface,size_t role) noexcept {
-        auto* self=static_cast<NativeRetainedDiIecpCapture*>(context);
+        auto* self=static_cast<NativeRetainedDiIecpCaptureFor*>(context);
         if(!self || !self->live() || role>=5)return 5;
         const auto& input=*self->active;TglOwnedSurfaceInputs selected;
         if(!tglPrepareSurfaceInputs(selected,input.current,input.target,input.pipe,input.di,input.iecp,
@@ -2246,7 +2246,7 @@ struct NativeRetainedDiIecpCapture {
         return 0;
     }
     static int admitDi(void* context,const TglOwnedSurfaceStorage& surface) noexcept {
-        auto* self=static_cast<NativeRetainedDiIecpCapture*>(context);
+        auto* self=static_cast<NativeRetainedDiIecpCaptureFor*>(context);
         if(!self || !self->live() || !tglNativeBackingPresent(surface.resource))return 5;
         const auto& input=*self->active;
         bool known=&surface==input.current || &surface==input.target || &surface==input.statistics ||
@@ -2258,7 +2258,7 @@ struct NativeRetainedDiIecpCapture {
     }
     NativeDiIecpCapture capability() noexcept {return {this,&capture};}
     static int capture(void* context,void* sink,NativeDiIecpCapture::Consume consume) noexcept {
-        auto* self=static_cast<NativeRetainedDiIecpCapture*>(context);
+        auto* self=static_cast<NativeRetainedDiIecpCaptureFor*>(context);
         if(!self || !sink || !consume || self->busy || !self->read.scope || !self->read.resolve)return 5;
         auto& planner=self->planner;
         if(planner.read!=&readMemory ||
@@ -2277,7 +2277,7 @@ struct NativeRetainedDiIecpCapture {
             [&](const TglDiIecpInputs& input) noexcept -> int {
                 if(self->active)return 5;
                 self->active=&input;self->generation=planner.childOwner.allocationGeneration();
-                struct Revoke {NativeRetainedDiIecpCapture& self;
+                struct Revoke {NativeRetainedDiIecpCaptureFor& self;
                     ~Revoke(){self.active=nullptr;self.generation=0;}} revoke{*self};
                 if(!self->live())return 5;
                 const int result=consume(sink,input);
@@ -2285,6 +2285,8 @@ struct NativeRetainedDiIecpCapture {
             },self->parameters);
     }
 };
+using NativeRetainedDiIecpCapture=NativeRetainedDiIecpCaptureFor<NativeContextSurfaceOwner>;
+template struct NativeRetainedDiIecpCaptureFor<NativeTemporarySurfaceOwner>;
 struct NativeFrameSurfaceRoleAdmission {
     void* scope=nullptr;int(*admit)(void*,const TglOwnedSurfaceStorage&,size_t) noexcept=nullptr;
     int operator()(const TglOwnedSurfaceStorage& surface,size_t role) const noexcept {

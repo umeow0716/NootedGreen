@@ -7352,6 +7352,27 @@ public:
             const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
             return withConversionMetadata<true>(expected,read,use);
         }
+        // Reuse the original root's existing metadata borrow/cleanup; only
+        // substitute the qualified temporary source view inside that scope.
+        template<class Parameters,size_t Count,class Use>
+        bool withBorrowedDenoiseMetadataGroup(const TglOwnedSurfaceStorage& expected,
+            Parameters& parameters,const std::array<TglOwnedSurfaceStorage*,Count>& metadata,Use use) noexcept {
+            using Views=std::array<const TglOwnedSurfaceStorage*,Count>;
+            static_assert(Count>0 && noexcept(use(expected,std::declval<const Views&>())) &&
+                std::is_same_v<decltype(use(expected,std::declval<const Views&>())),void>);
+            if(!hasSurfaceLease(expected) || !hasNativeDenoiseAdmissionGrant(expected,parameters))return false;
+            for(auto* target:metadata)if(target==&expected)return false;
+            bool entered=false,valid=false;
+            const bool borrowed=original_.withBorrowedDenoiseMetadataGroup(
+                *temporary_.originals_[index_],parameters,metadata,
+                [&](const TglOwnedSurfaceStorage&,const Views& views) noexcept {
+                    if(!hasSurfaceLease(expected) || !hasNativeDenoiseAdmissionGrant(expected,parameters))return;
+                    entered=true;use(expected,views);
+                    valid=hasSurfaceLease(expected) && hasNativeDenoiseAdmissionGrant(expected,parameters);
+                });
+            if(entered && (!borrowed || !valid))dnFault_=true;
+            return borrowed && entered && valid && !dnFault_;
+        }
         // Read-only callbacks borrow this temporary shell, never the original
         // retained root. Keep the same generation/reentry guard as mutation.
         template<class Use> bool withSurface(Use use) noexcept {
