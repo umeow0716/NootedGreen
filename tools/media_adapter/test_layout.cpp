@@ -23785,6 +23785,65 @@ int main() {
                                 auto* child0=storage.children().first().owner().constructedBase();
                                 auto* child1=storage.children().second().owner().constructedBase();
                                 {
+                                    // Codec roots and creator pins are DISTINCT registries/objects.
+                                    unsigned codecDeaths=0;
+                                    const uintptr_t codecAddress=parentAddress+0x10000;
+                                    TglOwnedContextOwnerRegistry<NativeParentOwner,1> codecs;
+                                    assert(codecs.adopt(base,0x8000,1,new NativeParentOwner{codecAddress,codecDeaths}));
+                                    TglNativeRemovedContextBatch<1> removedCodec;
+                                    removedCodec.valid=true;removedCodec.count=1;removedCodec.contexts[0]=codecAddress;
+                                    TglNativeContextInputRoots roots;
+                                    roots.input=0x40000;roots.parent.context=codecAddress;roots.parent.physical=0x8000;
+                                    roots.sources[0]=reinterpret_cast<uintptr_t>(&source);roots.targets[0]=reinterpret_cast<uintptr_t>(&target);
+                                    auto readable=[&](uintptr_t p,void* out,size_t bytes) noexcept {
+                                        for(auto* shell:{&source,&target,&history}) {
+                                            const auto at=reinterpret_cast<uintptr_t>(shell);
+                                            if(p>=at && p-at<=sizeof(*shell) && bytes<=sizeof(*shell)-(p-at)) {
+                                                std::memcpy(out,reinterpret_cast<void*>(p),bytes);return true;
+                                            }
+                                        }
+                                        return false;
+                                    };
+                                    auto admitted=[&](uintptr_t p,size_t bytes) noexcept {
+                                        return bytes==0x2a8 && (p==roots.sources[0] || p==roots.targets[0] || p==hp);
+                                    };
+                                    using Sidecars=TglNativeContextSurfaceOwners<decltype(codecs),3>;
+                                    using OriginalOwner=typename Sidecars::Owner;
+                                    auto access=[&](const auto& pin,auto use) noexcept -> int {
+                                        assert(pin.get() && pin.get()->context()==parentAddress && pin.get()->context()!=codecAddress);
+                                        return use(storage,*creatorView);
+                                    };
+                                    auto types=[](TglNativeFrontendCfTypes& out) noexcept {out={11,12};return true;};
+                                    auto pin=[&]() noexcept {return parents.pin(base,0x8000,1,parentAddress);};
+                                    auto admit=[&](auto& cpu,const auto& view,const auto* src,const auto* dst) noexcept {
+                                        return &cpu==cpuAddress && view.renderer.creator==creatorAddress && src==&source && dst==&target;
+                                    };
+                                    using Borrowed=TglNativeVeboxBorrowedFrontendFrameStorage<decltype(parent),
+                                        OriginalOwner,OriginalOwner,Cf,FrameDnBackend,decltype(access)>;
+                                    auto constructor=tglMakeNativeBorrowedFrontendConstructor<Borrowed>(
+                                        Cf{refs},frameDn,types,pin,access,admit);
+                                    auto construct=[&](uintptr_t p,auto resolve,OriginalOwner& targetOwner) noexcept -> Borrowed* {
+                                        return constructor(p,resolve,targetOwner);
+                                    };
+                                    using Retained=TglNativeContextRendererFrameStorage<decltype(codecs),Borrowed,3>;
+                                    for(unsigned frame=0;frame<2;++frame) {
+                                        Retained retained(roots,codecs,base,0x8000,1,roots.sources[0],roots.targets[0],
+                                            readable,admitted,admitted,construct);
+                                        assert(retained.surfacesReady() && !retained.requiresRetention());
+                                        assert(codecs.reconcileSuccessfulRemoval(base,0x8000,1,removedCodec)==5 && !codecDeaths);
+                                        assert(retained.withFrame([&](auto& frontend) noexcept -> int {
+                                            return frontend.withCpuFrontend([&](auto& cpu,auto&...) noexcept {
+                                                assert(&cpu==cpuAddress && !retained.clear());
+                                                return TglOwnedVeboxCommandTransactionResult{31,0,false,false,false};
+                                            }).status;
+                                        })==31);
+                                        assert(retained.clear() && refs==originalRefs && storageOwner.get()==cpuAddress);
+                                        assert(storage.children().first().owner().constructedBase()==child0 &&
+                                            storage.children().second().owner().constructedBase()==child1);
+                                    }
+                                    assert(codecs.reconcileSuccessfulRemoval(base,0x8000,1,removedCodec)==0 && codecDeaths==1 && !parentDeaths);
+                                }
+                                {
                                     unsigned mode=0,reads=0;
                                     auto types=[&](TglNativeFrontendCfTypes& out) noexcept {
                                         ++reads;if(mode==0)return false;
