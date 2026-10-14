@@ -17780,6 +17780,9 @@ inline bool tglRewindNativeVeboxCommand(TglOwnedVeboxBuilderScratch& scratch,
 // Consequently the native API's success also does not distinguish termination
 // from execution. Separately, waitForStamp12954 returns0 immediately when
 // dc8!=0 (12974..1297d->12b78); a wait result is not a live-generation gate.
+// Context63c is not a durable reset epoch either: submit6fdc..6ffa counts
+// qualifying submissions at640 and clears BOTH63c/640 after1000. Equality
+// of sampled63c values cannot authorize retirement across native submission.
 struct TglNativeVideoFenceEventInvoker {
     uint32_t operator()(uintptr_t entry,uintptr_t context,uint32_t index) const noexcept {
         using Finish=uint32_t(*)(void*,uint32_t);
