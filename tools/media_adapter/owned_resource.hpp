@@ -17108,6 +17108,7 @@ class TglNativeVideoBufferFlushBinding {
 public:
     struct Observation {
         uint32_t nativeStatus=5,flagsBefore=0,flagsAfter=0;
+        uintptr_t context=0,nativeContext=0;
         bool called=false,observed=false;
         bool lossBitsObserved() const noexcept {return observed && (flagsAfter&0x60000000U);}
     };
@@ -17142,6 +17143,7 @@ public:
         if(!entry_ || !context || context>UINTPTR_MAX-0xe4 ||
            !read(context+8,&nativeContext,8) || !nativeContext ||
            !read(context+0x54,&result.flagsBefore,4)) return result;
+        result.context=context;result.nativeContext=nativeContext;
         result.called=true;result.nativeStatus=flush(context,invoke);
         uint32_t flags=0;
         if(!read(context+8,&afterContext,8) || afterContext!=nativeContext ||
@@ -24330,6 +24332,9 @@ class TglNativeContextRendererFrameStorage {
     Sidecars* sidecars_=nullptr;
     Renderer* renderer_=nullptr;
     bool busy_=false,retirementStarted_=false,retirementFailed_=false,retired_=false;
+    bool flushBusy_=false,flushEntered_=false,flushUncertain_=false;
+    uint32_t lossFlags_=0;
+    uintptr_t flushContext_=0,flushNativeContext_=0;
 public:
     // Scope::createContextRootFrame supplies its freshly authenticated roots
     // first. Preserve that same proof; never resolve an independent root set.
@@ -24365,9 +24370,42 @@ public:
         (void)clear();
     }
     bool surfacesReady() const noexcept {return renderer_ && renderer_->surfacesReady();}
+    bool invalidated() const noexcept {return flushUncertain_ || lossFlags_;}
+    uint32_t lossFlags() const noexcept {return lossFlags_;}
+    bool flushUncertain() const noexcept {return flushUncertain_;}
+    // Enter only from this frame's withFrame producer scope. Admit verifies
+    // the flush context derives from THIS renderer's retained native owner.
+    template<class Read,class Admit,class Invoke=TglNativeVideoBufferFlushInvoker>
+    TglNativeVideoBufferFlushBinding::Observation observeNativeFlush(
+        const TglNativeVideoBufferFlushBinding& binding,uintptr_t context,
+        Read read,Admit admit,Invoke invoke=Invoke{}) noexcept {
+        static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})));
+        static_assert(noexcept(admit(std::declval<const Renderer&>(),uintptr_t{})) &&
+            std::is_same_v<decltype(admit(std::declval<const Renderer&>(),uintptr_t{})),bool>);
+        if(!busy_ || flushBusy_ || !renderer_ || retirementStarted_ || invalidated() ||
+           !context || context>UINTPTR_MAX-0xe4 ||
+           (flushContext_ && flushContext_!=context) || !admit(std::as_const(*renderer_),context)) return {};
+        flushBusy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{flushBusy_};
+        auto sameRead=[&](uintptr_t p,void* out,size_t bytes) noexcept {
+            if(!read(p,out,bytes)) {if(flushEntered_)flushUncertain_=true;return false;}
+            if(p==context+8 && bytes==8 && flushNativeContext_) {
+                uintptr_t native=0;std::memcpy(&native,out,8);
+                if(native!=flushNativeContext_){flushUncertain_=true;return false;}
+            }
+            return true;
+        };
+        auto observation=binding.observeFlush(context,sameRead,invoke);
+        if(observation.called) {
+            flushEntered_=true;flushContext_=observation.context;flushNativeContext_=observation.nativeContext;
+            // a893 can fail during buffer refresh AFTER submitting commands.
+            flushUncertain_=flushUncertain_ || !observation.observed || observation.nativeStatus!=0;
+            if(observation.observed)lossFlags_|=observation.flagsAfter&0x60000000U;
+        }
+        return observation;
+    }
     bool canDestroy() noexcept {
         return !busy_ && (!renderer_ || retired_ ||
-            (!retirementStarted_ && !renderer_->backing().retention()()));
+            (!retirementStarted_ && !flushEntered_ && !renderer_->backing().retention()()));
     }
     // Retention is monotonic evidence of acquired/submitted work, not a flag
     // to clear. Only the enclosing exact frame/event retirement authority may
@@ -24377,13 +24415,31 @@ public:
             std::is_same_v<decltype(admit(std::declval<const Renderer&>(),bool{})),int> &&
             noexcept(prepare(std::declval<Renderer&>())) &&
             std::is_same_v<decltype(prepare(std::declval<Renderer&>())),int>);
-        if(busy_ || !renderer_ || retired_ || retirementFailed_) return 5;
+        if(busy_ || !renderer_ || retired_ || retirementFailed_ || invalidated()) return 5;
         busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
-        const int status=admit(std::as_const(*renderer_),renderer_->backing().retention()());
+        const int status=admit(std::as_const(*renderer_),flushEntered_ || renderer_->backing().retention()());
         if(status) return status;
         retirementStarted_=true;
         const int result=prepare(*renderer_);
         if(result) {retirementFailed_=true;return result;} // Unknown partial detach: quarantine.
+        retired_=true;return 0;
+    }
+    // Separate fault teardown: certificate must prove native quiescence, NOT
+    // event status1 or callback success. Lost/unknown reports remain latched.
+    template<class Quiescent,class Prepare>
+    int prepareQuiescentRetirement(Quiescent quiescent,Prepare prepare) noexcept {
+        static_assert(noexcept(quiescent(std::declval<const Renderer&>(),bool{},uint32_t{},bool{})) &&
+            std::is_same_v<decltype(quiescent(std::declval<const Renderer&>(),bool{},uint32_t{},bool{})),int> &&
+            noexcept(prepare(std::declval<Renderer&>())) &&
+            std::is_same_v<decltype(prepare(std::declval<Renderer&>())),int>);
+        if(busy_ || !renderer_ || retired_ || retirementFailed_ || !invalidated())return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        const int status=quiescent(std::as_const(*renderer_),
+            flushEntered_ || renderer_->backing().retention()(),lossFlags_,flushUncertain_);
+        if(status)return status;
+        retirementStarted_=true;
+        const int result=prepare(*renderer_);
+        if(result){retirementFailed_=true;return result;}
         retired_=true;return 0;
     }
     bool clear() noexcept {
@@ -24393,9 +24449,10 @@ public:
     template<class Use> int withFrame(Use use) noexcept {
         static_assert(noexcept(use(std::declval<Renderer&>())) &&
             std::is_same_v<decltype(use(std::declval<Renderer&>())),int>);
-        if(busy_ || retirementStarted_ || !surfacesReady()) return 5;
+        if(busy_ || retirementStarted_ || invalidated() || !surfacesReady()) return 5;
         busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
-        return use(*renderer_);
+        const int result=use(*renderer_);
+        return result?result:(invalidated()?5:0);
     }
 };
 

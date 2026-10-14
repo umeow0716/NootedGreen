@@ -14981,6 +14981,72 @@ static void testRetainedVeboxFrames() {
                     Storage stale(owners,image,0x8000,success.ticket.generation+1,renderRoots,address,historyAddress,
                         readGraph,admitGraph,admitGraph,construct);
                     assert(!stale.surfacesReady() && constructed==1);
+                    for(unsigned mode=0;mode<8;++mode) {
+                        Storage flushed(owners,image,0x8000,success.ticket.generation,renderRoots,address,historyAddress,
+                            readGraph,admitGraph,admitGraph,construct);
+                        constexpr uintptr_t flushContext=0x77000;
+                        uintptr_t nativeContext=0x78000;uint32_t flags=0;bool reportReadable=true;unsigned flushes=0;
+                        const std::array<uint8_t,21> code{
+                            0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0x48,0x89,0xfb,0x48,0x8b,0x47,0x20,
+                            0x48,0x85,0xc0,0x74,0x5c,0xa8,0x07};
+                        auto reportRead=[&](uintptr_t p,void* out,size_t bytes) noexcept {
+                            if(!reportReadable)return false;
+                            if(p==image+0xa9dc && bytes==code.size()){std::memcpy(out,code.data(),bytes);return true;}
+                            if(p==flushContext+8 && bytes==8){std::memcpy(out,&nativeContext,8);return true;}
+                            if(p==flushContext+0x54 && bytes==4){std::memcpy(out,&flags,4);return true;}
+                            return false;
+                        };
+                        TglNativeVideoBufferFlushBinding flush;
+                        assert(flush.resolve(image,reportRead,[&](uintptr_t p) noexcept {return p==image;},
+                            [&](uintptr_t p,size_t bytes) noexcept {return p==image+0xa9dc && bytes==code.size();}));
+                        auto admitFlush=[](const RendererFixture& renderer,uintptr_t p) noexcept -> bool {
+                            return renderer.surfacesReady() && p==flushContext;
+                        };
+                        auto noInvoke=[](uintptr_t,uintptr_t,uint8_t) noexcept -> uint32_t {assert(false);return 0;};
+                        assert(!flushed.observeNativeFlush(flush,flushContext,reportRead,admitFlush,noInvoke).called);
+                        auto invoke=[&](uintptr_t entry,uintptr_t context,uint8_t kind) noexcept -> uint32_t {
+                            assert(entry==image+0xa9dc && context==flushContext && kind==2);++flushes;
+                            if(mode==1 || mode==6)flags=0x40000000;
+                            if(mode==2)flags=0x20000000;
+                            if(mode==3)reportReadable=false;
+                            if(mode==7)assert(!flushed.observeNativeFlush(flush,flushContext,reportRead,admitFlush,noInvoke).called);
+                            return mode==4?31:0;
+                        };
+                        const int result=flushed.withFrame([&](auto&) noexcept -> int {
+                            assert(!flushed.observeNativeFlush(flush,flushContext,reportRead,
+                                [](const auto&,uintptr_t) noexcept {return false;},noInvoke).called);
+                            const auto observation=flushed.observeNativeFlush(flush,flushContext,reportRead,admitFlush,invoke);
+                            assert(observation.called && flushes==1);
+                            if(mode==5 || mode==6) {
+                                if(mode==5)nativeContext+=8;else flags=0;
+                                assert(!flushed.observeNativeFlush(flush,flushContext,reportRead,admitFlush,noInvoke).called);
+                            }
+                            return int(observation.nativeStatus);
+                        });
+                        const bool invalid=mode==1 || mode==2 || mode==3 || mode==4 || mode==5 || mode==6;
+                        assert(result==(mode==4?31:invalid?5:0));
+                        assert(flushed.invalidated()==invalid && !flushed.canDestroy() && !flushed.clear());
+                        if(invalid) {
+                            assert(flushed.withFrame([](auto&) noexcept -> int {assert(false);return 0;})==5);
+                            assert(flushed.prepareRetirement([](const auto&,bool) noexcept -> int {assert(false);return 0;},
+                                [](auto&) noexcept -> int {assert(false);return 0;})==5);
+                            auto certificate=[&](const auto&,bool pending,uint32_t loss,bool uncertain) noexcept -> int {
+                                assert(pending && loss==flushed.lossFlags() && uncertain==flushed.flushUncertain());
+                                return 31; // No quiescence certificate: preserve quarantine.
+                            };
+                            assert(flushed.prepareQuiescentRetirement(certificate,[](auto&) noexcept -> int {assert(false);return 0;})==31);
+                            assert(!flushed.clear());
+                            assert(flushed.prepareQuiescentRetirement([](const auto&,bool pending,uint32_t,bool) noexcept -> int {
+                                assert(pending);return 0; // Explicit CPU-fixture quiescence, NOT a GPU fence.
+                            },[](auto&) noexcept -> int {return 0;})==0);
+                            assert(flushed.invalidated()); // Retirement never erases historical loss.
+                        } else {
+                            assert(flushed.prepareRetirement([](const auto&,bool pending) noexcept -> int {
+                                assert(pending);return 0; // Explicit CPU-fixture retirement certificate.
+                            },[](auto&) noexcept -> int {return 0;})==0);
+                        }
+                        assert(flushed.clear());
+                    }
                 }
                 {
                     Sidecars set;
