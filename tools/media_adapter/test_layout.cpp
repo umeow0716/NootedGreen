@@ -15643,6 +15643,20 @@ static void testRetainedVeboxFrames() {
                             });
                         assert(result.entered && result.copiedBack && result.nativeStatus==31 && !backend.live);
                         assert(original.prefix[0x86]==1);original.prefix[0x86]=0;
+                        TglNativePerPassTemporaryScope<Backend> handoff(backend);
+                        const auto rotated=handoff.runWithDerivedRoots(parameters,pass,roots,sidecar,sidecar,held,
+                            [&](auto& params,auto& packet,auto& source,auto&) noexcept -> int {
+                                return source.withMutableSurface([&](auto& copy) noexcept -> int {
+                                    uintptr_t next=0;std::memcpy(&next,packet.data()+0x48,8);
+                                    assert(next);std::memcpy(reinterpret_cast<void*>(next),&copy,0x2a8);
+                                    reinterpret_cast<uint8_t*>(next)[0x86]=2;
+                                    std::memcpy(packet.data()+0x18,&next,8);packet[8]=1;packet[0x20]=1;
+                                    assert(tglApplyNativePerPassSuccessHandoff(params,packet,0));return 0;
+                                });
+                            });
+                        assert(rotated.entered && rotated.copiedBack && !rotated.nativeStatus && !backend.live);
+                        assert(original.prefix[0x86]==2);original.prefix[0x86]=0;
+                        uintptr_t preserved=0;std::memcpy(&preserved,parameters.data()+8,8);assert(preserved==address);
                     }
                     const uintptr_t dnAddress=dn.get();
                     assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {
@@ -16989,6 +17003,13 @@ int main() {
                 [](size_t,TglOwnedSurfaceStorage*) noexcept {return false;}));
             assert(source.prefix[0]==0x79);
             assert(shells.copyBackExisting(destinations,live));
+            std::array<uintptr_t,25> mapped{};mapped[0]=shells.get(0);mapped[24]=shells.get(24);
+            assert(shells.copyBackMappedExisting(destinations,mapped,
+                [&](size_t i,TglOwnedSurfaceStorage* p) noexcept {
+                    mapped[0]=1; // callback cannot redirect the validated snapshot
+                    return live(i,p);
+                }));
+            assert(!shells.copyBackMappedExisting(destinations,mapped,live));
             // Native loop order: duplicate originals receive the last slot.
             assert(source.prefix[0]==0x34 && source.tail[0x17]==0x63);
             shells.reset();shells.reset();assert(b.live==0);

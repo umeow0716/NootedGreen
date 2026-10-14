@@ -7376,19 +7376,29 @@ public:
     // Topology-changing native copyback needs separate allocation authority.
     template<class Lease> bool copyBackExisting(
         const std::array<TglOwnedSurfaceStorage*,25>& destinations,Lease live) noexcept {
+        std::array<uintptr_t,25> selected{};
+        for(size_t i=0;i<selected.size();++i)selected[i]=shells_[i];
+        return copyBackMappedExisting(destinations,selected,live);
+    }
+    template<class Lease> bool copyBackMappedExisting(
+        const std::array<TglOwnedSurfaceStorage*,25>& destinations,
+        const std::array<uintptr_t,25>& selected,Lease live) noexcept {
         static_assert(noexcept(live(size_t{},static_cast<TglOwnedSurfaceStorage*>(nullptr))));
-        if(!prepared_)return false;
+        if(!prepared_ || derivedLoans_)return false;
         const auto expected=shells_;
         const auto generation=generation_;
+        const auto mapping=selected;
         for(size_t i=0;i<destinations.size();++i) {
+            const bool known=mapping[i] && std::find(expected.begin(),expected.end(),mapping[i])!=expected.end();
             if(destinations[i]!=originals_[i] ||
+                (destinations[i]? !known : mapping[i]!=0) ||
                 (destinations[i] && !live(i,destinations[i])) ||
                 !prepared_ || generation_!=generation || shells_!=expected)return false;
         }
         for(size_t i=0;i<destinations.size();++i) {
             if(!destinations[i])continue;
             if(!live(i,destinations[i]) || !prepared_ || generation_!=generation || shells_!=expected)return false;
-            std::memcpy(destinations[i],reinterpret_cast<const void*>(shells_[i]),0x2a8);
+            std::memcpy(destinations[i],reinterpret_cast<const void*>(mapping[i]),0x2a8);
         }
         return prepared_ && generation_==generation && shells_==expected;
     }
@@ -13735,15 +13745,14 @@ public:
             }
             static_assert(noexcept(use(parameters,pass)));
             result.entered=true;result.nativeStatus=use(parameters,pass);
-            bool same=true;
+            std::array<uintptr_t,25> selected{};
             for(size_t i=0;i<25;++i) {
                 const size_t offset=i<17?8+i*8:0x98+(i-17)*8;
-                uintptr_t pointer=0;std::memcpy(&pointer,parameters.data()+offset,8);
-                same=same && pointer==shells_.get(i);
+                std::memcpy(&selected[i],parameters.data()+offset,8);
             }
             // Native copies back even when the lower pass returns failure.
             // Never publish temporary root pointers into original arrays.
-            if(same && shells_.copyBackExisting(originals,live)) {
+            if(shells_.copyBackMappedExisting(originals,selected,live)) {
                 tglCopyNativePerPassParameterFields(originalParams,parameters);
                 tglCopyNativePerPassScalars(originalPass,pass);result.copiedBack=true;
             }
