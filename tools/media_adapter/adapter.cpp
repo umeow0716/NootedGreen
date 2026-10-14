@@ -162,8 +162,18 @@ struct NativeRendererChildRetirement {
     int operator()() const noexcept {return (*authority)(child,generation,index);}
 };
 using NativeRendererChildLifetime=TglOwnedVeboxLifetimeContext<NativeRendererChildOwner,NativeRendererChildRetirement>;
+using NativeVpModeResolve=TglOwnedVpSfcResolve<TglOwnedVpModeContext<decltype(&readMemory)>>;
+using NativeAllocationSfcFormat=TglOwnedVeboxSfcModeQuery<true,NativeRendererChildOwner,NativeVpModeResolve>;
+using NativeAllocationSfcColor=TglOwnedVeboxSfcModeQuery<false,NativeRendererChildOwner,NativeVpModeResolve>;
+using NativeExecutionBackend=TglExecutionBackend<decltype(&readMemory),NativeTglImageAdmission,TglNativeExecutionInvoker>;
+using NativeExecutionOwner=TglExecutionOwner<NativeExecutionBackend>;
 static_assert(sizeof(NativeRendererCpu)>0 && !std::is_copy_constructible_v<NativeRendererCpu>);
 class NativeRendererCpuAssembly {
+    static TglExecutionBinding executionBinding(uintptr_t image) noexcept {
+        TglExecutionBinding binding;
+        if(!binding.resolve(image,&readMemory,NativeTglImageAdmission{image},&executableMemory))return {};
+        return binding;
+    }
     static int scopedRetirement(void* storage,void* child,uint64_t generation,size_t index) noexcept {
         auto* context=TglOwnedScopedContext<TglOwnedVphalRetirementContext,TglOwnedVphalRetirementDomain>::get(storage);
         return context && context->scope && context->admit?
@@ -175,31 +185,47 @@ class NativeRendererCpuAssembly {
     const uintptr_t image_;
     NativeRendererRetirementAuthority authority_;
     NativeRendererCleanupContext firstCleanup_,secondCleanup_;
+    NativeExecutionBackend executionBackend_;
     NativeRendererCpu cpu_;
+    std::array<NativeExecutionOwner,2> executions_;
     bool cleanupBound_=false,basesAttempted_=false,basesReady_=false,vpAttempted_=false;
 public:
     NativeRendererCpuAssembly(uintptr_t image,
         const TglNativeVphalResourceEnvironment& environment)
         :image_(image),authority_{this,&scopedRetirement},firstCleanup_(authority_),secondCleanup_(authority_),
+         executionBackend_(executionBinding(image),&readMemory,NativeTglImageAdmission{image},
+            TglNativeExecutionInvoker{},&executableMemory),
          cpu_(image,&readMemory,NativeTglImageAdmission{image},&executableMemory,
             environment.resources,environment.pageSize,environment.fill,
             std::array<TglNativeTrackedCpuInvoker,2>{},
             std::array<NativeRendererCleanup,2>{{{&firstCleanup_},{&secondCleanup_}}},
             std::array<TglNativeTrackedCpuInvoker,2>{},std::array<TglNativeSfcLifetimeInvoker,2>{},
-            std::array<TglNativeVeboxDestructorInvoker,2>{}) {}
+            std::array<TglNativeVeboxDestructorInvoker,2>{}),
+         executions_{{NativeExecutionOwner(executionBackend_),NativeExecutionOwner(executionBackend_)}} {}
     NativeRendererCpuAssembly(const NativeRendererCpuAssembly&)=delete;
     NativeRendererCpuAssembly& operator=(const NativeRendererCpuAssembly&)=delete;
     auto& cpu() noexcept {return cpu_;}
     auto& backing() noexcept {return cpu_.backing();}
     auto& children() noexcept {return cpu_.children();}
     bool readyForFrontend() noexcept {
-        if(!basesReady_ || !cleanupBound_ || backing().retention()() ||
+        if(!executionBackend_.bound() || !basesReady_ || !cleanupBound_ || backing().retention()() ||
             !backing().vpBound(0) || !backing().vpBound(1))return false;
         // Do not retain a frame pin before both private tables are admitted:
         // that pin would prevent the exclusive creator installation stage.
         return children().first().owner().withPrivateChild([&](void*) noexcept -> int {
             return children().second().owner().withPrivateChild([](void*) noexcept -> int {return 0;});
         })==0;
+    }
+    template<class Use> int withChildExecution(size_t index,Use use) noexcept {
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        if(index>1 || !readyForFrontend())return 5;
+        auto& owner=index?children().second().owner():children().first().owner();
+        auto& execution=executions_[index];
+        return owner.withNativeOwnedExecution(execution,&readMemory,[&](void* child,uintptr_t report) noexcept -> int {
+            static_assert(noexcept(use(owner,execution,child,report)) &&
+                std::is_same_v<decltype(use(owner,execution,child,report)),int>);
+            return use(owner,execution,child,report);
+        });
     }
     int initializeNativeBases(const TglNativeVphalMhwView& view,const TglOwnedVphalLifetimeTable& lifetime) noexcept {
         if(basesAttempted_ || view.renderer.image!=image_ || lifetime.object()!=view.parent ||
@@ -603,6 +629,11 @@ template class TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhys
     decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,NativeRendererChildAdmission,
     NativeVphalDestructorInvoker>;
 template class TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
+template struct TglOwnedVeboxSfcModeQuery<true,NativeRendererChildOwner,NativeVpModeResolve>;
+template struct TglOwnedVeboxSfcModeQuery<false,NativeRendererChildOwner,NativeVpModeResolve>;
+template int NativeRendererCpuAssembly::withChildExecution<
+    int(*)(NativeRendererChildOwner&,NativeExecutionOwner&,void*,uintptr_t) noexcept>(size_t,
+    int(*)(NativeRendererChildOwner&,NativeExecutionOwner&,void*,uintptr_t) noexcept) noexcept;
 template class TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePin,
     NativeContextSurfaceOwner,NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi,
     NativeFrontendEnvironment,NativeFrontendAccess>;

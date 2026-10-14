@@ -21707,6 +21707,24 @@ int main() {
                     assert(context.status()==(scenario==0?0:5) && calls==9);
                     assert(context.outputColorSpace(exportedColor)==(scenario==0));
                     assert(context.outputFormat(exportedFormat)==(scenario==0));
+                    alignas(8) std::array<uint8_t,0x88> queryChild{};
+                    TestVeboxChildLease queryOwner{queryChild.data()};queryOwner.busy=true;
+                    const uintptr_t queryVp=reinterpret_cast<uintptr_t>(storage.bytes.data());
+                    std::memcpy(queryChild.data()+0x80,&queryVp,8);
+                    TglOwnedVeboxSfcModeQuery<true,TestVeboxChildLease,Resolve> formatQuery{
+                        queryOwner,queryChild.data(),storage.bytes.data(),queryOwner.generation};
+                    TglOwnedVeboxSfcModeQuery<false,TestVeboxChildLease,Resolve> colorQuery{
+                        queryOwner,queryChild.data(),storage.bytes.data(),queryOwner.generation};
+                    uint32_t scalar=123;
+                    assert(formatQuery(scalar)==(scenario==0) && scalar==(scenario==0?3u:123u));
+                    scalar=123;
+                    assert(colorQuery(scalar)==(scenario==0) && scalar==(scenario==0?5u:123u));
+                    queryOwner.busy=false;scalar=123;assert(!formatQuery(scalar) && scalar==123);
+                    queryOwner.busy=true;++queryOwner.generation;assert(!formatQuery(scalar) && scalar==123);
+                    --queryOwner.generation;
+                    const uintptr_t missingVp=0;std::memcpy(queryChild.data()+0x80,&missingVp,8);
+                    assert(!colorQuery(scalar) && scalar==123);
+                    std::memcpy(queryChild.data()+0x80,&queryVp,8);
                     if(!scenario) {
                         assert(exportedColor==5 && exportedFormat==3);
                         uint32_t mode=0,format=0;uintptr_t ref=0;

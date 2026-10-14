@@ -15868,6 +15868,28 @@ bool tglSelectOwnedFfdiCompressionFromReport(TglOwnedFfdiCompressionSelection& o
 // exact Darwin format values (3/d), not Linux enum numbers. Pipe1's format
 // producer is supplied by a held owned SFC child; never read ICL child+99c
 // through a TGL object. Publish only after every report/source read succeeds.
+template<bool Format,class ChildOwner,class ModeResolve>
+struct TglOwnedVeboxSfcModeQuery {
+    ChildOwner& owner;void* child;void* vp;uint64_t generation;
+    bool operator()(uint32_t& output) const noexcept {
+        const auto admitted=[&]() noexcept {
+            if(!child || !vp || !generation || owner.allocationGeneration()!=generation ||
+                !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)))return false;
+            uintptr_t linked=0;std::memcpy(&linked,static_cast<const uint8_t*>(child)+0x80,8);
+            return linked==reinterpret_cast<uintptr_t>(vp);
+        };
+        static_assert(noexcept(ModeResolve{}(vp)));
+        if(!admitted())return false;
+        auto* modes=ModeResolve{}(vp);
+        if(!modes || !modes->owns(vp))return false;
+        uint32_t candidate=0;
+        bool ready=false;
+        if constexpr(Format)ready=modes->outputFormat(candidate);
+        else ready=modes->outputColorSpace(candidate);
+        if(!ready || !admitted() || ModeResolve{}(vp)!=modes || !modes->owns(vp))return false;
+        output=candidate;return true;
+    }
+};
 template<class Read,class SfcFormat,class Supports>
 bool tglPrepareOwnedFfdiRequestFromReport(TglOwnedFfdiAllocationRequest& output,
     const TglOwnedSurfaceStorage& source,uintptr_t child,uintptr_t execution,
