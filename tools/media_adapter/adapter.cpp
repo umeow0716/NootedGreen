@@ -345,9 +345,23 @@ struct NativeAllocationRectangle {
         });
     }
 };
-// Compilation composition only: the production caller must supply the real
-// allocation-only unwind, never nullptr or TglOwnedVeboxFrameNoUnwind.
-using NativeAllocationUnwind=void(*)(void*,uintptr_t,const TglOwnedSurfaceStorage&) noexcept;
+struct NativeModeRetirementAuthority {
+    void* scope=nullptr;int(*admit)(void*) noexcept=nullptr;
+    int operator()() const noexcept {return scope && admit?admit(scope):5;}
+};
+using NativeSurfaceFrameBacking=TglNativeVeboxSurfaceFrameStorage<TglDarwinStmmSurfaceApi>;
+using NativeVpLines=std::remove_reference_t<decltype(std::declval<TglNativeVpLineResourceStorage&>().resources())>;
+using NativeModeReleaseContext=TglOwnedVeboxModeReleaseContext<NativeSurfaceFrameBacking,
+    NativeVpLines,NativeModeRetirementAuthority>;
+// The context and its frame-local authority must enclose the native callback.
+// Preserve native allocation failure; caller also inspects mode.status() and
+// retains the frame on any refused/partial cleanup. No synchronous-success default.
+struct NativeAllocationUnwind {
+    NativeModeReleaseContext& mode;
+    void operator()(void* child,uintptr_t,const TglOwnedSurfaceStorage&) const noexcept {
+        if(mode.owns(child))mode.freeResources();
+    }
+};
 using NativeAllocationPlanner=TglOwnedVeboxAllocationFramePlanner<TglDarwinStmmSurfaceApi,
     NativeContextSurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,decltype(&readMemory),
     NativeAllocationSfcFormat,NativeAllocationSfcColor,NativeAllocationParameterKind,
@@ -655,6 +669,7 @@ template class TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhys
 template class TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
 template struct TglOwnedVeboxSfcModeQuery<true,NativeRendererChildOwner,NativeVpModeResolve>;
 template struct TglOwnedVeboxSfcModeQuery<false,NativeRendererChildOwner,NativeVpModeResolve>;
+template class TglOwnedVeboxModeReleaseContext<NativeSurfaceFrameBacking,NativeVpLines,NativeModeRetirementAuthority>;
 template struct TglOwnedVeboxAllocationFramePlanner<TglDarwinStmmSurfaceApi,
     NativeContextSurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,decltype(&readMemory),
     NativeAllocationSfcFormat,NativeAllocationSfcColor,NativeAllocationParameterKind,

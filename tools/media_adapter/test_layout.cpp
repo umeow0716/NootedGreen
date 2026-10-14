@@ -17169,8 +17169,30 @@ int main() {
             [](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
         assert(auxiliary.withPreparedViews(true,
             [](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
-        auxiliary.retention().observe(TglOwnedVeboxCommandTransactionResult{31,31,true,false});
+        unsigned retireCalls=0;
+        auto refuseRetirement=[&]() noexcept -> int {
+            ++retireCalls;
+            assert(auxiliary.stmm().ensure(keys)==5);
+            assert(auxiliary.releaseModeResources(storage.pair(),false,
+                []() noexcept -> int {assert(false);return 0;})==5);
+            return 31;
+        };
+        assert(auxiliary.releaseModeResources(storage.pair(),true,refuseRetirement)==31 && retireCalls==1);
+        assert(storage.pair().withReleaseReservation([&](auto) noexcept -> int {
+            assert(auxiliary.releaseModeResources(storage.pair(),true,refuseRetirement)==5 && retireCalls==1);
+            return auxiliary.releaseModeResources(storage.pair(),false,refuseRetirement);
+        })==31 && retireCalls==2);
+        assert(auxiliary.statistics().withReleaseReservation([&](auto) noexcept -> int {
+            return auxiliary.releaseModeResources(storage.pair(),false,refuseRetirement);
+        })==5 && retireCalls==2);
+        assert(auxiliary.releaseModeResources(storage.pair(),true,[&]() noexcept -> int {++retireCalls;return 0;})==0);
+        assert(auxiliary.releaseModeResources(storage.pair(),true,[&]() noexcept -> int {
+            ++retireCalls;
+            auxiliary.retention().observe(TglOwnedVeboxCommandTransactionResult{31,31,true,false});
+            return 0;
+        })==5);
         assert(auxiliary.retention()());
+        assert(auxiliary.releaseModeResources(storage.pair(),false,refuseRetirement)==5 && retireCalls==4);
         using FrameSurfaces=TglNativeVeboxSurfaceFrameStorage<DeniedSurfaceApi>;
         static_assert(!std::is_move_constructible_v<FrameSurfaces>);
         FrameSurfaces frame(TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{});

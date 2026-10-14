@@ -20844,6 +20844,25 @@ public:
     auto& statistics() noexcept {return statistics_;}
     const auto& statisticsFill() const noexcept {return fill_;}
     auto& retention() noexcept {return retention_;}
+    // Native1f87b0 selective cleanup: retain FFDi/FFDN, reserve STMM and
+    // statistics plus optional SFC BEFORE asking the real retirement authority.
+    // Admission/retention refusal releases nothing and never clears a latch.
+    template<class Lines,class Retire>
+    int releaseModeResources(Lines& lines,bool releaseSfc,Retire retire) noexcept {
+        static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);
+        if(retention_())return 5;
+        return stmm_.pair().withReleaseReservation([&](auto releaseStmm) noexcept -> int {
+            return statistics_.withReleaseReservation([&](auto releaseStatistics) noexcept -> int {
+                auto release=[&](auto releaseLines) noexcept -> int {
+                    const int status=retire();
+                    if(status || retention_())return status?status:5;
+                    releaseStmm();releaseStatistics();releaseLines();return 0;
+                };
+                if(releaseSfc)return lines.withReleaseReservation(release);
+                return release([]() noexcept {});
+            });
+        });
+    }
     // Reborrow only: native allocation/publication must already have completed.
     // Caller derives useStmm from the current admitted DN/DI report. Pending
     // retention does not prohibit reading retained backing; no reset/ensure,
@@ -20909,6 +20928,12 @@ public:
     TglNativeVeboxSurfaceFrameStorage(const TglNativeVeboxSurfaceFrameStorage&)=delete;
     TglNativeVeboxSurfaceFrameStorage& operator=(const TglNativeVeboxSurfaceFrameStorage&)=delete;
     auto& auxiliary() noexcept {return auxiliary_;}
+    template<class Lines,class Retire>
+    int releaseModeResources(Lines& lines,bool releaseSfc,Retire retire) noexcept {
+        const int status=auxiliary_.releaseModeResources(lines,releaseSfc,retire);
+        if(!status)discardPreparedSelection();
+        return status;
+    }
     auto& ffdiDescriptors() noexcept {return ffdiDescriptors_;}
     auto& ffdnDescriptors() noexcept {return ffdnDescriptors_;}
     auto& history() noexcept {return history_;}
