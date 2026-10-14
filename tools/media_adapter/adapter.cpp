@@ -41,6 +41,10 @@ struct Entry {
     AvdDescriptorBridge bridge;
     TglNativePhysicalCallbackBinding physical;
     TglNativeResourceCfTypeBinding resourceClass;
+    // Qualified allocator entries only. A frontend must own its backend beside
+    // its DN owner; borrowing a backend from this factory-lifetime Entry would
+    // leave a dangling reference when the native factory table is destroyed.
+    TglTrackedCpuBinding nativeCpu;
     bool expectedFrontendTypes(TglNativeFrontendCfTypes& output) const noexcept {
         return tglReadNativeFrontendCfTypes(resourceClass,readMemory,
             []() noexcept -> uintptr_t {return TglDarwinTypedCfReferenceApi{}.surfaceType();},output);
@@ -239,6 +243,11 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
         if(!entry->physical.resolve(image,readMemory,
             [image](uintptr_t candidate) noexcept {return candidate==image;},executableMemory) ||
             !entry->physical.matchesFactoryTable(entry->callbacks)) {
+            library.destroy(table);
+            return 10;
+        }
+        if(!entry->nativeCpu.resolve(image,readMemory,
+            [image](uintptr_t candidate) noexcept {return candidate==image;},executableMemory)) {
             library.destroy(table);
             return 10;
         }
