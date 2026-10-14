@@ -13376,6 +13376,27 @@ public:
 template<size_t Extent,size_t WriteOffset=Extent>
 using TglBorrowedVeboxAdmissionPacketView=TglBorrowedVeboxByteView<Extent,WriteOffset>;
 
+// Exact TGL 1b24e0 / 1b2940 scalar transfer. The temporary pass has its
+// own roots, ping-pong index and two allocated shells: NEVER copy those
+// pointers back into the original pass. Caller owns both CPU byte arrays.
+// This operation grants neither native-object admission nor GPU retirement.
+template<size_t DestinationBytes,size_t SourceBytes>
+bool tglCopyNativePerPassScalars(std::array<uint8_t,DestinationBytes>& destination,
+    const std::array<uint8_t,SourceBytes>& source) noexcept {
+    if constexpr(DestinationBytes<0x34 || SourceBytes<0x34)return false;
+    else {
+        // Snapshot first so the same array is also a valid source/destination.
+        const uint8_t first=source[8]&1,second=source[0x20]&1;
+        uint32_t sourceIndex=0,targetIndex=0;
+        std::memcpy(&sourceIndex,source.data()+0xc,4);
+        std::memcpy(&targetIndex,source.data()+0x30,4);
+        destination[8]=first;destination[0x20]=second;
+        std::memcpy(destination.data()+0xc,&sourceIndex,4);
+        std::memcpy(destination.data()+0x30,&targetIndex,4);
+        return true;
+    }
+}
+
 // Resolve the original child-owned history on each admission, under the same
 // child lease. Caller's region validators must also hold its allocation live;
 // readable/writable permission alone is not an ownership grant.

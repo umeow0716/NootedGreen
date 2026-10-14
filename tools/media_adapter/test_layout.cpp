@@ -16717,6 +16717,22 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        std::array<uint8_t,0x60> source,destination;
+        source.fill(0xff);destination.fill(0xa5);
+        assert(tglCopyNativePerPassScalars(destination,source));
+        for(size_t i=0;i<destination.size();++i) {
+            const bool index=(i>=0xc && i<0x10)||(i>=0x30 && i<0x34);
+            assert(destination[i]==((i==8 || i==0x20)?1:(index?0xff:0xa5)));
+        }
+        assert(tglCopyNativePerPassScalars(source,source));
+        assert(source[8]==1 && source[0x20]==1 && source[0x40]==0xff);
+        std::array<uint8_t,0x33> shortPass{};
+        const auto saved=destination;
+        assert(!tglCopyNativePerPassScalars(destination,shortPass));
+        assert(destination==saved);
+        assert(!tglCopyNativePerPassScalars(shortPass,source));
+    }
+    {
         const uintptr_t image=0x100000;
         TglNativePhysicalCallbackBinding physical{image,image+0x135d9,image+0x13c8c};
         TglTrackedCpuBinding cpu{image,image+0x437e0,image+0x436d0};
