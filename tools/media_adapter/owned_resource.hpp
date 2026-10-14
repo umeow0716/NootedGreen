@@ -18872,6 +18872,10 @@ public:
     template<class Read,class Admit,class Invoke=TglNativeOsCommandSubmitInvoker>
     Observation observeCall(void* command,uint32_t flags,Read read,Admit admit,Invoke invoke={}) const noexcept {
         Observation result;
+        static_assert(std::is_nothrow_invocable_r_v<bool,Admit&,uintptr_t,uintptr_t,uintptr_t>);
+        if constexpr(std::is_pointer_v<Read>)if(!read)return result;
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return result;
+        if constexpr(std::is_pointer_v<Invoke>)if(!invoke)return result;
         struct Snapshot {
             uintptr_t database=0,record=0,wrapper=0,native=0;
             uint32_t index=0,flags=0;
@@ -27762,6 +27766,43 @@ public:
             // A later native submit can overwrite the previous consumed reset
             // report with zero. Historical loss belongs to this retained frame
             // even when the new submit succeeds or its post-read fails.
+            lossFlags_|=observation.flagsBefore&0x60000000U;
+            if(observation.observed)lossFlags_|=observation.flagsAfter&0x60000000U;
+        }
+        return observation;
+    }
+    // SAME active frame, but the planned OS2d0 operation rather than an
+    // extra a9dc call. Admit binds OS/wrapper/native context to this renderer.
+    template<class Read,class Admit,class Invoke=TglNativeOsCommandSubmitInvoker>
+    TglNativeOsCommandSubmitBinding::Observation observeNativeOsSubmit(
+        const TglNativeOsCommandSubmitBinding& binding,void* command,uint32_t flags,
+        Read read,Admit admit,Invoke invoke={}) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<bool,Read&,uintptr_t,void*,size_t> &&
+            std::is_nothrow_invocable_r_v<bool,Admit&,const Renderer&,uintptr_t,uintptr_t,uintptr_t>);
+        if constexpr(std::is_pointer_v<Read>)if(!read)return {};
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return {};
+        if constexpr(std::is_pointer_v<Invoke>)if(!invoke)return {};
+        if(!busy_ || flushBusy_ || !renderer_ || retirementStarted_ || invalidated())return {};
+        flushBusy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{flushBusy_};
+        auto sameRead=[&](uintptr_t at,void* out,size_t count) noexcept {
+            if(!read(at,out,count)){if(flushEntered_)flushUncertain_=true;return false;}
+            return true;
+        };
+        auto sameOwner=[&](uintptr_t os,uintptr_t wrapper,uintptr_t native) noexcept {
+            if((flushContext_ && wrapper!=flushContext_) ||
+                (flushNativeContext_ && native!=flushNativeContext_)) {
+                if(flushEntered_)flushUncertain_=true;
+                return false;
+            }
+            return admit(std::as_const(*renderer_),os,wrapper,native);
+        };
+        auto observation=binding.observeCall(command,flags,sameRead,sameOwner,invoke);
+        if(observation.submit.called) {
+            // OS entry may mutate sideband/command backing even if its flush
+            // branch is unproven. Conservative retention, NOT GPU evidence.
+            flushEntered_=true;flushContext_=observation.context;flushNativeContext_=observation.nativeContext;
+            flushUncertain_=flushUncertain_ || !observation.observed || !observation.submit.stable ||
+                observation.submit.nativeStatus!=0;
             lossFlags_|=observation.flagsBefore&0x60000000U;
             if(observation.observed)lossFlags_|=observation.flagsAfter&0x60000000U;
         }

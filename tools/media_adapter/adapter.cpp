@@ -3865,6 +3865,11 @@ using NativeOsSubmitObservationAdmit=bool(*)(uintptr_t,uintptr_t,uintptr_t) noex
 template TglNativeOsCommandSubmitBinding::Observation TglNativeOsCommandSubmitBinding::observeCall<
     decltype(&readMemory),NativeOsSubmitObservationAdmit,TglNativeOsCommandSubmitInvoker>(
         void*,uint32_t,decltype(&readMemory),NativeOsSubmitObservationAdmit,TglNativeOsCommandSubmitInvoker) const noexcept;
+using NativeFrameOsSubmitAdmit=bool(*)(const NativeBorrowedFrontend&,uintptr_t,uintptr_t,uintptr_t) noexcept;
+template TglNativeOsCommandSubmitBinding::Observation NativeContextRendererFrame::observeNativeOsSubmit<
+    decltype(&readMemory),NativeFrameOsSubmitAdmit,TglNativeOsCommandSubmitInvoker>(
+        const TglNativeOsCommandSubmitBinding&,void*,uint32_t,decltype(&readMemory),
+        NativeFrameOsSubmitAdmit,TglNativeOsCommandSubmitInvoker) noexcept;
 template class TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,NativeBorrowedFrontend>;
 template class TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;
 template class TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,

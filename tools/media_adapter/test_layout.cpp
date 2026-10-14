@@ -16197,6 +16197,72 @@ static void testRetainedVeboxFrames() {
                     Storage stale(owners,image,0x8000,success.ticket.generation+1,renderRoots,address,historyAddress,
                         readGraph,admitGraph,admitGraph,construct);
                     assert(!stale.surfacesReady() && constructed==1);
+                    for(unsigned mode=0;mode<8;++mode) {
+                        Storage submitted(owners,image,0x8000,success.ticket.generation,renderRoots,address,historyAddress,
+                            readGraph,admitGraph,admitGraph,construct);
+                        constexpr uintptr_t os=0x79000,database=0x7a000,wrapper=0x77000;
+                        uintptr_t native=0x78000,slot=image+0x64df0;
+                        uint32_t flags=mode==4?0x20000000:0;unsigned submits=0;bool readable=true;
+                        auto submitRead=[&](uintptr_t at,void* out,size_t n) noexcept {
+                            if(!readable)return false;
+                            auto value=[&](auto v) noexcept {if(n!=sizeof(v))return false;std::memcpy(out,&v,n);return true;};
+                            if(at==os)return value(database);
+                            if(at==os+8)return value(uint32_t{0});
+                            if(at==database+8)return value(wrapper);
+                            if(at==wrapper+8)return value(native);
+                            if(at==wrapper+0x54)return value(flags);
+                            if(at==os+0x2d0)return value(slot);
+                            if(at==image+0x64df0 && n==TglNativeOsCommandSubmitBinding::anchor.size()) {
+                                std::memcpy(out,TglNativeOsCommandSubmitBinding::anchor.data(),n);return true;
+                            }
+                            if(at==image+0x6503a && n==TglNativeOsCommandSubmitBinding::tail.size()) {
+                                std::memcpy(out,TglNativeOsCommandSubmitBinding::tail.data(),n);return true;
+                            }
+                            return false;
+                        };
+                        TglNativeOsCommandSubmitBinding submit;
+                        assert(submit.resolve(os,image,submitRead,[&](uintptr_t p) noexcept {return p==image;},
+                            [](uintptr_t,size_t) noexcept {return true;}));
+                        int command=0;
+                        auto admitSubmit=[&](const RendererFixture& r,uintptr_t o,uintptr_t w,uintptr_t c) noexcept {
+                            return r.surfacesReady() && o==os && w==wrapper && c==0x78000;
+                        };
+                        auto never=[](uintptr_t,uintptr_t,void*,uint32_t) noexcept -> int {assert(false);return 0;};
+                        assert(!submitted.observeNativeOsSubmit(submit,&command,2,submitRead,admitSubmit,never).submit.called);
+                        auto invoke=[&](uintptr_t entry,uintptr_t actual,void* buffer,uint32_t kind) noexcept -> int {
+                            assert(entry==image+0x64df0 && actual==os && buffer==&command && kind==2);++submits;
+                            flags=mode==1?0x40000000:0;
+                            if(mode==3)readable=false;
+                            if(mode==5)assert(!submitted.observeNativeOsSubmit(submit,&command,2,submitRead,admitSubmit,never).submit.called);
+                            if(mode==6)native+=8;
+                            if(mode==7)++slot;
+                            return mode==2?31:0;
+                        };
+                        const int status=submitted.withFrame([&](auto&) noexcept -> int {
+                            using MissingAdmit=bool(*)(const RendererFixture&,uintptr_t,uintptr_t,uintptr_t) noexcept;
+                            assert(!submitted.observeNativeOsSubmit(submit,&command,2,submitRead,MissingAdmit{},never).submit.called);
+                            assert(!submitted.observeNativeOsSubmit(submit,&command,2,submitRead,
+                                [](const auto&,uintptr_t,uintptr_t,uintptr_t) noexcept {return false;},never).submit.called);
+                            const auto observed=submitted.observeNativeOsSubmit(submit,&command,2,submitRead,admitSubmit,invoke);
+                            assert(observed.submit.called && submits==1);return observed.submit.nativeStatus;
+                        });
+                        const bool invalid=mode!=0 && mode!=5;
+                        assert(status==(mode==2?31:invalid?5:0) && submitted.invalidated()==invalid && submitted.requiresRetention());
+                        assert(submitted.lossFlags()==(mode==1?0x40000000U:mode==4?0x20000000U:0));
+                        assert(submitted.flushUncertain()==(mode==2 || mode==3 || mode==6 || mode==7));
+                        if(invalid) {
+                            assert(submitted.prepareRetirement([](const auto&,bool) noexcept -> int {assert(false);return 0;},
+                                [](auto&) noexcept -> int {assert(false);return 0;})==5);
+                            assert(submitted.prepareQuiescentRetirement([](const auto&,bool pending,uint32_t,bool) noexcept -> int {
+                                assert(pending);return 0; // Explicit CPU-fixture authority, NOT GPU completion.
+                            },[](auto&) noexcept {return TglNativeHistoryCacheInspection{true,false};},
+                                [](auto&) noexcept -> int {return 0;})==0);
+                            assert(submitted.invalidated());
+                        } else assert(submitted.prepareRetirement([](const auto&,bool pending) noexcept -> int {
+                            assert(pending);return 0; // Explicit CPU-fixture authority.
+                        },[](auto&) noexcept -> int {return 0;})==0);
+                        assert(submitted.clear());
+                    }
                     for(unsigned mode=0;mode<12;++mode) {
                         Storage flushed(owners,image,0x8000,success.ticket.generation,renderRoots,address,historyAddress,
                             readGraph,admitGraph,admitGraph,construct);
@@ -32888,5 +32954,7 @@ int main() {
         failFlags=failAfter=false;mutate=true;
         observed=binding.observeCall(&command,2,observationRead,admit,observedInvoke);
         assert(observed.submit.called && !observed.submit.stable && observed.observed && calls==7);
+        using MissingAdmit=bool(*)(uintptr_t,uintptr_t,uintptr_t) noexcept;
+        assert(!binding.observeCall(&command,2,observationRead,MissingAdmit{},observedInvoke).submit.called && calls==7);
     }
 }
