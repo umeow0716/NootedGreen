@@ -18231,7 +18231,7 @@ template<class ContextLease> class TglNativeContextRootSurfaceOwner {
     ContextLease context_;
     TglOwnedSurfaceStorage* shell_=nullptr;
     bool borrowed_=false,conversionBorrowed_=false,conversionFault_=false,diBorrowed_=false,diFault_=false,surfaceBusy_=false;
-    bool denoiseBorrowed_=false,denoiseFault_=false;
+    bool denoiseBorrowed_=false,denoiseFault_=false,denoiseMetadataBorrowed_=false;
 public:
     template<class Writable>
     TglNativeContextRootSurfaceOwner(ContextLease&& lease,const TglNativeContextInputRoots& roots,
@@ -18276,6 +18276,41 @@ public:
             [&]() noexcept {entered=true;use();});
         if(entered && (!reconciled || !hasSurfaceLease(expected)))denoiseFault_=true;
         return reconciled && !denoiseFault_;
+    }
+    // FFDN metadata borrows the ALREADY published native-release slot. Do not
+    // take a second Parameters borrow or adopt a pre-existing foreign pointer.
+    template<class Parameters,size_t Count,class Use>
+    bool withBorrowedDenoiseMetadataGroup(const TglOwnedSurfaceStorage& expected,
+        Parameters& parameters,const std::array<TglOwnedSurfaceStorage*,Count>& metadata,Use use) noexcept {
+        using Views=std::array<const TglOwnedSurfaceStorage*,Count>;
+        static_assert(Count>0 && noexcept(use(expected,std::declval<const Views&>())) &&
+            std::is_same_v<decltype(use(expected,std::declval<const Views&>())),void>);
+        if(!denoiseBorrowed_ || denoiseFault_ || denoiseMetadataBorrowed_ || !hasSurfaceLease(expected) ||
+            !parameters.hasNativeReleaseSlot(expected.prefix.data()+0x90))return false;
+        uintptr_t pointer=0;std::memcpy(&pointer,expected.prefix.data()+0x90,8);
+        if(!pointer || pointer!=parameters.get() || parameters.size()<8)return false;
+        Views views{};
+        for(size_t i=0;i<Count;++i) {
+            if(!metadata[i] || metadata[i]==&expected)return false;
+            for(size_t j=0;j<i;++j)if(metadata[i]==metadata[j])return false;
+            uintptr_t previous=0;std::memcpy(&previous,metadata[i]->prefix.data()+0x90,8);
+            if(previous)return false;
+            views[i]=metadata[i];
+        }
+        denoiseMetadataBorrowed_=true;
+        struct Reset {bool& busy;~Reset(){busy=false;}} reset{denoiseMetadataBorrowed_};
+        for(auto* target:metadata)std::memcpy(target->prefix.data()+0x90,&pointer,8);
+        use(expected,static_cast<const Views&>(views));
+        bool unchanged=hasSurfaceLease(expected);
+        uintptr_t current=0;std::memcpy(&current,expected.prefix.data()+0x90,8);
+        unchanged=unchanged && current==pointer && parameters.hasNativeReleaseSlot(expected.prefix.data()+0x90);
+        for(auto* target:metadata) {
+            std::memcpy(&current,target->prefix.data()+0x90,8);
+            if(current==pointer)std::memset(target->prefix.data()+0x90,0,8);
+            else unchanged=false;
+        }
+        if(!unchanged)denoiseFault_=true;
+        return unchanged;
     }
     template<class Parameters,class Read>
     bool readLeasedDenoiseRequest(const TglOwnedSurfaceStorage& expected,

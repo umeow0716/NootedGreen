@@ -1457,6 +1457,28 @@ struct NativeFrameSurfaceAdmission {
         return scope && admit && ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1)?admit(scope,surface):5;
     }
 };
+struct NativeRetainedDiIecpCapture {
+    NativeAllocationPlanner& planner;NativeFrameDataRead& read;
+    const std::array<uint32_t,11>& controls;NativeDenoiseParameters* parameters;
+    bool busy=false;
+    NativeDiIecpCapture capability() noexcept {return {this,&capture};}
+    static int capture(void* context,void* sink,NativeDiIecpCapture::Consume consume) noexcept {
+        auto* self=static_cast<NativeRetainedDiIecpCapture*>(context);
+        if(!self || !sink || !consume || self->busy || !self->read.scope || !self->read.resolve)return 5;
+        auto& planner=self->planner;
+        if(planner.read!=&readMemory ||
+            !planner.childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(planner.child)) ||
+            !planner.executionOwner.hasExecutionLease(planner.execution) ||
+            !planner.input.hasSurfaceLease(planner.source))return 5;
+        self->busy=true;struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{self->busy};
+        // Allocation selection is read at producer use, not guessed from a
+        // pre-allocation report. Every tail view remains inside this consume.
+        return tglRunRetainedDiIecpFrameInput(planner.storage,planner.input,planner.target,
+            planner.secondary,planner.previous,planner.childOwner,planner.executionOwner,
+            planner.child,planner.execution,planner.source,self->read,planner.alignDi64,self->controls,
+            [&](const TglDiIecpInputs& input) noexcept -> int {return consume(sink,input);},self->parameters);
+    }
+};
 struct NativeFrameSurfaceRoleAdmission {
     void* scope=nullptr;int(*admit)(void*,const TglOwnedSurfaceStorage&,size_t) noexcept=nullptr;
     int operator()(const TglOwnedSurfaceStorage& surface,size_t role) const noexcept {

@@ -15346,6 +15346,24 @@ static void testRetainedVeboxFrames() {
                     assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {
                         uintptr_t actual=0;std::memcpy(&actual,original.prefix.data()+0x90,8);
                         assert(actual==dnAddress && dn.hasNativeReleaseSlot(original.prefix.data()+0x90));
+                        TglOwnedSurfaceStorage metadataA,metadataB;
+                        const std::array<TglOwnedSurfaceStorage*,2> metadata{&metadataA,&metadataB};
+                        assert(sidecar.withBorrowedDenoiseMetadataGroup(original,dn,metadata,
+                            [&](const auto& source,const auto& views) noexcept {
+                                assert(&source==&original && views[0]==&metadataA && views[1]==&metadataB);
+                                for(const auto* view:views) {
+                                    uintptr_t value=0;std::memcpy(&value,view->prefix.data()+0x90,8);
+                                    assert(value==dnAddress);
+                                }
+                                assert(!sidecar.withBorrowedDenoiseMetadataGroup(original,dn,metadata,
+                                    [](const auto&,const auto&) noexcept {assert(false);}));
+                            }));
+                        for(auto* view:metadata) {
+                            uintptr_t value=1;std::memcpy(&value,view->prefix.data()+0x90,8);assert(!value);
+                        }
+                        const std::array<TglOwnedSurfaceStorage*,2> duplicate{&metadataA,&metadataA};
+                        assert(!sidecar.withBorrowedDenoiseMetadataGroup(original,dn,duplicate,
+                            [](const auto&,const auto&) noexcept {assert(false);}));
                         assert(sidecar.readLeasedDenoiseRequest(original,dn,dnRequest,readDn) && dnRequest==0xd5 && dnReads==1);
                         std::array<uint8_t,0xd30> report{};const uint32_t pipe=1,format=0x19;
                         std::memcpy(report.data()+0xa0c,&pipe,4);
