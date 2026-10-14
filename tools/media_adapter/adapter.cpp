@@ -1632,6 +1632,32 @@ struct NativeFrontendRuntimeScope {
         });
     }
 };
+struct NativeRetainedFrontendRuntime {
+    using Use=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeRendererCpuAssembly&,
+        NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
+        NativeDenoiseParameters&,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept;
+    static TglOwnedVeboxCommandTransactionResult run(NativeContextRendererFrame& frame,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* scope,Use use) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        if(!scope || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
+            frame.invalidated() || !frame.surfacesReady())return result;
+        const int status=frame.withFrame([&](NativeBorrowedFrontend& frontend) noexcept -> int {
+            result=NativeFrontendRuntimeScope::run(frontend,roles,sourceIndex,targetIndex,temporal,
+                [&](NativeRendererCpuAssembly& cpu,NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
+                    NativeContextSurfaceOwner* secondary,NativeContextSurfaceOwner* previous,
+                    NativeDenoiseParameters& parameters,NativeRendererChildLifetime& first,
+                    NativeRendererChildLifetime& second) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                    return use(scope,cpu,source,target,secondary,previous,parameters,first,second);
+                });
+            return result.status;
+        });
+        // Preserve acquisition/native-entry evidence even on post-frame loss;
+        // the same root aggregate remains the quarantine/retirement owner.
+        if(status)result.status=status;
+        return result;
+    }
+};
 // Callback table entries carry no Entry/closure argument. Route the immutable
 // qualified native image and actual physical generation, never "current Entry".
 // Prepared backend only; factory callback publication remains disabled.
