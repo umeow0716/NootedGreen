@@ -642,6 +642,85 @@ struct NativeAdmissionReset {
             !backing.retention()();
     }
 };
+using NativeAdmissionParams=TglBorrowedVeboxAdmissionPacketView<0x139>;
+using NativeAdmissionPass=TglBorrowedVeboxAdmissionPacketView<0x18,8>;
+struct NativeAdmissionStages {
+    NativeAdmissionReset& reset;NativeOutputPipeSelector& select;
+    NativeAdmissionHistorySetup& history;NativeAdmissionFeatureStage& feature;
+    NativeSfcPreparation& sfc;const NativeSfcDenoiseRequest& dn;
+    NativeAdmissionParams& params;NativeAdmissionPass& pass;
+    const TglVeboxAdmissionBorrowedInterfaces& interfaces;NativeFrameDataRead& read;
+    bool compatible() const noexcept {
+        return reset.child && reset.child==feature.child && reset.child==history.stage.child &&
+            reset.child==sfc.child && reset.execution==feature.execution &&
+            reset.execution==history.stage.execution && reset.index==sfc.index &&
+            &reset.backing==&sfc.backing && &reset.childOwner==&feature.childOwner &&
+            &reset.childOwner==&history.stage.childOwner && &reset.childOwner==&sfc.childOwner &&
+            &reset.executionOwner==&feature.executionOwner &&
+            &reset.executionOwner==&history.stage.executionOwner && &reset.executionOwner==&sfc.executionOwner &&
+            &feature.sourceOwner==&sfc.sourceOwner && &feature.targetOwner==&sfc.targetOwner &&
+            &feature.source==&history.stage.source && &dn.owner==&feature.sourceOwner &&
+            &dn.parameters==&feature.parameters && feature.sourceOwner.hasSurfaceLease(feature.source) &&
+            feature.targetOwner.hasSurfaceLease(feature.target) &&
+            select.matchesFrame(read,feature.binding.image,reinterpret_cast<uintptr_t>(reset.child),
+                reset.vp,feature.source,feature.target,params.data()) &&
+            feature.parameters.hasNativeReleaseSlot(feature.source.prefix.data()+0x90) &&
+            reset.executionOwner.hasLeasedFeatureReport(reset.execution,&feature.target);
+    }
+    struct Result {TglOwnedVeboxCommandTransactionResult native{};int status=5;bool admitted=false;};
+    template<class Render>
+    Result run(Render& render) noexcept {
+        static_assert(noexcept(render()) &&
+            std::is_same_v<decltype(render()),TglOwnedVeboxCommandTransactionResult>);
+        Result result;
+        if constexpr(std::is_pointer_v<Render>)if(!render)return result;
+        // Called by the owned outer frame, INSIDE its original surface/DN/
+        // feature-report scopes. Do not use this as a bool-only callback that
+        // returns then calls native Render a second time outside VP scopes.
+        if(!read.scope || !read.resolve || !compatible() ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(read.resolve),1))return result;
+        const uint64_t generation=reset.childOwner.allocationGeneration();
+        if(!generation)return result;
+        int loanStatus=5;
+        auto pausedRender=[&]() noexcept {
+            TglOwnedVeboxCommandTransactionResult native;
+            loanStatus=reset.executionOwner.withAdmissionContinuation(reset.execution,[&]() noexcept -> int {
+                native=render();return native.status;
+            });
+            return native;
+        };
+        TglOwnedVeboxAdmissionRenderContinuation continuation(pausedRender,reset.backing.retention());
+        bool admitted=false;
+        const int status=reset.executionOwner.withLeasedAdmissionBytes(reset.execution,
+            [&](TglLeasedAdmissionExecution& report) noexcept -> int {
+                auto resetStage=[&]() noexcept {return reset();};
+                auto selectStage=[&](uint8_t& flag) noexcept {return select(flag);};
+                auto setupStage=[&](TglLeasedAdmissionExecution& active) noexcept {return history(active);};
+                auto featureStage=[&](TglLeasedAdmissionExecution& active) noexcept {
+                    return NativeAdmissionFeaturePreparation::apply(feature,active);
+                };
+                auto sfcStage=[&](TglLeasedAdmissionExecution& active,const TglVeboxAdmissionStagesInput& input,
+                    auto finish) noexcept -> bool {
+                    return NativeSfcAdmission::run(sfc,read,dn,reset.vp,reset.execution,
+                        feature.source,feature.target,active,input,finish);
+                };
+                auto retained=[&](auto next) noexcept -> bool {return continuation(next);};
+                admitted=tglRunCapturedSelectedVeboxAdmissionStages(reset.childOwner,reset.executionOwner,
+                    reset.child,params,pass,feature.source,feature.target,interfaces,report,read,
+                    resetStage,selectStage,setupStage,featureStage,sfcStage,retained);
+                return admitted?0:5;
+            });
+        result.native=continuation.nativeResult();
+        result.admitted=!status && admitted && !loanStatus && !continuation.status() &&
+            reset.childOwner.allocationGeneration()==generation && compatible();
+        result.status=result.native.nativeEntered && result.native.status?result.native.status:
+            result.admitted?0:5;
+        return result;
+    }
+};
+using NativeAdmissionRenderFn=TglOwnedVeboxCommandTransactionResult(*)() noexcept;
+template NativeAdmissionStages::Result NativeAdmissionStages::run<NativeAdmissionRenderFn>(
+    NativeAdmissionRenderFn&) noexcept;
 using NativeSurfaceFrameBacking=TglNativeVeboxSurfaceFrameStorage<TglDarwinStmmSurfaceApi>;
 using NativeVpLines=std::remove_reference_t<decltype(std::declval<TglNativeVpLineResourceStorage&>().resources())>;
 using NativeModeReleaseContext=TglOwnedVeboxModeReleaseContext<NativeSurfaceFrameBacking,

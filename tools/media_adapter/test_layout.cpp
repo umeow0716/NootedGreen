@@ -966,6 +966,7 @@ static void testTrackedCpuOwner() {
             const int result=owner.withLeasedAdmissionBytes(actual,[&](auto& bytes) noexcept {
                 assert(bytes.data()==backend.bytes.data());
                 assert(owner.withLeasedAdmissionBytes(actual,denied)==5);
+                assert(owner.withAdmissionContinuation(actual,[]() noexcept -> int {assert(false);return 0;})==5);
                 owner.reset();assert(owner.get()==actual && !backend.destroys);
                 TglVeboxAdmissionStagesInput input;
                 input.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
@@ -994,6 +995,16 @@ static void testTrackedCpuOwner() {
                 assert(admitted && params==0x1234 && field==71);
                 assert(backend.initializes==2 && vpResets==1 && !resetStage());
                 assert(backend.initializes==2 && vpResets==1 && owner.initializeLeasedAdmission(actual)==5);
+                assert(owner.withAdmissionContinuation(actual,[&]() noexcept -> int {
+                    assert(owner.hasExecutionLease(actual));
+                    assert(owner.withAdmissionContinuation(actual,[]() noexcept -> int {assert(false);return 0;})==5);
+                    assert(owner.withLeasedAdmissionBytes(actual,[&](auto& inner) noexcept -> int {
+                        assert(inner.data()==bytes.data());return 0;
+                    })==0);
+                    return 31;
+                })==31);
+                assert(owner.withAdmissionContinuation(actual,[]() noexcept -> int {assert(false);return 0;})==5);
+                assert(owner.withLeasedAdmissionBytes(actual,denied)==5); // outer view restored
                 return 31;
             });
             const auto before=backend.bytes;
@@ -3619,6 +3630,13 @@ static void testLeasedGen12PlatformPolicy() {
         uint8_t comp=0xa4;uint32_t output=0xdeadbeef;
         TglLeasedGen12VeboxOutputPolicy policy(read,childOwner,childOwner.image,childAddress,paramsAddress,
             vpAddress,0,scenario==10 || scenario>=16?colorFill:0,sourceOwner,source,a,targetOwner,target,b,comp,frame,query,fill);
+        assert(policy.matchesFrame(read,childOwner.image,childAddress,paramsAddress,vpAddress,source,target));
+        auto otherRead=read;
+        assert(!policy.matchesFrame(otherRead,childOwner.image,childAddress,paramsAddress,vpAddress,source,target));
+        assert(!policy.matchesFrame(read,childOwner.image,childAddress+8,paramsAddress,vpAddress,source,target));
+        assert(!policy.matchesFrame(read,childOwner.image,childAddress,paramsAddress+8,vpAddress,source,target));
+        assert(!policy.matchesFrame(read,childOwner.image,childAddress,paramsAddress,vpAddress+8,source,target));
+        assert(!policy.matchesFrame(read,childOwner.image,childAddress,paramsAddress,vpAddress,target,source));
         TglOwnedVpAdmissionEntries entries;entries.extent=&SfcFixture::extent;
         TglOwnedVpOutputPipePolicy<decltype(policy)> scoped{policy,entries,
             scenario==32?static_cast<void*>(&queries):static_cast<void*>(&sfcCalls),
@@ -16343,6 +16361,41 @@ static void testActualNv12LayoutSnapshot() {
     assert(uvRow==32);
 }
 int main() {
+    for(unsigned scenario=0;scenario<6;++scenario) {
+        TglOwnedVeboxFrameRetention retention;unsigned renders=0;bool catalogue=false;
+        auto render=[&]() noexcept {
+            assert(catalogue);++renders;
+            TglOwnedVeboxCommandTransactionResult result;
+            result.status=scenario==1?31:0;result.nativeEntered=scenario!=5;
+            return result;
+        };
+        TglOwnedVeboxAdmissionRenderContinuation scope(render,retention);
+        const bool accepted=scope([&](auto finish) noexcept {
+            catalogue=true;
+            const bool rendered=scenario==2?false:finish();
+            if(scenario==4)assert(!finish() && renders==1);
+            assert(retention()==(scenario!=2 && scenario!=5));
+            catalogue=false;
+            return scenario==3?false:rendered;
+        });
+        assert(accepted==(scenario==0));
+        assert(renders==(scenario==2?0u:1u));
+        assert(scope.status()==(scenario==0?0:scenario==1?31:5));
+        if(scenario!=2)assert(scope.nativeResult().status==(scenario==1?31:0));
+        assert(!scope([](auto) noexcept -> bool {assert(false);return true;}));
+        assert(renders==(scenario==2?0u:1u));
+    }
+    {
+        TglOwnedVeboxFrameRetention retention;
+        using Render=TglOwnedVeboxCommandTransactionResult(*)() noexcept;
+        Render absent=nullptr;
+        TglOwnedVeboxAdmissionRenderContinuation missing(absent,retention);
+        assert(!missing([](auto) noexcept -> bool {assert(false);return true;}) && !missing.entered());
+        TglOwnedVeboxCommandTransactionResult pending;pending.nativeEntered=true;retention.observe(pending);
+        auto denied=[]() noexcept -> TglOwnedVeboxCommandTransactionResult {assert(false);return {};};
+        TglOwnedVeboxAdmissionRenderContinuation blocked(denied,retention);
+        assert(!blocked([](auto) noexcept -> bool {assert(false);return true;}) && !blocked.entered());
+    }
     {
         constexpr uintptr_t os=0x1000,database=0x2000,wrapper=0x5000,device=0x6000,create=0x7000;
         uintptr_t db=database,w=wrapper,d=device;uint32_t index=1,port=42;

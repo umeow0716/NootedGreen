@@ -3475,6 +3475,7 @@ template<class Backend> class TglExecutionOwner {
     Backend& backend;
     uintptr_t object = 0;
     bool leased_=false,admissionBytesBusy_=false,admissionResetAttempted_=false,borrowed_=false,featureBusy_=false;
+    bool admissionContinuationAttempted_=false,admissionContinuationBusy_=false;
     const void* featureTarget_=nullptr;
     int admissionError_=0;
 public:
@@ -3549,6 +3550,7 @@ public:
         if(leased_ || admissionError_ || !object) return 5;
         leased_=true;
         admissionResetAttempted_=false;
+        admissionContinuationAttempted_=false;
         if(!backend.validate(object)) {
             if(borrowed_) admissionError_=5;
             leased_=false;reset();return 5;
@@ -3566,6 +3568,21 @@ public:
         const int result=use(view);
         admissionBytesBusy_=false;
         return admissionError_ ? admissionError_ : result;
+    }
+    // Temporarily lend the SAME report to whole Render after admission reset.
+    // Outer admission must not access its byte view during Use. Nested normal
+    // producer borrows are allowed; another whole continuation is not.
+    template<class Use> int withAdmissionContinuation(uintptr_t expected,Use use) noexcept {
+        static_assert(noexcept(use()) && std::is_same_v<decltype(use()),int>);
+        if(!admissionBytesBusy_ || !admissionResetAttempted_ || admissionContinuationAttempted_ ||
+            admissionContinuationBusy_ || !hasExecutionLease(expected))return 5;
+        admissionContinuationAttempted_=admissionContinuationBusy_=true;
+        admissionBytesBusy_=false;
+        const int status=use();
+        if(admissionBytesBusy_ || !leased_ || object!=expected)
+            admissionError_=admissionError_?admissionError_:5;
+        admissionBytesBusy_=true;admissionContinuationBusy_=false;
+        return admissionError_?admissionError_:status;
     }
     // Share the existing execution lease without recursively acquiring it.
     // Native170's report60 target borrow must not outlive the source/target
@@ -7196,6 +7213,12 @@ public:
         }
         return true;
     }
+    // Identity only; normal healthy()/region admission remains mandatory.
+    bool matchesFrame(const Read& read,uintptr_t image,uintptr_t child,uintptr_t parameters,
+        uintptr_t vp,const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target) const noexcept {
+        return &read_==&read && image_==image && child_==child && parameters_==parameters && vp_==vp &&
+            &source_==&source && &target_==&target;
+    }
     bool bypass() noexcept {
         return healthy() && tglCompositionBypassFromLiveFlag(parameters_,
             reinterpret_cast<uintptr_t>(&source_),compNeeded_,gate_);
@@ -10786,6 +10809,12 @@ public:
         return tglSelectOwnedVpOutputPipe(vp_,read_,policy_,source_,target_,parameters_,
             compNeeded,pipe)?pipe:UINT32_MAX;
     }
+    bool matchesFrame(const Read& read,uintptr_t image,uintptr_t child,void* vp,
+        const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,void* parameters) const noexcept {
+        return &read_==&read && vp_.bytes.data()==vp && source_==&source && target_==&target &&
+            parameters_==parameters && policy_.matchesFrame(read,image,child,
+                reinterpret_cast<uintptr_t>(parameters),reinterpret_cast<uintptr_t>(vp),source,target);
+    }
 };
 
 // Bounded slot28 geometry acquisition. Read authorizes every surface/MHW
@@ -13457,6 +13486,43 @@ public:
         // Canonical whole-frame results always use the overload above.
         pending_=pending_ || result.acquired || result.writtenBack;
     }
+};
+// Admission's finish callback runs Render INSIDE retained VP/catalogue scopes.
+// The owned outer caller consumes this result instead of calling Render again.
+// Raw native status is preserved separately from post-admission rejection.
+template<class Render> class TglOwnedVeboxAdmissionRenderContinuation {
+    Render& render_;TglOwnedVeboxFrameRetention& retention_;
+    TglOwnedVeboxCommandTransactionResult native_{};
+    bool invoked_=false,entered_=false,repeated_=false;
+    int status_=5;
+public:
+    TglOwnedVeboxAdmissionRenderContinuation(Render& render,TglOwnedVeboxFrameRetention& retention) noexcept
+        :render_(render),retention_(retention) {
+        static_assert(noexcept(render()) &&
+            std::is_same_v<decltype(render()),TglOwnedVeboxCommandTransactionResult>);
+    }
+    TglOwnedVeboxAdmissionRenderContinuation(const TglOwnedVeboxAdmissionRenderContinuation&)=delete;
+    template<class Continue> bool operator()(Continue continuation) noexcept {
+        if(invoked_) {repeated_=true;status_=native_.status?native_.status:5;return false;}
+        invoked_=true;
+        if constexpr(std::is_pointer_v<Render>)if(!render_)return false;
+        if(retention_())return false;
+        auto finish=[&]() noexcept -> bool {
+            if(entered_) {repeated_=true;return false;}
+            entered_=true;native_=render_();
+            retention_.observe(native_); // BEFORE any VP/DN/surface scope unwinds.
+            return native_.nativeEntered && native_.status==0;
+        };
+        static_assert(noexcept(continuation(finish)) &&
+            std::is_same_v<decltype(continuation(finish)),bool>);
+        const bool admitted=continuation(finish);
+        status_=entered_ && native_.status?native_.status:
+            admitted && entered_ && native_.nativeEntered && !repeated_?0:5;
+        return status_==0;
+    }
+    const TglOwnedVeboxCommandTransactionResult& nativeResult() const noexcept {return native_;}
+    int status() const noexcept {return status_;}
+    bool entered() const noexcept {return entered_;}
 };
 struct TglOwnedVeboxFrameNoRetention {bool operator()() const noexcept {return false;}};
 // A retained frame owns this pair until qualified retirement. Owners, their
