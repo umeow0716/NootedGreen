@@ -2656,6 +2656,12 @@ struct NativeRetainedFrontendRuntime {
 // context registry. The dispatcher needs a derived temporary-shell lease
 // under the original context/root pin, including nested metadata lifetime
 // and copyback reconciliation, before calling this existing execution path.
+// Keep NativeBorrowedFrontend as the ORIGINAL retained frame owner:
+// withCpuFrontend retains source graph/target CF backing and parent pin after
+// acquisition. Callback-scoped DerivedSurfaceLease is NOT a replacement
+// SourceOwnerType/TargetOwnerType for that persistent frame. The temporary
+// overlay must be confined to synchronous producer/packet execution while
+// this same original frame retains command/resource backing for completion.
 struct NativeOriginalFrameExecution {
     using Frontend=NativeRetainedFrontendRuntime;
     struct Request {
