@@ -757,6 +757,8 @@ struct NativeVpPreparedCallbacks {
     void* renderData;bool rgbAdaptive,eightTapChroma,compressionEnabled;
     TglOwnedSfcCompressionMode compressionMode;
     int error=0;
+    TglOwnedVpFramePreparation capturedFrame{};
+    bool frameCaptured=false;
     int fail(int result) noexcept {if(result && !error)error=result;return result;}
     bool sameOwners() const noexcept {
         return &packet.scalar==&scalar && &avs.scalar==&scalar && &filters.scalar==&scalar &&
@@ -766,13 +768,19 @@ struct NativeVpPreparedCallbacks {
     }
     int state(void* actual,const TglOwnedVpFramePreparation& frame,
         NativeVpNv12PacketScope::StateOwner& owner,void* data,void* source,void* target) noexcept {
+        return state(actual,frame,geometry,owner,data,source,target);
+    }
+    int state(void* actual,const TglOwnedVpFramePreparation& frame,const TglOwnedVpRegionInput& capturedGeometry,
+        NativeVpNv12PacketScope::StateOwner& owner,void* data,void* source,void* target) noexcept {
         if(error)return error;
         if(!sameOwners() || data!=renderData || !data || source!=&scalar.source || target!=&scalar.target ||
             actual!=scalar.vp)return fail(5);
-        int result=scalar.prepare(actual,frame,geometry);
+        int result=scalar.prepare(actual,frame,capturedGeometry);
         if(result)return fail(result);
-        return fail(packet.prepare(vp,owner,lines,
-            catalogue,commands,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode));
+        result=packet.prepare(vp,owner,lines,
+            catalogue,commands,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode);
+        if(!result) {capturedFrame=frame;frameCaptured=true;}
+        return fail(result);
     }
     int prepareAvs(void* actual,const TglOwnedVpFramePreparation& frame,NativeVpAvsProducer::Owner& owner) noexcept {
         if(error)return error;
@@ -1015,7 +1023,7 @@ struct NativeSfcPreparation {
     using State=int(*)(void*,const TglOwnedVpFramePreparation&,const TglOwnedVpRegionInput&,
         TglOwnedSfcStateParameters<CpuBackend>&,void*,void*,void*) noexcept;
     using Avs=int(*)(void*,const TglOwnedVpFramePreparation&,TglOwnedSfcAvsParameters<CpuBackend>&) noexcept;
-    using Ief=void(*)(void*,const TglOwnedVpFramePreparation&) noexcept;
+    using Ief=void(*)(void*,const TglOwnedVpFramePreparation&,uint8_t*) noexcept;
     using Emit=int(*)(void*,void*,void*,const TglOwnedVpEntrySet&) noexcept;
     NativeRendererBacking& backing;NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
     NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
@@ -1067,6 +1075,44 @@ struct NativeSfcPreparation {
 template int NativeSfcPreparation::run<NativeFrameDataRead,int(*)(void*) noexcept>(
     void*,uintptr_t,uintptr_t,const TglOwnedSurfaceStorage&,const TglOwnedSurfaceStorage&,
     uintptr_t,NativeFrameDataRead,int(*)(void*) noexcept) noexcept;
+struct NativeVpPreparationDomain {};
+struct NativeVpPreparationScope {
+    using Publication=TglOwnedScopedContext<NativeVpPreparedCallbacks,NativeVpPreparationDomain>;
+    static int state(void* vp,const TglOwnedVpFramePreparation& frame,const TglOwnedVpRegionInput& geometry,
+        NativeVpNv12PacketScope::StateOwner& owner,void* data,void* source,void* target) noexcept {
+        auto* callbacks=Publication::get(vp);
+        return callbacks?callbacks->state(vp,frame,geometry,owner,data,source,target):5;
+    }
+    static int avs(void* vp,const TglOwnedVpFramePreparation& frame,NativeVpAvsProducer::Owner& owner) noexcept {
+        auto* callbacks=Publication::get(vp);
+        return callbacks?callbacks->prepareAvs(vp,frame,owner):5;
+    }
+    static void ief(void* vp,const TglOwnedVpFramePreparation& frame,uint8_t* liveState) noexcept {
+        if(auto* callbacks=Publication::get(vp))callbacks->prepareFilters(vp,frame,liveState);
+    }
+    static int emit(void* vp,void* data,void* command,const TglOwnedVpEntrySet& entries) noexcept {
+        auto* callbacks=Publication::get(vp);
+        if(!callbacks || !callbacks->frameCaptured || entries.allocate!=callbacks->catalogue.allocate ||
+            entries.platformSend!=callbacks->catalogue.platformSend)return 5;
+        return callbacks->emit(vp,callbacks->capturedFrame,data,command);
+    }
+    using Use=int(*)(void*,NativeSfcPreparation&) noexcept;
+    static int run(NativeVpPreparedCallbacks& callbacks,NativeSfcPreparation& preparation,void* context,Use use) noexcept {
+        if(!context || !use || !callbacks.sameOwners() || callbacks.error || callbacks.scalar.attempted ||
+            preparation.renderData!=callbacks.renderData || &preparation.base!=&callbacks.catalogue ||
+            &preparation.childOwner!=&callbacks.emission.childOwner || preparation.child!=callbacks.emission.parent ||
+            &preparation.targetOwner!=&callbacks.packet.targetOwner ||
+            &preparation.sourceOwner!=&callbacks.filters.sourceOwner)return 5;
+        Publication scope(callbacks.vp.bytes.data(),callbacks);
+        if(!scope.bound())return 5;
+        const auto oldState=preparation.state;const auto oldAvs=preparation.avs;
+        const auto oldIef=preparation.ief;const auto oldEmit=preparation.emit;
+        preparation.state=&state;preparation.avs=&avs;preparation.ief=&ief;preparation.emit=&emit;
+        const int result=use(context,preparation);
+        preparation.state=oldState;preparation.avs=oldAvs;preparation.ief=oldIef;preparation.emit=oldEmit;
+        return result?result:callbacks.error;
+    }
+};
 template<class Read> struct NativeSfcPrepareCall {
     NativeSfcPreparation& preparation;Read& read;
     template<class Complete> int operator()(void* vp,uintptr_t e0,uintptr_t f0,
