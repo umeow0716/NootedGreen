@@ -24090,6 +24090,51 @@ int tglInitializeRendererChildrenFromCreator(Storage& storage,const TglNativeVph
     }
     return 0;
 }
+// Creator retains this stable context and the retirement authority through
+// child destruction. Binding validates the actual lifecycle allocation; opaque
+// owner storage breaks the owner<Cleanup> type cycle without copying its pin.
+template<class Backing,class Retire> class TglOwnedVeboxVpCleanupContext {
+    Backing* backing_=nullptr;Retire& retire_;
+    void* owner_=nullptr;void* child_=nullptr;uint64_t generation_=0;size_t index_=0;
+    bool(*owns_)(void*,void*,uint64_t) noexcept=nullptr;
+    bool busy_=false,retired_=false;
+public:
+    explicit TglOwnedVeboxVpCleanupContext(Retire& retire) noexcept:retire_(retire) {}
+    TglOwnedVeboxVpCleanupContext(const TglOwnedVeboxVpCleanupContext&)=delete;
+    TglOwnedVeboxVpCleanupContext& operator=(const TglOwnedVeboxVpCleanupContext&)=delete;
+    template<class Owner> bool bind(Backing& backing,Owner& owner,void* child,uint64_t generation,size_t index) noexcept {
+        static_assert(noexcept(owner.ownsLifecycleAllocation(child,generation)));
+        if(owner_ || busy_ || retired_ || !child || !generation || index>=2 ||
+            !owner.ownsLifecycleAllocation(child,generation) || !backing.vpBound(index))return false;
+        backing_=&backing;owner_=&owner;child_=child;generation_=generation;index_=index;
+        owns_=[](void* p,void* c,uint64_t g) noexcept {return static_cast<Owner*>(p)->ownsLifecycleAllocation(c,g);};
+        return true;
+    }
+    bool operator()(void* child) noexcept {
+        static_assert(noexcept(retire_(child,uint64_t{},size_t{})) &&
+            std::is_same_v<decltype(retire_(child,uint64_t{},size_t{})),int>);
+        if(!backing_ || !owner_ || !owns_ || child!=child_ || busy_ || retired_ ||
+            !owns_(owner_,child_,generation_) || backing_->retention()())return false;
+        uintptr_t vp=0;std::memcpy(&vp,static_cast<const uint8_t*>(child_)+0x80,8);
+        if(vp)return false;
+        busy_=true;struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        const int status=backing_->retireVpResources(index_,[&]() noexcept -> int {
+            // Authority must attest same physical epoch, no frames and restored
+            // descriptor borrows. This component cannot manufacture completion.
+            const int admitted=retire_(child_,generation_,index_);
+            if(admitted)return admitted;
+            if(!owns_(owner_,child_,generation_))return 5;
+            uintptr_t after=0;std::memcpy(&after,static_cast<const uint8_t*>(child_)+0x80,8);
+            return after?5:0;
+        });
+        if(status)return false;
+        retired_=true;return true;
+    }
+};
+template<class Context> struct TglOwnedVeboxVpCleanupCallback {
+    Context* context=nullptr;
+    bool operator()(void* child) const noexcept {return context && (*context)(child);}
+};
 template<class Api,class Cleanup,class Cpu=TglNativeTrackedCpuInvoker,
     class Sfc=TglNativeSfcLifetimeInvoker,class Destroy=TglNativeVeboxDestructorInvoker>
 class TglNativeVeboxRendererCpuStorage {

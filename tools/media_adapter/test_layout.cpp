@@ -23995,6 +23995,35 @@ int main() {
                                     assert(paired.withVpResources(1,[&](auto& graph,auto& storage,auto&) noexcept -> int {
                                         assert(graph.generation()==passGeneration && storage.bytes.data()==resetVp);return 0;
                                     })==0); // No pass reset or graph/shell destruction during resource cleanup.
+                                    {
+                                        std::array<uint8_t,0x88> child{};
+                                        struct Owner {
+                                            void* child;unsigned checks=0;
+                                            bool ownsLifecycleAllocation(void* p,uint64_t g) noexcept {++checks;return p==child && g==7;}
+                                        } owner{child.data()};
+                                        int retirementStatus=31;unsigned admissions=0;bool changeVp=false;
+                                        auto authority=[&](void* p,uint64_t g,size_t index) noexcept -> int {
+                                            ++admissions;assert(p==child.data() && g==7 && index==1);
+                                            if(changeVp) {const uintptr_t borrowed=0x123400;std::memcpy(child.data()+0x80,&borrowed,8);}
+                                            return retirementStatus;
+                                        };
+                                        TglOwnedVeboxVpCleanupContext<std::decay_t<decltype(paired)>,decltype(authority)> cleanup(authority);
+                                        TglOwnedVeboxVpCleanupCallback<decltype(cleanup)> callback{&cleanup};
+                                        assert(!callback(child.data()));
+                                        assert(!cleanup.bind(paired,owner,child.data(),8,1));
+                                        assert(cleanup.bind(paired,owner,child.data(),7,1));
+                                        assert(!cleanup.bind(paired,owner,child.data(),7,1));
+                                        uintptr_t borrowed=0x123400;std::memcpy(child.data()+0x80,&borrowed,8);
+                                        assert(!callback(child.data()) && !admissions);
+                                        borrowed=0;std::memcpy(child.data()+0x80,&borrowed,8);
+                                        assert(!callback(child.data()) && admissions==1);
+                                        retirementStatus=0;changeVp=true;
+                                        assert(!callback(child.data()) && admissions==2);
+                                        changeVp=false;std::memcpy(child.data()+0x80,&borrowed,8); // Fixture restores NULL; production never forces detach.
+                                        assert(callback(child.data()) && admissions==3);
+                                        const auto checked=owner.checks;
+                                        assert(!callback(child.data()) && owner.checks==checked && admissions==3);
+                                    }
                                     assert(paired.reinitializeVpPass(1,[&]() noexcept -> int {
                                         ++retireCalls;return 31;
                                     })==31 && paired.vpBound(1));
