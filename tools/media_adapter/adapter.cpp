@@ -2826,7 +2826,7 @@ public:
         if(!ready_ || !core_ || !core_->live() ||
             !core_->childOwner.matchesPrivateSend(&NativeVeboxSendSubmissionStage::send))return false;
         TglVeboxHardwareBinding current;
-        return tail.matchesChild(core_->child,&readMemory) &&
+        return tail.matchesIdentity(core_->child,&readMemory) &&
             current.resolve(hardware_.interface,hardware_.os,core_->image,&readMemory,
                 NativeTglImageAdmission{core_->image}) && current.heap==hardware_.heap && core_->live();
     }
@@ -3216,6 +3216,8 @@ struct NativeOriginalFrameExecution {
         const TglOwnedGen12SurfaceFeatures* sourceFeatures=nullptr;
         const TglOwnedGen12SurfaceFeatures* targetFeatures=nullptr;
         bool attempted=false;
+        NativeVeboxSendSubmissionStage::Admit submitAdmit=nullptr;
+        NativeVeboxSendSubmissionStage::AdmitChild childAdmit=nullptr;
     };
     // Construct execution Inputs ONLY inside the original retained frontend
     // continuation. No caller-supplied core/graph/line storage or owner copies.
@@ -3226,13 +3228,15 @@ struct NativeOriginalFrameExecution {
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,Request& request) noexcept {
         if(request.attempted)return {};
         request.attempted=true;
+        if(bool(request.submitAdmit)!=bool(request.childAdmit))return {};
+        struct RetainedCall {Request& request;NativeContextRendererFrame& frame;} retained{request,frame};
         Frontend::VpRequest vpRequest{request.childIndex,request.interfaces,request.parameters,request.pass,
-            request.catalogue,request.retirement,&request,
+            request.catalogue,request.retirement,&retained,
             +[](void* context,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
                 TglNativeVpLineResourceStorage& lines,NativeAdmissionParams& params,NativeAdmissionPass& pass,
                 NativeFrameDataRead& read,NativeVpProducerFrame& vp,const TglOwnedVpModeState& mode,
                 Frontend::VpFrontend& frontend) noexcept -> TglOwnedVeboxCommandTransactionResult {
-                auto& request=*static_cast<Request*>(context);
+                auto& retained=*static_cast<RetainedCall*>(context);auto& request=retained.request;
                 TglOwnedGen12SurfaceFeatures sourceFeatures,targetFeatures;
                 if(!tglBindLeasedUnknownGen12SurfaceFeatures(sourceFeatures,core.sourceOwner,core.source,
                     request.acquisition) ||
@@ -3245,7 +3249,7 @@ struct NativeOriginalFrameExecution {
                 Inputs input{frontend,core,graph,lines,params,pass,read,vp,request.catalogue,mode,request.view,
                     sourceFeatures,targetFeatures,request.acquisition,request.decompressionStatus,
                     request.decompression,request.argument};
-                return run(input);
+                return request.submitAdmit?runWithSend(retained.frame,input,request.submitAdmit,request.childAdmit):run(input);
             }};
         return Frontend::runVpInputs(frame,roles,sourceIndex,targetIndex,temporal,vpRequest);
     }
@@ -3262,6 +3266,24 @@ struct NativeOriginalFrameExecution {
         NativeVeboxSendRenderScopeFor<SurfaceOwner>* sendScope=nullptr;
     };
     using Inputs=InputsFor<NativeContextSurfaceOwner>;
+    template<class SurfaceOwner> static TglOwnedVeboxCommandTransactionResult runWithSend(
+        NativeContextRendererFrame& frame,InputsFor<SurfaceOwner>& in,
+        NativeVeboxSendSubmissionStage::Admit admit,NativeVeboxSendSubmissionStage::AdmitChild childAdmit) noexcept {
+        if(in.sendScope || !admit || !childAdmit || frame.invalidated() || !frame.surfacesReady() ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(childAdmit),1))return {};
+        NativeVeboxSendBindingsFor<SurfaceOwner> bindings;
+        if(!bindings.resolve(in.core,in.view,in.frontend.pinned) || !bindings.live())return {};
+        TglOwnedVeboxBuilderScratch scratch;
+        NativeVeboxRenderSendRequestFor<SurfaceOwner> request{frame,bindings.tail,bindings.submit,
+            bindings.setup,bindings.builder,scratch,in.frontend.assembly.backing().retention(),
+            in.core.image,in.view.os,admit,childAdmit};
+        auto scope=request.scope();in.sendScope=&scope;
+        auto result=run(in);in.sendScope=nullptr;
+        if(!bindings.live() && !result.status)result.status=5;
+        in.frontend.assembly.backing().retention().observe(result);
+        return result;
+    }
     template<class SurfaceOwner> static TglOwnedVeboxCommandTransactionResult run(InputsFor<SurfaceOwner>& in) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
         auto& core=in.core;const NativeTglImageAdmission qualify{core.image};
@@ -3316,6 +3338,9 @@ struct NativeOriginalFrameExecution {
 };
 template TglOwnedVeboxCommandTransactionResult NativeOriginalFrameExecution::run<NativeTemporarySurfaceOwner>(
     InputsFor<NativeTemporarySurfaceOwner>&) noexcept;
+template TglOwnedVeboxCommandTransactionResult NativeOriginalFrameExecution::runWithSend<NativeTemporarySurfaceOwner>(
+    NativeContextRendererFrame&,InputsFor<NativeTemporarySurfaceOwner>&,
+    NativeVeboxSendSubmissionStage::Admit,NativeVeboxSendSubmissionStage::AdmitChild) noexcept;
 // Concrete synchronous lower continuation inside runWithDerivedRoots. The
 // outer retained graph/transaction owns original backing and copyback; this
 // object never installs tables, resolves new context owners or claims retirement.
