@@ -7297,7 +7297,7 @@ public:
         // Borrow the original conversion allocation, never infer ownership
         // from the copied a8 pointer. Both shells must still name that SAME
         // allocation throughout the original owner's bounded metadata grant.
-        template<class Read,class Use> int withLeasedConversionMetadata(
+        template<bool Optional,class Read,class Use> int withConversionMetadata(
             const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
             if(conversionFault_ || !hasSurfaceLease(expected))return 5;
             uintptr_t metadata=0;std::memcpy(&metadata,expected.prefix.data()+0xa8,8);
@@ -7307,15 +7307,26 @@ public:
                 if(current!=metadata)conversionFault_=true;
                 return !conversionFault_;
             };
-            const int status=original_.withLeasedConversionMetadata(*temporary_.originals_[index_],read,
-                [&](uintptr_t originalMetadata,auto bounded) noexcept -> int {
+            auto grant=[&](uintptr_t originalMetadata,auto bounded) noexcept -> int {
                     if(originalMetadata!=metadata || !valid())return 5;
                     auto checked=[&](uintptr_t address,void* output,size_t bytes) noexcept {
                         return valid() && bounded(address,output,bytes) && valid();
                     };
                     const int result=use(metadata,checked);return valid()?result:5;
-                });
+                };
+            int status=5;
+            if constexpr(Optional)
+                status=original_.withLeasedOptionalConversionMetadata(*temporary_.originals_[index_],read,grant);
+            else status=original_.withLeasedConversionMetadata(*temporary_.originals_[index_],read,grant);
             return valid()?status:5;
+        }
+        template<class Read,class Use> int withLeasedConversionMetadata(
+            const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
+            return withConversionMetadata<false>(expected,read,use);
+        }
+        template<class Read,class Use> int withLeasedOptionalConversionMetadata(
+            const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
+            return withConversionMetadata<true>(expected,read,use);
         }
         template<class Use> int withMutableSurface(Use use) noexcept {
             static_assert(noexcept(use(std::declval<TglOwnedSurfaceStorage&>())));

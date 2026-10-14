@@ -15818,6 +15818,34 @@ static void testRetainedVeboxFrames() {
                     const uintptr_t noConversion=0;
                     std::memcpy(original.prefix.data()+0xa8,&noConversion,8);
                     auto neverRead=[](uintptr_t,void*,size_t) noexcept -> bool {assert(false);return false;};
+                    {
+                        struct Backend {
+                            uintptr_t allocate(size_t n) noexcept {return reinterpret_cast<uintptr_t>(std::malloc(n));}
+                            void release(uintptr_t p) noexcept {std::free(reinterpret_cast<void*>(p));}
+                        } backend;
+                        TglNativePerPassCpuShells<Backend> temporary(backend);
+                        std::array<const TglOwnedSurfaceStorage*,25> roots{};roots[0]=&original;
+                        assert(temporary.prepare(roots));
+                        assert(temporary.withDerivedSurfaceLease(0,sidecar,[&](auto& derived) noexcept {
+                            return derived.withMutableSurface([&](auto& copy) noexcept {
+                                TglVeboxPipeAcquisition frame;TglOwnedGen12SurfaceFeatures features;
+                                assert(tglAcquireLeasedConversionLutFeatures(derived,copy,frame,neverRead,features));
+                                assert(features.surface==&copy && features.frame==&frame &&
+                                    features.lut==TglOwnedFeaturePresence::Absent &&
+                                    features.hdr==TglOwnedFeaturePresence::Unknown);
+                                assert(derived.withLeasedConversionMetadata(copy,neverRead,
+                                    [](uintptr_t,auto) noexcept -> int {assert(false);return 0;})==5);
+                                assert(derived.withLeasedOptionalConversionMetadata(copy,neverRead,
+                                    [&](uintptr_t p,auto bounded) noexcept -> int {
+                                        assert(!p);uint32_t value=0;assert(!bounded(1,&value,4));
+                                        const uintptr_t changed=8;std::memcpy(copy.prefix.data()+0xa8,&changed,8);
+                                        assert(!bounded(1,&value,4));
+                                        std::memset(copy.prefix.data()+0xa8,0,8);return 31;
+                                    })==5);
+                                return 31;
+                            });
+                        })==31);
+                    }
                     assert(sidecar.withLeasedOptionalConversionMetadata(original,neverRead,
                         [&](uintptr_t metadata,auto bounded) noexcept -> int {
                             assert(!metadata);uint32_t word=0;
