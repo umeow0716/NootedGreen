@@ -17112,6 +17112,12 @@ int main() {
                         {
                             auto initialization=OwnerRouter::pinForInitialization(creatorAddress);
                             assert(initialization.get()==owner && initialization.exclusive());
+                            assert(owner->withCreatorStorage(initialization,creatorAdmit,qualify,ownerExecutable,
+                                [&](auto&,const auto&) noexcept -> int {
+                                    assert(owner->withCreatorStorage(initialization,creatorAdmit,qualify,ownerExecutable,producer)==5);
+                                    assert(!owner->recoverDestruction([](auto&&...) noexcept {assert(false);return false;}));
+                                    return 31;
+                                })==31);
                             assert(owner->withCreatorStorage(initialization,creatorAdmit,qualify,ownerExecutable,producer)==31);
                             actualRenderer+=8;
                             assert(owner->withCreatorStorage(initialization,creatorAdmit,qualify,ownerExecutable,producer)==5);

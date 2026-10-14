@@ -22066,6 +22066,7 @@ class TglOwnedVphalRendererOwner {
         Read read;Write write;TableAdmit tableAdmit;ChildAdmit childAdmit;Native native;
         TglOwnedVphalLifetimeTable table;TglOwnedVphalDestructionState destruction;
         Storage* storage=nullptr;
+        bool storageBusy=false;
         State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t o,uintptr_t r,
             Read rd,Write wr,TableAdmit ta,ChildAdmit ca,Native n) noexcept
             :image(i),physical(p),object(o),renderer(r),generation(g),
@@ -22133,17 +22134,17 @@ public:
                 state_->read,state_->write,state_->tableAdmit);
     }
     bool requestDestruction(Kind kind) noexcept {
-        if(!state_) return false;
+        if(!state_ || state_->storageBusy) return false;
         return state_->destruction.request(state_->table,state_->object,kind,
             [&]() noexcept {return state_->prepare();},state_->native);
     }
     template<class Recover> bool recoverDestruction(Recover recover) noexcept {
-        if(!state_) return false;
+        if(!state_ || state_->storageBusy) return false;
         return state_->destruction.recover(state_->table,recover,
             [&]() noexcept {return state_->prepare();},state_->native);
     }
     template<class Pending,class Admit> bool resumeRecordedDestruction(Pending& pending,Admit admit) noexcept {
-        if(!state_) return false;
+        if(!state_ || state_->storageBusy) return false;
         return state_->destruction.resumeRecorded(state_->table,state_->object,pending,admit,
             [&]() noexcept {return state_->prepare();},state_->native);
     }
@@ -22163,7 +22164,7 @@ public:
         static_assert(noexcept(use(std::declval<Storage&>(),std::declval<const TglNativeCreatedVeboxRendererView&>())) &&
             std::is_same_v<decltype(use(std::declval<Storage&>(),
                 std::declval<const TglNativeCreatedVeboxRendererView&>())),int>);
-        if(!state_ || lease.get()!=this || !lease.exclusive() || !state_->storage ||
+        if(!state_ || state_->storageBusy || lease.get()!=this || !lease.exclusive() || !state_->storage ||
             state_->destruction.phase()!=TglOwnedVphalDestructionState::Phase::Idle ||
             !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
             !state_->boundPhysicalOs()) return 5;
@@ -22175,6 +22176,8 @@ public:
             publication==Publication::Published && created.resolveOwned(state_->image,state_->object,
                 state_->table,state_->read,admit,qualify,executable);
         if(!resolved || created.renderer!=state_->renderer) return 5;
+        state_->storageBusy=true;
+        struct Reset {bool& busy;~Reset(){busy=false;}} reset{state_->storageBusy};
         return use(*state_->storage,static_cast<const TglNativeCreatedVeboxRendererView&>(created));
     }
 };
