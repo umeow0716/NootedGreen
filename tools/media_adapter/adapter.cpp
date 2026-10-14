@@ -1244,6 +1244,7 @@ using NativeAdmissionParams=TglBorrowedVeboxAdmissionPacketView<0x139>;
 using NativeAdmissionPass=TglBorrowedVeboxAdmissionPacketView<0x18,8>;
 struct NativeAdmissionFrameDataScope {
     NativeCoreFrameDataScope& core;NativeAdmissionParams& params;NativeAdmissionPass& pass;
+    const TglVeboxAdmissionBorrowedInterfaces& interfaces;
     NativeFrameDataRead capability() noexcept {return {this,&resolve};}
     static bool resolve(void* context,uintptr_t address,void* output,size_t bytes) noexcept {
         auto* self=static_cast<NativeAdmissionFrameDataScope*>(context);
@@ -1251,8 +1252,22 @@ struct NativeAdmissionFrameDataScope {
         if(NativeCoreFrameDataScope::resolve(&self->core,address,output,bytes))return true;
         const auto p=reinterpret_cast<uintptr_t>(self->params.data());
         const auto q=reinterpret_cast<uintptr_t>(self->pass.data());
-        const bool admitted=NativeCoreFrameDataScope::contains(p,self->params.size(),address,bytes) ||
+        bool admitted=NativeCoreFrameDataScope::contains(p,self->params.size(),address,bytes) ||
             NativeCoreFrameDataScope::contains(q,self->pass.size(),address,bytes);
+        if(!admitted) {
+            uintptr_t os=0,hal=0,sku=0;
+            auto& core=self->core;
+            if(!core.childOwner.readLeasedStorage(core.child,core.generation,core.child+0x10,&os,8) ||
+                !core.childOwner.readLeasedStorage(core.child,core.generation,core.child+0x18,&hal,8) ||
+                !core.childOwner.readLeasedStorage(core.child,core.generation,core.child+0x20,&sku,8) ||
+                !os || !hal || !sku || os!=self->interfaces.os || hal!=self->interfaces.renderHal ||
+                sku!=self->interfaces.sku)return false;
+            // Exact fields consumed by admission SKU policy and the qualified
+            // six-argument platform send. Do not grant entire native objects.
+            admitted=NativeCoreFrameDataScope::contains(sku,8,address,bytes) ||
+                (sku<=UINTPTR_MAX-0x6c && NativeCoreFrameDataScope::contains(sku+0x64,8,address,bytes)) ||
+                (hal<=UINTPTR_MAX-0x20 && NativeCoreFrameDataScope::contains(hal+0x18,8,address,bytes));
+        }
         return admitted && readMemory(address,output,bytes) && self->core.live();
     }
 };
