@@ -17356,6 +17356,18 @@ struct TglDiIecpInputs {
     std::array<const TglOwnedSurfaceStorage*,2> ffdn{}, stmm{};
     std::array<uint32_t,11> controls{};
 };
+// Only original roots: auxiliary FFDI/FFDN/STMM/statistics remain protected
+// by their enclosing prepared-allocation view. Do not adopt a copied shell.
+template<class Owner>
+bool tglValidateOriginalDiIecpLeases(const TglDiIecpInputs& input,Owner& sourceOwner,
+    const TglOwnedSurfaceStorage& source,Owner* targetOwner,Owner* previousOwner) noexcept {
+    static_assert(noexcept(sourceOwner.hasSurfaceLease(source)));
+    if(input.current!=&source || !sourceOwner.hasSurfaceLease(source)) return false;
+    if(input.target && (!targetOwner || !targetOwner->hasSurfaceLease(*input.target))) return false;
+    if(input.referenceValid)
+        return input.previous && previousOwner && previousOwner->hasSurfaceLease(*input.previous);
+    return !input.previous;
+}
 // Owned logical policy reconstructed from exact Darwin1f88d0/1f7500.
 // Scalar decisions only; no ICL object offsets, vtables or GPU commands.
 inline bool tglOwnedMmcFormatSupported(uint32_t format) noexcept {

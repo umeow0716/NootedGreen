@@ -2071,8 +2071,9 @@ struct NativeRetainedDiIecpCapture {
     const TglDiIecpInputs* active=nullptr;uint64_t generation=0;
     bool live() const noexcept {
         return busy && active && generation && planner.childOwner.allocationGeneration()==generation &&
-            planner.childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(planner.child)) &&
-            planner.executionOwner.hasExecutionLease(planner.execution) && planner.input.hasSurfaceLease(planner.source);
+            planner.childOwner.hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(planner.child),image) &&
+            planner.executionOwner.hasExecutionLease(planner.execution) &&
+            tglValidateOriginalDiIecpLeases(*active,planner.input,planner.source,planner.target,planner.previous);
     }
     static int admitRole(void* context,const TglOwnedSurfaceStorage& surface,size_t role) noexcept {
         auto* self=static_cast<NativeRetainedDiIecpCapture*>(context);

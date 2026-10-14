@@ -16697,6 +16697,30 @@ static void testActualNv12LayoutSnapshot() {
     assert(uvRow==32);
 }
 int main() {
+    {
+        TglOwnedSurfaceStorage source{},target{},previous{},copy{};
+        struct Owner {
+            const TglOwnedSurfaceStorage* bound;bool live=true;
+            bool hasSurfaceLease(const TglOwnedSurfaceStorage& value) const noexcept {
+                return live && bound==&value;
+            }
+        } s{&source},t{&target},p{&previous};
+        TglDiIecpInputs input;input.current=&source;input.target=&target;
+        auto valid=[&]() noexcept {return tglValidateOriginalDiIecpLeases(input,s,source,&t,&p);};
+        assert(valid());
+        t.live=false;assert(!valid());t.live=true;
+        input.target=&copy;assert(!valid());input.target=&target;
+        input.current=&copy;assert(!valid());input.current=&source;
+        s.live=false;assert(!valid());s.live=true;
+        input.referenceValid=true;assert(!valid());
+        input.previous=&previous;assert(valid());
+        p.live=false;assert(!valid());p.live=true;
+        input.previous=&copy;assert(!valid());input.previous=&previous;
+        input.referenceValid=false;assert(!valid());input.previous=nullptr;
+        input.target=nullptr;assert(valid());
+        input.referenceValid=true;input.previous=&previous;
+        assert(!tglValidateOriginalDiIecpLeases(input,s,source,&t,static_cast<Owner*>(nullptr)));
+    }
     for(unsigned scenario=0;scenario<6;++scenario) {
         TglOwnedVeboxFrameRetention retention;unsigned renders=0;bool catalogue=false;
         auto render=[&]() noexcept {
