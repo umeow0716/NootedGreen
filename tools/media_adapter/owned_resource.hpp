@@ -7472,18 +7472,18 @@ public:
         const TglOwnedSurfaceStorage& temporary) noexcept:graph_(graph),owner_(owner),temporary_(temporary) {}
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
         const auto* original=owner_.originalSurfaceBinding();
-        if(&surface!=&temporary_ || !original || graph_.storage()!=original ||
-            !owner_.hasSurfaceLease(surface) || !graph_.hasSurfaceLease(*original))return false;
+        if(&surface!=&temporary_ || !original ||
+            !owner_.hasSurfaceLease(surface) || !graph_.hasRetainedSurfaceLease(*original))return false;
         for(const auto offset:{size_t{0xc0},size_t{0xc8}}) {
             uintptr_t copied=0;std::memcpy(&copied,surface.prefix.data()+offset,8);
-            if(copied!=reinterpret_cast<uintptr_t>(graph_.linkedStorage(*original,offset)))return false;
+            if(copied!=reinterpret_cast<uintptr_t>(graph_.linkedRetainedStorage(*original,offset)))return false;
         }
-        return owner_.hasSurfaceLease(surface) && graph_.hasSurfaceLease(*original);
+        return owner_.hasSurfaceLease(surface) && graph_.hasRetainedSurfaceLease(*original);
     }
     const TglOwnedSurfaceStorage* linkedStorage(const TglOwnedSurfaceStorage& surface,size_t offset) const noexcept {
         if((offset!=0xc0 && offset!=0xc8) || !hasSurfaceLease(surface))return nullptr;
         const auto* original=owner_.originalSurfaceBinding();
-        const auto* linked=graph_.linkedStorage(*original,offset);
+        const auto* linked=graph_.linkedRetainedStorage(*original,offset);
         return hasSurfaceLease(surface)?linked:nullptr;
     }
 };
@@ -19644,9 +19644,22 @@ public:
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& shell) const noexcept {
         return storage()==&shell && slots_[0].lease->hasSurfaceLease(shell);
     }
+    // Membership is separate from the root identity grant above. Each member
+    // already has its own CF/resource lease in this SAME retained graph.
+    bool hasRetainedSurfaceLease(const TglOwnedSurfaceStorage& shell) const noexcept {
+        if(!valid())return false;
+        for(size_t i=0;i<count_;++i)
+            if(slots_[i].lease->storage()==&shell && slots_[i].lease->hasSurfaceLease(shell))return true;
+        return false;
+    }
     const TglOwnedSurfaceStorage* linkedStorage(const TglOwnedSurfaceStorage& root,
         size_t offset) const noexcept {
-        if(!hasSurfaceLease(root) || (offset!=0xc0 && offset!=0xc8)) return nullptr;
+        if(!hasSurfaceLease(root))return nullptr;
+        return linkedRetainedStorage(root,offset);
+    }
+    const TglOwnedSurfaceStorage* linkedRetainedStorage(const TglOwnedSurfaceStorage& root,
+        size_t offset) const noexcept {
+        if(!hasRetainedSurfaceLease(root) || (offset!=0xc0 && offset!=0xc8)) return nullptr;
         uintptr_t address=0;std::memcpy(&address,root.prefix.data()+offset,8);
         if(!address) return nullptr;
         for(size_t i=0;i<count_;++i) {

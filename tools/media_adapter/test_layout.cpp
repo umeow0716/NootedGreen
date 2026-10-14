@@ -17994,6 +17994,14 @@ int main() {
                     TglOwnedVeboxFrameRetention retention;int calls=0;
                     auto render=[&](auto&,auto&,auto& a,auto& b) noexcept {
                         ++calls;assert(a.originalSurfaceBinding()==&older && b.originalSurfaceBinding()==&previous);
+                        assert(!graph.hasSurfaceLease(older) && graph.hasRetainedSurfaceLease(older));
+                        assert(!graph.hasRetainedSurfaceLease(shell));
+                        using Overlay=TglNativePerPassHistoryOverlay<decltype(graph),std::remove_reference_t<decltype(b)>>;
+                        const auto* selected=b.surfaceBinding();assert(selected);
+                        Overlay overlay(graph,b,*selected);
+                        assert(overlay.hasSurfaceLease(*selected));
+                        assert(overlay.linkedStorage(*selected,0xc8)==&older);
+                        assert(!overlay.hasSurfaceLease(previous));
                         TglOwnedVeboxCommandTransactionResult result;result.status=31;result.nativeEntered=true;
                         return result;
                     };
