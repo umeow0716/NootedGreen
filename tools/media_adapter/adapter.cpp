@@ -2635,6 +2635,27 @@ using NativePhysicalFrameScope=typename NativePhysicalRegistry::Scope;
 using NativePhysicalCallbacks=TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,
     decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory)>;
 struct NativeFrontendRuntimeScope {
+    template<class Use> static TglOwnedVeboxCommandTransactionResult runUnselected(NativeBorrowedFrontend& frontend,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,Use use) noexcept {
+        return frontend.withCpuFrontend([&](NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view,
+            auto& source,auto& target,auto& parameters) noexcept {
+            TglOwnedVeboxCommandTransactionResult result;
+            const auto* input=source.storage();const auto* output=target.storage();
+            if(!cpu.readyForFrontend() || !input || !output || !roles.sourceMatches(sourceIndex,source,*input) ||
+                !roles.targetMatches(targetIndex,target,*output))return result;
+            // Do not enter graph.withOriginalOwners here: the transaction
+            // selects roots AND temporal owners together in one graph borrow.
+            const int status=cpu.withChildLifetimeScopes([&](void*,void*,auto& first,auto& second) noexcept -> int {
+                static_assert(noexcept(use(cpu,view,source,target,parameters,first,second)) &&
+                    std::is_same_v<decltype(use(cpu,view,source,target,parameters,first,second)),TglOwnedVeboxCommandTransactionResult>);
+                result=use(cpu,view,source,target,parameters,first,second);
+                cpu.backing().retention().observe(result);
+                return result.status;
+            });
+            if(!result.status && status)result.status=status;
+            return result;
+        });
+    }
     template<class Use> static TglOwnedVeboxCommandTransactionResult run(NativeBorrowedFrontend& frontend,
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,Use use) noexcept {
@@ -2671,6 +2692,26 @@ struct NativeFrontendRuntimeScope {
     }
 };
 struct NativeRetainedFrontendRuntime {
+    using UnselectedUse=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeRendererCpuAssembly&,
+        const TglNativeCreatedVeboxRendererView&,NativeSourceGraph&,
+        const TglOwnedType1BorrowedSurfaceLease<NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi>&,
+        NativeDenoiseParameters&,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept;
+    static TglOwnedVeboxCommandTransactionResult runUnselected(NativeContextRendererFrame& frame,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,void* scope,UnselectedUse use) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        if(!scope || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
+            frame.invalidated() || !frame.surfacesReady())return result;
+        const int status=frame.withRenderPass([&](NativeBorrowedFrontend& frontend) noexcept -> int {
+            result=NativeFrontendRuntimeScope::runUnselected(frontend,roles,sourceIndex,targetIndex,
+                [&](auto& cpu,const auto& view,auto& graph,const auto& target,auto& parameters,
+                    auto& first,auto& second) noexcept {
+                    return use(scope,cpu,view,graph,target,parameters,first,second);
+                });
+            return result.status;
+        });
+        if(status)result.status=status;
+        return result;
+    }
     using Use=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeRendererCpuAssembly&,
         const TglNativeCreatedVeboxRendererView&,
         NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
@@ -3107,7 +3148,7 @@ struct NativeRetainedTemporaryTransaction {
     using Target=TglOwnedType1BorrowedSurfaceLease<NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi>;
     Backend& backend;NativeRendererCpuAssembly& assembly;
     const TglNativeCreatedVeboxRendererView& pinned;NativeSourceGraph& graph;const Target& finalTarget;
-    NativeContextSurfaceOwner* secondary;NativeContextSurfaceOwner* previous;NativeDenoiseParameters& denoise;
+    const std::array<const TglOwnedSurfaceStorage*,2>& temporal;NativeDenoiseParameters& denoise;
     size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
     const TglOwnedVpEntrySet& catalogue;NativeModeRetirementAuthority& retirement;
     const TglNativeVphalMhwView& view;TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
@@ -3127,8 +3168,8 @@ struct NativeRetainedTemporaryTransaction {
             return graph.hasRetainedSurfaceAddress(address) || surface==finalTarget.storage();
         };
         return tglRunRetainedGraphPerPassTransaction(backend,graph,parameters,pass,originals,
-            assembly.backing().retention(),held,
-            [&](auto& params,auto& packet,auto& source,auto& target) noexcept {
+            temporal,assembly.backing().retention(),held,
+            [&](auto& params,auto& packet,auto& source,auto& target,auto* secondary,auto* previous) noexcept {
                 const auto* input=source.surfaceBinding();const auto* output=target.surfaceBinding();
                 if(!input || !output)return TglOwnedVeboxCommandTransactionResult{};
                 NativeHistorySavePreparation prepare{assembly,pinned,graph};

@@ -14422,7 +14422,8 @@ TglNativePerPassCommandResult tglRunNativePerPassCommandTransaction(Backend& bac
 template<class Backend,size_t P,size_t Q,class Graph,class Retention,class Lease,class Use>
 TglNativePerPassCommandResult tglRunRetainedGraphPerPassTransaction(Backend& backend,Graph& graph,
     std::array<uint8_t,P>& parameters,std::array<uint8_t,Q>& pass,
-    const std::array<TglOwnedSurfaceStorage*,25>& originals,Retention& retention,
+    const std::array<TglOwnedSurfaceStorage*,25>& originals,
+    const std::array<const TglOwnedSurfaceStorage*,2>& temporal,Retention& retention,
     Lease live,Use use) noexcept {
     TglNativePerPassCommandResult result;
     static_assert(noexcept(retention()) && noexcept(retention.observe(result.native)));
@@ -14433,15 +14434,27 @@ TglNativePerPassCommandResult tglRunRetainedGraphPerPassTransaction(Backend& bac
         std::memcpy(&source,pass.data()+0xc,4);std::memcpy(&target,pass.data()+0x30,4);
         if(source>=17 || target>=17 || !originals[source] || !originals[target] ||
             !live(source,originals[source]) || !live(target,originals[target]))return result;
-        const int status=graph.withSelectedOriginalOwners(*originals[source],*originals[target],
-            [&](auto& input,auto& output) noexcept -> int {
-                result=tglRunNativePerPassCommandTransaction(backend,parameters,pass,originals,input,output,live,use);
+        const int status=graph.withSelectedOriginalRoles(*originals[source],*originals[target],temporal,
+            [&](auto& input,auto& output,auto* secondary,auto* previous) noexcept -> int {
+                result=tglRunNativePerPassCommandTransaction(backend,parameters,pass,originals,input,output,live,
+                    [&](auto& params,auto& packet,auto& source,auto& target) noexcept {
+                        return use(params,packet,source,target,secondary,previous);
+                    });
                 retention.observe(result.native);
                 return result.native.status;
             });
         if(!result.native.status && status)result.native.status=status;
         return result;
     }
+}
+template<class Backend,size_t P,size_t Q,class Graph,class Retention,class Lease,class Use>
+TglNativePerPassCommandResult tglRunRetainedGraphPerPassTransaction(Backend& backend,Graph& graph,
+    std::array<uint8_t,P>& parameters,std::array<uint8_t,Q>& pass,
+    const std::array<TglOwnedSurfaceStorage*,25>& originals,Retention& retention,Lease live,Use use) noexcept {
+    return tglRunRetainedGraphPerPassTransaction(backend,graph,parameters,pass,originals,{},retention,live,
+        [&](auto& params,auto& packet,auto& source,auto& target,auto*,auto*) noexcept {
+            return use(params,packet,source,target);
+        });
 }
 
 // Whole native Render under the original surface and private child/image
@@ -19859,13 +19872,14 @@ public:
     }
     // Roles are supplied by the captured native selection, never inferred from
     // link offsets. Keep all selected original owners leased simultaneously.
-    template<class Use> int withOriginalOwners(
-        const std::array<const TglOwnedSurfaceStorage*,3>& selected,Use use) noexcept {
-        using Owners=std::array<Owner*,3>;
+    template<size_t Count,class Use> int withOriginalRoleOwners(
+        const std::array<const TglOwnedSurfaceStorage*,Count>& selected,Use use) noexcept {
+        static_assert(Count>0 && Count<=5,"bounded native selected+temporal role set");
+        using Owners=std::array<Owner*,Count>;
         static_assert(noexcept(use(std::declval<const Owners&>())) &&
             std::is_same_v<decltype(use(std::declval<const Owners&>())),int>);
         if(busy_ || !valid() || selected[0]!=slots_[0].lease->storage())return 5;
-        std::array<Lease*,3> leases{};Owners owners{};
+        std::array<Lease*,Count> leases{};Owners owners{};
         for(size_t role=0;role<selected.size();++role) {
             if(!selected[role])continue;
             for(size_t i=0;i<count_;++i)
@@ -19886,6 +19900,20 @@ public:
         };
         const int status=visit(visit,0);
         return valid()?status:5;
+    }
+    template<class Use> int withOriginalOwners(
+        const std::array<const TglOwnedSurfaceStorage*,3>& selected,Use use) noexcept {
+        return withOriginalRoleOwners(selected,use);
+    }
+    template<class Use> int withSelectedOriginalRoles(const TglOwnedSurfaceStorage& source,
+        const TglOwnedSurfaceStorage& target,const std::array<const TglOwnedSurfaceStorage*,2>& temporal,
+        Use use) noexcept {
+        const auto* root=storage();if(!root)return 5;
+        return withOriginalRoleOwners(std::array<const TglOwnedSurfaceStorage*,5>{root,&source,&target,temporal[0],temporal[1]},
+            [&](const auto& owners) noexcept -> int {
+                if(!owners[1] || !owners[2])return 5;
+                return use(*owners[1],*owners[2],owners[3],owners[4]);
+            });
     }
     // Per-pass roots are selected from the source array, not necessarily the
     // graph root and never inferred from the final output endpoint. Borrow

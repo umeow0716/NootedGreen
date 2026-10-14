@@ -18164,7 +18164,17 @@ int main() {
                         TglOwnedVeboxCommandTransactionResult result;result.status=31;result.nativeEntered=true;
                         return result;
                     };
-                    const auto result=tglRunRetainedGraphPerPassTransaction(backend,graph,params,packet,roots,retention,live,render);
+                    assert(graph.withSelectedOriginalRoles(older,previous,{&shell,nullptr},
+                        [](auto&,auto&,auto*,auto*) noexcept -> int {assert(false);return 0;})==5);
+                    const auto result=tglRunRetainedGraphPerPassTransaction(backend,graph,params,packet,roots,
+                        {&older,&previous},retention,live,[&](auto& params,auto& packet,auto& a,auto& b,
+                            auto* secondary,auto* prior) noexcept {
+                            assert(secondary==&oo && prior==&po);
+                            assert(graph.withSelectedOriginalOwners(root,root,[](auto&,auto&) noexcept -> int {
+                                assert(false);return 0;
+                            })==5);
+                            return render(params,packet,a,b);
+                        });
                     assert(result.entered && result.copiedBack && result.native.status==31 && retention());
                     assert(calls==1 && !backend.live);
                     const auto denied=tglRunRetainedGraphPerPassTransaction(backend,graph,params,packet,roots,retention,live,render);
