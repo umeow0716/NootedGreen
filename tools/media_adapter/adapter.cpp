@@ -2791,6 +2791,47 @@ struct NativeVeboxSendSubmissionStage {
 };
 template struct NativeVeboxSendSubmissionStage::ProducerRequest<NativeContextSurfaceOwner>;
 template struct NativeVeboxSendSubmissionStage::ProducerRequest<NativeTemporarySurfaceOwner>;
+template<class SurfaceOwner> class NativeVeboxSendBindingsFor {
+    bool attempted_=false,ready_=false;
+    NativeCoreFrameDataScopeFor<SurfaceOwner>* core_=nullptr;
+    TglVeboxHardwareBinding hardware_{};
+public:
+    TglNativeOsCommandSubmitBinding submit;
+    TglNativeVeboxSetupBinding setup;
+    TglNativeVeboxBuilderBinding builder;
+    TglNativeVeboxSendTailBinding tail;
+    NativeVeboxSendBindingsFor()=default;
+    NativeVeboxSendBindingsFor(const NativeVeboxSendBindingsFor&)=delete;
+    NativeVeboxSendBindingsFor& operator=(const NativeVeboxSendBindingsFor&)=delete;
+    bool resolve(NativeCoreFrameDataScopeFor<SurfaceOwner>& core,
+        const TglNativeVphalMhwView& view,const TglNativeCreatedVeboxRendererView& pinned) noexcept {
+        if(attempted_)return false;attempted_=true;
+        const NativeTglImageAdmission qualify{core.image};
+        uintptr_t childOs=0,childMhw=0;
+        if(!core.live() || !view.matchesCreated(pinned,&readMemory,NativeDataAdmission{},qualify) ||
+            !core.childOwner.matchesPrivateSend(&NativeVeboxSendSubmissionStage::send) ||
+            !core.capability()(core.child+0x10,&childOs,8) || childOs!=view.os ||
+            !core.capability()(core.child+0x60,&childMhw,8) || childMhw!=view.hardware.interface ||
+            !hardware_.resolve(childMhw,childOs,core.image,&readMemory,qualify) ||
+            hardware_.heap!=view.hardware.heap ||
+            !setup.resolve(core.image,&readMemory,qualify,&executableMemory) ||
+            !builder.resolve(core.image,&readMemory,qualify,&executableMemory) ||
+            !submit.resolve(childOs,core.image,&readMemory,qualify,&executableMemory) ||
+            !tail.capture(core.image,core.child,hardware_,&readMemory,qualify,&executableMemory) ||
+            !core.live() || !view.matchesCreated(pinned,&readMemory,NativeDataAdmission{},qualify))return false;
+        core_=&core;ready_=true;return true;
+    }
+    bool live() const noexcept {
+        if(!ready_ || !core_ || !core_->live() ||
+            !core_->childOwner.matchesPrivateSend(&NativeVeboxSendSubmissionStage::send))return false;
+        TglVeboxHardwareBinding current;
+        return tail.matchesChild(core_->child,&readMemory) &&
+            current.resolve(hardware_.interface,hardware_.os,core_->image,&readMemory,
+                NativeTglImageAdmission{core_->image}) && current.heap==hardware_.heap && core_->live();
+    }
+};
+template class NativeVeboxSendBindingsFor<NativeContextSurfaceOwner>;
+template class NativeVeboxSendBindingsFor<NativeTemporarySurfaceOwner>;
 template<class SurfaceOwner> struct NativeVeboxRenderSendRequestFor {
     using Stage=NativeVeboxSendSubmissionStage;
     using Scope=NativeVeboxSendRenderScopeFor<SurfaceOwner>;
