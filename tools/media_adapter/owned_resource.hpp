@@ -5398,6 +5398,10 @@ private:
             // frees CPU shells (12de6f etc). Retire bound resource tokens here,
             // while shell storage is still alive; the native base destructor
             // cannot dispatch the owned +60 hook to do that cleanup for us.
+            // Native126cf0 is void:126d13 reads child20->SKU DWORD,
+            //126d19..126d22 tests bit12,126d32 calls virtual60 only if set.
+            // Its return cannot implement bool cleanup admission, and a
+            // skipped virtual60 is not evidence that owned resources retired.
             // VP child80 has an additional ownership boundary: when SKU64
             // bit17 is set,12e097 calls12e190(&child80), which decrements
             // native allocation counter7f3218 BEFORE invoking vtable+8.
