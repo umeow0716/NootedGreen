@@ -820,7 +820,7 @@ struct NativeVpPreparedCallbacks {
     NativeVpScalarStateProducer& scalar;NativeVpNv12PacketScope& packet;
     NativeVpAvsProducer& avs;NativeVpIefCscProducer& filters;NativeVpCommandEmission& emission;
     TglOwnedVpSfcCallerStorage& vp;TglNativeVpLineResourceStorage& lines;const TglOwnedVpEntrySet& catalogue;
-    TglOwnedSfcCommandParameters& commands;const TglOwnedVpRegionInput& geometry;
+    TglOwnedSfcCommandParameters& commands;
     void* renderData;bool rgbAdaptive,eightTapChroma,compressionEnabled;
     TglOwnedSfcCompressionMode compressionMode;
     int error=0;
@@ -832,10 +832,6 @@ struct NativeVpPreparedCallbacks {
             &emission.scalar==&scalar && &avs.parameters==&commands &&
             &filters.parameters==&commands && emission.avs==&avs && scalar.vp==vp.bytes.data() &&
             &emission.catalogue==&catalogue && &packet.targetOwner==&emission.targetOwner;
-    }
-    int state(void* actual,const TglOwnedVpFramePreparation& frame,
-        NativeVpNv12PacketScope::StateOwner& owner,void* data,void* source,void* target) noexcept {
-        return state(actual,frame,geometry,owner,data,source,target);
     }
     int state(void* actual,const TglOwnedVpFramePreparation& frame,const TglOwnedVpRegionInput& capturedGeometry,
         NativeVpNv12PacketScope::StateOwner& owner,void* data,void* source,void* target) noexcept {
@@ -872,7 +868,7 @@ struct NativeVpPreparedCallbacks {
     using AssemblyUse=int(*)(void*,void*,const TglOwnedVpEntrySet&) noexcept;
     bool assemblyAttempted=false;
     int withAssembly(NativeVpGraph& graph,const TglOwnedVpFramePreparation& frame,
-        uintptr_t sourceA8,void* scope,AssemblyUse use) noexcept {
+        const TglOwnedVpRegionInput& capturedGeometry,uintptr_t sourceA8,void* scope,AssemblyUse use) noexcept {
         if(error)return error;
         if(assemblyAttempted || !sameOwners() || !scope || !use || !renderData ||
             scalar.attempted || packet.attempted || avs.attempted || filters.attempted || emission.attempted)
@@ -886,7 +882,7 @@ struct NativeVpPreparedCallbacks {
             const_cast<TglOwnedSurfaceStorage*>(&scalar.source),renderData,
             [&](void* child,const TglOwnedVpFramePreparation& captured,auto& owner,
                 void* data,void* source,void* target) noexcept -> int {
-                return state(child,captured,owner,data,source,target);
+                return state(child,captured,capturedGeometry,owner,data,source,target);
             },
             [&](void* child,const TglOwnedVpFramePreparation& captured,auto& owner) noexcept -> int {
                 return prepareAvs(child,captured,owner);
@@ -918,7 +914,6 @@ public:
         const TglSfcMhwBinding& binding;const TglNativeSfcOutputUsageBinding& usage;
         const TglOwnedVpEntrySet& catalogue;
         TglOwnedVpSfcCallerStorage& vp;TglNativeVpLineResourceStorage& lines;
-        const TglOwnedVpRegionInput& geometry;
         void* parent;void* renderData;uintptr_t performance;
         bool rgbAdaptive,eightTapChroma,compressionEnabled;
         TglOwnedSfcCompressionMode compressionMode;
@@ -940,7 +935,7 @@ public:
          emission_{scalar_,in.childOwner,scalar_.dataRead,in.targetOwner,in.binding,in.usage,
              in.catalogue,in.parent,nullptr,&avs_},
          callbacks_{scalar_,packet_,avs_,filters_,emission_,in.vp,in.lines,in.catalogue,
-             in.commands,in.geometry,in.renderData,in.rgbAdaptive,in.eightTapChroma,
+             in.commands,in.renderData,in.rgbAdaptive,in.eightTapChroma,
              in.compressionEnabled,in.compressionMode} {}
     NativeVpProducerFrame(const NativeVpProducerFrame&)=delete;
     NativeVpProducerFrame& operator=(const NativeVpProducerFrame&)=delete;
