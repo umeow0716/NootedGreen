@@ -71,20 +71,54 @@ using NativeCodecOwner=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependenc
     NativeTglImageAdmission,decltype(&executableMemory)>;
 struct NativeCodecBackend {
     using Registry=TglOwnedContextOwnerRegistry<NativeCodecOwner,64>;
+    using Batch=TglNativeCreatedContextBatch<16>;
+    struct Creation {
+        uintptr_t image=0,physical=0;uint64_t generation=0;
+        Batch batch{};
+        std::array<NativeCodecOwner*,16> candidates{};
+        bool used=false,adopted=false;
+    };
+    struct Ledger {
+        std::atomic_flag gate=ATOMIC_FLAG_INIT;
+        std::array<Creation,64> records{};
+    };
+    static Ledger& ledger() noexcept {static Ledger value;return value;}
     static Registry& owners() noexcept {
         // Registry destruction does not delete unresolved native owners. Keep
         // its pin counters alive as long as process-owned frames can exist.
         static Registry registry;
         return registry;
     }
-    template<size_t N,class Scope>
-    static int adopt(Scope& scope,uintptr_t physical,const TglNativeCreatedContextBatch<N>& batch,
-        std::array<NativeCodecOwner*,N>& persistentCandidates) noexcept {
-        // Caller must retain this ledger on partial failure. No Entry captures,
-        // native context deletion or synthetic successful-removal proof here.
-        return tglAdoptNativeCodecContextBatch(scope,physical,batch,owners(),persistentCandidates,
+    template<class Scope>
+    static int adopt(Scope& scope,uintptr_t physical,const Batch& batch) noexcept {
+        if(!batch.valid || batch.count>16 || !scope.matches(scope.image(),physical,scope.generation()))return 5;
+        auto& storage=ledger();
+        if(storage.gate.test_and_set(std::memory_order_acquire))return 5;
+        struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{storage.gate};
+        Creation* selected=nullptr;
+        for(auto& record:storage.records) {
+            // No retry may overwrite partially adopted native state. Native
+            // physical mutation failure is quarantined by the caller's gate.
+            if(record.used && record.image==scope.image() && record.physical==physical &&
+                record.generation==scope.generation()) {
+                if(!record.adopted)return 5;
+                // Successful prior batches may coexist, but never alias an
+                // existing context or erase that batch's deletion obligations.
+                for(size_t i=0;i<batch.count;++i)if(batch.contexts[i])
+                    for(size_t j=0;j<record.batch.count;++j)
+                        if(batch.contexts[i]==record.batch.contexts[j])return 5;
+            }
+            if(!record.used && !selected)selected=&record;
+        }
+        if(!selected)return 5;
+        selected->used=true;selected->image=scope.image();selected->physical=physical;
+        selected->generation=scope.generation();selected->batch=batch;
+        // Store candidates BEFORE leaving this callback, including any partial
+        // failure. No Entry/stack ledger lifetime and no synthetic deletion.
+        const int result=tglAdoptNativeCodecContextBatch(scope,physical,batch,owners(),selected->candidates,
             &readMemory,NativeDataPointerWriter{},NativeDataAdmission{},
             NativeTglImageAdmission{scope.image()},&executableMemory);
+        selected->adopted=result==0;return result;
     }
 };
 struct Entry {
