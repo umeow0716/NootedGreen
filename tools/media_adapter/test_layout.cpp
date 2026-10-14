@@ -17488,10 +17488,14 @@ int main() {
                         auto creatorHandoff=[&](void* object) noexcept -> int {
                             ++creatorHandoffs;
                             assert(physicalOwners.withDependencyAdoption(ticket,image,0x90000,[&](auto& physicalScope) noexcept -> int {
-                                return TglOwnedCreatorConstructionLease::withCreatorHandoff(physicalScope,image,0x90000,
+                                return physicalScope.withMutationAuthority([&](auto& authority) noexcept -> int {
+                                static_assert(!std::is_copy_constructible_v<std::decay_t<decltype(authority)>>);
+                                assert(authority.matches(image,0x90000,ticket.generation) && !authority.matches(image,0x90000,ticket.generation+1));
+                                return TglOwnedCreatorConstructionLease::withCreatorHandoff(authority,image,0x90000,
                                     ticket.generation,reinterpret_cast<uintptr_t>(object),[&](auto&& lease) noexcept -> int {
                                         assert(lease.get());constructionLease=std::move(lease);assert(!lease.get() && constructionLease.get());return 0;
                                     });
+                                });
                             })==0);
                             assert(!constructionLease.get());constructionLease={}; // Escaped temporary capability is invalid, never a permanent parent.
                             auto reservation=OwnerRouter::pinForInitialization(reinterpret_cast<uintptr_t>(object));

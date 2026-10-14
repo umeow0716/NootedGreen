@@ -21670,6 +21670,28 @@ public:
 // Globally unique physical epochs: independent Frame template types must not
 // produce interchangeable metadata identities now that their lease type joins.
 inline std::atomic<uint64_t> tglOwnedPhysicalNextGeneration{0};
+// Frame-independent borrowed view of an ACTUAL empty-frame mutation scope.
+// No public/default constructor, pin copy or completion authority; only the
+// registry's DependencyAdoptionScope may issue it for one synchronous Use.
+class TglOwnedPhysicalMutationAuthority {
+    template<class,size_t> friend class TglOwnedVeboxPhysicalFrameRegistry;
+    void* scope_;uintptr_t image_,physical_;uint64_t generation_;
+    bool(*matches_)(void*,uintptr_t,uintptr_t,uint64_t) noexcept;
+    TglOwnedPhysicalDependencyLease(*retain_)(void*) noexcept;
+    TglOwnedPhysicalMutationAuthority(void* scope,uintptr_t image,uintptr_t physical,uint64_t generation,
+        decltype(matches_) matches,decltype(retain_) retain) noexcept
+        :scope_(scope),image_(image),physical_(physical),generation_(generation),matches_(matches),retain_(retain) {}
+public:
+    TglOwnedPhysicalMutationAuthority(const TglOwnedPhysicalMutationAuthority&)=delete;
+    TglOwnedPhysicalMutationAuthority& operator=(const TglOwnedPhysicalMutationAuthority&)=delete;
+    uintptr_t image() const noexcept {return image_;}
+    uintptr_t physical() const noexcept {return physical_;}
+    uint64_t generation() const noexcept {return generation_;}
+    bool matches(uintptr_t image,uintptr_t physical,uint64_t generation) const noexcept {
+        return matches_(scope_,image,physical,generation);
+    }
+    TglOwnedPhysicalDependencyLease retainPhysicalDependency() noexcept {return retain_(scope_);}
+};
 
 // Owned registry records, not a retain of native physical memory. Reserve
 // BEFORE native135d9, publish only its successful original output, and route
@@ -21725,6 +21747,16 @@ public:
         DependencyLease retainPhysicalDependency() noexcept {
             if(!matches(image(),physical(),generation()))return {};
             return retainDependency(entry_);
+        }
+        template<class Use> int withMutationAuthority(Use use) noexcept {
+            static_assert(noexcept(use(std::declval<TglOwnedPhysicalMutationAuthority&>())) &&
+                std::is_same_v<decltype(use(std::declval<TglOwnedPhysicalMutationAuthority&>())),int>);
+            if(!matches(image(),physical(),generation()))return 5;
+            TglOwnedPhysicalMutationAuthority authority(this,image(),physical(),generation(),
+                [](void* p,uintptr_t i,uintptr_t ph,uint64_t g) noexcept {
+                    return static_cast<DependencyAdoptionScope*>(p)->matches(i,ph,g);
+                },[](void* p) noexcept {return static_cast<DependencyAdoptionScope*>(p)->retainPhysicalDependency();});
+            return use(authority);
         }
     };
     class Scope {

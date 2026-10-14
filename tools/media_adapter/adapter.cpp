@@ -48,6 +48,7 @@ bool retainOwnedHookImage() {
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept;
 bool executableMemory(uintptr_t address,size_t length) noexcept;
 bool writableDataMemory(uintptr_t address,size_t length) noexcept;
+bool ownedExecutableMemory(uintptr_t address,size_t length) noexcept;
 struct NativeDataPointerWriter {
     bool operator()(uintptr_t address,uintptr_t value) const noexcept {
         // Caller holds exact owner/physical exclusive admission. A failed write
@@ -279,6 +280,56 @@ struct Entry {
     std::array<uintptr_t, 17> callbacks{};
     void *native = nullptr;
 };
+struct NativeCreatorPreparation {
+    struct Record {
+        uintptr_t image=0,physical=0,creator=0,renderer=0;uint64_t generation=0;
+        NativeRendererCpuAssembly* storage=nullptr;NativeVphalOwner* owner=nullptr;
+        bool used=false,adopted=false,lifetimePublished=false;
+    };
+    struct Ledger {std::atomic_flag gate=ATOMIC_FLAG_INIT;std::array<Record,64> records{};};
+    static Ledger& ledger() noexcept {static Ledger value;return value;}
+    // Component status only. Caller MUST initialize/publish complete owned
+    // children before returning success from the full native creator handoff.
+    template<class PhysicalScope>
+    static int prepareOwner(PhysicalScope& physical,const Entry& factory,uintptr_t image,
+        uintptr_t address,uint64_t generation,uintptr_t creator) noexcept {
+        return TglOwnedCreatorConstructionLease::withCreatorHandoff(physical,image,address,generation,creator,
+            [&](TglOwnedCreatorConstructionLease&& pin) noexcept -> int {
+                auto& storage=ledger();
+                if(storage.gate.test_and_set(std::memory_order_acquire))return 5;
+                struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{storage.gate};
+                Record* record=nullptr;
+                for(auto& candidate:storage.records) {
+                    if(candidate.used && candidate.creator==creator)return 5;
+                    if(!candidate.used && !record)record=&candidate;
+                }
+                if(!record)return 5;
+                record->used=true;record->image=image;record->physical=address;
+                record->generation=generation;record->creator=creator;
+                Entry::ConstructionParent parent;TglNativeVphalResourceEnvironment environment;
+                if(!factory.constructionResourceEnvironment(std::move(pin),creator,parent,environment) || !parent.view())return 5;
+                record->renderer=parent.view()->renderer.renderer;
+                try {record->storage=new(std::nothrow) NativeRendererCpuAssembly(image,environment);}
+                catch(...) {return 7;}
+                if(!record->storage)return 7;
+                auto dependency=physical.retainPhysicalDependency();
+                record->owner=NativeVphalOwner::create(image,address,generation,creator,record->renderer,
+                    dependency,record->storage,&readMemory,NativeDataPointerWriter{},NativeDataAdmission{},
+                    NativeRendererChildAdmission{},NativeVphalDestructorInvoker{});
+                if(!record->owner)return 5; // Persistent ledger owns failed candidate, never stack cleanup.
+                if(!NativeVphalRouter::adopt(image,address,generation,record->owner))return 5;
+                record->adopted=true; // Router now owns owner; record pointer is identity only.
+                return tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
+                    auto lease=NativeVphalRouter::pinForInitialization(creator);
+                    if(lease.get()!=record->owner || !lease.exclusive())return 5;
+                    if(!record->owner->publishLifetime(NativeVphalRouter::Callbacks::destroyEntry(),
+                        NativeVphalRouter::Callbacks::deletingDestroyEntry(),&readMemory,
+                        NativeTglImageAdmission{image},&executableMemory,&ownedExecutableMemory,NativeDataAdmission{}))return 5;
+                    record->lifetimePublished=true;return 0;
+                });
+            });
+    }
+};
 std::map<void *, std::unique_ptr<Entry>> registry;
 std::atomic<uintptr_t> nativeCreateContexts{0};
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept {
@@ -310,6 +361,12 @@ bool executableMemory(uintptr_t address,size_t length) noexcept {
 }
 bool writableDataMemory(uintptr_t address,size_t length) noexcept {
     return leafMemoryPermissions(address,length,VM_PROT_READ|VM_PROT_WRITE,VM_PROT_EXECUTE);
+}
+bool ownedExecutableMemory(uintptr_t address,size_t length) noexcept {
+    Dl_info candidate{},owned{};
+    return ownedImageHandle && dladdr(reinterpret_cast<void*>(address),&candidate) && candidate.dli_fbase &&
+        dladdr(reinterpret_cast<void*>(&NGRN_ObservedCreateContexts),&owned) &&
+        candidate.dli_fbase==owned.dli_fbase && executableMemory(address,length);
 }
 uintptr_t qualifiedIoAcceleratorFramework(uintptr_t address) noexcept {
     Dl_info info{};
@@ -378,6 +435,8 @@ template class TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhys
     decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,NativeRendererChildAdmission,
     NativeVphalDestructorInvoker>;
 template class TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
+template int NativeCreatorPreparation::prepareOwner<TglOwnedPhysicalMutationAuthority>(
+    TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 
 extern "C" __attribute__((visibility("default")))
 int NGRN_ObservedCreateContexts(void *context, const void *input) {
@@ -461,7 +520,9 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
     *metadata = {};
     void *table = nullptr;
     try {
-        if(!retainOwnedHookImage())return 10; // Before native factory side effects.
+        if(!retainOwnedHookImage() ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(&NGRN_ObservedCreateContexts),1))return 10;
+        // Owned callbacks are pinned RX/no-W code before native factory effects.
         std::call_once(loadOnce, load);
         if (!library.create || !library.destroy || !library.resourceShared) return 10;
         AvdMetadata native{};
