@@ -2635,21 +2635,29 @@ struct NativeVeboxSendSubmissionStage {
     using Admit=bool(*)(const NativeBorrowedFrontend&,uintptr_t,uintptr_t,uintptr_t) noexcept;
     using AdmitChild=bool(*)(uintptr_t,uintptr_t,uintptr_t) noexcept;
     struct SendDomain;
+    struct SendContext;
+    using BuildCommand=int(*)(void*,SendContext&,void*) noexcept;
     struct SendContext {
         NativeContextRendererFrame& frame;TglOwnedVeboxProducerPass& pass;
         TglNativeVeboxSendTailBinding& tail;const TglNativeOsCommandSubmitBinding& binding;
         TglOwnedVeboxBuilderScratch& scratch;TglOwnedVeboxCommandTransactionResult& command;
         TglOwnedVeboxFrameRetention& retention;uintptr_t image;
         Admit admit;AdmitChild admitChild;bool entered=false;int result=5;
+        void* buildContext=nullptr;BuildCommand build=nullptr;bool buildAttempted=false;
     };
     using SendScope=TglOwnedScopedContext<SendContext,SendDomain>;
     template<class SourceOwner,class ChildOwner,class ExecutionOwner,class PacketContext>
-    static int buildThenSend(SendContext& context,SourceOwner& sourceOwner,ChildOwner& childOwner,
+    static int buildCommand(SendContext& context,SourceOwner& sourceOwner,ChildOwner& childOwner,
         ExecutionOwner& executionOwner,void* child,uintptr_t execution,
         const TglOwnedSurfaceStorage& source,PacketContext& packets,
         const TglNativeVeboxSetupBinding& setup,const TglNativeVeboxBuilderBinding& builder,
         uintptr_t os) noexcept {
-        if(context.entered || !context.pass.acceptsProducer() ||
+        if(context.buildAttempted) {
+            if(!context.command.status)context.command.status=5;
+            (void)context.pass.record(5);context.retention.observe(context.command);return 5;
+        }
+        context.buildAttempted=true;
+        if(!context.entered || !context.pass.acceptsProducer() ||
             !context.tail.matchesChild(reinterpret_cast<uintptr_t>(child),&readMemory))return 5;
         context.command=tglWithCapturedOwnedNativeVeboxCommandTransaction(
             sourceOwner,childOwner,executionOwner,child,execution,source,packets,setup,builder,
@@ -2659,7 +2667,7 @@ struct NativeVeboxSendSubmissionStage {
             (void)context.pass.record(context.command.status);
             return context.command.status;
         }
-        return send(child);
+        return 0;
     }
     static int send(void* child) noexcept {
         auto* context=SendScope::get(child);
@@ -2671,6 +2679,18 @@ struct NativeVeboxSendSubmissionStage {
             return 5;
         }
         context->entered=true;
+        if(!context->buildContext || !context->build ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(context->build),1)) {
+            context->result=5;(void)context->pass.record(5);return 5;
+        }
+        context->result=context->build(context->buildContext,*context,child);
+        if(!context->buildAttempted && !context->result)context->result=5;
+        if(context->result || context->command.status) {
+            if(!context->result)context->result=context->command.status;
+            (void)context->pass.record(context->result);
+            context->retention.observe(context->command);
+            return context->result;
+        }
         context->result=runTail(context->frame,context->pass,context->tail,context->binding,
             context->scratch,context->command,context->retention,context->image,
             context->admit,context->admitChild);
@@ -2678,7 +2698,9 @@ struct NativeVeboxSendSubmissionStage {
     }
     using NativeCall=int(*)(void*) noexcept;
     static int withSendScope(void* child,SendContext& context,void* argument,NativeCall call) noexcept {
-        if(!child || !argument || !call || context.entered || context.frame.invalidated() ||
+        if(!child || !argument || !call || !context.buildContext || !context.build ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(context.build),1) ||
+            context.entered || context.frame.invalidated() ||
             !context.frame.surfacesReady() ||
             !context.tail.matchesChild(reinterpret_cast<uintptr_t>(child),&readMemory) ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(call),1))return 5;
