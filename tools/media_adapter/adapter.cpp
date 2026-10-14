@@ -165,14 +165,15 @@ class NativeRendererCpuAssembly {
     // Value-owned authority outlives contexts, which outlive CPU/child teardown.
     // The opaque key is THIS assembly, never a borrowed scope pointee. Actual
     // authority is resolved only inside the creator's synchronous TLS scope.
+    const uintptr_t image_;
     NativeRendererRetirementAuthority authority_;
     NativeRendererCleanupContext firstCleanup_,secondCleanup_;
     NativeRendererCpu cpu_;
-    bool cleanupBound_=false;
+    bool cleanupBound_=false,basesAttempted_=false;
 public:
     NativeRendererCpuAssembly(uintptr_t image,
         const TglNativeVphalResourceEnvironment& environment)
-        :authority_{this,&scopedRetirement},firstCleanup_(authority_),secondCleanup_(authority_),
+        :image_(image),authority_{this,&scopedRetirement},firstCleanup_(authority_),secondCleanup_(authority_),
          cpu_(image,&readMemory,NativeTglImageAdmission{image},&executableMemory,
             environment.resources,environment.pageSize,environment.fill,
             std::array<TglNativeTrackedCpuInvoker,2>{},
@@ -184,6 +185,23 @@ public:
     auto& cpu() noexcept {return cpu_;}
     auto& backing() noexcept {return cpu_.backing();}
     auto& children() noexcept {return cpu_.children();}
+    int initializeNativeBases(const TglNativeVphalMhwView& view,const TglOwnedVphalLifetimeTable& lifetime) noexcept {
+        if(basesAttempted_ || view.renderer.image!=image_ || lifetime.object()!=view.parent ||
+            lifetime.publication()!=TglOwnedVphalLifetimeTable::Publication::Published)return 5;
+        basesAttempted_=true;
+        try {
+            TglVeboxLifetimeBinding base;TglSfcLifetimeBinding sfc;
+            const NativeTglImageAdmission qualify{image_};
+            if(!base.resolve(image_,&readMemory,qualify,&executableMemory) ||
+                !sfc.resolve(image_,&readMemory,qualify,&executableMemory))return 5;
+            const int initialized=tglInitializeRendererChildrenFromCreator(cpu_,view,base,sfc,
+                &readMemory,qualify,&executableMemory);
+            if(initialized)return initialized;
+            const int shells=cpu_.allocateCpuShellsFromCreator(view,&readMemory,qualify,&executableMemory);
+            if(shells)return shells;
+            return cpu_.allocateHelpersFromCreator(view,&readMemory,qualify,&executableMemory);
+        } catch(...) {return 7;}
+    }
     bool bindCleanupContexts() noexcept {
         if(cleanupBound_)return false;
         auto& first=children().first().owner();auto& second=children().second().owner();
@@ -284,7 +302,7 @@ struct NativeCreatorPreparation {
     struct Record {
         uintptr_t image=0,physical=0,creator=0,renderer=0;uint64_t generation=0;
         NativeRendererCpuAssembly* storage=nullptr;NativeVphalOwner* owner=nullptr;
-        bool used=false,adopted=false,lifetimePublished=false;
+        bool used=false,adopted=false,lifetimePublished=false,basesReady=false;
     };
     struct Ledger {std::atomic_flag gate=ATOMIC_FLAG_INIT;std::array<Record,64> records{};};
     static Ledger& ledger() noexcept {static Ledger value;return value;}
@@ -328,6 +346,33 @@ struct NativeCreatorPreparation {
                     record->lifetimePublished=true;return 0;
                 });
             });
+    }
+    template<class PhysicalScope>
+    static int initializeBases(PhysicalScope& physical,uintptr_t image,uintptr_t address,
+        uint64_t generation,uintptr_t creator) noexcept {
+        auto* handoff=TglOwnedScopedContext<TglOwnedCreatorHandoffContext,TglOwnedCreatorHandoffDomain>::get(reinterpret_cast<void*>(creator));
+        if(!handoff || handoff->image!=image || !physical.matches(image,address,generation))return 5;
+        auto& state=ledger();if(state.gate.test_and_set(std::memory_order_acquire))return 5;
+        struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
+        Record* record=nullptr;
+        for(auto& candidate:state.records)if(candidate.used && candidate.image==image && candidate.physical==address &&
+            candidate.generation==generation && candidate.creator==creator)record=&candidate;
+        if(!record || !record->adopted || !record->lifetimePublished || record->basesReady)return 5;
+        return tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
+            auto lease=NativeVphalRouter::pinForInitialization(creator);
+            if(lease.get()!=record->owner || !lease.exclusive())return 5;
+            return record->owner->withCreatorStorage(lease,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,
+                [&](NativeRendererCpuAssembly& assembly,const TglNativeCreatedVeboxRendererView&) noexcept -> int {
+                    TglNativeBorrowedVphalMhwLease<decltype(lease)> parent;
+                    if(!parent.acquireOwned(std::move(lease),image,creator,creator,record->owner->lifetime(),
+                        &readMemory,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,
+                        [](const NativeVphalOwner& owner,const TglNativeVphalMhwView& view) noexcept {
+                            return owner.context()==view.parent && owner.lifetime().object()==view.parent;
+                        }) || !parent.view())return 5;
+                    const int status=assembly.initializeNativeBases(*parent.view(),record->owner->lifetime());
+                    record->basesReady=status==0;return status;
+                });
+        });
     }
 };
 std::map<void *, std::unique_ptr<Entry>> registry;
@@ -437,6 +482,8 @@ template class TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhys
 template class TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
 template int NativeCreatorPreparation::prepareOwner<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
+template int NativeCreatorPreparation::initializeBases<TglOwnedPhysicalMutationAuthority>(
+    TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 
 extern "C" __attribute__((visibility("default")))
 int NGRN_ObservedCreateContexts(void *context, const void *input) {
