@@ -447,6 +447,28 @@ struct NativeVpIefCscProducer {
     NativeContextSurfaceOwner& sourceOwner;
     TglOwnedSfcCommandParameters& parameters;TglOwnedVpCscCache& cache;
     bool attempted=false;
+    bool prepared=false,cscPrepared=false,sendAttempted=false;
+    std::array<uint8_t,64> preparedIef{};
+    int prepare(void* actual,const TglOwnedVpFramePreparation& frame,
+        NativeVpNv12PacketScope& packet,uint8_t* liveState) noexcept;
+    template<class Use> int withPreparedInputs(void* actual,Use use) noexcept {
+        static_assert(noexcept(use(static_cast<const TglOwnedSfcCommandParameters&>(parameters))) &&
+            std::is_same_v<decltype(use(static_cast<const TglOwnedSfcCommandParameters&>(parameters))),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        const auto* packet=NativeVpPacketPublication::get(actual);
+        if(!prepared || sendAttempted || !scalar.state() || actual!=scalar.vp ||
+            !packet || packet->scalar!=&scalar || packet->parameters!=&parameters ||
+            parameters.filtersInUse || parameters.ief!=preparedIef ||
+            !sourceOwner.hasSurfaceLease(scalar.source))return 5;
+        sendAttempted=true;parameters.filtersInUse=true;
+        auto consume=[&]() noexcept -> int {
+            if(!scalar.state())return 5;
+            const int result=use(static_cast<const TglOwnedSfcCommandParameters&>(parameters));
+            return result?result:(scalar.state()?0:5);
+        };
+        const int result=cscPrepared?cache.withParameters(parameters.ief,parameters.state,consume):consume();
+        parameters.filtersInUse=false;return result;
+    }
     template<class Use> int run(void* actual,const TglOwnedVpFramePreparation& frame,Use use) noexcept {
         static_assert(noexcept(use(static_cast<const TglOwnedSfcCommandParameters&>(parameters))) &&
             std::is_same_v<decltype(use(static_cast<const TglOwnedSfcCommandParameters&>(parameters))),int>);
@@ -494,6 +516,8 @@ struct NativeVpIefCscProducer {
 };
 template int NativeVpIefCscProducer::run<int(*)(const TglOwnedSfcCommandParameters&) noexcept>(
     void*,const TglOwnedVpFramePreparation&,int(*)(const TglOwnedSfcCommandParameters&) noexcept) noexcept;
+template int NativeVpIefCscProducer::withPreparedInputs<int(*)(const TglOwnedSfcCommandParameters&) noexcept>(
+    void*,int(*)(const TglOwnedSfcCommandParameters&) noexcept) noexcept;
 struct NativeNv12OutputQuery {
     struct State {bool attempted=false;TglOwnedNv12LayoutRead result{};};
     NativeContextSurfaceOwner& owner;const TglOwnedSurfaceStorage& expected;State& state;
@@ -585,6 +609,9 @@ public:
             static_cast<const StateOwner&>(*preparedState_).data()==preparedData_ &&
             preparedLines_->lines().boundToVp(*preparedVp_) && !commands.filtersInUse;
     }
+    bool matchesPreparedState(const uint8_t* state) const noexcept {
+        return state && preparedCommands_ && state==preparedData_ && readyForSetup(scalar,*preparedCommands_);
+    }
     // Setup materializes owned packet/resources only. No borrowed coefficient
     // pointers or scope addresses survive this call; graph/frame ownership
     // retains the allocations until send or qualified retirement.
@@ -647,6 +674,27 @@ int NativeVpAvsProducer::prepare(void* actual,const TglOwnedVpFramePreparation& 
     });
     if(!packet.readyForSetup(scalar,parameters)) {ready=false;return result?result:5;}
     return result;
+}
+int NativeVpIefCscProducer::prepare(void* actual,const TglOwnedVpFramePreparation& frame,
+    NativeVpNv12PacketScope& packet,uint8_t* liveState) noexcept {
+    if(!packet.readyForSetup(scalar,parameters) || !packet.matchesPreparedState(liveState) ||
+        actual!=scalar.vp)return 5;
+    NativeVpPacketContext context{&scalar,&parameters};
+    NativeVpPacketPublication publication(actual,context);
+    if(!publication.bound())return 5;
+    const int result=run(actual,frame,[&](const TglOwnedSfcCommandParameters&) noexcept -> int {
+        return scalar.state()?0:5;
+    });
+    // run has closed the temporary CSC borrow: only owned IEF bytes and the
+    // persistent coefficient cache may survive setup. Never copy its pointers.
+    if(result || !packet.matchesPreparedState(liveState))return result?result:5;
+    for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
+        uintptr_t pointer=0;std::memcpy(&pointer,parameters.ief.data()+offset,8);
+        if(pointer)return 5;
+    }
+    liveState[0x67]=parameters.state[0x67];liveState[0x68]=parameters.state[0x68];
+    preparedIef=parameters.ief;cscPrepared=bool(frame.at920);prepared=true;
+    return 0;
 }
 template int NativeVpNv12PacketScope::run<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
     TglOwnedVpSfcCallerStorage&,TglOwnedSfcStateParameters<NativeVpNv12PacketScope::CpuBackend>&,
