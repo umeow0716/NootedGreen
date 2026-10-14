@@ -198,6 +198,16 @@ int main() {
             {reinterpret_cast<uintptr_t>(nativeTable),reinterpret_cast<uintptr_t>(ownedTable),0});
         if(overlap.isArmed())return 1;
     }
+    for(unsigned test=0;test!=4;++test) {
+        // Reject out-of-range role, absent role site, role/observation overlap,
+        // and an unaccounted third breakpoint before touching debug state.
+        const std::array<uintptr_t,4> sites={reinterpret_cast<uintptr_t>(owned_debug_copy_site),
+            test==1?0:reinterpret_cast<uintptr_t>(owned_debug_creator_site),
+            test==3?reinterpret_cast<uintptr_t>(owned_debug_data_site):0,0};
+        NativeReturnObserver refused(sites,0,0,0,0,0x2000,0x1000,{1,2,4},test==2?2:0,
+            {reinterpret_cast<uintptr_t>(nativeTable),reinterpret_cast<uintptr_t>(ownedTable),test==0?4u:1u});
+        if(refused.isArmed())return 1;
+    }
     alarm(0);
     int handlerRestored = sigaction(SIGTRAP, &previous, nullptr);
     x86_debug_state64_t finalState{};
