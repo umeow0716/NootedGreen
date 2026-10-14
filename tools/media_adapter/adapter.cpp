@@ -2112,6 +2112,11 @@ struct NativeFrontendRuntimeScope {
                     TglOwnedVeboxCommandTransactionResult result;
                     const int status=cpu.withChildLifetimeScopes([&](void*,void*,auto& firstLife,auto& secondLife) noexcept -> int {
                         if constexpr(std::is_nothrow_invocable_r_v<TglOwnedVeboxCommandTransactionResult,Use&,
+                            NativeRendererCpuAssembly&,const TglNativeCreatedVeboxRendererView&,decltype(source),
+                            decltype(input),decltype(output),decltype(secondary),decltype(previous),
+                            decltype(parameters),decltype(firstLife),decltype(secondLife)>)
+                            result=use(cpu,view,source,input,output,secondary,previous,parameters,firstLife,secondLife);
+                        else if constexpr(std::is_nothrow_invocable_r_v<TglOwnedVeboxCommandTransactionResult,Use&,
                             NativeRendererCpuAssembly&,const TglNativeCreatedVeboxRendererView&,decltype(input),decltype(output),
                             decltype(secondary),decltype(previous),decltype(parameters),decltype(firstLife),decltype(secondLife)>)
                             result=use(cpu,view,input,output,secondary,previous,parameters,firstLife,secondLife);
@@ -2135,11 +2140,20 @@ struct NativeRetainedFrontendRuntime {
         const TglNativeCreatedVeboxRendererView&,
         NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
         NativeDenoiseParameters&,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept;
+    using UseGraph=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeRendererCpuAssembly&,
+        const TglNativeCreatedVeboxRendererView&,NativeSourceGraph&,
+        NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
+        NativeDenoiseParameters&,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept;
+    static TglOwnedVeboxCommandTransactionResult runWithGraph(NativeContextRendererFrame& frame,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* scope,UseGraph use) noexcept {
+        return run(frame,roles,sourceIndex,targetIndex,temporal,scope,use);
+    }
     static TglOwnedVeboxCommandTransactionResult runPrepared(NativeContextRendererFrame& frame,
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,NativeModeFrameExecution::Inputs& inputs) noexcept {
         return run(frame,roles,sourceIndex,targetIndex,temporal,&inputs,
-            [](void* context,NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& pinned,
+            +[](void* context,NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& pinned,
                 NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
                 NativeContextSurfaceOwner* secondary,NativeContextSurfaceOwner* previous,
                 NativeDenoiseParameters& parameters,NativeRendererChildLifetime& first,
@@ -2164,20 +2178,27 @@ struct NativeRetainedFrontendRuntime {
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,NativeCompleteFrameConsumer& consumer) noexcept {
         return run(frame,roles,sourceIndex,targetIndex,temporal,&consumer,&NativeCompleteFrameConsumer::consume);
     }
+    template<class Consumer>
     static TglOwnedVeboxCommandTransactionResult run(NativeContextRendererFrame& frame,
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
-        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* scope,Use use) noexcept {
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* scope,Consumer use) noexcept {
+        static_assert(std::is_pointer_v<Consumer>,"owned executable callback must be a function pointer");
         TglOwnedVeboxCommandTransactionResult result;
         if(!scope || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
             frame.invalidated() || !frame.surfacesReady())return result;
         const int status=frame.withFrame([&](NativeBorrowedFrontend& frontend) noexcept -> int {
             result=NativeFrontendRuntimeScope::run(frontend,roles,sourceIndex,targetIndex,temporal,
-                [&](NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view,
+                [&](NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view,NativeSourceGraph& graph,
                     NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
                     NativeContextSurfaceOwner* secondary,NativeContextSurfaceOwner* previous,
                     NativeDenoiseParameters& parameters,NativeRendererChildLifetime& first,
                     NativeRendererChildLifetime& second) noexcept -> TglOwnedVeboxCommandTransactionResult {
-                    return use(scope,cpu,view,source,target,secondary,previous,parameters,first,second);
+                    if constexpr(std::is_nothrow_invocable_r_v<TglOwnedVeboxCommandTransactionResult,Consumer,
+                        void*,NativeRendererCpuAssembly&,const TglNativeCreatedVeboxRendererView&,NativeSourceGraph&,
+                        NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
+                        NativeDenoiseParameters&,NativeRendererChildLifetime&,NativeRendererChildLifetime&>)
+                        return use(scope,cpu,view,graph,source,target,secondary,previous,parameters,first,second);
+                    else return use(scope,cpu,view,source,target,secondary,previous,parameters,first,second);
                 });
             return result.status;
         });
