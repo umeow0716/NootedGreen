@@ -5062,7 +5062,11 @@ public:
         std::memcpy(reinterpret_cast<uint8_t*>(helper)+8,&child,8);
         std::memcpy(reinterpret_cast<uint8_t*>(helper)+0x10,&report,8);
         std::memcpy(field,&helper,8); // Native base destructor now owns it.
-        return true;
+        // Preserve counted-helper ownership even on report failure, but never
+        // let the creator publish an incompletely initialized child as ready.
+        uintptr_t linkedReport=0;
+        std::memcpy(&linkedReport,reinterpret_cast<const uint8_t*>(child)+0x88,8);
+        return report && linkedReport==report;
     }
     // Synchronous child lease for the authenticated builder/producer context.
     // Reset/reinitialize/table replacement are inert during invocation, so
