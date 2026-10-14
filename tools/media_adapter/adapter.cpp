@@ -1297,6 +1297,30 @@ struct NativeRendererPerformanceRead {
         return readMemory(slot,&after,8) && after==performance && published==performance;
     }
 };
+struct NativeOptionalVpMetadataRead {
+    NativeRendererPerformanceRead& base;
+    const TglBorrowedVeboxByteView<12>& fill;
+    const TglBorrowedVeboxByteView<8>& alpha;
+    NativeFrameDataRead capability() noexcept {return {this,&resolve};}
+    static bool resolve(void* context,uintptr_t address,void* output,size_t bytes) noexcept {
+        auto* self=static_cast<NativeOptionalVpMetadataRead*>(context);
+        if(!self || !output || !bytes || !self->base.base.core.live())return false;
+        if(NativeRendererPerformanceRead::resolve(&self->base,address,output,bytes))return true;
+        auto& admission=self->base.base;
+        uintptr_t e0=0,f0=0;
+        if(!admission.params.data() || !readMemory(reinterpret_cast<uintptr_t>(admission.params.data())+0xe0,&e0,8) ||
+            !readMemory(reinterpret_cast<uintptr_t>(admission.params.data())+0xf0,&f0,8) ||
+            e0!=admission.interfaces.paramsE0 || f0!=admission.interfaces.paramsF0)return false;
+        const auto fill=reinterpret_cast<uintptr_t>(self->fill.data());
+        const auto alpha=reinterpret_cast<uintptr_t>(self->alpha.data());
+        const bool admitted=(e0 && e0==fill && NativeCoreFrameDataScope::contains(fill,self->fill.size(),address,bytes)) ||
+            (f0 && f0==alpha && NativeCoreFrameDataScope::contains(alpha,self->alpha.size(),address,bytes));
+        if(!admitted || !readMemory(address,output,bytes) || !admission.core.live())return false;
+        uintptr_t afterE0=0,afterF0=0;
+        return readMemory(reinterpret_cast<uintptr_t>(admission.params.data())+0xe0,&afterE0,8) &&
+            readMemory(reinterpret_cast<uintptr_t>(admission.params.data())+0xf0,&afterF0,8) && afterE0==e0 && afterF0==f0;
+    }
+};
 struct NativeAdmissionStages {
     NativeAdmissionReset& reset;NativeOutputPipeSelector& select;
     NativeAdmissionHistorySetup& history;NativeAdmissionFeatureStage& feature;
