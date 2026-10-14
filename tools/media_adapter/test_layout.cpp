@@ -22262,6 +22262,24 @@ int main() {
             assert(graph.withResourceOwnerStorage([&](auto& storage) noexcept -> int {
                 admissionVp=storage.bytes.data();return 0;
             })==0);
+            {
+                TestPairedVpResourceLines resources;
+                resources.vp=reinterpret_cast<TglOwnedVpSfcCallerStorage*>(admissionVp);
+                auto retire=[]() noexcept -> int {return 5;};
+                int(*escaped)(void*) noexcept=nullptr;
+                TglOwnedVpEntrySet seed;
+                assert(graph.withResourceCatalogue(seed,resources,retire,
+                    [&](void* child,const TglOwnedVpEntrySet& entries) noexcept -> int {
+                        assert(child==admissionVp && entries.allocate && entries.freeResources && !graph.tryReset());
+                        escaped=entries.allocate;
+                        assert(entries.allocate(child)==5 && resources.allocations==0);
+                        auto conflict=seed;conflict.allocate=entries.allocate;
+                        assert(graph.withResourceCatalogue(conflict,resources,retire,
+                            [](void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                        return 31;
+                    })==31);
+                assert(escaped && escaped(admissionVp)==5 && !resources.allocations && !resources.releases);
+            }
             TglVeboxAdmissionStagesInput sfcInputs;sfcInputs.leasedParamsE0=0x6000;sfcInputs.leasedParamsF0=0x7000;
             for(unsigned stageFailure=0;stageFailure<13;++stageFailure) {
                 calls=0;unsigned states=0,emits=0;int data=0,command=0;

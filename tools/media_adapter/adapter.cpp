@@ -836,14 +836,15 @@ template<class SurfaceOwner> struct NativeVpCommandEmissionFor {
     void* parent;void* command;NativeVpAvsProducerFor<SurfaceOwner>* avs;
     bool attempted=false;
     int run(void* actual,const TglOwnedVpFramePreparation& frame,
-        const TglOwnedSfcCommandParameters& parameters) noexcept {
+        const TglOwnedSfcCommandParameters& parameters,const TglOwnedVpEntrySet& activeCatalogue) noexcept {
         const auto* packet=NativeVpPacketPublicationFor<SurfaceOwner>::get(actual);
         const auto* prefix=scalar.state();
         if(attempted || !prefix || actual!=scalar.vp || !packet || packet->scalar!=&scalar ||
             packet->parameters!=&parameters || &dataRead!=&scalar.dataRead || !command ||
             !scalar.health.matchesChild(childOwner,reinterpret_cast<uintptr_t>(parent)) ||
-            !targetOwner.hasSurfaceLease(scalar.target) || binding.image!=scalar.image || !catalogue.platformSend ||
-            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(catalogue.platformSend),1))return 5;
+            !targetOwner.hasSurfaceLease(scalar.target) || binding.image!=scalar.image ||
+            activeCatalogue.allocate!=catalogue.allocate || !activeCatalogue.platformSend ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(activeCatalogue.platformSend),1))return 5;
         const uint8_t scaling=frame.regions.scale.scaling,forceAvs=frame.color.at9b8;
         const uint8_t ief=frame.at922,csc=frame.at920;
         if(((scaling|forceAvs)&1) && (!avs || !avs->readyForSend() || &avs->scalar!=&scalar ||
@@ -858,7 +859,7 @@ template<class SurfaceOwner> struct NativeVpCommandEmissionFor {
             if(scalar.state()!=prefix || !targetOwner.hasSurfaceLease(scalar.target))return 5;
             // Qualified owned callback reproduces the proven six-argument
             // no-op ABI; not a fabricated generic platform-success callback.
-            const int status=catalogue.platformSend(actual,reinterpret_cast<void*>(mhw),
+            const int status=activeCatalogue.platformSend(actual,reinterpret_cast<void*>(mhw),
                 reinterpret_cast<void*>(renderArgument),reinterpret_cast<void*>(os),descriptor.data(),command);
             return status?status:(scalar.state()==prefix?0:5);
         };
@@ -885,7 +886,17 @@ template<class SurfaceOwner> struct NativeVpPreparedCallbacksFor {
     int error=0;
     TglOwnedVpFramePreparation capturedFrame{};
     bool frameCaptured=false;
-    int fail(int result) noexcept {if(result && !error)error=result;return result;}
+    const TglOwnedVpEntrySet* activeCatalogue=nullptr;
+    template<class Use> int withAdmittedCatalogue(void* child,const TglOwnedVpEntrySet& entries,Use use) noexcept {
+        if(error)return error;
+        if(activeCatalogue || child!=vp.bytes.data() || !sameOwners() || !entries.allocate ||
+            entries.allocate!=catalogue.allocate || !entries.platformSend)return fail(5);
+        activeCatalogue=&entries;
+        const int result=use(child);
+        activeCatalogue=nullptr;
+        return fail(result?result:error);
+    }
+    int fail(int result) noexcept {if(result && !error)error=result;return error;}
     bool sameOwners() const noexcept {
         return &packet.scalar==&scalar && &avs.scalar==&scalar && &filters.scalar==&scalar &&
             &emission.scalar==&scalar && &avs.parameters==&commands &&
@@ -895,12 +906,12 @@ template<class SurfaceOwner> struct NativeVpPreparedCallbacksFor {
     int state(void* actual,const TglOwnedVpFramePreparation& frame,const TglOwnedVpRegionInput& capturedGeometry,
         typename NativeVpNv12PacketScopeFor<SurfaceOwner>::StateOwner& owner,void* data,void* source,void* target) noexcept {
         if(error)return error;
-        if(!sameOwners() || data!=renderData || !data || source!=&scalar.source || target!=&scalar.target ||
+        if(!activeCatalogue || !sameOwners() || data!=renderData || !data || source!=&scalar.source || target!=&scalar.target ||
             actual!=scalar.vp)return fail(5);
         int result=scalar.prepare(actual,frame,capturedGeometry);
         if(result)return fail(result);
         result=packet.prepare(vp,owner,lines,
-            catalogue,commands);
+            *activeCatalogue,commands);
         if(!result) {capturedFrame=frame;frameCaptured=true;}
         return fail(result);
     }
@@ -915,12 +926,12 @@ template<class SurfaceOwner> struct NativeVpPreparedCallbacksFor {
     }
     int emit(void* actual,const TglOwnedVpFramePreparation& frame,void* data,void* command) noexcept {
         if(error)return error;
-        if(!sameOwners() || actual!=scalar.vp || data!=renderData || !command ||
+        if(!activeCatalogue || !sameOwners() || actual!=scalar.vp || data!=renderData || !command ||
             (emission.command && emission.command!=command))return fail(5);
         void* previous=emission.command;emission.command=command;
         const int result=packet.withPreparedInputs([&](TglOwnedSfcCommandParameters&) noexcept -> int {
             return filters.withPreparedInputs(actual,[&](const TglOwnedSfcCommandParameters& inputs) noexcept {
-                return emission.run(actual,frame,inputs);
+                return emission.run(actual,frame,inputs,*activeCatalogue);
             });
         });
         emission.command=previous;return fail(result);
@@ -955,7 +966,9 @@ template<class SurfaceOwner> struct NativeVpPreparedCallbacksFor {
             },
             [&](void* child,const TglOwnedVpEntrySet& entries) noexcept -> int {
                 if(error || child!=vp.bytes.data())return error?error:5;
-                const int status=use(scope,child,entries);
+                const int status=withAdmittedCatalogue(child,entries,[&](void* admitted) noexcept -> int {
+                    return use(scope,admitted,entries);
+                });
                 return status?status:error;
             });
         return fail(result?result:error);
@@ -997,6 +1010,7 @@ public:
              in.commands,in.renderData} {}
     NativeVpProducerFrameFor(const NativeVpProducerFrameFor&)=delete;
     NativeVpProducerFrameFor& operator=(const NativeVpProducerFrameFor&)=delete;
+    const TglOwnedVpEntrySet& catalogue() const noexcept {return callbacks_.catalogue;}
     template<class Use> int run(Use use) noexcept {
         static_assert(noexcept(use(std::declval<NativeVpPreparedCallbacksFor<SurfaceOwner>&>())) &&
             std::is_same_v<decltype(use(std::declval<NativeVpPreparedCallbacksFor<SurfaceOwner>&>())),int>);
@@ -1374,6 +1388,7 @@ template<class SurfaceOwner> struct NativeSfcPreparationFor {
     size_t index;void* child;uintptr_t mhw;void* renderData;
     State state;Avs avs;Ief ief;Emit emit;
     NativeVpGraph* borrowedGraph=nullptr;TglOwnedVpSfcCallerStorage* borrowedStorage=nullptr;
+    NativeVpPreparedCallbacksFor<SurfaceOwner>* callbacks=nullptr;
     template<class Read,class Complete>
     int run(void* expectedVp,uintptr_t e0,uintptr_t f0,const TglOwnedSurfaceStorage& source,
         const TglOwnedSurfaceStorage& target,uintptr_t execution,Read read,Complete complete) noexcept {
@@ -1407,7 +1422,7 @@ template<class SurfaceOwner> struct NativeSfcPreparationFor {
                 base,original,renderData,read,state,avs,ief,emit,
                 [&](void* actual,const TglOwnedVpEntrySet& entries) noexcept -> int {
                     if(actual!=expectedVp || !entries.initialize || !entries.prepare || backing.retention()() || !live())return 5;
-                    const int status=complete(actual);
+                    const int status=callbacks?callbacks->withAdmittedCatalogue(actual,entries,complete):complete(actual);
                     // The continuation may acquire/submit work. Its retention
                     // is expected and must survive scope unwind, not be called
                     // a completion certificate or converted to a false error.
@@ -1447,8 +1462,9 @@ template<class SurfaceOwner> struct NativeVpPreparationScopeFor {
     }
     static int emit(void* vp,void* data,void* command,const TglOwnedVpEntrySet& entries) noexcept {
         auto* callbacks=Publication::get(vp);
-        if(!callbacks || !callbacks->frameCaptured || entries.allocate!=callbacks->catalogue.allocate ||
-            entries.platformSend!=callbacks->catalogue.platformSend)return 5;
+        if(!callbacks || !callbacks->activeCatalogue || !callbacks->frameCaptured ||
+            entries.allocate!=callbacks->activeCatalogue->allocate ||
+            entries.platformSend!=callbacks->activeCatalogue->platformSend)return 5;
         return callbacks->emit(vp,callbacks->capturedFrame,data,command);
     }
     using Use=int(*)(void*,NativeSfcPreparationFor<SurfaceOwner>&) noexcept;
@@ -1463,10 +1479,12 @@ template<class SurfaceOwner> struct NativeVpPreparationScopeFor {
         if(!scope.bound())return 5;
         const auto oldState=preparation.state;const auto oldAvs=preparation.avs;
         const auto oldIef=preparation.ief;const auto oldEmit=preparation.emit;
+        auto* oldCallbacks=preparation.callbacks;preparation.callbacks=&callbacks;
         preparation.state=&state;preparation.avs=&avs;preparation.ief=&ief;preparation.emit=&emit;
         const int result=use(context,preparation);
         preparation.state=oldState;preparation.avs=oldAvs;preparation.ief=oldIef;preparation.emit=oldEmit;
-        return result?result:callbacks.error;
+        preparation.callbacks=oldCallbacks;
+        return callbacks.error?callbacks.error:result;
     }
 };
 using NativeVpPreparationDomain=NativeVpPreparationDomainFor<NativeContextSurfaceOwner>;
@@ -1837,11 +1855,20 @@ template<class SurfaceOwner> struct NativeLeasedVpFrameInputScopeFor {
         return NativeLeasedFrameInputScopeFor<SurfaceOwner>::run(in,[&](NativeCoreFrameDataScopeFor<SurfaceOwner>& core,
             NativeVpGraph& graph,TglNativeVpLineResourceStorage& lines,NativeAdmissionParams& params,
             NativeAdmissionPass& pass,NativeFrameDataRead& read) noexcept -> TglOwnedVeboxCommandTransactionResult {
-            typename NativeVpProducerInputScopeFor<SurfaceOwner>::Inputs inputs{core,read,in.pinned,in.interfaces,lines,catalogue};
-            NativeVpProducerInputScopeFor<SurfaceOwner> producers(inputs);
-            return producers.run([&](NativeVpProducerFrameFor<SurfaceOwner>& vp,const TglOwnedVpModeState& original) noexcept {
-                return use(context,core,graph,lines,params,pass,read,vp,original);
-            });
+            TglOwnedVeboxCommandTransactionResult result;
+            if(!in.resetAuthority)return result;
+            const int status=graph.withResourceCatalogue(catalogue,lines.resources(),*in.resetAuthority,
+                [&](void* child,const TglOwnedVpEntrySet& resources) noexcept -> int {
+                    if(child!=core.vp.bytes.data())return 5;
+                    typename NativeVpProducerInputScopeFor<SurfaceOwner>::Inputs inputs{core,read,in.pinned,in.interfaces,lines,resources};
+                    NativeVpProducerInputScopeFor<SurfaceOwner> producers(inputs);
+                    result=producers.run([&](NativeVpProducerFrameFor<SurfaceOwner>& vp,const TglOwnedVpModeState& original) noexcept {
+                        return use(context,core,graph,lines,params,pass,read,vp,original);
+                    });
+                    return result.status;
+                });
+            if(!result.status && status)result.status=status;
+            return result;
         });
     }
 };
@@ -3288,7 +3315,7 @@ struct NativeOriginalFrameExecution {
                 // EXACT original surface/frame identities by withPolicyInputs.
                 if(request.sourceFeatures)sourceFeatures=*request.sourceFeatures;
                 if(request.targetFeatures)targetFeatures=*request.targetFeatures;
-                Inputs input{frontend,core,graph,lines,params,pass,read,vp,request.catalogue,mode,request.view,
+                Inputs input{frontend,core,graph,lines,params,pass,read,vp,vp.catalogue(),mode,request.view,
                     sourceFeatures,targetFeatures,request.acquisition,request.decompressionStatus,
                     request.decompression,request.argument};
                 return (request.ownedSend || request.submitAdmit)?
@@ -3335,6 +3362,7 @@ struct NativeOriginalFrameExecution {
     }
     template<class SurfaceOwner> static TglOwnedVeboxCommandTransactionResult run(InputsFor<SurfaceOwner>& in) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
+        if(&in.catalogue!=&in.vp.catalogue())return result;
         auto& core=in.core;const NativeTglImageAdmission qualify{core.image};
         TglVeboxRenderBinding render;TglCscCoefficientsBinding coefficients;bool alignDi64=false;
         if(!core.preparedReset || !core.live() ||
@@ -3456,7 +3484,7 @@ struct NativeTemporaryLowerContinuation {
                     !tglBindLeasedUnknownGen12SurfaceFeatures(targetFeatures,core.targetOwner,core.target,self.acquisition))
                     return TglOwnedVeboxCommandTransactionResult{};
                 NativeOriginalFrameExecution::InputsFor<NativeTemporarySurfaceOwner> execution{
-                    call.frontend,core,graph,lines,params,pass,read,vp,self.catalogue,mode,self.view,
+                    call.frontend,core,graph,lines,params,pass,read,vp,vp.catalogue(),mode,self.view,
                     sourceFeatures,targetFeatures,self.acquisition,self.decompressionStatus,self.decompression,self.argument};
                 return self.sendFrame?NativeOriginalFrameExecution::runWithSend(*self.sendFrame,execution,
                     self.submitAdmit,self.childAdmit):NativeOriginalFrameExecution::run(execution);

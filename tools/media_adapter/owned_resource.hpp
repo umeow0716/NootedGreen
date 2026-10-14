@@ -16706,6 +16706,21 @@ public:
                     });
             });
     }
+    // Retain actual line/state resource dispatch while the later initialized
+    // catalogue adds its phase entries. This does not initialize a pass or
+    // take the graph's builder lock prematurely.
+    template<class Lines,class Retire,class Use>
+    int withResourceCatalogue(const TglOwnedVpEntrySet& base,Lines& lines,Retire& retire,Use use) noexcept {
+        if(!ready_ || busy_ || !lines.boundToVp(storage_) || base.allocate || base.freeResources)return 5;
+        ResourceOwnerLease pin(*this);
+        if(pin.storage()!=&storage_)return 5;
+        return tglWithOwnedVpResourceEntries(storage_,lines,state_,retire,
+            [&](void* child,auto allocate,auto release) noexcept -> int {
+                auto entries=base;
+                if(child!=storage_.bytes.data() || !tglBindOwnedVpResourceEntries(entries,allocate,release))return 5;
+                return use(child,entries);
+            },retention_);
+    }
     // Admission VP28 uses the SAME graph and captured original E0/F0, surfaces
     // and report. Keep the existing initialized catalogue scope through Use;
     // caller may bind its qualified table and finish admission there. Pointer
