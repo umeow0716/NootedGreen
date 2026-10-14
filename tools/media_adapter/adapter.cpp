@@ -656,6 +656,58 @@ struct NativeCreatorPreparation {
     }
 };
 std::map<void *, std::unique_ptr<Entry>> registry;
+// Prepared invocation only: factory callbacks remain unchanged until complete
+// child hooks/publication and frame retirement are supplied. Keep native status
+// separate from bridge admission so a missed call cannot masquerade as handoff.
+struct NativeCreatorScopedInvocation {
+    struct Result {
+        int nativeResult=5,handoffResult=5;
+        bool nativeInvoked=false,selected=false,handoffCompleted=false;
+    };
+    using Scope=typename NativePhysicalRegistry::DependencyAdoptionScope;
+    using AdmitFn=bool(*)(void*) noexcept;
+    using HandoffFn=int(*)(void*) noexcept;
+    template<class Admit,class Handoff>
+    static Result run(uintptr_t entry,uintptr_t physical,const void* input,Scope& physicalScope,
+        Admit& admit,Handoff& handoff) noexcept {
+        static_assert(noexcept(admit(static_cast<void*>(nullptr))) &&
+            noexcept(handoff(static_cast<void*>(nullptr))));
+        Result result;
+        const uintptr_t image=physicalScope.image();
+        const uint64_t generation=physicalScope.generation();
+        if(!image || image>UINTPTR_MAX-0x75bb78 || entry!=image+0x13e43 || !input ||
+            !physicalScope.matches(image,physical,generation) || !executableMemory(entry,1))return result;
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return result;
+        if constexpr(std::is_pointer_v<Handoff>)if(!handoff)return result;
+        auto qualifiedCreator=[&](void* creator) noexcept -> bool {
+            return physicalScope.matches(image,physical,generation) && admit(creator);
+        };
+        auto completeHandoff=[&](void* creator) noexcept -> int {
+            if(!physicalScope.matches(image,physical,generation))return 5;
+            return handoff(creator); // Full handoff, NOT prepareOwner component status.
+        };
+        TglNativeCreatorCallInvoker nativeCreate;
+        TglOwnedCreatorCallScope<decltype(nativeCreate),decltype(completeHandoff),decltype(qualifiedCreator)>
+            creatorScope(nativeCreate,completeHandoff,qualifiedCreator);
+        if(!creatorScope.prepare(image,&readMemory,NativeTglImageAdmission{image},
+            &executableMemory,&ownedExecutableMemory))return result;
+        NativeReturnObserver observer({image+0x133c0f,0,0,0},0,0,0,0,0,0,{},0,
+            {creatorScope.table().source(),creatorScope.table().addressPoint()});
+        if(!observer.isArmed())return result;
+        result.nativeInvoked=true;
+        result.nativeResult=reinterpret_cast<int(*)(void*,const void*)>(entry)(
+            reinterpret_cast<void*>(physical),input);
+        result.selected=observer.observed(0,1) && creatorScope.consumed();
+        result.handoffResult=creatorScope.result();
+        result.handoffCompleted=result.selected && creatorScope.handoffCompleted() &&
+            physicalScope.matches(image,physical,generation);
+        return result;
+    }
+};
+template NativeCreatorScopedInvocation::Result NativeCreatorScopedInvocation::run<
+    NativeCreatorScopedInvocation::AdmitFn,NativeCreatorScopedInvocation::HandoffFn>(
+    uintptr_t,uintptr_t,const void*,NativeCreatorScopedInvocation::Scope&,
+    NativeCreatorScopedInvocation::AdmitFn&,NativeCreatorScopedInvocation::HandoffFn&) noexcept;
 std::atomic<uintptr_t> nativeCreateContexts{0};
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept {
     mach_vm_size_t copied = 0;
