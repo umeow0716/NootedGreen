@@ -13378,6 +13378,49 @@ struct TglOwnedVeboxPersistentVpAdmissionReset {
     }
 };
 
+// A synchronous receipt for a pass reset performed BEFORE entering the VP
+// resource borrow. It is not a GPU completion certificate: Retire must supply
+// that authority. Admission consumes it once without reborrowing resources.
+template<class ChildOwner> class TglOwnedVeboxPreparedVpReset {
+    ChildOwner& owner_;size_t index_;void* child_;void* vp_;
+    uint64_t childGeneration_,graphGeneration_;bool consumed_=false;
+    TglOwnedVeboxPreparedVpReset(ChildOwner& owner,size_t index,void* child,void* vp,
+        uint64_t childGeneration,uint64_t graphGeneration) noexcept
+        :owner_(owner),index_(index),child_(child),vp_(vp),childGeneration_(childGeneration),
+         graphGeneration_(graphGeneration) {}
+public:
+    TglOwnedVeboxPreparedVpReset(const TglOwnedVeboxPreparedVpReset&)=delete;
+    TglOwnedVeboxPreparedVpReset& operator=(const TglOwnedVeboxPreparedVpReset&)=delete;
+    template<class Graph> bool consume(ChildOwner& owner,size_t index,void* child,void* vp,Graph& graph) noexcept {
+        if(consumed_ || &owner!=&owner_ || index!=index_ || child!=child_ || vp!=vp_ ||
+            owner.allocationGeneration()!=childGeneration_ ||
+            !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
+            graph.generation()!=graphGeneration_ || !graph.ownsStorage(vp))return false;
+        uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x80,8);
+        if(linked!=reinterpret_cast<uintptr_t>(vp))return false;
+        consumed_=true;return true;
+    }
+    template<class Backing,class Retire,class Use>
+    static int run(ChildOwner& owner,Backing& backing,size_t index,void* child,void* vp,
+        Retire retire,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<TglOwnedVeboxPreparedVpReset&>())) &&
+            std::is_same_v<decltype(use(std::declval<TglOwnedVeboxPreparedVpReset&>())),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        const uint64_t generation=owner.allocationGeneration();
+        if(!generation || !vp)return 5;
+        TglOwnedVeboxPersistentVpAdmissionReset<ChildOwner,Backing,Retire> reset{owner,backing,index,child,vp,retire};
+        if(!reset() || owner.allocationGeneration()!=generation)return 5;
+        uint64_t graphGeneration=0;
+        const int captured=backing.withVpResources(index,[&](auto& graph,auto& storage,auto&) noexcept -> int {
+            if(storage.bytes.data()!=vp || !graph.ownsStorage(vp))return 5;
+            graphGeneration=graph.generation();return graphGeneration?0:5;
+        });
+        if(captured)return captured;
+        TglOwnedVeboxPreparedVpReset receipt(owner,index,child,vp,generation,graphGeneration);
+        return use(receipt);
+    }
+};
+
 template<class ChildOwner,class ExecutionOwner,class VpReset>
 struct TglOwnedVeboxAdmissionResetStage {
     ChildOwner& childOwner;ExecutionOwner& executionOwner;

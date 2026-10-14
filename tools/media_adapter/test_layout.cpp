@@ -26588,11 +26588,23 @@ int main() {
                                             vp=storage.bytes.data();preparedGeneration=graph.generation();return 0;
                                         })) return 5;
                                         auto retire=[]() noexcept -> int {return 0;}; // unsubmitted CPU fixture only
-                                        TglOwnedVeboxPersistentVpAdmissionReset<std::decay_t<decltype(owner)>,
-                                            std::decay_t<decltype(backing)>,decltype(retire)> reset{
-                                            owner,backing,0,child,vp,retire};
+                                        using Receipt=TglOwnedVeboxPreparedVpReset<std::decay_t<decltype(owner)>>;
                                         return owner.withLeasedBorrowedVpCpuView(child,vp,
-                                            [&](void*,void*) noexcept -> int {return reset()?0:5;});
+                                            [&](void*,void*) noexcept -> int {
+                                                return Receipt::run(owner,backing,0,child,vp,retire,
+                                                    [&](Receipt& receipt) noexcept -> int {
+                                                        return backing.withVpResources(0,[&](auto& graph,auto& storage,auto&) noexcept -> int {
+                                                            // Keep the real resource owner's reentry rejection;
+                                                            // admission consumes the prepared receipt instead.
+                                                            assert(backing.withVpResources(0,[](auto&,auto&,auto&) noexcept {return 0;})==5);
+                                                            assert(!receipt.consume(owner,1,child,vp,graph));
+                                                            assert(!receipt.consume(owner,0,child,nullptr,graph));
+                                                            assert(receipt.consume(owner,0,child,storage.bytes.data(),graph));
+                                                            assert(!receipt.consume(owner,0,child,vp,graph));
+                                                            return 0;
+                                                        });
+                                                    });
+                                            });
                                     },consumePrepared);
                                 assert(prepared.status==-92 && preparations==2 && consumptions==1);
                                 std::array<uint8_t,8> savedDimensions{};
