@@ -16292,6 +16292,10 @@ static void testRetainedVeboxFrames() {
                         assert(submit.resolve(os,image,submitRead,[&](uintptr_t p) noexcept {return p==image;},
                             [](uintptr_t,size_t) noexcept {return true;}));
                         int command=0;
+                        assert(submit.matchesSlot(os,wrapper,0x78000,submitRead));
+                        assert(!submit.matchesSlot(os+8,wrapper,0x78000,submitRead) &&
+                            !submit.matchesSlot(os,wrapper+8,0x78000,submitRead) &&
+                            !submit.matchesSlot(os,wrapper,0x78008,submitRead));
                         auto admitSubmit=[&](const RendererFixture& r,uintptr_t o,uintptr_t w,uintptr_t c) noexcept {
                             assert(submitted.ownsActiveRenderer(r));
                             return r.surfacesReady() && o==os && w==wrapper && c==0x78000;

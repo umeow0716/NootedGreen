@@ -18948,6 +18948,20 @@ public:
         uint32_t flagsBefore=0,flagsAfter=0;
         bool observed=false;
     };
+    template<class Read> bool matchesSlot(uintptr_t os,uintptr_t wrapper,uintptr_t native,Read read) const noexcept {
+        if constexpr(std::is_pointer_v<Read>)if(!read)return false;
+        if(!os_ || os!=os_ || !entry_ || !wrapper || !native)return false;
+        auto capture=[&]() noexcept {
+            uintptr_t database=0,actualWrapper=0,actualNative=0,entry=0;uint32_t index=0;
+            if(!read(os_,&database,8) || !database || !read(os_+8,&index,4) ||
+                !read(os_+0x2d0,&entry,8) || entry!=entry_)return false;
+            const uint64_t offset=8+uint64_t{index}*0x15c0;
+            return offset<=UINTPTR_MAX-8 && database<=UINTPTR_MAX-8-offset &&
+                read(database+uintptr_t(offset),&actualWrapper,8) && actualWrapper==wrapper &&
+                wrapper<=UINTPTR_MAX-16 && read(wrapper+8,&actualNative,8) && actualNative==native;
+        };
+        return capture() && capture();
+    }
     // Exact64df0 obtains its a9dc wrapper from database+8+index*15c0.
     // Do not invent OS+15b0: that is a field of the DATABASE RECORD used
     // for the separate optional fence call. At most one a9dc occurs here,

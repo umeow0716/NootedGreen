@@ -2724,10 +2724,40 @@ struct NativeVeboxSendSubmissionStage {
     }
     using NativeCall=int(*)(void*) noexcept;
     template<class SurfaceOwner> struct ProducerRequest {
-        SendContext& send;SurfaceOwner& sourceOwner;
+        SendContext& send;SurfaceOwner& sourceOwner;SurfaceOwner& targetOwner;
         typename NativeVeboxProducerTypesFor<SurfaceOwner>::Context& packets;
         const TglNativeVeboxSetupBinding& setup;const TglNativeVeboxBuilderBinding& builder;
         uintptr_t os;bool attempted=false;
+        struct AuthorityDomain;
+        using AuthorityScope=TglOwnedScopedContext<ProducerRequest,AuthorityDomain>;
+        Admit externalAdmit=nullptr;AdmitChild externalChild=nullptr;
+        uint64_t childGeneration=0;bool invocationAttempted=false;
+        bool leased() const noexcept {
+            return childGeneration && packets.childOwner.allocationGeneration()==childGeneration &&
+                packets.childOwner.hasPrivateChildImageLease(packets.leases.child,send.image) &&
+                packets.executionOwner.hasExecutionLease(packets.leases.execution) &&
+                sourceOwner.hasSurfaceLease(packets.leases.source) &&
+                packets.leases.target && targetOwner.hasSurfaceLease(*packets.leases.target) &&
+                &packets.pass==&send.pass && send.tail.matchesIdentity(packets.leases.child,&readMemory);
+        }
+        static bool admitChild(uintptr_t child,uintptr_t actualOs,uintptr_t mhw) noexcept {
+            auto* context=SendScope::get(reinterpret_cast<void*>(child));
+            if(!context || context->build!=&prepare || !context->buildContext)return false;
+            auto& request=*static_cast<ProducerRequest*>(context->buildContext);
+            uintptr_t linkedOs=0,linkedMhw=0;
+            return &request.send==context && request.attempted && context->entered && request.leased() &&
+                actualOs==request.os && readMemory(child+0x10,&linkedOs,8) && linkedOs==actualOs &&
+                readMemory(child+0x60,&linkedMhw,8) && linkedMhw==mhw && mhw &&
+                (!request.externalChild || request.externalChild(child,actualOs,mhw));
+        }
+        static bool admitNative(const NativeBorrowedFrontend& renderer,uintptr_t actualOs,
+            uintptr_t wrapper,uintptr_t native) noexcept {
+            auto* request=AuthorityScope::get(reinterpret_cast<void*>(actualOs));
+            return request && request->attempted && request->send.entered && request->leased() &&
+                request->send.frame.ownsActiveRenderer(renderer) &&
+                request->send.binding.matchesSlot(actualOs,wrapper,native,&readMemory) &&
+                (!request->externalAdmit || request->externalAdmit(renderer,actualOs,wrapper,native));
+        }
         static int prepare(void* raw,SendContext& active,void* child) noexcept {
             if(!raw)return 5;
             auto& request=*static_cast<ProducerRequest*>(raw);
@@ -2740,10 +2770,18 @@ struct NativeVeboxSendSubmissionStage {
                 request.packets.leases.source,request.packets,request.setup,request.builder,request.os);
         }
         int withNativeCall(void* argument,NativeCall call) noexcept {
-            if(attempted || send.entered || send.build || send.buildContext)return 5;
+            if(invocationAttempted)return 5;invocationAttempted=true;
+            childGeneration=packets.childOwner.allocationGeneration();
+            if(attempted || send.entered || send.build || send.buildContext || !leased() ||
+                send.admit==&admitNative || send.admitChild==&admitChild)return 5;
+            AuthorityScope authority(reinterpret_cast<void*>(os),*this);
+            if(!authority.bound())return 5;
+            externalAdmit=send.admit;externalChild=send.admitChild;
+            send.admit=&admitNative;send.admitChild=&admitChild;
             send.buildContext=this;send.build=&prepare;
             const int result=withSendScope(reinterpret_cast<void*>(packets.leases.child),send,argument,call);
             send.build=nullptr;send.buildContext=nullptr;
+            send.admit=externalAdmit;send.admitChild=externalChild;
             return result;
         }
     };
@@ -2853,7 +2891,8 @@ template<class SurfaceOwner> struct NativeVeboxRenderSendRequestFor {
         Stage::SendContext context{request.frame,producer.pass,request.tail,request.submit,
             request.scratch,command,request.retention,request.image,request.admit,request.admitChild};
         typename Stage::template ProducerRequest<SurfaceOwner> preparation{context,
-            render.render.admission.feature.sourceOwner,producer,request.setup,request.builder,request.os};
+            render.render.admission.feature.sourceOwner,render.render.admission.feature.targetOwner,
+            producer,request.setup,request.builder,request.os};
         struct Call {
             typename Scope::Render& render;typename Scope::Result& result;
             static int invoke(void* raw) noexcept {
