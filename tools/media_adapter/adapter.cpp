@@ -1461,6 +1461,32 @@ struct NativeRetainedDiIecpCapture {
     NativeAllocationPlanner& planner;NativeFrameDataRead& read;
     const std::array<uint32_t,11>& controls;NativeDenoiseParameters* parameters;
     bool busy=false;
+    const TglDiIecpInputs* active=nullptr;uint64_t generation=0;
+    bool live() const noexcept {
+        return busy && active && generation && planner.childOwner.allocationGeneration()==generation &&
+            planner.childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(planner.child)) &&
+            planner.executionOwner.hasExecutionLease(planner.execution) && planner.input.hasSurfaceLease(planner.source);
+    }
+    static int admitRole(void* context,const TglOwnedSurfaceStorage& surface,size_t role) noexcept {
+        auto* self=static_cast<NativeRetainedDiIecpCapture*>(context);
+        if(!self || !self->live() || role>=5)return 5;
+        const auto& input=*self->active;TglOwnedSurfaceInputs selected;
+        if(!tglPrepareSurfaceInputs(selected,input.current,input.target,input.pipe,input.di,input.iecp,
+            input.dnNeeded,input.indices,input.ffdi,input.ffdn,input.stmm) || selected.surfaces[role]!=&surface ||
+            !tglNativeBackingPresent(surface.resource))return 5;
+        return 0;
+    }
+    static int admitDi(void* context,const TglOwnedSurfaceStorage& surface) noexcept {
+        auto* self=static_cast<NativeRetainedDiIecpCapture*>(context);
+        if(!self || !self->live() || !tglNativeBackingPresent(surface.resource))return 5;
+        const auto& input=*self->active;
+        bool known=&surface==input.current || &surface==input.target || &surface==input.statistics ||
+            (input.referenceValid && &surface==input.previous);
+        for(const auto* item:input.ffdi)known=known || item==&surface;
+        for(const auto* item:input.ffdn)known=known || item==&surface;
+        for(const auto* item:input.stmm)known=known || item==&surface;
+        return known?0:5;
+    }
     NativeDiIecpCapture capability() noexcept {return {this,&capture};}
     static int capture(void* context,void* sink,NativeDiIecpCapture::Consume consume) noexcept {
         auto* self=static_cast<NativeRetainedDiIecpCapture*>(context);
@@ -1476,7 +1502,15 @@ struct NativeRetainedDiIecpCapture {
         return tglRunRetainedDiIecpFrameInput(planner.storage,planner.input,planner.target,
             planner.secondary,planner.previous,planner.childOwner,planner.executionOwner,
             planner.child,planner.execution,planner.source,self->read,planner.alignDi64,self->controls,
-            [&](const TglDiIecpInputs& input) noexcept -> int {return consume(sink,input);},self->parameters);
+            [&](const TglDiIecpInputs& input) noexcept -> int {
+                if(self->active)return 5;
+                self->active=&input;self->generation=planner.childOwner.allocationGeneration();
+                struct Revoke {NativeRetainedDiIecpCapture& self;
+                    ~Revoke(){self.active=nullptr;self.generation=0;}} revoke{*self};
+                if(!self->live())return 5;
+                const int result=consume(sink,input);
+                return result?result:(self->live()?0:5);
+            },self->parameters);
     }
 };
 struct NativeFrameSurfaceRoleAdmission {
@@ -1494,6 +1528,33 @@ using NativeVeboxPacketBridge=TglOwnedVeboxNativePacketBridge<NativeVeboxLivePac
 using NativeVeboxProducerTypes=TglOwnedVeboxFrameProducerTypes<NativeVeboxPacketBridge,NativeRendererChildOwner,
     NativeExecutionOwner,decltype(&readMemory),TglNativeDndiStackAdmission,NativeVeboxCscProducer>;
 using NativeVeboxProducerResolve=typename NativeVeboxProducerTypes::Resolve;
+struct NativeVeboxFrameCapabilityScope {
+    using Use=NativeAdmissionStages::Result(*)(void*,NativeVeboxLivePacketFrame&) noexcept;
+    static NativeAdmissionStages::Result run(NativeRendererCpuAssembly& assembly,
+        const TglNativeVphalMhwView& view,NativeRetainedDiIecpCapture& capture,
+        TglOwnedVeboxPacketLeases leases,bool disableTemporalDenoise,void* scope,Use use) noexcept {
+        NativeAdmissionStages::Result result;
+        auto& planner=capture.planner;
+        if(!scope || !use || capture.busy || capture.active || !leases.target ||
+            leases.child!=reinterpret_cast<uintptr_t>(planner.child) || leases.execution!=planner.execution ||
+            &leases.source!=&planner.source || leases.renderHal!=view.renderHal ||
+            !planner.target || !planner.target->hasSurfaceLease(*leases.target) ||
+            !planner.input.hasSurfaceLease(leases.source))return result;
+        const int status=assembly.cpu().withCreatorDiIecpServices(view,&readMemory,
+            NativeTglImageAdmission{view.renderer.image},&executableMemory,
+            [&](const TglNativeDiIecpServices& services) noexcept -> int {
+                NativeVeboxLivePacketFrame frame{{},leases,disableTemporalDenoise,capture.capability(),capture.read,
+                    {&capture,&NativeRetainedDiIecpCapture::admitRole},
+                    {&capture,&NativeRetainedDiIecpCapture::admitDi},
+                    TglNativeDiIecpRegistration{services},
+                    TglNativeDiIecpControl<NativeVeboxControlPolicy>{services,
+                        {leases.child,leases.execution,leases.target,capture.read}}};
+                result=use(scope,frame);return result.status;
+            });
+        if(status) {result.status=status;result.admitted=false;}
+        return result;
+    }
+};
 struct NativeVeboxPacketProducerScope {
     // Construction and execution name this SAME resolver specialization.
     // This is only the producer portion, never a complete publishable table.

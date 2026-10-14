@@ -2082,16 +2082,21 @@ static void testTrackedCpuOwner() {
             assert(tglPrepareOwnedStatePacket(expectedStateBytes,expectedState));
             assert(std::memcmp(state.data(),expectedStateBytes.data(),expectedStateBytes.size())==0);
             unsigned liveCaptures=0;
-            bool liveReady=false;
+            bool liveReady=false,liveBorrow=false;
             auto liveInput=consistentInput;
             auto captureLive=[&](auto use) noexcept -> int {
                 ++liveCaptures;
                 if(!liveReady) return 31;
-                return use(static_cast<const TglDiIecpInputs&>(liveInput));
+                assert(!liveBorrow);liveBorrow=true;
+                const int result=use(static_cast<const TglDiIecpInputs&>(liveInput));
+                liveBorrow=false;return result;
+            };
+            auto scopedDiAdmission=[&](const TglOwnedSurfaceStorage& surface) noexcept -> int {
+                assert(liveBorrow);return admitDi(surface);
             };
             TglOwnedVeboxLivePacketContext<decltype(captureLive),decltype(noRead),
-                decltype(admitSurface),decltype(admitDi),decltype(registerResource),decltype(control)>
-                livePacket{{},leases,false,captureLive,noRead,admitSurface,admitDi,registerResource,control};
+                decltype(admitSurface),decltype(scopedDiAdmission),decltype(registerResource),decltype(control)>
+                livePacket{{},leases,false,captureLive,noRead,admitSurface,scopedDiAdmission,registerResource,control};
             assert(liveCaptures==0); // Construction must not read pre-preparation state.
             assert(livePacket.state(false,&foreignCommandState)==5 && liveCaptures==0);
             assert(livePacket.state(false,&state)==31 && liveCaptures==1);
@@ -2101,6 +2106,7 @@ static void testTrackedCpuOwner() {
             assert(livePacket.state(false,&state)==5 && liveCaptures==3);
             liveInput=consistentInput;
             assert(livePacket.state(false,&state)==0 && liveCaptures==4);
+            assert(!liveBorrow);
             assert(std::memcmp(state.data(),expectedStateBytes.data(),expectedStateBytes.size())==0);
             using LiveProducers=TglOwnedVeboxFrameProducerTypes<decltype(livePacket),Child,Execution,
                 decltype(noRead),decltype(noPackets),ImageCsc>;

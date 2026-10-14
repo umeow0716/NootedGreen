@@ -17779,9 +17779,13 @@ struct TglOwnedVeboxLivePacketContext {
     }
     int state(bool di,void* packet) noexcept {
         if(packet!=&leases.state) return 5;
-        if(leases.target && admitDi(*leases.target)!=0) return 5;
-        const int result=withInput([&](auto& view) noexcept {return view.state(di,packet);});
-        return leases.target && admitDi(*leases.target)!=0 ? 5 : result;
+        return withInput([&](auto& view) noexcept -> int {
+            // Resource admission belongs INSIDE the same captured ownership
+            // scope as packet generation, not before/after its tail views live.
+            if(leases.target && admitDi(*leases.target)!=0)return 5;
+            const int result=view.state(di,packet);
+            return leases.target && admitDi(*leases.target)!=0?5:result;
+        });
     }
     int diIecp(bool di,void* packet) noexcept {
         if(packet!=&leases.diIecp) return 5;
