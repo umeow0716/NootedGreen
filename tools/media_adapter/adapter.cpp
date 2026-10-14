@@ -2456,7 +2456,7 @@ struct NativeRetainedFrontendRuntime {
     }
     using AllocationInputUse=int(*)(void*,NativeModeAllocationPlan&) noexcept;
     static int withAllocationInputs(VpFrontend& frontend,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
-        TglNativeVpLineResourceStorage& lines,bool reinitializeStmm,bool alignDi64,
+        TglNativeVpLineResourceStorage& lines,bool alignDi64,
         void* context,AllocationInputUse use) noexcept {
         if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
             frontend.childIndex>1 || !core.live() || frontend.pinned.image!=core.image ||
@@ -2467,7 +2467,9 @@ struct NativeRetainedFrontendRuntime {
             frontend.interfaces.renderHal,frontend.interfaces.sku,graph};
         NativeModeAllocationPlan allocation{frontend.assembly.backing().command().backing(),lines.resources(),
             selection,frontend.retirement,core.sourceOwner,core.targetOwner,frontend.secondary,frontend.previous,
-            core.executionOwner,core.execution,core.source,reinitializeStmm,alignDi64};
+            // Exact ICL1f7990 initializes each STMM only when allocator's
+            // changed flag is set; owner.ensure already implements that lane.
+            core.executionOwner,core.execution,core.source,false,alignDi64};
         const int status=use(context,allocation);
         return status?status:(core.live() && graph.ownsStorage(core.vp.bytes.data())?0:5);
     }
@@ -2620,7 +2622,7 @@ struct NativeOriginalFrameExecution {
         const TglOwnedGen12SurfaceFeatures& sourceFeatures;const TglOwnedGen12SurfaceFeatures& targetFeatures;
         TglVeboxPipeAcquisition& acquisition;uint32_t& compressionFormat;int& decompressionStatus;
         NativeTargetDecompression& decompression;const std::array<uint32_t,11>& controls;
-        bool reinitializeStmm,disableTemporalDenoise;void* argument;
+        bool disableTemporalDenoise;void* argument;
     };
     static TglOwnedVeboxCommandTransactionResult run(Inputs& in) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
@@ -2645,7 +2647,7 @@ struct NativeOriginalFrameExecution {
                 auto& state=*static_cast<State*>(context);auto& in=state.input;
                 struct Packet {State& state;TglOwnedVeboxPacketLeases& leases;} packet{state,leases};
                 return Frontend::withAllocationInputs(in.frontend,in.core,in.graph,in.lines,
-                    in.reinitializeStmm,state.alignDi64,&packet,
+                    state.alignDi64,&packet,
                     +[](void* context,NativeModeAllocationPlan& allocation) noexcept -> int {
                         auto& packet=*static_cast<Packet*>(context);auto& in=packet.state.input;
                         struct Allocation {Packet& packet;NativeModeAllocationPlan& plan;} stage{packet,allocation};

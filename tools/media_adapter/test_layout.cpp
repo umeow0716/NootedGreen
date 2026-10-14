@@ -6752,10 +6752,17 @@ static void testNativeStatisticsFill() {
         assert(history.withStorage([](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
         ++stmmUses;return 0;
     })==0 && stmmUses==1 && stmmPublications==2);
+    const uint8_t historyMarker=uint8_t(api.bytes[0]^0xff);api.bytes[0]=historyMarker;
     reportBytes[0x17]=0xa5;reportBytes[0x18]=0x5a;
     assert(stmmStage([](const auto* first,const auto* second) noexcept -> int {
         assert(first && second);return 0;
     })==0 && stmmPublications==2 && reportBytes[0x17]==0xa5 && reportBytes[0x18]==0x5a);
+    assert(api.bytes[0]==historyMarker); // unchanged backing keeps history, not just metadata
+    childBytes[0x1ba9]=1;
+    assert(stmmStage([](const auto* first,const auto* second) noexcept -> int {
+        assert(first && second);return 0;
+    })==0 && stmmPublications==4 && api.bytes[0]!=historyMarker);
+    childBytes[0x1ba9]=0;
     reportBytes[0x13]=0;
     const auto historyReferences=api.references;
     assert(stmmStage([&](const auto* first,const auto* second) noexcept -> int {
