@@ -150,6 +150,13 @@ int main() {
     int result = set == KERN_SUCCESS ? owned_debug_target() : -1;
     kern_return_t restored = thread_set_state(thread, x86_DEBUG_STATE64,
         reinterpret_cast<thread_state_t>(&original), x86_DEBUG_STATE64_COUNT);
+    // Scoped observers correctly require SIG_DFL; finish the initial raw trap
+    // test BEFORE their admission, rather than leaving our handler installed.
+    const int handlerRestored = sigaction(SIGTRAP, &previous, nullptr);
+    if(handlerRestored || restored!=KERN_SUCCESS) {
+        mach_port_deallocate(mach_task_self(),thread);
+        return 1;
+    }
     // Select a call-only table, never change the creator's object vptr.
     alignas(8) unsigned char creator[0x70]{};
     alignas(8) uintptr_t nativeTable[4]{0, 0, 0, reinterpret_cast<uintptr_t>(creatorNative)};
@@ -209,7 +216,6 @@ int main() {
         if(refused.isArmed())return 1;
     }
     alarm(0);
-    int handlerRestored = sigaction(SIGTRAP, &previous, nullptr);
     x86_debug_state64_t finalState{};
     count = x86_DEBUG_STATE64_COUNT;
     kern_return_t verified = thread_get_state(thread, x86_DEBUG_STATE64,
