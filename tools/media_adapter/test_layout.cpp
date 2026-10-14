@@ -16758,6 +16758,28 @@ int main() {
             assert(!shells.get(27) && !shells.prepare(originals));
             assert(std::memcmp(reinterpret_cast<void*>(shells.get(0)),&source,0x2a8)==0);
             assert(shells.get(0)!=shells.get(24));
+            struct Root {
+                const TglOwnedSurfaceStorage* expected;bool valid=true;
+                bool hasSurfaceLease(const TglOwnedSurfaceStorage& value) const noexcept {
+                    return valid && &value==expected;
+                }
+            } root{&source};
+            assert(shells.withDerivedSurfaceLease(0,root,[&](auto& derived) noexcept {
+                assert(derived.live() && !derived.hasSurfaceLease(source));
+                shells.reset();assert(b.live==4); // outstanding loans pin CPU allocations
+                return derived.withMutableSurface([&](auto& temporary) noexcept {
+                    assert(derived.hasSurfaceLease(temporary) && !root.hasSurfaceLease(temporary));
+                    assert(derived.withMutableSurface([](auto&) noexcept {return 0;})==5);
+                    return shells.withDerivedSurfaceLease(24,root,[&](auto& peer) noexcept {
+                        assert(peer.live());return 31;
+                    });
+                });
+            })==31);
+            assert(shells.withDerivedSurfaceLease(25,root,[](auto&) noexcept {return 0;})==5);
+            assert(shells.withDerivedSurfaceLease(0,root,[&](auto& derived) noexcept {
+                root.valid=false;assert(!derived.live());return 0;
+            })==5);
+            root.valid=true;
             std::array<TglOwnedSurfaceStorage*,25> destinations{};
             destinations[0]=&source;destinations[24]=&source;
             auto live=[&](size_t i,TglOwnedSurfaceStorage* p) noexcept {

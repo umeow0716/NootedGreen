@@ -2648,6 +2648,14 @@ struct NativeRetainedFrontendRuntime {
 // through 1b2b20->1337b0. Successful pass+20 handoff switches root+10 to
 // root+18 and 131e20 advances pass+40 modulo two. None of these are leases
 // on the original roots or evidence that GPU resource retirement completed.
+// Integration dependency: NativeContextSurfaceOwner::hasSurfaceLease pins
+// ONLY its original shell, and NativeCoreFrameDataScope / packet.same()
+// require that exact identity. A copied shell from TemporaryScope cannot
+// pass those checks merely because its resource descriptor is identical.
+// Do not weaken those checks or resolve the temporary address in the native
+// context registry. The dispatcher needs a derived temporary-shell lease
+// under the original context/root pin, including nested metadata lifetime
+// and copyback reconciliation, before calling this existing execution path.
 struct NativeOriginalFrameExecution {
     using Frontend=NativeRetainedFrontendRuntime;
     struct Request {

@@ -7187,8 +7187,47 @@ template<class Backend> class TglNativePerPassCpuShells {
     std::array<uintptr_t,27> shells_{};
     std::array<const TglOwnedSurfaceStorage*,25> originals_{};
     uint64_t generation_=0;
+    size_t derivedLoans_=0;
     bool prepared_=false;
 public:
+    // A derived lease is not a registry root and cannot outlive its callback.
+    // Original owner retains context/backing authority; this grants CPU shell
+    // identity only. Nested metadata services still require original grants.
+    template<class Owner> class DerivedSurfaceLease {
+        friend class TglNativePerPassCpuShells;
+        TglNativePerPassCpuShells& temporary_;Owner& original_;
+        size_t index_;uint64_t generation_;bool busy_=false;
+        DerivedSurfaceLease(TglNativePerPassCpuShells& temporary,Owner& original,size_t index) noexcept
+            :temporary_(temporary),original_(original),index_(index),generation_(temporary.generation_) {}
+    public:
+        DerivedSurfaceLease(const DerivedSurfaceLease&)=delete;
+        DerivedSurfaceLease& operator=(const DerivedSurfaceLease&)=delete;
+        bool live() const noexcept {
+            return temporary_.prepared_ && temporary_.generation_==generation_ &&
+                temporary_.derivedLoans_ && temporary_.originals_[index_] &&
+                original_.hasSurfaceLease(*temporary_.originals_[index_]);
+        }
+        bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
+            return live() && temporary_.shells_[index_]==reinterpret_cast<uintptr_t>(&surface);
+        }
+        template<class Use> int withMutableSurface(Use use) noexcept {
+            static_assert(noexcept(use(std::declval<TglOwnedSurfaceStorage&>())));
+            if(busy_ || !live())return 5;
+            busy_=true;struct Reset {bool& value;~Reset(){value=false;}} reset{busy_};
+            const int status=use(*reinterpret_cast<TglOwnedSurfaceStorage*>(temporary_.shells_[index_]));
+            return live()?status:5;
+        }
+    };
+    template<class Owner,class Use> int withDerivedSurfaceLease(size_t index,Owner& original,Use use) noexcept {
+        static_assert(noexcept(original.hasSurfaceLease(std::declval<const TglOwnedSurfaceStorage&>())));
+        if(!prepared_ || index>=25 || !shells_[index] || !originals_[index] ||
+            derivedLoans_==SIZE_MAX || !original.hasSurfaceLease(*originals_[index]))return 5;
+        ++derivedLoans_;
+        struct Reset {size_t& count;~Reset(){--count;}} reset{derivedLoans_};
+        DerivedSurfaceLease<Owner> lease(*this,original,index);
+        static_assert(noexcept(use(lease)));
+        const int status=use(lease);return lease.live()?status:5;
+    }
     explicit TglNativePerPassCpuShells(Backend& backend) noexcept:backend_(backend) {}
     TglNativePerPassCpuShells(const TglNativePerPassCpuShells&)=delete;
     TglNativePerPassCpuShells& operator=(const TglNativePerPassCpuShells&)=delete;
@@ -7236,6 +7275,7 @@ public:
         return prepared_ && generation_==generation && shells_==expected;
     }
     void reset() noexcept {
+        if(derivedLoans_)return;
         const auto old=shells_;shells_.fill(0);originals_.fill(nullptr);prepared_=false;
         if(generation_!=UINT64_MAX)++generation_;
         for(size_t i=old.size();i;--i)if(old[i-1])backend_.release(old[i-1]);
