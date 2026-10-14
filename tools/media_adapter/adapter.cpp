@@ -1314,7 +1314,7 @@ struct NativeAdmissionFeaturePreparation {
     static bool apply(NativeAdmissionFeatureStage& stage,TglLeasedAdmissionExecution& report) noexcept {
         if(stage.read!=&readMemory || stage.executable!=&executableMemory ||
             !stage.binding.image || stage.qualify.image!=stage.binding.image ||
-            !stage.parameters.hasNativeReleaseSlot(stage.source.prefix.data()+0x90))return false;
+            !tglHasNativeDenoiseAdmissionGrant(stage.sourceOwner,stage.source,stage.parameters))return false;
         return stage(report);
     }
 };
@@ -1831,7 +1831,7 @@ struct NativeAdmissionStages {
             feature.targetOwner.hasSurfaceLease(feature.target) &&
             select.matchesFrame(read,feature.binding.image,reinterpret_cast<uintptr_t>(reset.child),
                 reset.vp,feature.source,feature.target,params.data()) &&
-            feature.parameters.hasNativeReleaseSlot(feature.source.prefix.data()+0x90) &&
+            tglHasNativeDenoiseAdmissionGrant(feature.sourceOwner,feature.source,feature.parameters) &&
             reset.executionOwner.hasLeasedFeatureReport(reset.execution,&feature.target);
     }
     struct Result {TglOwnedVeboxCommandTransactionResult native{};int status=5;bool admitted=false;};

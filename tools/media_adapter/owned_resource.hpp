@@ -1634,7 +1634,7 @@ template<class Backend> class TglTrackedCpuOwner {
     size_t extent = 0;
     bool borrowed = false;
     uint8_t* nativeReleaseSlot_=nullptr;
-    bool nativeAliasBorrowed_=false;
+    uint8_t* nativeAliasSlot_=nullptr;
 public:
     explicit TglTrackedCpuOwner(Backend& b) : backend(b) {}
     TglTrackedCpuOwner(const TglTrackedCpuOwner&) = delete;
@@ -1665,18 +1665,22 @@ public:
     // never adoption. Caller authenticates the native consumer and both slots.
     template<class Use> bool withNativeReleaseAlias(uint8_t* alias,Use use) noexcept {
         static_assert(noexcept(use()) && std::is_same_v<decltype(use()),void>);
-        if(!borrowed || !nativeReleaseSlot_ || nativeAliasBorrowed_ || !alias || alias==nativeReleaseSlot_)return false;
+        if(!borrowed || !nativeReleaseSlot_ || nativeAliasSlot_ || !alias || alias==nativeReleaseSlot_)return false;
         uintptr_t original=0,published=0;
         std::memcpy(&original,nativeReleaseSlot_,8);std::memcpy(&published,alias,8);
         if(original!=published || (published && published!=storage))return false;
-        nativeAliasBorrowed_=true;
-        struct Reset {bool& value;~Reset(){value=false;}} reset{nativeAliasBorrowed_};
+        nativeAliasSlot_=alias;
+        struct Reset {uint8_t*& slot;~Reset(){slot=nullptr;}} reset{nativeAliasSlot_};
         use();
         uintptr_t currentOriginal=0,observed=0;
         std::memcpy(&currentOriginal,nativeReleaseSlot_,8);std::memcpy(&observed,alias,8);
         if(currentOriginal!=original)return false;
         std::memcpy(nativeReleaseSlot_,&observed,8);
         return !observed || observed==published;
+    }
+    bool hasNativeReleaseAlias(const uint8_t* slot) const noexcept {
+        if(!slot || slot!=nativeAliasSlot_ || !hasNativeReleaseSlot(nativeReleaseSlot_))return false;
+        uintptr_t value=0;std::memcpy(&value,slot,8);return !value || value==storage;
     }
     // Non-consuming synchronous borrow. No native release/ownership transfer
     // is permitted; reset, reallocation and consuming-slot entry stay blocked.
@@ -7234,6 +7238,12 @@ public:
         const TglOwnedSurfaceStorage* surfaceBinding() const noexcept {
             return live()?reinterpret_cast<const TglOwnedSurfaceStorage*>(temporary_.shells_[index_]):nullptr;
         }
+        template<class Parameters> bool hasNativeDenoiseAdmissionGrant(
+            const TglOwnedSurfaceStorage& expected,const Parameters& parameters) const noexcept {
+            return hasSurfaceLease(expected) &&
+                parameters.hasNativeReleaseSlot(temporary_.originals_[index_]->prefix.data()+0x90) &&
+                parameters.hasNativeReleaseAlias(expected.prefix.data()+0x90);
+        }
         template<class Parameters,class Use> bool withNativeDenoiseParameters(
             const TglOwnedSurfaceStorage& expected,Parameters& parameters,Use use) noexcept {
             if(dnFault_ || !hasSurfaceLease(expected) ||
@@ -7254,6 +7264,14 @@ public:
             uint8_t& output,Read read) noexcept {
             if(dnFault_ || !hasSurfaceLease(expected))return false;
             uintptr_t captured=0;std::memcpy(&captured,expected.prefix.data()+0x90,8);
+            // Native consumption can clear the alias before its enclosing
+            // transaction propagates NULL to the original slot. The active
+            // alias grant proves absence; never read the old stored address.
+            if(!captured && hasNativeDenoiseAdmissionGrant(expected,parameters)) {
+                uintptr_t after=1;std::memcpy(&after,expected.prefix.data()+0x90,8);
+                if(after || !hasSurfaceLease(expected))return false;
+                output=0;return true;
+            }
             auto valid=[&]() noexcept {
                 if(!hasSurfaceLease(expected))return false;
                 uintptr_t temporary=0,original=0;
@@ -12956,6 +12974,26 @@ bool tglUpdateOwnedVeboxHistory(Owner& owner,void* child,
     std::memcpy(base+0x1b5c,&state.field1b5c,4);
     return true;
 }
+// Original owners require their exact tracked release slot. Derived owners
+// may provide the stronger original-pin + active-alias transaction proof;
+// raw pointer equality alone is never an admission grant.
+template<class Owner,class Parameters,class=void> struct TglNativeDenoiseAdmissionGrant {
+    static bool check(const Owner& owner,const TglOwnedSurfaceStorage& surface,const Parameters& parameters) noexcept {
+        return owner.hasSurfaceLease(surface) && parameters.hasNativeReleaseSlot(surface.prefix.data()+0x90);
+    }
+};
+template<class Owner,class Parameters> struct TglNativeDenoiseAdmissionGrant<Owner,Parameters,
+    std::void_t<decltype(std::declval<const Owner&>().hasNativeDenoiseAdmissionGrant(
+        std::declval<const TglOwnedSurfaceStorage&>(),std::declval<const Parameters&>()))>> {
+    static bool check(const Owner& owner,const TglOwnedSurfaceStorage& surface,const Parameters& parameters) noexcept {
+        return owner.hasNativeDenoiseAdmissionGrant(surface,parameters);
+    }
+};
+template<class Owner,class Parameters> bool tglHasNativeDenoiseAdmissionGrant(
+    const Owner& owner,const TglOwnedSurfaceStorage& surface,const Parameters& parameters) noexcept {
+    return TglNativeDenoiseAdmissionGrant<Owner,Parameters>::check(owner,surface,parameters);
+}
+
 // Enclose feature preparation AND every synchronous consumer of report60 in
 // one frame lease. Native160 retains target there; clear it before either
 // surface owner unlocks. This is not permission for asynchronous GPU submission.
@@ -12974,7 +13012,7 @@ int tglInvokePreboundVeboxFeaturePreparation(const TglVeboxFeatureBinding& bindi
         return child && sourceOwner.hasSurfaceLease(source) && targetOwner.hasSurfaceLease(target) &&
             childOwner.hasPrivateFeaturePreparationLease(reinterpret_cast<uintptr_t>(child),binding.image) &&
             executionOwner.hasLeasedFeatureReport(execution,&target) &&
-            parameters.hasNativeReleaseSlot(source.prefix.data()+0x90);
+            tglHasNativeDenoiseAdmissionGrant(sourceOwner,source,parameters);
     };
     if(!leased()) return 5;
     uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);

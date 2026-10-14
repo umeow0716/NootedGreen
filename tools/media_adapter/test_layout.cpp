@@ -15736,12 +15736,21 @@ static void testRetainedVeboxFrames() {
                         assert(temporary.withDerivedSurfaceLease(0,sidecar,[&](auto& derived) noexcept {
                             return derived.withMutableSurface([&](auto& copy) noexcept {
                                 assert(derived.withNativeDenoiseParameters(copy,dn,[&]() noexcept {
+                                    assert(!dn.hasNativeReleaseSlot(copy.prefix.data()+0x90));
+                                    assert(dn.hasNativeReleaseAlias(copy.prefix.data()+0x90));
+                                    assert(tglHasNativeDenoiseAdmissionGrant(derived,copy,dn));
+                                    assert(tglHasNativeDenoiseAdmissionGrant(sidecar,original,dn));
                                     assert(!derived.withNativeDenoiseParameters(copy,dn,[]() noexcept {assert(false);}));
                                 })); // unchanged alias leaves original transaction/storage intact
+                                assert(!dn.hasNativeReleaseAlias(copy.prefix.data()+0x90));
+                                assert(!tglHasNativeDenoiseAdmissionGrant(derived,copy,dn));
                                 assert(dn.get()==dnAddress && dnBackend.releases==0);
                                 assert(derived.withNativeDenoiseParameters(copy,dn,[&]() noexcept {
                                     dnBackend.release(dnAddress);
                                     std::memset(copy.prefix.data()+0x90,0,8);
+                                    uint8_t absent=99;
+                                    assert(derived.readLeasedDenoiseRequest(copy,dn,absent,
+                                        [](uintptr_t,void*,size_t) noexcept {assert(false);return false;}) && !absent);
                                 }));
                                 uintptr_t reconciled=1;std::memcpy(&reconciled,original.prefix.data()+0x90,8);
                                 assert(!reconciled && dn.hasNativeReleaseSlot(original.prefix.data()+0x90));
