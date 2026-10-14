@@ -9112,8 +9112,8 @@ static void testNativeResourceBoundary() {
                                                     reportBackend.bytes[0x12]=0;reportBackend.bytes[0x13]=0;
                                                     std::memset(reportBackend.bytes.data()+0x60,0,16);
                                                     assert(tglRunRetainedDiIecpFrameInput(retained,linkedInput,
-                                                        static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
-                                                        static_cast<decltype(&linkedInput)>(nullptr),childOwner,reportOwner,actualChild,report,
+                                                        static_cast<decltype(&linkedInput)>(nullptr),static_cast<TglHeldOwnedSurfaceRole*>(nullptr),
+                                                        static_cast<TglHeldOwnedSurfaceRole*>(nullptr),childOwner,reportOwner,actualChild,report,
                                                         current,read,false,{},
                                                         [&](const TglDiIecpInputs& live) noexcept -> int {
                                                             assert(live.current==&current && !live.dnNeeded && !live.referenceValid);

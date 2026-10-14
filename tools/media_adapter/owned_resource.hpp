@@ -22715,10 +22715,10 @@ int tglRunCapturedDiIecpFrameInput(SourceOwner& sourceOwner,ChildOwner& childOwn
 // Reenter retained allocation owners at producer time, then read current
 // prepared execution state. Allocation count/kind/resource choices must be
 // supplied from allocation, never reconstructed from modified report flags.
-template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Consume,
+template<class Api,class Owner,class TemporalOwner,class ChildOwner,class ExecutionOwner,class Read,class Consume,
     class Parameters=TglOwnedFfdnNoDenoiseBorrow>
 int tglRunRetainedDiIecpFrameInput(TglNativeVeboxSurfaceFrameStorage<Api>& storage,
-    Owner& sourceOwner,Owner* targetOwner,Owner* secondaryOwner,Owner* previousOwner,
+    Owner& sourceOwner,Owner* targetOwner,TemporalOwner* secondaryOwner,TemporalOwner* previousOwner,
     ChildOwner& childOwner,ExecutionOwner& executionOwner,void* child,uintptr_t execution,
     const TglOwnedSurfaceStorage& source,size_t count,TglOwnedFfdiAllocationKind kind,
     bool allocatedFfdn,bool allocatedStmm,Read read,bool alignDi64,
@@ -22750,10 +22750,10 @@ int tglRunRetainedDiIecpFrameInput(TglNativeVeboxSurfaceFrameStorage<Api>& stora
         });
 }
 
-template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Consume,
+template<class Api,class Owner,class TemporalOwner,class ChildOwner,class ExecutionOwner,class Read,class Consume,
     class Parameters=TglOwnedFfdnNoDenoiseBorrow>
 int tglRunRetainedDiIecpFrameInput(TglNativeVeboxSurfaceFrameStorage<Api>& storage,
-    Owner& sourceOwner,Owner* targetOwner,Owner* secondaryOwner,Owner* previousOwner,
+    Owner& sourceOwner,Owner* targetOwner,TemporalOwner* secondaryOwner,TemporalOwner* previousOwner,
     ChildOwner& childOwner,ExecutionOwner& executionOwner,void* child,uintptr_t execution,
     const TglOwnedSurfaceStorage& source,Read read,bool alignDi64,
     const std::array<uint32_t,11>& controls,Consume consume,Parameters* parameters=nullptr) noexcept {
@@ -22768,10 +22768,10 @@ int tglRunRetainedDiIecpFrameInput(TglNativeVeboxSurfaceFrameStorage<Api>& stora
 // Retained reader holds owners, not allocation-continuation stack views.
 // Construction does not read selection/report; producer invocation does.
 template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
-    class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+    class Parameters=TglOwnedFfdnNoDenoiseBorrow,class TemporalOwner=Owner>
 struct TglRetainedVeboxLiveInputReader {
     TglNativeVeboxSurfaceFrameStorage<Api>& storage;
-    Owner& sourceOwner;Owner* targetOwner;Owner* secondaryOwner;Owner* previousOwner;
+    Owner& sourceOwner;Owner* targetOwner;TemporalOwner* secondaryOwner;TemporalOwner* previousOwner;
     ChildOwner& childOwner;ExecutionOwner& executionOwner;
     void* child;uintptr_t execution;const TglOwnedSurfaceStorage& source;
     Read read;bool alignDi64;std::array<uint32_t,11> controls;Parameters* parameters=nullptr;
@@ -22781,9 +22781,10 @@ struct TglRetainedVeboxLiveInputReader {
     }
 };
 template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
-    class SurfaceAdmit,class DiAdmit,class Register,class Control,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+    class SurfaceAdmit,class DiAdmit,class Register,class Control,class Parameters=TglOwnedFfdnNoDenoiseBorrow,
+    class TemporalOwner=Owner>
 struct TglRetainedVeboxLiveFrameTypes {
-    using Capture=TglRetainedVeboxLiveInputReader<Api,Owner,ChildOwner,ExecutionOwner,Read,Parameters>;
+    using Capture=TglRetainedVeboxLiveInputReader<Api,Owner,ChildOwner,ExecutionOwner,Read,Parameters,TemporalOwner>;
     using Frame=TglOwnedVeboxLivePacketContext<Capture,Read,SurfaceAdmit,DiAdmit,Register,Control>;
     template<class PacketAdmit,class ProduceCsc>
     using Producers=TglOwnedVeboxFrameProducerTypes<Frame,ChildOwner,ExecutionOwner,Read,PacketAdmit,ProduceCsc>;
