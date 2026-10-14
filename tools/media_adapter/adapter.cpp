@@ -1079,9 +1079,9 @@ using NativeVpProducerInputUse=TglOwnedVeboxCommandTransactionResult(*)(NativeVp
     const TglOwnedVpModeState&) noexcept;
 template TglOwnedVeboxCommandTransactionResult NativeVpProducerInputScope::run<NativeVpProducerInputUse>(
     NativeVpProducerInputUse) noexcept;
-struct NativeTwoPassCscHealth {
+template<class SurfaceOwner> struct NativeTwoPassCscHealthFor {
     NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
-    NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+    SurfaceOwner& sourceOwner;SurfaceOwner& targetOwner;
     const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
     uintptr_t image,child,execution;uint64_t generation;
     bool operator()(uintptr_t actualSource,uintptr_t actualTarget) const noexcept {
@@ -1096,11 +1096,13 @@ struct NativeTwoPassCscHealth {
             readMemory(reinterpret_cast<uintptr_t>(source.prefix.data()+0x130),&format,4);
     }
 };
-using NativeTwoPassCscQuery=TglLeasedNativeTwoPassCscQuery<NativeRendererChildOwner,
+using NativeTwoPassCscHealth=NativeTwoPassCscHealthFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> using NativeTwoPassCscQueryFor=TglLeasedNativeTwoPassCscQuery<NativeRendererChildOwner,
     decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory),
-    TglNativeTwoPassCscInvoke,NativeTwoPassCscHealth>;
-struct NativeVeboxCscProducer {
-    NativeTwoPassCscHealth& health;const TglCscCoefficientsBinding& binding;
+    TglNativeTwoPassCscInvoke,NativeTwoPassCscHealthFor<SurfaceOwner>>;
+using NativeTwoPassCscQuery=NativeTwoPassCscQueryFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeVeboxCscProducerFor {
+    NativeTwoPassCscHealthFor<SurfaceOwner>& health;const TglCscCoefficientsBinding& binding;
     bool busy=false;
     bool operator()(TglCscCoefficients& output,uint32_t from,uint32_t to,uint32_t format) noexcept {
         const auto source=reinterpret_cast<uintptr_t>(&health.source);
@@ -1122,17 +1124,19 @@ struct NativeVeboxCscProducer {
         output=candidate;return true;
     }
 };
-struct NativeTargetDecompression {
+using NativeVeboxCscProducer=NativeVeboxCscProducerFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeTargetDecompressionFor {
     void* scope=nullptr;
-    int(*invoke)(void*,NativeContextSurfaceOwner&,const TglOwnedSurfaceStorage&) noexcept=nullptr;
+    int(*invoke)(void*,SurfaceOwner&,const TglOwnedSurfaceStorage&) noexcept=nullptr;
 };
-struct NativeFastFillTransaction {
-    NativeContextSurfaceOwner& targetOwner;
+using NativeTargetDecompression=NativeTargetDecompressionFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeFastFillTransactionFor {
+    SurfaceOwner& targetOwner;
     TglVeboxPipeAcquisition& acquisition;
     // This Darwin policy consumes the proven compressed/mode fields; it has
     // no compression-format side-channel consumer. Decompression remains real.
     int& decompressionStatus;
-    NativeTargetDecompression& decompression;
+    NativeTargetDecompressionFor<SurfaceOwner>& decompression;
     template<class Policy> bool operator()(Policy& policy) noexcept {
         bool entered=false,selected=false;
         const int status=targetOwner.withMutableSurface([&](TglOwnedSurfaceStorage& target) noexcept -> int {
@@ -1160,24 +1164,28 @@ struct NativeFastFillTransaction {
         return !status && selected && acquisition.healthy();
     }
 };
-using NativeOutputPipePolicy=TglLeasedGen12VeboxOutputPolicy<NativeFrameDataRead,
-    NativeRendererChildOwner,NativeContextSurfaceOwner,NativeContextSurfaceOwner,
-    NativeTwoPassCscQuery,NativeFastFillTransaction>;
-using NativeOutputPipeSelector=TglOwnedVpPipeSelector<NativeFrameDataRead,NativeOutputPipePolicy>;
+using NativeFastFillTransaction=NativeFastFillTransactionFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> using NativeOutputPipePolicyFor=TglLeasedGen12VeboxOutputPolicy<NativeFrameDataRead,
+    NativeRendererChildOwner,SurfaceOwner,SurfaceOwner,
+    NativeTwoPassCscQueryFor<SurfaceOwner>,NativeFastFillTransactionFor<SurfaceOwner>>;
+using NativeOutputPipePolicy=NativeOutputPipePolicyFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> using NativeOutputPipeSelectorFor=TglOwnedVpPipeSelector<NativeFrameDataRead,NativeOutputPipePolicyFor<SurfaceOwner>>;
+using NativeOutputPipeSelector=NativeOutputPipeSelectorFor<NativeContextSurfaceOwner>;
 // Compile the concrete selector/transaction bodies; no policy instance is
 // published until the compressed-resource producer has a proven native route.
-struct NativeOutputPipeSelection {
-    static uint32_t select(NativeOutputPipeSelector& selector,uint8_t& compositionNeeded) noexcept {
+template<class SurfaceOwner> struct NativeOutputPipeSelectionFor {
+    static uint32_t select(NativeOutputPipeSelectorFor<SurfaceOwner>& selector,uint8_t& compositionNeeded) noexcept {
         return selector(compositionNeeded);
     }
 };
-struct NativeOutputCscQueryScope {
-    static bool query(NativeTwoPassCscQuery& scoped,uintptr_t source,uintptr_t target,bool& needed) noexcept {
+using NativeOutputPipeSelection=NativeOutputPipeSelectionFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeOutputCscQueryScopeFor {
+    static bool query(NativeTwoPassCscQueryFor<SurfaceOwner>& scoped,uintptr_t source,uintptr_t target,bool& needed) noexcept {
         return scoped(source,target,needed);
     }
-    template<class Use> static int run(NativeTwoPassCscHealth& health,Use use) noexcept {
-        static_assert(noexcept(use(std::declval<NativeTwoPassCscQuery&>())) &&
-            std::is_same_v<decltype(use(std::declval<NativeTwoPassCscQuery&>())),int>);
+    template<class Use> static int run(NativeTwoPassCscHealthFor<SurfaceOwner>& health,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<NativeTwoPassCscQueryFor<SurfaceOwner>&>())) &&
+            std::is_same_v<decltype(use(std::declval<NativeTwoPassCscQueryFor<SurfaceOwner>&>())),int>);
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         const auto source=reinterpret_cast<uintptr_t>(&health.source);
         const auto target=reinterpret_cast<uintptr_t>(&health.target);
@@ -1186,48 +1194,49 @@ struct NativeOutputCscQueryScope {
         NativeTglImageAdmission qualify{health.image};TglNativeTwoPassCscInvoke invoke;
         TglTwoPassCscBinding binding;
         if(!binding.resolve(health.image,read,qualify,executable))return 5;
-        NativeTwoPassCscQuery scoped(health.childOwner,binding,health.child,read,qualify,executable,invoke,health);
+        NativeTwoPassCscQueryFor<SurfaceOwner> scoped(health.childOwner,binding,health.child,read,qualify,executable,invoke,health);
         const int status=use(scoped);
         return status?status:(health(source,target)?0:5);
     }
 };
+using NativeOutputCscQueryScope=NativeOutputCscQueryScopeFor<NativeContextSurfaceOwner>;
 template int NativeOutputCscQueryScope::run<int(*)(NativeTwoPassCscQuery&) noexcept>(
     NativeTwoPassCscHealth&,int(*)(NativeTwoPassCscQuery&) noexcept) noexcept;
-struct NativeOutputPipeFrameScope {
-    NativeTwoPassCscHealth& health;NativeFrameDataRead& read;
+template<class SurfaceOwner> struct NativeOutputPipeFrameScopeFor {
+    NativeTwoPassCscHealthFor<SurfaceOwner>& health;NativeFrameDataRead& read;
     TglOwnedVpSfcCallerStorage& vp;uintptr_t parameters,di,colorFill;
     const TglOwnedGen12SurfaceFeatures& sourceFeatures;
     const TglOwnedGen12SurfaceFeatures& targetFeatures;const uint8_t& compositionNeeded;
     TglVeboxPipeAcquisition& acquisition;
-    int& decompressionStatus;NativeTargetDecompression& decompression;
+    int& decompressionStatus;NativeTargetDecompressionFor<SurfaceOwner>& decompression;
     bool attempted=false;
     template<class Use> int run(Use use) noexcept {
-        static_assert(noexcept(use(std::declval<NativeOutputPipeSelector&>())) &&
-            std::is_same_v<decltype(use(std::declval<NativeOutputPipeSelector&>())),int>);
+        static_assert(noexcept(use(std::declval<NativeOutputPipeSelectorFor<SurfaceOwner>&>())) &&
+            std::is_same_v<decltype(use(std::declval<NativeOutputPipeSelectorFor<SurfaceOwner>&>())),int>);
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         if(attempted || !read.scope || !read.resolve || !acquisition.healthy())return 5;
         attempted=true;
-        NativeFastFillTransaction fastFill{health.targetOwner,acquisition,decompressionStatus,decompression};
-        return NativeOutputCscQueryScope::run(health,[&](NativeTwoPassCscQuery& query) noexcept -> int {
+        NativeFastFillTransactionFor<SurfaceOwner> fastFill{health.targetOwner,acquisition,decompressionStatus,decompression};
+        return NativeOutputCscQueryScopeFor<SurfaceOwner>::run(health,[&](NativeTwoPassCscQueryFor<SurfaceOwner>& query) noexcept -> int {
             // Not an inference from the CSC prefix: exact2343d0 uploads
             // the cube for mode2;237730 publishes that mode at+a8/+64.
             // The checked original owner supplies this conversion lane only.
             struct LutSource {
-                NativeTwoPassCscHealth& health;TglVeboxPipeAcquisition& acquisition;
+                NativeTwoPassCscHealthFor<SurfaceOwner>& health;TglVeboxPipeAcquisition& acquisition;
                 static bool produce(void* context,TglOwnedGen12SurfaceFeatures& output) noexcept {
                     auto& self=*static_cast<LutSource*>(context);
                     return tglAcquireLeasedConversionLutFeatures(self.health.sourceOwner,self.health.source,
                         self.acquisition,&readMemory,output);
                 }
             } lut{health,acquisition};
-            NativeOutputPipePolicy policy(read,health.childOwner,health.image,health.child,parameters,
+            NativeOutputPipePolicyFor<SurfaceOwner> policy(read,health.childOwner,health.image,health.child,parameters,
                 reinterpret_cast<uintptr_t>(vp.bytes.data()),di,colorFill,
                 health.sourceOwner,health.source,sourceFeatures,health.targetOwner,health.target,targetFeatures,
                 compositionNeeded,acquisition,query,fastFill);
             if(sourceFeatures.lut==TglOwnedFeaturePresence::Unknown &&
                 (!ownedExecutableMemory(reinterpret_cast<uintptr_t>(&LutSource::produce),1) ||
                     !policy.bindLutProducer(&lut,&LutSource::produce)))return 5;
-            NativeOutputPipeSelector selector(vp,read,policy,const_cast<TglOwnedSurfaceStorage*>(&health.source),
+            NativeOutputPipeSelectorFor<SurfaceOwner> selector(vp,read,policy,const_cast<TglOwnedSurfaceStorage*>(&health.source),
                 const_cast<TglOwnedSurfaceStorage*>(&health.target),reinterpret_cast<void*>(parameters));
             if(!acquisition.healthy())return 5;
             const int status=use(selector);
@@ -1235,6 +1244,13 @@ struct NativeOutputPipeFrameScope {
         });
     }
 };
+using NativeOutputPipeFrameScope=NativeOutputPipeFrameScopeFor<NativeContextSurfaceOwner>;
+template struct NativeTwoPassCscHealthFor<NativeTemporarySurfaceOwner>;
+template struct NativeVeboxCscProducerFor<NativeTemporarySurfaceOwner>;
+template struct NativeOutputPipeSelectionFor<NativeTemporarySurfaceOwner>;
+template int NativeOutputPipeFrameScopeFor<NativeTemporarySurfaceOwner>::run<
+    int(*)(NativeOutputPipeSelectorFor<NativeTemporarySurfaceOwner>&) noexcept>(
+    int(*)(NativeOutputPipeSelectorFor<NativeTemporarySurfaceOwner>&) noexcept) noexcept;
 template int NativeOutputPipeFrameScope::run<int(*)(NativeOutputPipeSelector&) noexcept>(
     int(*)(NativeOutputPipeSelector&) noexcept) noexcept;
 using NativeSourceGraph=TglOwnedFrontendSourceGraph<NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi>;
