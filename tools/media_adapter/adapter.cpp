@@ -1160,14 +1160,24 @@ struct NativeOutputPipeFrameScope {
         attempted=true;
         NativeFastFillTransaction fastFill{health.targetOwner,acquisition,decompressionStatus,decompression};
         return NativeOutputCscQueryScope::run(health,[&](NativeTwoPassCscQuery& query) noexcept -> int {
+            // Not an inference from the CSC prefix: exact2343d0 uploads
+            // the cube for mode2;237730 publishes that mode at+a8/+64.
+            // The checked original owner supplies this conversion lane only.
+            struct LutSource {
+                NativeTwoPassCscHealth& health;TglVeboxPipeAcquisition& acquisition;
+                static bool produce(void* context,TglOwnedGen12SurfaceFeatures& output) noexcept {
+                    auto& self=*static_cast<LutSource*>(context);
+                    return tglAcquireLeasedConversionLutFeatures(self.health.sourceOwner,self.health.source,
+                        self.acquisition,&readMemory,output);
+                }
+            } lut{health,acquisition};
             NativeOutputPipePolicy policy(read,health.childOwner,health.image,health.child,parameters,
                 reinterpret_cast<uintptr_t>(vp.bytes.data()),di,colorFill,
                 health.sourceOwner,health.source,sourceFeatures,health.targetOwner,health.target,targetFeatures,
                 compositionNeeded,acquisition,query,fastFill);
-            // Exact237730 proves source+a8 is CSC matrix/offset metadata,
-            // not the DDI p3DLutParams extension. Neither its nullness nor
-            // conversion mode establishes LUT presence. Keep independently
-            // supplied feature provenance; Unknown denies when consumed.
+            if(sourceFeatures.lut==TglOwnedFeaturePresence::Unknown &&
+                (!ownedExecutableMemory(reinterpret_cast<uintptr_t>(&LutSource::produce),1) ||
+                    !policy.bindLutProducer(&lut,&LutSource::produce)))return 5;
             NativeOutputPipeSelector selector(vp,read,policy,const_cast<TglOwnedSurfaceStorage*>(&health.source),
                 const_cast<TglOwnedSurfaceStorage*>(&health.target),reinterpret_cast<void*>(parameters));
             if(!acquisition.healthy())return 5;
