@@ -3185,6 +3185,43 @@ struct NativeRetainedTemporaryTransaction {
             });
     }
 };
+struct NativeRetainedTemporaryExecution {
+    struct Request {
+        NativeRetainedTemporaryTransaction::Backend& backend;
+        std::array<uint8_t,0x139>& parameters;std::array<uint8_t,0x60>& pass;
+        const TglNativeOuterSurfaceRoles& roles;size_t sourceIndex,targetIndex,childIndex;
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal;
+        const TglVeboxAdmissionBorrowedInterfaces& interfaces;const TglOwnedVpEntrySet& catalogue;
+        NativeModeRetirementAuthority& retirement;const TglNativeVphalMhwView& view;
+        TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
+        NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;void* argument;
+        bool attempted=false,consumed=false;
+    };
+    static TglOwnedVeboxCommandTransactionResult consume(void* context,NativeRendererCpuAssembly& cpu,
+        const TglNativeCreatedVeboxRendererView& pinned,NativeSourceGraph& graph,
+        const NativeRetainedTemporaryTransaction::Target& target,NativeDenoiseParameters& denoise,
+        NativeRendererChildLifetime& first,NativeRendererChildLifetime& second) noexcept {
+        if(!context)return {};
+        auto& request=*static_cast<Request*>(context);
+        if(!request.attempted || request.consumed)return {};
+        request.consumed=true;
+        if(request.childIndex>1 || !request.view.matchesCreated(pinned,&readMemory,NativeDataAdmission{},
+            NativeTglImageAdmission{pinned.image}))return {};
+        const auto child=pinned.originalChildren[request.childIndex];
+        auto* lifetime=TglOwnedVeboxScopedContext<NativeRendererChildLifetime>::get(reinterpret_cast<void*>(child));
+        if(!lifetime || lifetime!=(request.childIndex?&second:&first))return {};
+        NativeRetainedTemporaryTransaction transaction{request.backend,cpu,pinned,graph,target,request.temporal,
+            denoise,request.childIndex,request.interfaces,request.catalogue,request.retirement,request.view,
+            request.acquisition,request.decompressionStatus,request.decompression,request.argument};
+        return transaction.run(request.parameters,request.pass,request.roles).native;
+    }
+    static TglOwnedVeboxCommandTransactionResult runRetained(NativeContextRendererFrame& frame,Request& request) noexcept {
+        if(request.attempted || request.childIndex>1)return {};
+        request.attempted=true;
+        return NativeRetainedFrontendRuntime::runUnselected(frame,request.roles,request.sourceIndex,request.targetIndex,
+            &request,&consume);
+    }
+};
 // Callback table entries carry no Entry/closure argument. Route the immutable
 // qualified native image and actual physical generation, never "current Entry".
 // Prepared backend only; factory callback publication remains disabled.
