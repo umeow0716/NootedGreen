@@ -177,6 +177,7 @@ using NativeRendererCleanupContext=TglOwnedVeboxVpCleanupContext<NativeRendererB
 using NativeRendererCleanup=TglOwnedVeboxVpCleanupCallback<NativeRendererCleanupContext>;
 using NativeRendererCpu=TglNativeVeboxRendererCpuStorage<TglDarwinStmmSurfaceApi,NativeRendererCleanup>;
 using NativeRendererChildOwner=std::remove_reference_t<decltype(std::declval<NativeRendererCpu&>().children().first().owner())>;
+using NativePreparedVpReset=TglOwnedVeboxPreparedVpReset<NativeRendererChildOwner>;
 struct NativeRendererChildRetirement {
     NativeRendererRetirementAuthority* authority;
     void* child;uint64_t generation;size_t index;
@@ -255,26 +256,37 @@ public:
             return use(owner,execution,child,report);
         });
     }
-    template<class Use> TglOwnedVeboxCommandTransactionResult withChildVpResources(size_t index,Use use) noexcept {
+    template<class Prepare,class Use> TglOwnedVeboxCommandTransactionResult withChildVpResourcesPrepared(
+        size_t index,Prepare prepare,Use use) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
         if constexpr(std::is_pointer_v<Use>)if(!use)return result;
         const int status=withChildExecution(index,[&](auto& owner,auto& execution,void* child,
             uintptr_t report) noexcept -> int {
-            return backing().withVpResources(index,[&](auto& graph,auto& storage,auto& lines) noexcept -> int {
+            auto enter=[&](NativePreparedVpReset* reset) noexcept -> int {
+              return backing().withVpResources(index,[&](auto& graph,auto& storage,auto& lines) noexcept -> int {
                 return owner.withLeasedBorrowedVpCpuView(child,storage.bytes.data(),
                     [&](void* parent,void* vp) noexcept -> int {
                         if(parent!=child || vp!=storage.bytes.data() || !execution.hasExecutionLease(report))return 5;
-                        static_assert(noexcept(use(owner,execution,parent,report,graph,storage,lines)) &&
-                            std::is_same_v<decltype(use(owner,execution,parent,report,graph,storage,lines)),
+                        static_assert(noexcept(use(owner,execution,parent,report,graph,storage,lines,reset)) &&
+                            std::is_same_v<decltype(use(owner,execution,parent,report,graph,storage,lines,reset)),
                                 TglOwnedVeboxCommandTransactionResult>);
-                        result=use(owner,execution,parent,report,graph,storage,lines);
+                        result=use(owner,execution,parent,report,graph,storage,lines,reset);
                         backing().retention().observe(result); // before child80/report/VP lease unwind
                         return result.status;
                     });
-            });
+              });
+            };
+            return prepare(owner,execution,child,report,enter);
         });
         if(status)result.status=status;
         return result;
+    }
+    template<class Use> TglOwnedVeboxCommandTransactionResult withChildVpResources(size_t index,Use use) noexcept {
+        if constexpr(std::is_pointer_v<Use>)if(!use)return {};
+        return withChildVpResourcesPrepared(index,
+            [](auto&,auto&,void*,uintptr_t,auto enter) noexcept -> int {return enter(nullptr);},
+            [&](auto& owner,auto& execution,void* child,uintptr_t report,auto& graph,auto& storage,
+                auto& lines,NativePreparedVpReset*) noexcept {return use(owner,execution,child,report,graph,storage,lines);});
     }
     int initializeNativeBases(const TglNativeVphalMhwView& view,const TglOwnedVphalLifetimeTable& lifetime) noexcept {
         if(basesAttempted_ || view.renderer.image!=image_ || lifetime.object()!=view.parent ||
@@ -387,6 +399,7 @@ struct NativeCoreFrameDataScope {
     const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
     TglOwnedVpSfcCallerStorage& vp;
     uintptr_t image,child,execution;uint64_t generation;
+    NativePreparedVpReset* preparedReset=nullptr;
     NativeFrameDataRead capability() noexcept {return {this,&resolve};}
     bool live() const noexcept {
         return generation && childOwner.allocationGeneration()==generation &&
@@ -1400,6 +1413,7 @@ struct NativeAdmissionReset {
     NativeRendererBacking& backing;
     NativeModeRetirementAuthority& retirement;
     size_t index;void* child;uintptr_t execution;void* vp;
+    NativePreparedVpReset* preparedReset=nullptr;NativeVpGraph* borrowedGraph=nullptr;
     bool operator()() noexcept {
         const auto address=reinterpret_cast<uintptr_t>(child);
         const uint64_t generation=childOwner.allocationGeneration();
@@ -1415,8 +1429,12 @@ struct NativeAdmissionReset {
         };
         using VpReset=TglOwnedVeboxPersistentVpAdmissionReset<NativeRendererChildOwner,
             NativeRendererBacking,decltype(admitRetirement)>;
-        VpReset reset{childOwner,backing,index,child,vp,admitRetirement};
-        TglOwnedVeboxAdmissionResetStage<NativeRendererChildOwner,NativeExecutionOwner,VpReset>
+        VpReset legacy{childOwner,backing,index,child,vp,admitRetirement};
+        auto reset=[&]() noexcept -> bool {
+            if(preparedReset)return borrowedGraph && preparedReset->consume(childOwner,index,child,vp,*borrowedGraph);
+            return !borrowedGraph && legacy();
+        };
+        TglOwnedVeboxAdmissionResetStage<NativeRendererChildOwner,NativeExecutionOwner,decltype(reset)>
             stage{childOwner,executionOwner,child,execution,reset};
         const bool accepted=stage();
         return accepted && childOwner.allocationGeneration()==generation &&
@@ -1622,12 +1640,30 @@ struct NativeLeasedFrameInputScope {
         const TglNativeCreatedVeboxRendererView& pinned;
         const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         uintptr_t parameters,pass;
+        NativeModeRetirementAuthority* resetAuthority=nullptr;
     };
     template<class Use> static TglOwnedVeboxCommandTransactionResult run(Inputs& in,Use use) noexcept {
         if constexpr(std::is_pointer_v<Use>)if(!use)return {};
         if(in.index>1 || !in.pinned.creator || !in.pinned.renderer)return {};
-        return in.assembly.withChildVpResources(in.index,[&](auto& owner,auto& execution,void* child,
-            uintptr_t report,auto& graph,auto& vp,auto& lines) noexcept -> TglOwnedVeboxCommandTransactionResult {
+        auto prepare=[&](auto& owner,auto& execution,void* child,uintptr_t report,auto enter) noexcept -> int {
+            if(!in.resetAuthority)return enter(nullptr);
+            const auto generation=owner.allocationGeneration();uintptr_t vp=0;
+            auto live=[&]() noexcept {
+                return in.index<2 && in.pinned.originalChildren[in.index]==reinterpret_cast<uintptr_t>(child) &&
+                    generation && owner.allocationGeneration()==generation && execution.hasExecutionLease(report) &&
+                    owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) && !in.assembly.backing().retention()();
+            };
+            if(!live() || !owner.readLeasedStorage(reinterpret_cast<uintptr_t>(child),generation,
+                reinterpret_cast<uintptr_t>(child)+0x80,&vp,8) || !vp)return 5;
+            auto retire=[&]() noexcept -> int {
+                if(!live())return 5;
+                const int status=(*in.resetAuthority)();return status?status:live()?0:5;
+            };
+            return NativePreparedVpReset::run(owner,in.assembly.backing(),in.index,child,reinterpret_cast<void*>(vp),
+                retire,[&](NativePreparedVpReset& reset) noexcept -> int {return live()?enter(&reset):5;});
+        };
+        return in.assembly.withChildVpResourcesPrepared(in.index,prepare,[&](auto& owner,auto& execution,void* child,
+            uintptr_t report,auto& graph,auto& vp,auto& lines,NativePreparedVpReset* reset) noexcept -> TglOwnedVeboxCommandTransactionResult {
             TglOwnedVeboxCommandTransactionResult result;
             const auto* source=in.sourceOwner.surfaceBinding();
             const auto* target=in.targetOwner.surfaceBinding();
@@ -1635,7 +1671,7 @@ struct NativeLeasedFrameInputScope {
                 !source || !target || !in.sourceOwner.hasSurfaceLease(*source) ||
                 !in.targetOwner.hasSurfaceLease(*target))return result;
             NativeCoreFrameDataScope core{owner,execution,in.sourceOwner,in.targetOwner,*source,*target,vp,
-                in.pinned.image,reinterpret_cast<uintptr_t>(child),report,owner.allocationGeneration()};
+                in.pinned.image,reinterpret_cast<uintptr_t>(child),report,owner.allocationGeneration(),reset};
             NativeAdmissionPacketScope packets(core,in.interfaces,in.parameters,in.pass);
             const int status=packets.run([&](NativeAdmissionParams& params,NativeAdmissionPass& pass,
                 TglBorrowedVeboxByteView<12>& fill,TglBorrowedVeboxByteView<8>& alpha) noexcept -> int {
@@ -1766,6 +1802,7 @@ public:
         const TglOwnedVpEntrySet& catalogue;const TglOwnedVpModeState& mode;
         size_t index;void* child;uintptr_t execution;void* vp;uintptr_t mhw;void* renderData;
         NativeVpGraph* borrowedGraph=nullptr;TglOwnedVpSfcCallerStorage* borrowedStorage=nullptr;
+        NativePreparedVpReset* preparedReset=nullptr;
     };
 private:
     NativeAdmissionReset reset_;
@@ -1777,7 +1814,8 @@ private:
     bool attempted_=false;
 public:
     NativeAdmissionFrameAssembly(const Inputs& in,NativeOutputPipeSelector& select,NativeFrameDataRead& read) noexcept
-        :reset_{in.childOwner,in.executionOwner,in.backing,in.retirement,in.index,in.child,in.execution,in.vp},
+        :reset_{in.childOwner,in.executionOwner,in.backing,in.retirement,in.index,in.child,in.execution,in.vp,
+             in.preparedReset,in.borrowedGraph},
          history_{{in.childOwner,in.executionOwner,in.sourceGraph,in.child,in.execution,in.source,
              NativeDataAdmission{},NativeDataAdmission{}}},
          feature_{in.featureBinding,in.sourceOwner,in.targetOwner,in.childOwner,in.executionOwner,
@@ -2382,6 +2420,7 @@ struct NativeRetainedFrontendRuntime {
             NativeVpProducerFrame&,const TglOwnedVpModeState&,VpFrontend&) noexcept;
         size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         uintptr_t parameters,pass;const TglOwnedVpEntrySet& catalogue;
+        NativeModeRetirementAuthority& retirement;
         void* context;Use use;
     };
     using AdmissionInputUse=int(*)(void*,const NativeAdmissionFrameAssembly::Inputs&) noexcept;
@@ -2404,7 +2443,7 @@ struct NativeRetainedFrontendRuntime {
             frontend.assembly.backing(),retirement,core.sourceOwner,core.targetOwner,
             frontend.sourceGraph,frontend.denoise,core.source,core.target,feature,params,pass,
             frontend.interfaces,catalogue,mode,frontend.childIndex,reinterpret_cast<void*>(core.child),
-            core.execution,core.vp.bytes.data(),mhw,reinterpret_cast<void*>(core.execution),&graph,&core.vp};
+            core.execution,core.vp.bytes.data(),mhw,reinterpret_cast<void*>(core.execution),&graph,&core.vp,core.preparedReset};
         const int status=use(context,inputs);
         return status?status:core.live()?0:5;
     }
@@ -2426,7 +2465,7 @@ struct NativeRetainedFrontendRuntime {
                 if(!lifetime || lifetime!=(request.childIndex?&second:&first))
                     return TglOwnedVeboxCommandTransactionResult{};
                 NativeLeasedFrameInputScope::Inputs inputs{cpu,request.childIndex,source,target,pinned,
-                    request.interfaces,request.parameters,request.pass};
+                    request.interfaces,request.parameters,request.pass,&request.retirement};
                 VpFrontend frontend{cpu,pinned,request.childIndex,request.interfaces,sourceGraph,
                     secondary,previous,denoise};
                 struct Continuation {VpRequest& request;VpFrontend& frontend;} continuation{request,frontend};
