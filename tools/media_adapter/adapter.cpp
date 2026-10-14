@@ -2123,6 +2123,20 @@ struct NativeCreatorPreparation {
                 });
         });
     }
+    // Full synchronous construction handoff, not a component-success alias.
+    // Each component keeps its persistent partial state; failure never retries
+    // construction or destroys objects still owned by the native creator.
+    template<class PhysicalScope>
+    static int complete(PhysicalScope& physical,const Entry& factory,uintptr_t image,
+        uintptr_t address,uint64_t generation,uintptr_t creator) noexcept {
+        const int owner=prepareOwner(physical,factory,image,address,generation,creator);
+        if(owner)return owner;
+        if(!physical.matches(image,address,generation))return 5;
+        const int children=initializeChildren(physical,image,address,generation,creator);
+        if(children)return children;
+        if(!physical.matches(image,address,generation))return 5;
+        return publishChildren(physical,image,address,generation,creator);
+    }
 };
 std::map<void *, std::unique_ptr<Entry>> registry;
 // Prepared invocation only: factory callbacks remain unchanged until complete
@@ -2348,6 +2362,8 @@ template int NativeCreatorPreparation::initializeChildren<TglOwnedPhysicalMutati
     TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 template int NativeCreatorPreparation::publishChildren<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
+template int NativeCreatorPreparation::complete<TglOwnedPhysicalMutationAuthority>(
+    TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 
 extern "C" __attribute__((visibility("default")))
 int NGRN_ObservedCreateContexts(void *context, const void *input) {
