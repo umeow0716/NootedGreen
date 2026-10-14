@@ -7488,6 +7488,32 @@ public:
         return hasSurfaceLease(surface)?linked:nullptr;
     }
 };
+struct TglNativePerPassHistorySavePlan {
+    std::array<uintptr_t,18> slots{};
+    size_t written=0;
+};
+// Exact1300f0 mode1 saves at most18 C0 links, without clearing untouched
+// suffix slots. This computes/validates the expected native data mutation;
+// it grants no renderer write, CF retain, ownership transfer or retirement.
+template<class Graph,class Owner>
+bool tglPlanNativePerPassHistorySave(TglNativePerPassHistorySavePlan& output,
+    const std::array<uintptr_t,18>& before,Graph& graph,Owner& owner,
+    const TglOwnedSurfaceStorage& temporary) noexcept {
+    const auto* original=owner.originalSurfaceBinding();
+    if(!original || !owner.hasSurfaceLease(temporary) || !graph.hasRetainedSurfaceLease(*original))return false;
+    uintptr_t copied=0;std::memcpy(&copied,temporary.prefix.data()+0xc0,8);
+    const auto* next=graph.linkedRetainedStorage(*original,0xc0);
+    if(copied!=reinterpret_cast<uintptr_t>(next))return false;
+    TglNativePerPassHistorySavePlan candidate{before,0};
+    while(next && candidate.written<candidate.slots.size()) {
+        if(!graph.hasRetainedSurfaceLease(*next))return false;
+        candidate.slots[candidate.written++]=reinterpret_cast<uintptr_t>(next);
+        next=graph.linkedRetainedStorage(*next,0xc0);
+    }
+    uintptr_t after=0;std::memcpy(&after,temporary.prefix.data()+0xc0,8);
+    if(after!=copied || !owner.hasSurfaceLease(temporary) || !graph.hasRetainedSurfaceLease(*original))return false;
+    output=candidate;return true;
+}
 // Gen12 DDI extensions are owned sidecars, NOT extra bytes in the native
 // 0x2a8 shell or aliases for source+a8's legacy CSC/conversion parameters.
 // Unknown is intentionally distinct from an explicitly absent feature. The

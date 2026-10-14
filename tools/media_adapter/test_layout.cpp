@@ -16346,8 +16346,15 @@ static void testRetainedVeboxFrames() {
                                     assert(overlay.hasSurfaceLease(copy) && !overlay.hasSurfaceLease(original));
                                     assert(overlay.linkedStorage(copy,0xc0)==&history && overlay.linkedStorage(copy,0xc8)==&history);
                                     assert(!overlay.linkedStorage(copy,0xb8) && refs==4);
+                                    std::array<uintptr_t,18> before{};before.fill(0x1234);
+                                    TglNativePerPassHistorySavePlan plan;
+                                    assert(tglPlanNativePerPassHistorySave(plan,before,graph,derived,copy));
+                                    assert(plan.written==1 && plan.slots[0]==historyAddress && refs==4);
+                                    for(size_t i=1;i<18;++i)assert(plan.slots[i]==before[i]);
                                     const uintptr_t zero=0;
                                     std::memcpy(copy.prefix.data()+0xc0,&zero,8);
+                                    assert(!tglPlanNativePerPassHistorySave(plan,before,graph,derived,copy));
+                                    assert(plan.written==1 && plan.slots[0]==historyAddress && refs==4);
                                     assert(!overlay.hasSurfaceLease(copy) && !overlay.linkedStorage(copy,0xc8));
                                     std::memcpy(copy.prefix.data()+0xc0,&historyAddress,8);
                                     assert(overlay.hasSurfaceLease(copy));return 31;
