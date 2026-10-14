@@ -2193,11 +2193,17 @@ struct NativeCreatorScopedInvocation {
         // Keep the proven metadata repair alive across the SAME native call.
         // Separate observers cannot own the thread's debug state concurrently.
         constexpr uint8_t copyAnchor[]={0xe8,0x9c,0x42,0xf3,0xff};
+        constexpr uint8_t creatorAnchor[]={0xff,0x51,0x18};
         uint8_t actualCopy[sizeof(copyAnchor)]{};
+        uint8_t actualCreator[sizeof(creatorAnchor)]{};
         std::vector<uint8_t> metadata;
         try { metadata.resize(TglKernelMetadataAdapter::blobBytes); }
         catch (...) { return result; }
-        if(!readMemory(image+0x13260f,actualCopy,sizeof(actualCopy)) ||
+        if(!executableMemory(image+0x133c0f,sizeof(creatorAnchor)) ||
+            !readMemory(image+0x133c0f,actualCreator,sizeof(actualCreator)) ||
+            std::memcmp(actualCreator,creatorAnchor,sizeof(creatorAnchor)) ||
+            !executableMemory(image+0x13260f,sizeof(copyAnchor)) ||
+            !readMemory(image+0x13260f,actualCopy,sizeof(actualCopy)) ||
             std::memcmp(actualCopy,copyAnchor,sizeof(copyAnchor)) ||
             !readMemory(image+0x531550,metadata.data(),metadata.size()) ||
             !TglKernelMetadataAdapter::translate(metadata))return result;
