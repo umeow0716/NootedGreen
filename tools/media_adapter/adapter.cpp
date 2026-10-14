@@ -3769,7 +3769,7 @@ struct NativeRetainedContextFrameDispatch {
         static int invoke(void* raw,int(*hook)(void*,void*,void*) noexcept) noexcept {
             auto& self=*static_cast<Call*>(raw);
             if(self.invoked || hook!=&NativeRetainedTemporaryExecution::temporaryPass)return 5;
-            return self.owner.dispatchScopedFrameWithReceipt(self.lease,self.physical,self.input,self.output,
+            return self.owner.dispatchAdmittedFrameWithReceipt(self.lease,self.physical,self.frame,self.input,self.output,
                 [&](uintptr_t entry,uintptr_t context,uintptr_t input,uintptr_t output,auto&) noexcept -> int {
                     if(self.invoked || context!=self.context || input!=self.input || output!=self.output ||
                         !self.frame.beginNativeFrame())return 5;
@@ -4157,6 +4157,23 @@ struct NativeCreatorPreparation {
             return record.passBackend.get();
         }
         return nullptr;
+    }
+    static TglOwnedVeboxCommandTransactionResult dispatchOwnedFrame(
+        NativeRetainedContextFrameDispatch::Lease& lease,NativePhysicalFrameScope& physical,
+        uintptr_t address,uint64_t generation,NativeContextRendererFrame& frame,
+        const TglNativeVphalMhwView& view,size_t childIndex,
+        const TglVeboxAdmissionBorrowedInterfaces& interfaces,const TglOwnedVpEntrySet& catalogue,
+        NativeModeRetirementAuthority& retirement,
+        NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument,
+        uintptr_t input,uintptr_t output,TglNativeFrameOutputReceipt& receipt) noexcept {
+        auto* backend=passBackendFor(physical,view.renderer.image,address,generation,
+            view.parent,view.renderer.renderer);
+        if(!backend)return {};
+        // The lookup gate is released before native execution: callbacks use
+        // this same ledger for lineage admission and must never recurse its lock.
+        return NativeRetainedContextFrameDispatch::runOwned(lease,physical,frame,*backend,view,
+            childIndex,interfaces,catalogue,retirement,decompression,temporal,argument,input,output,receipt);
     }
     // Full synchronous construction handoff, not a component-success alias.
     // Each component keeps its persistent partial state; failure never retries

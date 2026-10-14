@@ -15137,15 +15137,20 @@ static void testRetainedVeboxFrames() {
             assert(scopedRegistry.publish(ticket,base,0x8000));
             unsigned scopedCalls=0;
             assert(scopedRegistry.withScope(ticket,base,0x8000,[&](auto& scope) noexcept -> int {
+                ItemFrame foreign;
                 auto call=[&](uintptr_t target,uintptr_t ctx,uintptr_t request,uintptr_t output,auto& active) noexcept -> int {
                     ++scopedCalls;
                     assert(target==entry && ctx==context && request==0x55000 && output==0x66000);
                     assert(&active==&scope);
+                    assert(privateTable.dispatchAdmittedItem(active,foreign,context,request,output,read,
+                        [](uintptr_t,uintptr_t,uintptr_t,uintptr_t,auto&) noexcept -> int {assert(false);return 0;})==5);
                     assert(privateTable.dispatchScopedItem(active,context,request,output,read,
                         [](uintptr_t,uintptr_t,uintptr_t,uintptr_t,auto&) noexcept -> int {assert(false);return 0;})==5);
                     return 31;
                 };
                 assert(privateTable.dispatchScopedItem(scope,context+8,0x55000,0x66000,read,call)==5);
+                assert(privateTable.dispatchAdmittedItem(scope,foreign,context,0x55000,0x66000,read,
+                    [](uintptr_t,uintptr_t,uintptr_t,uintptr_t,auto&) noexcept -> int {assert(false);return 0;})==5);
                 return privateTable.dispatchScopedItem(scope,context,0x55000,0x66000,read,call);
             })==31 && scopedCalls==1);
             TglNativeFrameOutputReceipt scopedReceipt;
@@ -16734,11 +16739,20 @@ static void testRetainedVeboxFrames() {
                 synchronousRootFrame=active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
                 assert(synchronousRootFrame.generation);
                 assert(!active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
-                const auto unsubmitted=active.runContextRootFrame([](Frame& frame) noexcept {
+                Frame* observedRoot=nullptr;
+                const auto unsubmitted=active.runContextRootFrame([&](Frame& frame) noexcept {
+                    observedRoot=&frame;
+                    assert(active.matchesActiveContextFrame(0x20000,&frame));
+                    assert(!active.matchesActiveContextFrame(0x20008,&frame));
+                    assert(!active.matchesActiveContextFrame(0x20000,nullptr));
+                    assert(!active.runContextRootFrame([](Frame&) noexcept {
+                        assert(false);return TglOwnedVeboxCommandTransactionResult{};
+                    }).acquired);
                     assert(frame.roots.parent.physical==0x8000);
                     return TglOwnedVeboxCommandTransactionResult{31,0,false,false};
                 });
                 assert(unsubmitted.status==31 && !unsubmitted.acquired);
+                assert(observedRoot && !active.matchesActiveContextFrame(0x20000,observedRoot));
                 assert(!active.bindContextRootFrameOutput({0x20008,0x62000,7,true}));
                 assert(!active.bindContextRootFrameOutput({0x20000,0x62000,7,true})); // No acquired work.
                 return 31;

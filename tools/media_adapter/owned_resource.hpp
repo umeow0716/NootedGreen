@@ -24209,6 +24209,7 @@ public:
         friend class TglOwnedVeboxPhysicalFrameRegistry;
         Pool& frames_;uintptr_t physical_,context_=0;Entry& entry_;
         FrameTicket requestFrame_{};
+        Frame* activeRequestFrame_=nullptr;
         explicit Scope(Entry& entry) noexcept
             :frames_(entry.frames),physical_(entry.physical),entry_(entry) {}
     public:
@@ -24245,8 +24246,16 @@ public:
         // reenter physical registry or accept an independently supplied ticket.
         template<class Invoke>
         TglOwnedVeboxCommandTransactionResult runContextRootFrame(Invoke invoke) noexcept {
-            if(!context_ || !requestFrame_.generation)return {};
-            return frames_.run(requestFrame_,invoke);
+            if(!context_ || !requestFrame_.generation || activeRequestFrame_)return {};
+            return frames_.run(requestFrame_,[&](Frame& frame) noexcept {
+                activeRequestFrame_=&frame;
+                struct Reset {Frame*& value;~Reset(){value=nullptr;}} reset{activeRequestFrame_};
+                return invoke(frame);
+            });
+        }
+        bool matchesActiveContextFrame(uintptr_t context,const Frame* frame) const noexcept {
+            return context && context==context_ && requestFrame_.generation && frame && frame==activeRequestFrame_ &&
+                entry_.state==State::Live && !frames_.workFaulted();
         }
         bool bindContextRootFrameOutput(const TglNativeFrameOutputReceipt& receipt) noexcept {
             return context_ && requestFrame_.generation && receipt.context==context_ &&
@@ -24726,6 +24735,15 @@ public:
             return invoke(nativeFrame_,context,request,outputSlot,active);
         });
     }
+    template<class Scope,class Frame,class Read,class Invoke>
+    int dispatchAdmittedItem(Scope& scope,Frame& frame,uintptr_t context,uintptr_t request,
+        uintptr_t outputSlot,Read read,Invoke invoke) noexcept {
+        if(!ready_ || publication_!=Publication::Published || context!=context_ || !request || !outputSlot ||
+            !scope.matchesActiveContextFrame(context,&frame))return 5;
+        uintptr_t actual=0;
+        if(!read(context,&actual,8) || actual!=reinterpret_cast<uintptr_t>(addressPoint()))return 5;
+        return invoke(nativeFrame_,context,request,outputSlot,scope);
+    }
     template<class Scope,class Read,class Invoke>
     int dispatchScopedItemWithReceipt(Scope& scope,uintptr_t context,uintptr_t request,
         uintptr_t outputSlot,Read read,Invoke invoke,TglNativeFrameOutputReceipt& receipt) noexcept {
@@ -24844,6 +24862,25 @@ public:
                     receipt={context,event,index,true};
                 // Keep native result and all ownership on missing lineage;
                 // an output event is NOT a GPU completion/quiescence proof.
+                return result;
+            });
+    }
+    // The exact request-owned frame is already running under the physical
+    // item guard. Authenticate that capability instead of entering it twice.
+    template<class OwnerLease,class Scope,class Frame,class Invoke>
+    int dispatchAdmittedFrameWithReceipt(const OwnerLease& lease,Scope& physicalScope,Frame& frame,
+        uintptr_t request,uintptr_t output,Invoke invoke,TglNativeFrameOutputReceipt& receipt) noexcept {
+        if(receipt.valid || !request || !output || !state_ || lease.get()!=this || !enter())return 5;
+        Unlock unlock{state_->busy};
+        if(state_->removed || state_->table.publication()!=TglOwnedContextFrameVtable::Publication::Published ||
+            !state_->retainedIdentity() || !physicalScope.matches(state_->image,state_->physical,state_->generation) ||
+            !physicalScope.matchesActiveContextFrame(state_->context,&frame) || !state_->nativeParentMatches())return 5;
+        return state_->table.dispatchAdmittedItem(physicalScope,frame,state_->context,request,output,state_->read,
+            [&](uintptr_t entry,uintptr_t context,uintptr_t input,uintptr_t slot,Scope& active) noexcept -> int {
+                const int result=invoke(entry,context,input,slot,active);
+                uintptr_t event=0;uint32_t index=0;
+                if(!result && state_->read(output,&event,8) && event && event<=UINTPTR_MAX-8 &&
+                    state_->read(event+4,&index,4))receipt={context,event,index,true};
                 return result;
             });
     }
