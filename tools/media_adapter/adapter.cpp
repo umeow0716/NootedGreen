@@ -3790,6 +3790,31 @@ struct NativeRetainedContextFrameDispatch {
         if((!call.invoked || !receipt.valid) && !result.status)result.status=5;
         return result; // Receipt is lineage only; nativeFrameEntered retains the frame on all exits.
     }
+    // Synchronous production join. The caller retains backend, native view,
+    // interfaces and frame owners; no stack allocator is captured by retained
+    // resources. Per-call policy latches live through every native sub-pass.
+    static TglOwnedVeboxCommandTransactionResult runOwned(Lease& lease,NativePhysicalFrameScope& physical,
+        NativeContextRendererFrame& frame,NativeRetainedTemporaryTransaction::Backend& backend,
+        const TglNativeVphalMhwView& view,size_t childIndex,
+        const TglVeboxAdmissionBorrowedInterfaces& interfaces,const TglOwnedVpEntrySet& catalogue,
+        NativeModeRetirementAuthority& retirement,
+        NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument,
+        uintptr_t input,uintptr_t output,TglNativeFrameOutputReceipt& receipt) noexcept {
+        if(!backend.bound() || view.renderer.image!=backend.image() ||
+            !view.renderer.renderer || childIndex>1 || !interfaces.os ||
+            interfaces.os!=view.os || !interfaces.renderHal || interfaces.renderHal!=view.renderHal || !interfaces.sku ||
+            !retirement.scope || !retirement.admit || receipt.valid)return {};
+        TglVeboxPipeAcquisition acquisition;
+        int decompressionStatus=0;
+        NativeRetainedTemporaryExecution::PassProvider provider{frame,backend,childIndex,interfaces,
+            catalogue,retirement,view,acquisition,decompressionStatus,decompression,argument,temporal};
+        auto result=run(lease,physical,frame,view.renderer.renderer,input,output,
+            &provider,&NativeRetainedTemporaryExecution::PassProvider::produce,receipt);
+        if(!result.status && (provider.failure || !acquisition.healthy()))
+            result.status=provider.failure?provider.failure:5;
+        return result;
+    }
 };
 // Callback table entries carry no Entry/closure argument. Route the immutable
 // qualified native image and actual physical generation, never "current Entry".
