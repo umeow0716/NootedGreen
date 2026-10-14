@@ -2047,6 +2047,7 @@ struct TglNativeCreatedVeboxRendererView {
     uintptr_t image=0,creator=0,renderer=0,configuration=0;
     std::array<uintptr_t,3> originalChildren{}; // 910/918/native920
 private:
+    uintptr_t admittedRendererTable_=0;
     template<class Read,class Admit,class Qualify,class Executable,class TableAdmit,class RendererAdmit>
     bool resolveTable(uintptr_t base,uintptr_t object,Read read,Admit admit,
         Qualify qualify,Executable executable,TableAdmit tableAdmit,RendererAdmit rendererAdmit) noexcept {
@@ -2064,9 +2065,18 @@ private:
            !read(rendererTable+0x28,&frame,8) || frame!=base+0x131fa0 || !executable(frame,1) ||
            !read(result+0x910,children.data(),sizeof(children)) || !children[2]) return false;
         image=base;creator=object;renderer=result;configuration=result+0x2cb0;
+        admittedRendererTable_=rendererTable;
         originalChildren=children;return true;
     }
 public:
+    // A witness produced only by full native/owner-qualified resolution.
+    // Caller still holds that owner pin; this does not grant new lifetime.
+    template<class Read> bool matchesRendererTable(Read read) const noexcept {
+        uintptr_t linked=0,table=0;
+        return admittedRendererTable_ && creator && creator<=UINTPTR_MAX-0x70 && renderer &&
+            read(creator+0x68,&linked,8) && linked==renderer &&
+            read(renderer,&table,8) && table==admittedRendererTable_;
+    }
     template<class Read,class Admit,class Qualify,class Executable>
     bool resolve(uintptr_t base,uintptr_t object,Read read,Admit admit,
         Qualify qualify,Executable executable) noexcept {
@@ -4497,7 +4507,8 @@ public:
             renderer.originalChildren!=pinned.originalChildren)return false;
         TglNativeVphalMhwView current;
         uintptr_t linked=0;std::array<uintptr_t,3> children{};
-        return current.resolveCreated(pinned.image,parent,pinned.creator,pinned,read,admit,qualify) &&
+        return pinned.matchesRendererTable(read) &&
+            current.resolveCreated(pinned.image,parent,pinned.creator,pinned,read,admit,qualify) &&
             read(parent+0x68,&linked,8) && linked==pinned.renderer &&
             read(pinned.renderer+0x910,children.data(),sizeof(children)) && children==pinned.originalChildren &&
             current.os==os && current.renderHal==renderHal &&

@@ -2595,12 +2595,10 @@ struct NativeRendererHistoryInspection {
         const int status=frontend.withRetainedInspection([&](const auto&,const auto& pinned,
             const auto& graph,const auto& target,bool) noexcept -> int {
             auto live=[&]() noexcept {
-                uintptr_t renderer=0,table=0;
                 return pinned.image && pinned.image<=UINTPTR_MAX-0x75bba0 &&
                     NativeTglImageAdmission{pinned.image}(pinned.image) &&
                     NativeDataAdmission{}(pinned.creator,0x70) && NativeDataAdmission{}(pinned.renderer,0x9b8) &&
-                    readMemory(pinned.creator+0x68,&renderer,8) && renderer==pinned.renderer &&
-                    readMemory(renderer,&table,8) && table==pinned.image+0x75bba0;
+                    pinned.matchesRendererTable(&readMemory);
             };
             result=tglInspectNativeHistoryCache(pinned.renderer,graph,target,&readMemory,live);
             return result.observed?0:5;
@@ -3084,12 +3082,10 @@ struct NativeHistorySavePreparation {
         if(attempted)return {};
         attempted=true;
         auto live=[&]() noexcept {
-            uintptr_t renderer=0,table=0;
             return assembly.readyForFrontend() && graph.valid() && pinned.image &&
                 pinned.image<=UINTPTR_MAX-0x75bba0 && NativeTglImageAdmission{pinned.image}(pinned.image) &&
                 NativeDataAdmission{}(pinned.creator,0x70) && NativeDataAdmission{}(pinned.renderer,0x9b8) &&
-                readMemory(pinned.creator+0x68,&renderer,8) && renderer==pinned.renderer &&
-                readMemory(renderer,&table,8) && table==pinned.image+0x75bba0 &&
+                pinned.matchesRendererTable(&readMemory) &&
                 reinterpret_cast<uintptr_t>(assembly.children().first().owner().constructedBase())==pinned.originalChildren[0] &&
                 reinterpret_cast<uintptr_t>(assembly.children().second().owner().constructedBase())==pinned.originalChildren[1];
         };

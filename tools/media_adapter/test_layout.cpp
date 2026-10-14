@@ -18844,11 +18844,18 @@ int main() {
                             creatorAdmit,qualify,creatorExecutable));
                         assert(publishedView.resolveOwnedRenderer(image,creatorAddress,lifetime,rendererOwner,
                             mainRead,creatorAdmit,qualify,creatorExecutable));
+                        assert(publishedView.matchesRendererTable(mainRead));
+                        const auto retainedView=publishedView;
+                        put(r,0,image+0x75bba0);
+                        assert(!retainedView.matchesRendererTable(mainRead));
+                        put(r,0,rendererOwner.addressPoint());
+                        assert(retainedView.matchesRendererTable(mainRead));
                         assert(!publishedView.resolveOwnedRenderer(image,creatorAddress,lifetime,foreignOwner,
                             mainRead,creatorAdmit,qualify,creatorExecutable));
                         assert(!publishedView.resolveOwnedRenderer(image,creatorAddress,unrelated,rendererOwner,
                             mainRead,creatorAdmit,qualify,creatorExecutable));
                         assert(rendererOwner.detach(mainRead,mainWrite,admit));
+                        assert(!retainedView.matchesRendererTable(mainRead));
                         assert(!publishedView.resolveOwnedRenderer(image,creatorAddress,lifetime,rendererOwner,
                             mainRead,creatorAdmit,qualify,creatorExecutable));
                         assert(publishedView.resolveOwned(image,creatorAddress,lifetime,publishedRead,
