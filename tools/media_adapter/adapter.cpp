@@ -29,6 +29,11 @@ Library library;
 std::once_flag loadOnce;
 std::mutex registryLock;
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept;
+bool executableMemory(uintptr_t address,size_t length) noexcept;
+struct NativeTglImageAdmission {
+    uintptr_t image=0;
+    bool operator()(uintptr_t candidate) const noexcept {return image && candidate==image;}
+};
 struct Entry {
     // Factory table lifetime only, not the native physical context lifetime.
     // Exact TGL table slots: [0] factory data, [1] 0x135d9 physical init
@@ -45,6 +50,12 @@ struct Entry {
     // its DN owner; borrowing a backend from this factory-lifetime Entry would
     // leave a dangling reference when the native factory table is destroyed.
     TglTrackedCpuBinding nativeCpu;
+    auto frontendCpuEnvironment() const noexcept {
+        // Entirely value-owned: no Entry pointer/reference escapes into frames.
+        return TglNativeFrontendCpuEnvironment<decltype(&readMemory),NativeTglImageAdmission,
+            decltype(&executableMemory)>{nativeCpu.image,readMemory,NativeTglImageAdmission{nativeCpu.image},
+                executableMemory,TglNativeTrackedCpuInvoker{}};
+    }
     bool expectedFrontendTypes(TglNativeFrontendCfTypes& output) const noexcept {
         return tglReadNativeFrontendCfTypes(resourceClass,readMemory,
             []() noexcept -> uintptr_t {return TglDarwinTypedCfReferenceApi{}.surfaceType();},output);

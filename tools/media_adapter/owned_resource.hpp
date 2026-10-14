@@ -23867,6 +23867,40 @@ public:
     }
 };
 
+// Value environment is consumed during construction only; the frontend owns
+// its qualified native CPU backend, never a reference into a factory Entry.
+template<class Read,class Qualify,class Executable,class Invoke=TglNativeTrackedCpuInvoker>
+struct TglNativeFrontendCpuEnvironment {
+    uintptr_t image;Read read;Qualify qualify;Executable executable;Invoke invoke;
+};
+template<class ParentLease,class SourceOwner,class TargetOwner,class CfApi,class Environment,class Access>
+class TglNativeVeboxBorrowedFrontendWithCpuAllocator {
+    using Invoke=decltype(std::declval<Environment>().invoke);
+    using Backend=TglTrackedCpuBackend<Invoke>;
+    Backend parameters_; // LAST destroyed; frontend DN owner borrows this
+    TglNativeVeboxBorrowedFrontendFrameStorage<ParentLease,SourceOwner,TargetOwner,CfApi,Backend,Access> frontend_;
+public:
+    using ParentLeaseType=ParentLease;
+    using SourceOwnerType=SourceOwner;
+    using TargetOwnerType=TargetOwner;
+    template<class Resolve>
+    TglNativeVeboxBorrowedFrontendWithCpuAllocator(ParentLease&& parent,uintptr_t source,Resolve resolve,
+        TargetOwner& target,CfApi cf,uintptr_t resourceType,uintptr_t surfaceType,
+        const Environment& environment,Access access) noexcept
+        :parameters_(environment.image,environment.read,environment.qualify,environment.executable,environment.invoke),
+         frontend_(std::move(parent),source,resolve,target,cf,resourceType,surfaceType,parameters_,std::move(access)) {}
+    TglNativeVeboxBorrowedFrontendWithCpuAllocator(const TglNativeVeboxBorrowedFrontendWithCpuAllocator&)=delete;
+    TglNativeVeboxBorrowedFrontendWithCpuAllocator& operator=(const TglNativeVeboxBorrowedFrontendWithCpuAllocator&)=delete;
+    template<class Admit> bool bindCpu(Admit admit) noexcept {
+        return parameters_.bound() && frontend_.bindCpu(admit);
+    }
+    bool surfacesReady() const noexcept {return frontend_.surfacesReady();}
+    bool requiresRetention() const noexcept {return frontend_.requiresRetention();}
+    template<class Use> TglOwnedVeboxCommandTransactionResult withCpuFrontend(Use use) noexcept {
+        return frontend_.withCpuFrontend(use);
+    }
+};
+
 // Lend one stable constructor through the context-sidecar construction lambda.
 // It publishes only a fully admitted borrowed frontend and never moves CPU ownership.
 template<class Frontend,class CfApi,class DnBackend,class Types,class Pin,class Access,class Admit>

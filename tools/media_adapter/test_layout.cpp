@@ -23818,26 +23818,51 @@ int main() {
                                     auto admit=[&](auto& cpu,const auto& view,const auto* src,const auto* dst) noexcept {
                                         return &cpu==cpuAddress && view.renderer.creator==creatorAddress && src==&source && dst==&target;
                                     };
-                                    using Borrowed=TglNativeVeboxBorrowedFrontendFrameStorage<decltype(parent),
-                                        OriginalOwner,OriginalOwner,Cf,FrameDnBackend,decltype(access)>;
+                                    unsigned dnLive=0,dnReleases=0;
+                                    struct DnInvoke {
+                                        uintptr_t image;unsigned& live;unsigned& releases;unsigned& creatorDeaths;
+                                        uintptr_t allocate(uintptr_t entry,size_t bytes) noexcept {
+                                            assert(entry==image+0x437e0 && bytes && !creatorDeaths);
+                                            auto* p=std::calloc(1,bytes);if(p)++live;
+                                            return reinterpret_cast<uintptr_t>(p);
+                                        }
+                                        void release(uintptr_t entry,uintptr_t p) noexcept {
+                                            assert(entry==image+0x436d0 && p && live && !creatorDeaths);
+                                            --live;++releases;std::free(reinterpret_cast<void*>(p));
+                                        }
+                                    };
+                                    using CpuEnvironment=TglNativeFrontendCpuEnvironment<decltype(allocatorRead),
+                                        decltype(qualifyMhw),decltype(executableMhw),DnInvoke>;
+                                    CpuEnvironment cpuEnvironment{base,allocatorRead,qualifyMhw,executableMhw,
+                                        DnInvoke{base,dnLive,dnReleases,parentDeaths}};
+                                    using Borrowed=TglNativeVeboxBorrowedFrontendWithCpuAllocator<decltype(parent),
+                                        OriginalOwner,OriginalOwner,Cf,CpuEnvironment,decltype(access)>;
                                     auto constructor=tglMakeNativeBorrowedFrontendConstructor<Borrowed>(
-                                        Cf{refs},frameDn,types,pin,access,admit);
+                                        Cf{refs},cpuEnvironment,types,pin,access,admit);
                                     auto construct=[&](uintptr_t p,auto resolve,OriginalOwner& targetOwner) noexcept -> Borrowed* {
                                         return constructor(p,resolve,targetOwner);
                                     };
                                     using Retained=TglNativeContextRendererFrameStorage<decltype(codecs),Borrowed,3>;
+                                    cpuEnvironment.image=0;
+                                    {
+                                        Retained refused(roots,codecs,base,0x8000,1,roots.sources[0],roots.targets[0],
+                                            readable,admitted,admitted,construct);
+                                        assert(!refused.surfacesReady() && refused.clear() && refs==originalRefs && !dnLive && !dnReleases);
+                                    }
+                                    cpuEnvironment.image=base;
                                     for(unsigned frame=0;frame<2;++frame) {
                                         Retained retained(roots,codecs,base,0x8000,1,roots.sources[0],roots.targets[0],
                                             readable,admitted,admitted,construct);
                                         assert(retained.surfacesReady() && !retained.requiresRetention());
                                         assert(codecs.reconcileSuccessfulRemoval(base,0x8000,1,removedCodec)==5 && !codecDeaths);
                                         assert(retained.withFrame([&](auto& frontend) noexcept -> int {
-                                            return frontend.withCpuFrontend([&](auto& cpu,auto&...) noexcept {
+                                            return frontend.withCpuFrontend([&](auto& cpu,auto&,auto&,auto& dn) noexcept {
                                                 assert(&cpu==cpuAddress && !retained.clear());
+                                                assert(dn.allocate(96) && dn.get() && dnLive==1);
                                                 return TglOwnedVeboxCommandTransactionResult{31,0,false,false,false};
                                             }).status;
                                         })==31);
-                                        assert(retained.clear() && refs==originalRefs && storageOwner.get()==cpuAddress);
+                                        assert(retained.clear() && refs==originalRefs && storageOwner.get()==cpuAddress && !dnLive && dnReleases==frame+1);
                                         assert(storage.children().first().owner().constructedBase()==child0 &&
                                             storage.children().second().owner().constructedBase()==child1);
                                     }
