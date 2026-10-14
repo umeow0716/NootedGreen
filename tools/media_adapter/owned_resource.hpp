@@ -16074,6 +16074,7 @@ template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedSfcAvsParameters<AvsBackend> avs_;
     const TglOwnedVeboxFrameRetention* retention_=nullptr;
     bool ready_=false,busy_=false,resourcesBound_=false,constructionScope_=false;
+    bool resourceOwnerBorrow_=false;
     uint64_t generation_=0;
     struct SendContext {
         void* child;
@@ -16313,6 +16314,14 @@ public:
                 &graph_->storage_:nullptr;
         }
     };
+    // Authenticate the existing exclusive owner; do not acquire a second pin.
+    template<class Use> int withResourceOwnerBorrow(const ResourceOwnerLease& lease,Use use) noexcept {
+        if(resourceOwnerBorrow_ || lease.storage()!=&storage_ || busy_)return 5;
+        resourceOwnerBorrow_=true;
+        struct EndBorrow {bool& active;~EndBorrow(){active=false;}} end{resourceOwnerBorrow_};
+        const int result=use();
+        return result?result:(lease.storage()==&storage_?0:5);
+    }
     // Construct resource owners inside this callback and destroy them before
     // returning. Their typed shells live in this VP storage, which must not
     // be zeroed/reinitialized until those owners are gone. Frame/setup/send
@@ -16712,14 +16721,15 @@ public:
     template<class Lines,class Retire,class Use>
     int withResourceCatalogue(const TglOwnedVpEntrySet& base,Lines& lines,Retire& retire,Use use) noexcept {
         if(!ready_ || busy_ || !lines.boundToVp(storage_) || base.allocate || base.freeResources)return 5;
-        ResourceOwnerLease pin(*this);
-        if(pin.storage()!=&storage_)return 5;
-        return tglWithOwnedVpResourceEntries(storage_,lines,state_,retire,
+        auto run=[&]() noexcept -> int {return tglWithOwnedVpResourceEntries(storage_,lines,state_,retire,
             [&](void* child,auto allocate,auto release) noexcept -> int {
                 auto entries=base;
                 if(child!=storage_.bytes.data() || !tglBindOwnedVpResourceEntries(entries,allocate,release))return 5;
                 return use(child,entries);
-            },retention_);
+            },retention_);};
+        if(resourceOwnerBorrow_ && resourcesBound_)return run();
+        ResourceOwnerLease pin(*this);
+        return pin.storage()==&storage_?run():5;
     }
     // Admission VP28 uses the SAME graph and captured original E0/F0, surfaces
     // and report. Keep the existing initialized catalogue scope through Use;
@@ -21713,7 +21723,9 @@ public:
         if(!lines_ || !vp || busy_) return 5;
         const auto generation=lease_.generation();
         busy_=true;
-        const int result=use(*vp,*lines_);
+        const int result=graph_.withResourceOwnerBorrow(lease_,[&]() noexcept -> int {
+            return use(*vp,*lines_);
+        });
         const bool retained=lease_.ownsStorage(vp->bytes.data(),generation);
         busy_=false;
         // Keep native failures exact; success cannot certify a foreign or
@@ -21814,6 +21826,25 @@ public:
         return resources_->retireForReinitialization([&]() noexcept -> int {
             const int status=retire();return status?status:(retention_()?5:0);
         });
+    }
+    // The VP allocation is embedded in cpu_, not a native heap object.
+    // Retire resources before dropping their persistent graph pin; only then
+    // may the CPU graph reset. Never delete the embedded child address.
+    template<class Retire> int retireEmbeddedStorage(void* expectedVp,Retire retire) noexcept {
+        static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);
+        if(!expectedVp || !bound() || retention_())return 5;
+        const int identity=resources_->withResources([&](auto& storage,auto&) noexcept -> int {
+            return storage.bytes.data()==expectedVp?0:5;
+        });
+        if(identity)return identity;
+        preparing_=true;
+        struct EndPreparation {bool& active;~EndPreparation(){active=false;}} end{preparing_};
+        const int retired=resources_->retireForReinitialization([&]() noexcept -> int {
+            const int status=retire();return status?status:(retention_()?5:0);
+        });
+        if(retired)return retired;
+        resources_->~Resources();resources_=nullptr;
+        return cpu_.graph().tryReset()?0:5;
     }
     template<class Retire> int reinitializePass(Retire retire) noexcept {
         static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);

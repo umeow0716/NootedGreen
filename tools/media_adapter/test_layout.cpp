@@ -22280,6 +22280,27 @@ int main() {
                     })==31);
                 assert(escaped && escaped(admissionVp)==5 && !resources.allocations && !resources.releases);
             }
+            {
+                using Graph=std::remove_reference_t<decltype(graph)>;
+                typename Graph::ResourceOwnerLease owner(graph);
+                TestPairedVpResourceLines resources;
+                resources.vp=owner.storage();
+                assert(resources.vp && !graph.tryReset());
+                auto retire=[]() noexcept -> int {return 5;};
+                auto catalogue=[&](void* child,const auto& entries) noexcept -> int {
+                    assert(child==admissionVp && entries.allocate && entries.freeResources);
+                    assert(!graph.tryReset());return 31;
+                };
+                assert(graph.withResourceCatalogue({},resources,retire,catalogue)==5);
+                assert(graph.withResourceOwnerBorrow(owner,[&]() noexcept -> int {
+                    assert(graph.withResourceOwnerBorrow(owner,[]() noexcept -> int {return 0;})==5);
+                    typename Graph::ResourceOwnerLease conflicting(graph);
+                    assert(!conflicting.storage());
+                    return graph.withResourceCatalogue({},resources,retire,catalogue);
+                })==31);
+                assert(graph.withResourceCatalogue({},resources,retire,catalogue)==5);
+                assert(owner.storage()==resources.vp && !resources.allocations && !resources.releases);
+            }
             TglVeboxAdmissionStagesInput sfcInputs;sfcInputs.leasedParamsE0=0x6000;sfcInputs.leasedParamsF0=0x7000;
             {
                 TestPairedVpResourceLines resources;
