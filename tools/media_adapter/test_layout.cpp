@@ -27233,6 +27233,61 @@ int main() {
                         assert(removeParent()==0 && parentDeaths==1);
                     }
                 }
+                for(bool mismatch:{false,true}) {
+                    std::array<unsigned,16> failedEvents{};size_t failedCount=0;
+                    Cpu failedCpu{{},failedEvents,failedCount};NativeCpu failedNative{failedCpu};
+                    Invoke failedInvoke;TrackedSfc failedSfc{failedInvoke,failedEvents,failedCount};
+                    alignas(8) std::array<uint8_t,0xa0> failedHelper{};
+                    unsigned creates=0,queries=0,deletes=0;
+                    auto cleanupFailed=[](void*) noexcept {};
+                    auto destroyFailed=[&](uintptr_t entry,void* child) noexcept {
+                        assert(entry==base+0x12de30 && child==failedCpu.bytes.data());
+                        uintptr_t helper=0;std::memcpy(&helper,static_cast<uint8_t*>(child)+0x1bb8,8);
+                        assert(helper==reinterpret_cast<uintptr_t>(failedHelper.data()));
+                        ++deletes;std::memset(static_cast<uint8_t*>(child)+0x1bb8,0,8);
+                    };
+                    using FailedChild=TglNativeVeboxCpuChildStorage<decltype(cleanupFailed),NativeCpu,TrackedSfc,decltype(destroyFailed)>;
+                    FailedChild failed(base,allocatorRead,[](uintptr_t image) noexcept {return image==base;},
+                        [](uintptr_t address,size_t size) noexcept {
+                            return size==16 && (address==base+0x437e0 || address==base+0x436d0);
+                        },cleanupFailed,failedNative,failedSfc,destroyFailed);
+                    auto constructFailed=[&](uintptr_t entry,void* child,void*,void*,void*,void*,void*,void*,const void*,int32_t* output) noexcept {
+                        assert(entry==base+0x12d4e0 && child==failedCpu.bytes.data());
+                        const uintptr_t table=base+0x757c98;std::memcpy(child,&table,8);*output=0;
+                    };
+                    int32_t failedStatus=5;
+                    assert(failed.initialize(baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),nullptr,
+                        reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,failedStatus,read,constructFailed)==
+                        TglOwnedBaseConstruction::ConstructedSuccess);
+                    auto helperReadFailed=[](uintptr_t address,void* output,size_t size) noexcept {
+                        constexpr std::array<uint8_t,16> anchor{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+                            0x48,0x8b,0x35,0x39,0xd4,0x62,0x00,0xbf};
+                        if(address==base+0x126be0 && size==16) {std::memcpy(output,anchor.data(),16);return true;}
+                        if(address==base+0x126bf0 && size==4) {const uint32_t extent=0xa0;std::memcpy(output,&extent,4);return true;}
+                        return false;
+                    };
+                    auto createFailed=[&](uintptr_t entry) noexcept {
+                        assert(entry==base+0x126be0);++creates;return reinterpret_cast<uintptr_t>(failedHelper.data());
+                    };
+                    struct FailedReport {
+                        bool mismatch;unsigned& queries;
+                        bool bound() const noexcept {return true;}
+                        uintptr_t image() const noexcept {return base;}
+                        uintptr_t operator()(void* child) const noexcept {
+                            ++queries;const uintptr_t linked=mismatch?0x8765:0;
+                            std::memcpy(static_cast<uint8_t*>(child)+0x88,&linked,8);return mismatch?0x5678:0;
+                        }
+                    } reportFailed{mismatch,queries};
+                    auto helperExecutableFailed=[](uintptr_t address,size_t size) noexcept {
+                        return (address==base+0x126be0 && size==16) || (address==base+0x126bf0 && size==4);
+                    };
+                    assert(!failed.owner().allocateNativeHelper(helperReadFailed,helperExecutableFailed,createFailed,reportFailed));
+                    uintptr_t retained=0;std::memcpy(&retained,failedCpu.bytes.data()+0x1bb8,8);
+                    assert(retained==reinterpret_cast<uintptr_t>(failedHelper.data()) && creates==1 && queries==1 && !deletes);
+                    assert(!failed.owner().allocateNativeHelper(helperReadFailed,helperExecutableFailed,createFailed,reportFailed));
+                    assert(creates==1 && queries==1);
+                    failed.owner().reset();assert(deletes==1 && !failedCpu.live);
+                }
                 ChildStorage childStorage(base,allocatorRead,
                     [](uintptr_t image) noexcept {return image==base;},
                     [](uintptr_t address,size_t size) noexcept {
