@@ -4302,6 +4302,23 @@ private:
         return true;
     }
 public:
+    // Revalidate an already pinned renderer against this borrowed environment.
+    // Pointer equality of creator/renderer alone cannot authenticate parents.
+    template<class Read,class Admit,class Qualify>
+    bool matchesCreated(const TglNativeCreatedVeboxRendererView& pinned,
+        Read read,Admit admit,Qualify qualify) const noexcept {
+        if(renderer.image!=pinned.image || renderer.creator!=pinned.creator ||
+            renderer.renderer!=pinned.renderer || renderer.configuration!=pinned.configuration ||
+            renderer.originalChildren!=pinned.originalChildren)return false;
+        TglNativeVphalMhwView current;
+        uintptr_t linked=0;std::array<uintptr_t,3> children{};
+        return current.resolveCreated(pinned.image,parent,pinned.creator,pinned,read,admit,qualify) &&
+            read(parent+0x68,&linked,8) && linked==pinned.renderer &&
+            read(pinned.renderer+0x910,children.data(),sizeof(children)) && children==pinned.originalChildren &&
+            current.os==os && current.renderHal==renderHal &&
+            current.hardware.interface==hardware.interface && current.hardware.os==hardware.os &&
+            current.hardware.heap==hardware.heap;
+    }
     template<class Read,class Admit,class Qualify,class Executable>
     bool resolve(uintptr_t image,uintptr_t vphal,uintptr_t creator,Read read,
         Admit admit,Qualify qualify,Executable executable) noexcept {

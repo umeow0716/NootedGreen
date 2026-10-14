@@ -1788,6 +1788,7 @@ struct NativeCompleteFrameConsumer {
             &admission.feature.sourceOwner!=&source || &admission.feature.targetOwner!=&target ||
             self.view.renderer.image!=pinned.image || self.view.parent!=pinned.creator ||
             self.view.renderer.renderer!=pinned.renderer ||
+            !self.view.matchesCreated(pinned,&readMemory,NativeDataAdmission{},NativeTglImageAdmission{pinned.image}) ||
             current!=(admission.reset.index==0?&first:admission.reset.index==1?&second:nullptr) ||
             !current)return result;
         const auto completed=self.run();

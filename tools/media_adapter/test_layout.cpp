@@ -18148,6 +18148,22 @@ int main() {
                     borrowedRead,borrowedAdmit,qualify,creatorExecutable);};
                 assert(resolveBorrowed() && borrowed.hardware.interface==nativeMhw &&
                     borrowed.hardware.heap==0xa000 && borrowed.os==nativeOs && borrowed.renderHal==nativeRenderHal);
+                const auto pinnedRenderer=borrowed.renderer;
+                assert(borrowed.matchesCreated(pinnedRenderer,borrowedRead,borrowedAdmit,qualify));
+                writeWord(creator,0x68,r+8);
+                assert(!borrowed.matchesCreated(pinnedRenderer,borrowedRead,borrowedAdmit,qualify));
+                writeWord(creator,0x68,r);
+                writeWord(mhw,0x20,0xa008);
+                assert(!borrowed.matchesCreated(pinnedRenderer,borrowedRead,borrowedAdmit,qualify));
+                writeWord(mhw,0x20,0xa000);
+                put(r,0x2cc8,nativeOs+8);
+                assert(!borrowed.matchesCreated(pinnedRenderer,borrowedRead,borrowedAdmit,qualify));
+                put(r,0x2cc8,nativeOs);
+                auto foreignRenderer=pinnedRenderer;foreignRenderer.originalChildren[0]^=8;
+                assert(!borrowed.matchesCreated(foreignRenderer,borrowedRead,borrowedAdmit,qualify));
+                assert(!borrowed.matchesCreated(pinnedRenderer,
+                    [](uintptr_t,void*,size_t) noexcept {return false;},borrowedAdmit,qualify));
+                assert(borrowed.matchesCreated(pinnedRenderer,borrowedRead,borrowedAdmit,qualify));
                 writeWord(mhw,0x20,0);assert(!resolveBorrowed() && !borrowed.parent);
                 writeWord(mhw,0x20,0xa000);writeWord(creator,0x68,r+8);
                 assert(!resolveBorrowed());writeWord(creator,0x68,r);
