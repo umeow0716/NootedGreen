@@ -363,6 +363,7 @@ struct NativeCoreFrameDataScope {
     NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
     NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
     const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
+    TglOwnedVpSfcCallerStorage& vp;
     uintptr_t image,child,execution;uint64_t generation;
     NativeFrameDataRead capability() noexcept {return {this,&resolve};}
     bool live() const noexcept {
@@ -378,6 +379,12 @@ struct NativeCoreFrameDataScope {
         auto* self=static_cast<NativeCoreFrameDataScope*>(context);
         if(!self || !output || !bytes || !self->live())return false;
         if(self->childOwner.readLeasedStorage(self->child,self->generation,address,output,bytes))return self->live();
+        if(contains(reinterpret_cast<uintptr_t>(self->vp.bytes.data()),self->vp.bytes.size(),address,bytes)) {
+            uintptr_t linked=0;
+            if(!self->childOwner.readLeasedStorage(self->child,self->generation,self->child+0x80,&linked,8) ||
+                linked!=reinterpret_cast<uintptr_t>(self->vp.bytes.data()))return false;
+            return readMemory(address,output,bytes) && self->live();
+        }
         // Exact native report constructor allocates d48 bytes; its linked
         // report identity and NativeExecutionOwner lease are checked above.
         const bool admitted=contains(self->execution,0xd48,address,bytes) ||
@@ -1235,6 +1242,20 @@ struct NativeAdmissionReset {
 };
 using NativeAdmissionParams=TglBorrowedVeboxAdmissionPacketView<0x139>;
 using NativeAdmissionPass=TglBorrowedVeboxAdmissionPacketView<0x18,8>;
+struct NativeAdmissionFrameDataScope {
+    NativeCoreFrameDataScope& core;NativeAdmissionParams& params;NativeAdmissionPass& pass;
+    NativeFrameDataRead capability() noexcept {return {this,&resolve};}
+    static bool resolve(void* context,uintptr_t address,void* output,size_t bytes) noexcept {
+        auto* self=static_cast<NativeAdmissionFrameDataScope*>(context);
+        if(!self || !output || !bytes || !self->core.live() || !self->params.data() || !self->pass.data())return false;
+        if(NativeCoreFrameDataScope::resolve(&self->core,address,output,bytes))return true;
+        const auto p=reinterpret_cast<uintptr_t>(self->params.data());
+        const auto q=reinterpret_cast<uintptr_t>(self->pass.data());
+        const bool admitted=NativeCoreFrameDataScope::contains(p,self->params.size(),address,bytes) ||
+            NativeCoreFrameDataScope::contains(q,self->pass.size(),address,bytes);
+        return admitted && readMemory(address,output,bytes) && self->core.live();
+    }
+};
 struct NativeAdmissionStages {
     NativeAdmissionReset& reset;NativeOutputPipeSelector& select;
     NativeAdmissionHistorySetup& history;NativeAdmissionFeatureStage& feature;
