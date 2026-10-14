@@ -21568,6 +21568,37 @@ public:
     }
 };
 
+// Frame-independent dependency type permits production codec/VPHAL owners
+// to be defined BEFORE the complete retained Frame type. Metadata/count lease
+// only: native physical memory is retained by coordinator teardown admission.
+class TglOwnedPhysicalDependencyLease {
+    template<class,size_t> friend class TglOwnedVeboxPhysicalFrameRegistry;
+    std::atomic<size_t>* count_=nullptr;
+    uintptr_t image_=0,physical_=0;uint64_t generation_=0;
+    TglOwnedPhysicalDependencyLease(std::atomic<size_t>& count,uintptr_t image,uintptr_t physical,uint64_t generation) noexcept
+        :count_(&count),image_(image),physical_(physical),generation_(generation) {}
+    void clear() noexcept {count_=nullptr;image_=physical_=0;generation_=0;}
+public:
+    TglOwnedPhysicalDependencyLease()=default;
+    TglOwnedPhysicalDependencyLease(const TglOwnedPhysicalDependencyLease&)=delete;
+    TglOwnedPhysicalDependencyLease& operator=(const TglOwnedPhysicalDependencyLease&)=delete;
+    TglOwnedPhysicalDependencyLease(TglOwnedPhysicalDependencyLease&& other) noexcept
+        :count_(other.count_),image_(other.image_),physical_(other.physical_),generation_(other.generation_) {other.clear();}
+    TglOwnedPhysicalDependencyLease& operator=(TglOwnedPhysicalDependencyLease&& other) noexcept {
+        if(this!=&other){reset();count_=other.count_;image_=other.image_;physical_=other.physical_;
+            generation_=other.generation_;other.clear();}return *this;
+    }
+    ~TglOwnedPhysicalDependencyLease() noexcept {reset();}
+    bool live() const noexcept {return count_!=nullptr;}
+    bool matches(uintptr_t image,uintptr_t physical,uint64_t generation) const noexcept {
+        return live() && image_==image && physical_==physical && generation_==generation;
+    }
+    void reset() noexcept {if(count_)count_->fetch_sub(1,std::memory_order_release);clear();}
+};
+// Globally unique physical epochs: independent Frame template types must not
+// produce interchangeable metadata identities now that their lease type joins.
+inline std::atomic<uint64_t> tglOwnedPhysicalNextGeneration{0};
+
 // Owned registry records, not a retain of native physical memory. Reserve
 // BEFORE native135d9, publish only its successful original output, and route
 // all owned frame access/native13c8c through this same generation gate. The
@@ -21584,7 +21615,7 @@ template<class Frame,size_t Capacity=4> class TglOwnedVeboxPhysicalFrameRegistry
     };
     std::array<Entry*,Capacity> entries_{};
     std::atomic_flag gate_=ATOMIC_FLAG_INIT;
-    inline static std::atomic<uint64_t> nextGeneration_{0};
+    inline static std::atomic<uint64_t>& nextGeneration_=tglOwnedPhysicalNextGeneration;
     struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}};
 public:
     struct Ticket {size_t index=Capacity;uint64_t generation=0;
@@ -21592,43 +21623,14 @@ public:
     using FrameTicket=typename Pool::Ticket;
     // Native physical allocation is kept by the coordinator, not refcounted
     // by Apple. This lease prevents our coordinator from invoking its teardown.
-    class DependencyLease {
-        friend class TglOwnedVeboxPhysicalFrameRegistry;
-        std::atomic<size_t>* count_=nullptr;
-        uintptr_t image_=0,physical_=0;uint64_t generation_=0;
-        explicit DependencyLease(Entry& entry) noexcept:count_(&entry.dependencies),
-            image_(entry.image),physical_(entry.physical),generation_(entry.generation) {}
-    public:
-        DependencyLease()=default;
-        DependencyLease(const DependencyLease&)=delete;
-        DependencyLease& operator=(const DependencyLease&)=delete;
-        DependencyLease(DependencyLease&& other) noexcept:count_(other.count_),image_(other.image_),
-            physical_(other.physical_),generation_(other.generation_) {other.clear();}
-        DependencyLease& operator=(DependencyLease&& other) noexcept {
-            if(this!=&other) {
-                reset();count_=other.count_;image_=other.image_;physical_=other.physical_;
-                generation_=other.generation_;other.clear();
-            }return *this;
-        }
-        ~DependencyLease() noexcept {reset();}
-        bool live() const noexcept {return count_!=nullptr;}
-        bool matches(uintptr_t image,uintptr_t physical,uint64_t generation) const noexcept {
-            return live() && image_==image && physical_==physical && generation_==generation;
-        }
-        void reset() noexcept {
-            if(count_) count_->fetch_sub(1,std::memory_order_release);
-            clear();
-        }
-    private:
-        void clear() noexcept {count_=nullptr;image_=physical_=0;generation_=0;}
-    };
+    using DependencyLease=TglOwnedPhysicalDependencyLease;
 private:
     static DependencyLease retainDependency(Entry& entry) noexcept {
         auto& count=entry.dependencies;
         auto value=count.load(std::memory_order_relaxed);
         do {if(value==SIZE_MAX) return {};}
         while(!count.compare_exchange_weak(value,value+1,std::memory_order_acquire,std::memory_order_relaxed));
-        return DependencyLease(entry);
+        return DependencyLease(entry.dependencies,entry.image,entry.physical,entry.generation);
     }
 public:
     class Scope {
@@ -22329,6 +22331,12 @@ private:
         if(!resolved || created.renderer!=state_->renderer) return 5;
         return use(*state_->storage,static_cast<const TglNativeCreatedVeboxRendererView&>(created));
     }
+};
+
+template<class Storage,class PhysicalLease,class Read,class Write,class TableAdmit,class ChildAdmit,class Native>
+struct TglImplicitContextRelease<TglOwnedVphalRendererOwner<Storage,PhysicalLease,Read,Write,TableAdmit,ChildAdmit,Native>> {
+    using Owner=TglOwnedVphalRendererOwner<Storage,PhysicalLease,Read,Write,TableAdmit,ChildAdmit,Native>;
+    static bool allowed(const Owner& owner) noexcept {return owner.nativeDestructionComplete();}
 };
 
 // Single composition used by a registry-resolved VPHAL destructor callback.

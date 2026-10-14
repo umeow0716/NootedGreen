@@ -14398,6 +14398,25 @@ static void testRetainedVeboxFrames() {
         };
         auto admitVptr=[](uintptr_t address,size_t size) noexcept {return address==context && size==8;};
         {
+            struct OtherFrame:ItemFrame {};
+            using First=TglOwnedVeboxPhysicalFrameRegistry<ItemFrame,1>;
+            using Second=TglOwnedVeboxPhysicalFrameRegistry<OtherFrame,1>;
+            static_assert(std::is_same_v<First::DependencyLease,TglOwnedPhysicalDependencyLease> &&
+                std::is_same_v<First::DependencyLease,Second::DependencyLease>);
+            First first;Second second;
+            const auto a=first.reserve(base);const auto b=second.reserve(base);
+            assert(a.generation && b.generation && a.generation!=b.generation);
+            assert(first.publish(a,base,0x30000) && second.publish(b,base,0x30000));
+            auto x=first.pinDependency(a,base,0x30000),y=second.pinDependency(b,base,0x30000);
+            assert(x.matches(base,0x30000,a.generation) && !x.matches(base,0x30000,b.generation));
+            assert(y.matches(base,0x30000,b.generation) && !y.matches(base,0x30000,a.generation));
+            auto moved=std::move(x);assert(!x.live());y=std::move(moved);
+            assert(!moved.live() && y.matches(base,0x30000,a.generation));
+            assert(second.destroy(b,base,0x30000,[](uintptr_t) noexcept -> int {return 0;})==0);
+            assert(first.destroy(a,base,0x30000,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
+            y.reset();assert(first.destroy(a,base,0x30000,[](uintptr_t) noexcept -> int {return 0;})==0);
+        }
+        {
             unsigned deaths=0;
             struct BatchOwner {
                 uintptr_t value;unsigned& deaths;
@@ -14441,12 +14460,13 @@ static void testRetainedVeboxFrames() {
                 return (p==context && (bytes==8 || bytes==0x12f8)) || (p==physical && bytes==0x58) ||
                     (p==os && bytes==0x10) || (p==wrapper && bytes==0x50);
             };
+            // Owner type is defined without instantiating any Frame registry.
+            using Codec=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,decltype(ownerRead),
+                decltype(writeVptr),decltype(ownerAdmit),decltype(qualify),decltype(executable)>;
             using Physical=TglOwnedVeboxPhysicalFrameRegistry<ItemFrame,1>;
             Physical physicals;const auto ticket=physicals.reserve(base);
             assert(physicals.publish(ticket,base,physical));
             auto dependency=physicals.pinDependency(ticket,base,physical);assert(dependency.live());
-            using Codec=TglOwnedNativeCodecContextOwner<Physical::DependencyLease,decltype(ownerRead),
-                decltype(writeVptr),decltype(ownerAdmit),decltype(qualify),decltype(executable)>;
             assert(!Codec::create(base,physical,ticket.generation+1,context,dependency,ownerRead,writeVptr,ownerAdmit,qualify,executable));
             assert(dependency.live());
             auto* owner=Codec::create(base,physical,ticket.generation,context,dependency,ownerRead,writeVptr,ownerAdmit,qualify,executable);
@@ -17180,6 +17200,7 @@ int main() {
                         assert(owner && !ownedStorage && !dependency.live());
                         activeOwnerTable=&owner->lifetime();
                         assert(owner->context()==creatorAddress && !owner->nativeDestructionComplete());
+                        assert(!TglImplicitContextRelease<Owner>::allowed(*owner));
                         auto ownerExecutable=[&](uintptr_t address,size_t size) noexcept {
                             return execLifetime(address,size) || creatorExecutable(address,size);
                         };
@@ -17309,6 +17330,7 @@ int main() {
                         assert(!owner->recoverDestruction([](uintptr_t) noexcept {return false;}));
                         assert(owner->recoverDestruction([&](uintptr_t object) noexcept {return object==creatorAddress;}));
                         assert(owner->nativeDestructionComplete() && backingReleased && ownedNativeCalls==1);
+                        assert(TglImplicitContextRelease<Owner>::allowed(*owner));
                         assert(!owner->requestDestruction(TglOwnedVphalDestructionState::Kind::DeletingDestroy));
                         // Native VPHAL completed, but physical dependency persists until owner retirement.
                         assert(physicalOwners.destroy(ticket,image,0x90000,
