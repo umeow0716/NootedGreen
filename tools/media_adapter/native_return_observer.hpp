@@ -22,6 +22,7 @@ struct NativeOwnedCopy {
 // the creator before calling native. No text/IP/result modification.
 struct NativeOwnedCallTable {
     uintptr_t source=0,replacement=0;
+    unsigned site=0;
     bool select(uintptr_t& table,uintptr_t creator) const noexcept {
         if(!source || !replacement || table!=source || !creator || (creator&7) ||
             creator>UINTPTR_MAX-0x70)return false;
@@ -99,7 +100,7 @@ class NativeReturnObserver {
             raw = exact ? 1 : uintptr_t(-1);
             self->record(2, exact ? 1 : 0);
         }
-        if(self->ownedCallTable.replacement && site==0) {
+        if(self->ownedCallTable.replacement && site==self->ownedCallTable.site) {
             uintptr_t table=state->uc_mcontext->__ss.__rcx;
             const bool exact=self->ownedCallTable.select(table,state->uc_mcontext->__ss.__rdi);
             if(exact)state->uc_mcontext->__ss.__rcx=table;
@@ -159,13 +160,19 @@ public:
                 imageBase + imageBytes < imageBase)) ||
             (ownedCopy.bytes && (!(wanted & 1) || booleanSites || rcxSites || readRax32Sites ||
                 ((rdxImageSites | rcxImageSites) & 1) ||
-                ((unsigned(wanted) & ~1u) != (rdxImageSites | rcxImageSites)) ||
+                ((unsigned(wanted) & ~1u) != ((rdxImageSites | rcxImageSites) |
+                    (ownedCallTable.replacement && ownedCallTable.site<4 ?
+                        (1u<<ownedCallTable.site) : 0u))) ||
                 !ownedCopy.source || !ownedCopy.replacement || ownedCopy.source == ownedCopy.replacement ||
                 ownedCopy.bytes > 0x7fffffff || ownedCopy.source + ownedCopy.bytes < ownedCopy.source ||
                 ownedCopy.replacement + ownedCopy.bytes < ownedCopy.replacement)) ||
             ((ownedCallTable.source || ownedCallTable.replacement) &&
-                (wanted!=1 || booleanSites || rcxSites || readRax32Sites || rdxImageSites || rcxImageSites ||
-                 ownedCopy.bytes || !ownedCallTable.source || !ownedCallTable.replacement ||
+                (ownedCallTable.site>=4 || !(unsigned(wanted)&(1u<<ownedCallTable.site)) ||
+                 ((booleanSites|rcxSites|readRax32Sites|rdxImageSites|rcxImageSites)&
+                    (1u<<ownedCallTable.site)) ||
+                 (ownedCopy.bytes ? ownedCallTable.site==0 :
+                    unsigned(wanted)!=(1u<<ownedCallTable.site)) ||
+                 !ownedCallTable.source || !ownedCallTable.replacement ||
                  ownedCallTable.source==ownedCallTable.replacement || (ownedCallTable.source&7) ||
                  (ownedCallTable.replacement&7) || ownedCallTable.source>UINTPTR_MAX-0x1f ||
                  ownedCallTable.replacement>UINTPTR_MAX-0x1f))) {

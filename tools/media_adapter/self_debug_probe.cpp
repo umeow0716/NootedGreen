@@ -167,6 +167,37 @@ int main() {
             creatorOwnedCalls != (test == 0 ? 1u : 0u) ||
             nativeTable[3] != reinterpret_cast<uintptr_t>(creatorNative) || creator[0] != 0) return 1;
     }
+    // One observer owns BOTH exact argument substitutions. Exercise either
+    // order, partial hit and rejected table without a nested debug owner.
+    for (unsigned test=0; test!=4; ++test) {
+        const uint32_t source=0x1234,replacement=0x5678;
+        uint32_t destination=0;
+        creatorNativeCalls=creatorOwnedCalls=0;
+        expectedCreator=creator;
+        NativeReturnObserver combined({reinterpret_cast<uintptr_t>(owned_debug_copy_site),
+            reinterpret_cast<uintptr_t>(owned_debug_creator_site),0,0},
+            0,0,0,0,0,0,
+            {reinterpret_cast<uintptr_t>(&source),reinterpret_cast<uintptr_t>(&replacement),4},0,
+            {reinterpret_cast<uintptr_t>(nativeTable),reinterpret_cast<uintptr_t>(ownedTable),1});
+        if(!combined.isArmed())return 1;
+        auto call=[&]() {
+            return owned_debug_creator_target(creator,test==3?otherTable:nativeTable)==0x1357;
+        };
+        if(test==0 && !call())return 1;
+        if(owned_debug_copy_target(&destination,4,&source,4)!=replacement ||
+            destination!=replacement || source!=0x1234 || !combined.observed(0,1))return 1;
+        if(test!=0 && test!=2 && !call())return 1;
+        if(test==2) {
+            if(combined.observed(1,1) || creatorNativeCalls || creatorOwnedCalls)return 1;
+        } else if(!combined.observed(1,test==3?-1:1) || creatorNativeCalls!=1 ||
+            creatorOwnedCalls!=(test==3?0u:1u))return 1;
+    }
+    {
+        NativeReturnObserver overlap({reinterpret_cast<uintptr_t>(owned_debug_copy_site),0,0,0},
+            0,0,0,0,0,0,{1,2,4},0,
+            {reinterpret_cast<uintptr_t>(nativeTable),reinterpret_cast<uintptr_t>(ownedTable),0});
+        if(overlap.isArmed())return 1;
+    }
     alarm(0);
     int handlerRestored = sigaction(SIGTRAP, &previous, nullptr);
     x86_debug_state64_t finalState{};
