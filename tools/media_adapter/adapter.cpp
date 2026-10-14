@@ -1413,6 +1413,72 @@ struct NativeAllocatedAdmissionRender {
         return result;
     }
 };
+// Stable, per-frame capabilities keep construction-time hook types identical
+// to execution-time producer resolvers. No success/default producer exists.
+struct NativeDiIecpCapture {
+    using Consume=int(*)(void*,const TglDiIecpInputs&) noexcept;
+    void* scope=nullptr;int(*capture)(void*,void*,Consume) noexcept=nullptr;
+    template<class Use> int operator()(Use use) const noexcept {
+        static_assert(noexcept(use(std::declval<const TglDiIecpInputs&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglDiIecpInputs&>())),int>);
+        if(!scope || !capture || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(capture),1))return 5;
+        struct Call {Use& use;bool entered=false,repeated=false;int result=5;};
+        Call call{use};
+        const int status=capture(scope,&call,[](void* context,const TglDiIecpInputs& input) noexcept -> int {
+            auto& call=*static_cast<Call*>(context);
+            if(call.entered) {call.repeated=true;return 5;}
+            call.entered=true;call.result=call.use(input);return call.result;
+        });
+        if(call.repeated || !call.entered)return 5;
+        return status?status:call.result;
+    }
+};
+struct NativeFrameSurfaceAdmission {
+    void* scope=nullptr;int(*admit)(void*,const TglOwnedSurfaceStorage&) noexcept=nullptr;
+    int operator()(const TglOwnedSurfaceStorage& surface) const noexcept {
+        return scope && admit && ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1)?admit(scope,surface):5;
+    }
+};
+using NativeVeboxControlPolicy=TglOwnedDiIecpControlPolicyReader<NativeFrameDataRead>;
+using NativeVeboxLivePacketFrame=TglOwnedVeboxLivePacketContext<NativeDiIecpCapture,NativeFrameDataRead,
+    NativeFrameSurfaceAdmission,NativeFrameSurfaceAdmission,TglNativeDiIecpRegistration,
+    TglNativeDiIecpControl<NativeVeboxControlPolicy>>;
+using NativeVeboxPacketBridge=TglOwnedVeboxNativePacketBridge<NativeVeboxLivePacketFrame,NativeStackPacketAdmission>;
+using NativeVeboxProducerTypes=TglOwnedVeboxFrameProducerTypes<NativeVeboxPacketBridge,NativeRendererChildOwner,
+    NativeExecutionOwner,decltype(&readMemory),TglNativeDndiStackAdmission,NativeVeboxCscProducer>;
+using NativeVeboxProducerResolve=typename NativeVeboxProducerTypes::Resolve;
+struct NativeVeboxPacketProducerScope {
+    // Construction and execution name this SAME resolver specialization.
+    // This is only the producer portion, never a complete publishable table.
+    static std::array<uintptr_t,20> producerHooks(std::array<uintptr_t,20> hooks) noexcept {
+        hooks=tglBindOwnedVeboxKernelSetupHook<NativeVeboxProducerResolve>(hooks);
+        hooks=tglBindOwnedVeboxProducerHooks<NativeVeboxProducerResolve>(hooks);
+        hooks=tglBindOwnedVeboxCscHook<NativeVeboxProducerResolve>(hooks);
+        return tglBindOwnedVeboxDndiHook<NativeVeboxProducerResolve>(hooks);
+    }
+    static NativeAdmissionStages::Result run(NativeVeboxLivePacketFrame& frame,uintptr_t dnParams,
+        NativeVeboxCscProducer csc,NativeAllocatedAdmissionRender& render) noexcept {
+        NativeAdmissionStages::Result result;
+        auto& admission=render.render.admission;auto& child=admission.reset.childOwner;
+        auto& execution=admission.reset.executionOwner;
+        const auto& leases=frame.leases;
+        if(leases.child!=reinterpret_cast<uintptr_t>(admission.reset.child) ||
+            leases.execution!=admission.reset.execution || &leases.source!=&admission.feature.source ||
+            leases.target!=&admission.feature.target || &csc.health.childOwner!=&child ||
+            &csc.health.executionOwner!=&execution || &csc.health.source!=&leases.source ||
+            &csc.health.target!=leases.target || frame.read.scope!=admission.read.scope ||
+            frame.read.resolve!=admission.read.resolve)return result;
+        NativeVeboxPacketBridge bridge(frame,NativeStackPacketAdmission{});
+        const int status=tglWithOwnedVeboxFrameProducers(bridge,child,execution,dnParams,&readMemory,
+            TglNativeDndiStackAdmission{},csc,[&](void* object,auto& producer) noexcept -> int {
+                static_assert(std::is_same_v<std::remove_reference_t<decltype(producer)>,NativeVeboxProducerTypes::Context>);
+                if(object!=admission.reset.child || NativeVeboxProducerResolve::get(object)!=&producer)return 5;
+                return producer.pass.withBuilder([&]() noexcept -> int {result=render.run();return result.status;});
+            });
+        if(status) {result.status=status;result.admitted=false;}
+        return result;
+    }
+};
 // Frame surfaces retain their original codec contexts; CPU children remain
 // in the permanent VPHAL owner and are entered only through its pinned access.
 using NativeBorrowedFrontend=TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePin,
