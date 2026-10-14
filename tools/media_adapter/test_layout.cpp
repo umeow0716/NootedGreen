@@ -19309,7 +19309,9 @@ int main() {
                     {
                         // Actual counted physical lease + stable owner composition;
                         // child/backing/native invocations remain CPU fixtures.
-                        struct EmptyPhysicalFrame {};
+                        struct EmptyPhysicalFrame {
+                            explicit EmptyPhysicalFrame(const TglNativeContextInputRoots&) noexcept {}
+                        };
                         using PhysicalRegistry=TglOwnedVeboxPhysicalFrameRegistry<EmptyPhysicalFrame>;
                         PhysicalRegistry physicalOwners;
                         const auto ticket=physicalOwners.reserve(image);
@@ -19326,6 +19328,12 @@ int main() {
                         rendererWords[1]=image+0x75bc00;rendererWords[14]=image+0x811e00;
                         for(size_t i=0;i<12;++i)rendererWords[i+2]=image+TglNativePrimaryRendererTable::offsets[i];
                         auto ownerRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                            if(size==8 && (address==0xe0128 || address==0xe12f0 || address==0xe12e0 || address==0xe12e8 ||
+                                (address>=0xe2000 && address<0xe20d8))) {
+                                const uintptr_t value=address==0xe0128?0x90000:address==0xe12f0?0x93000:
+                                    address==0xe12e0?creatorAddress:address==0xe12e8?0xe2000:0;
+                                std::memcpy(bytes,&value,8);return true;
+                            }
                             if(size==8 && (address==image+0x75bbc0 || address==image+0x75bbc8))
                                 return creatorRead(address,bytes,size);
                             const auto rendererStart=image+0x75bb90;
@@ -19417,6 +19425,36 @@ int main() {
                         using OwnerRouter=TglOwnedVphalProcessRouter<Owner,OwnerRoutingPolicy,1>;
                         OwnerRoutingPolicy::identity()={image,0x90000,uintptr_t(ticket.generation),creatorAddress};
                         assert(OwnerRouter::adopt(image,0x90000,ticket.generation,owner));
+                        {
+                            auto pin=OwnerRouter::pinFrame(image,0x90000,ticket.generation,creatorAddress);
+                            assert(pin.get()==owner);
+                            TglOwnedVeboxRetainedFrames<EmptyPhysicalFrame>::Ticket frameTicket;
+                            unsigned calls=0;
+                            assert(physicalOwners.withScope(ticket,image,0x90000,[&](auto& scope) noexcept -> int {
+                                return scope.withNativeRequestItem(0xe0000,[&](auto& active) noexcept -> int {
+                                    frameTicket=active.createContextRootFrame(ownerRead,
+                                        [](uintptr_t,size_t) noexcept {return true;});
+                                    assert(frameTicket.generation);
+                                    return active.runContextRootFrame([&](EmptyPhysicalFrame& frame) noexcept {
+                                        auto invoke=[&](uintptr_t entry,uintptr_t object,uintptr_t parameters) noexcept -> int {
+                                            ++calls;assert(entry==image+0x133cb0 && object==creatorAddress && parameters==0xe2000);
+                                            assert(!owner->requestDestruction(TglOwnedVphalDestructionState::Kind::Destroy));
+                                            assert(owner->dispatchPreparedFrame(pin,active,frame,0xe0000,0xe2000,ownerExecutable,
+                                                [](auto...) noexcept -> int {assert(false);return 0;})==5);
+                                            return 31;
+                                        };
+                                        assert(owner->dispatchPreparedFrame(pin,active,frame,0xe0000,0xe2008,ownerExecutable,invoke)==5 && !calls);
+                                        const int result=owner->dispatchPreparedFrame(pin,active,frame,0xe0000,0xe2000,ownerExecutable,invoke);
+                                        return TglOwnedVeboxCommandTransactionResult{result,0,false,false};
+                                    }).status;
+                                });
+                            })==31 && calls==1);
+                            assert(physicalOwners.withLive(ticket,image,0x90000,[&](auto& pool) noexcept -> int {
+                                return pool.retire(frameTicket,[](const auto&,bool pending,const auto&) noexcept -> int {
+                                    assert(!pending);return 0;
+                                });
+                            })==0);
+                        }
                         unsigned producerCalls=0;
                         auto producer=[&](RendererStorage& storage,const TglNativeCreatedVeboxRendererView& view) noexcept -> int {
                             assert(&storage.children()==&children && view.creator==creatorAddress && view.renderer==r);

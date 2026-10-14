@@ -3816,6 +3816,37 @@ struct NativeRetainedContextFrameDispatch {
         return result;
     }
 };
+struct NativePreparedVphalFrameDispatch {
+    struct Call {
+        NativeVphalFramePin& parent;NativePhysicalFrameScope& physical;
+        NativeContextRendererFrame& frame;uintptr_t context,parameters;
+        bool invoked=false;
+        static int invoke(void* raw,int(*hook)(void*,void*,void*) noexcept) noexcept {
+            auto& self=*static_cast<Call*>(raw);
+            auto* owner=self.parent.get();
+            if(self.invoked || !owner || hook!=&NativeRetainedTemporaryExecution::temporaryPass)return 5;
+            return owner->dispatchPreparedFrame(self.parent,self.physical,self.frame,self.context,self.parameters,
+                &executableMemory,[&](uintptr_t entry,uintptr_t creator,uintptr_t parameters) noexcept -> int {
+                    if(self.invoked || !self.frame.beginNativeFrame())return 5;
+                    self.invoked=true;
+                    return reinterpret_cast<int(*)(void*,void*)>(entry)(
+                        reinterpret_cast<void*>(creator),reinterpret_cast<void*>(parameters));
+                });
+        }
+    };
+    static TglOwnedVeboxCommandTransactionResult run(NativeVphalFramePin& parent,
+        NativePhysicalFrameScope& physical,uintptr_t context,uintptr_t parameters,
+        NativeContextRendererFrame& frame,NativeRetainedTemporaryExecution::PassProvider& provider) noexcept {
+        if(!parent.get() || !context || !parameters || &provider.frame!=&frame ||
+            parent.get()->context()!=provider.view.parent || !provider.view.renderer.renderer)return {};
+        Call call{parent,physical,frame,context,parameters};
+        auto result=NativeRetainedTemporaryExecution::withNativePasses(frame,provider.view.renderer.renderer,
+            &provider,&NativeRetainedTemporaryExecution::PassProvider::produce,&call,&Call::invoke);
+        result.nativeEntered=result.nativeEntered || call.invoked;
+        if(!result.status && (!call.invoked || provider.failure))result.status=provider.failure?provider.failure:5;
+        return result; // Codec caller binds its output receipt AFTER235b00 returns.
+    }
+};
 // Callback table entries carry no Entry/closure argument. Route the immutable
 // qualified native image and actual physical generation, never "current Entry".
 // Prepared backend only; factory callback publication remains disabled.

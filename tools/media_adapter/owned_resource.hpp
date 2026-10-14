@@ -24989,6 +24989,7 @@ class TglOwnedVphalRendererOwner {
         TglOwnedPrimaryRendererTable rendererTable;
         Storage* storage=nullptr;
         std::atomic<bool> storageBusy{false};
+        std::atomic<bool> frameBusy{false};
         State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t o,uintptr_t r,
             Read rd,Write wr,TableAdmit ta,ChildAdmit ca,Native n) noexcept
             :image(i),physical(p),object(o),renderer(r),generation(g),
@@ -25005,7 +25006,7 @@ class TglOwnedVphalRendererOwner {
                 read(os+0x8,&embedded,8) && embedded==wrapper+0x48;
         }
         int prepare() noexcept {
-            if(!physicalLease.matches(image,physical,generation) || !boundRenderer() || !boundPhysicalOs()) return 5;
+            if(frameBusy || !physicalLease.matches(image,physical,generation) || !boundRenderer() || !boundPhysicalOs()) return 5;
             using Publication=TglOwnedPrimaryRendererTable::Publication;
             if(rendererTable.publication()==Publication::Ambiguous) return 5;
             if(rendererTable.publication()==Publication::Published &&
@@ -25047,6 +25048,31 @@ public:
     uintptr_t context() const noexcept {return state_?state_->object:0;}
     const TglOwnedVphalLifetimeTable& lifetime() const noexcept {return state_->table;}
     const TglOwnedPrimaryRendererTable& rendererLifetime() const noexcept {return state_->rendererTable;}
+    //235b00 prepares context12e8 BEFORE VPHAL+10. Consume that exact late
+    // boundary under the already-active request/frame, never invoke235ab0
+    // recursively or acquire the creator storage lock across native rendering.
+    template<class OwnerLease,class Scope,class Frame,class Executable,class Invoke>
+    int dispatchPreparedFrame(const OwnerLease& lease,Scope& scope,Frame& frame,
+        uintptr_t context,uintptr_t parameters,Executable executable,Invoke invoke) noexcept {
+        if(!state_ || lease.get()!=this || !context || context>UINTPTR_MAX-0x12f0 || !parameters ||
+            !state_->storage || state_->storageBusy ||
+            state_->destruction.phase()!=TglOwnedVphalDestructionState::Phase::Idle ||
+            state_->table.publication()!=TglOwnedVphalLifetimeTable::Publication::Published ||
+            !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
+            !scope.matches(state_->image,state_->physical,state_->generation) ||
+            !scope.matchesActiveContextFrame(context,&frame) || !state_->boundRenderer() || !state_->boundPhysicalOs())return 5;
+        uintptr_t creator=0,input=0,vptr=0;
+        const uintptr_t entry=state_->table.nativeFrame();
+        if(!entry || !executable(entry,1) || !state_->read(context+0x12e0,&creator,8) || creator!=state_->object ||
+            !state_->read(context+0x12e8,&input,8) || input!=parameters ||
+            !state_->read(state_->object,&vptr,8) || vptr!=state_->table.addressPoint())return 5;
+        bool expected=false;
+        if(!state_->frameBusy.compare_exchange_strong(expected,true,std::memory_order_acq_rel))return 5;
+        struct Unlock {std::atomic<bool>& flag;~Unlock(){flag.store(false,std::memory_order_release);}} unlock{state_->frameBusy};
+        static_assert(noexcept(invoke(entry,state_->object,parameters)) &&
+            std::is_same_v<decltype(invoke(entry,state_->object,parameters)),int>);
+        return invoke(entry,state_->object,parameters);
+    }
     // Initialization reservation pins THIS state/table/code until qualified
     // destruction; callback dispatch never owns a second renderer object.
     template<class ExclusiveLease,class Qualify,class Executable,class OwnedExecutable>
@@ -25078,12 +25104,12 @@ public:
                 state_->read,state_->write,state_->tableAdmit);
     }
     bool requestDestruction(Kind kind) noexcept {
-        if(!state_ || state_->storageBusy) return false;
+        if(!state_ || state_->storageBusy || state_->frameBusy) return false;
         return state_->destruction.request(state_->table,state_->object,kind,
             [&]() noexcept {return state_->prepare();},state_->native);
     }
     template<class Recover> bool recoverDestruction(Recover recover) noexcept {
-        if(!state_ || state_->storageBusy) return false;
+        if(!state_ || state_->storageBusy || state_->frameBusy) return false;
         return state_->destruction.recover(state_->table,recover,
             [&]() noexcept {return state_->prepare();},state_->native);
     }
