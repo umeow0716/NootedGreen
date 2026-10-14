@@ -19672,6 +19672,20 @@ public:
         const int status=visit(visit,0);
         return valid()?status:5;
     }
+    // Per-pass roots are selected from the source array, not necessarily the
+    // graph root and never inferred from the final output endpoint. Borrow
+    // both exact already-retained owners through the existing graph scope.
+    template<class Use> int withSelectedOriginalOwners(const TglOwnedSurfaceStorage& source,
+        const TglOwnedSurfaceStorage& target,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<Owner&>(),std::declval<Owner&>())) &&
+            std::is_same_v<decltype(use(std::declval<Owner&>(),std::declval<Owner&>())),int>);
+        const auto* root=storage();if(!root)return 5;
+        return withOriginalOwners({root,&source,&target},[&](const auto& owners) noexcept -> int {
+            if(!owners[1] || !owners[2] || !owners[1]->hasSurfaceLease(source) ||
+                !owners[2]->hasSurfaceLease(target))return 5;
+            return use(*owners[1],*owners[2]);
+        });
+    }
     template<class Use> int withMutableSurface(Use use) noexcept {
         if(busy_ || !valid()) return 5;
         busy_=true;const int result=slots_[0].lease->withMutableSurface(use);busy_=false;

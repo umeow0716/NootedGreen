@@ -17958,6 +17958,19 @@ int main() {
                     return 31;
                 };
                 assert(graph.withOriginalOwners({&root,&older,&previous},selected)==31);
+                assert(graph.withSelectedOriginalOwners(older,previous,[&](auto& a,auto& b) noexcept -> int {
+                    assert(&a==&oo && &b==&po);
+                    assert(graph.withSelectedOriginalOwners(root,root,[](auto&,auto&) noexcept -> int {
+                        assert(false);return 0;
+                    })==5);
+                    return 31;
+                })==31);
+                assert(graph.withSelectedOriginalOwners(previous,previous,[&](auto& a,auto& b) noexcept -> int {
+                    assert(&a==&po && &a==&b);return 0;
+                })==0);
+                assert(graph.withSelectedOriginalOwners(shell,root,[](auto&,auto&) noexcept -> int {
+                    assert(false);return 0;
+                })==5);
                 assert(graph.withOriginalOwners({&root,&previous,&previous},[&](const OriginalOwners& owners) noexcept -> int {
                     assert(owners[0]==&ro && owners[1]==&po && owners[2]==&po);return 0;
                 })==0);
