@@ -335,6 +335,27 @@ using NativeFrontendAccess=TglPinnedVphalStorageAccess<NativeDataAdmission,Nativ
 using NativeFrontendEnvironment=TglNativeFrontendCpuEnvironment<decltype(&readMemory),NativeTglImageAdmission,
     decltype(&executableMemory)>;
 using NativeContextSurfaceOwner=typename TglNativeContextSurfaceOwners<NativeCodecBackend::Registry>::Owner;
+using NativeSourceGraph=TglOwnedFrontendSourceGraph<NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi>;
+using NativeAdmissionHistoryStage=TglOwnedVeboxHistoryAdmissionStage<NativeRendererChildOwner,
+    NativeExecutionOwner,NativeSourceGraph,NativeDataAdmission,NativeDataAdmission>;
+struct NativeAdmissionHistorySetup {
+    NativeAdmissionHistoryStage stage;
+    bool operator()(TglLeasedAdmissionExecution& report) noexcept {
+        const auto address=reinterpret_cast<uintptr_t>(stage.child);
+        const uint64_t generation=stage.childOwner.allocationGeneration();
+        if(!generation || !stage.sourceGraph.hasSurfaceLease(stage.source) ||
+            !stage.childOwner.hasPrivateChildLease(address) ||
+            !stage.executionOwner.hasExecutionLease(stage.execution))return false;
+        // Exact source c0/c8 come from the retained original-context graph.
+        // History uses the freshly published report pipe, not a pre-reset copy
+        // and not an ABI-incompatible direct call to native child+180.
+        const bool accepted=stage(report);
+        return accepted && stage.childOwner.allocationGeneration()==generation &&
+            stage.childOwner.hasPrivateChildLease(address) &&
+            stage.executionOwner.hasExecutionLease(stage.execution) &&
+            stage.sourceGraph.hasSurfaceLease(stage.source);
+    }
+};
 using NativeDenoiseParameters=TglTrackedCpuOwner<TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>>;
 using NativeAdmissionFeatureStage=TglOwnedVeboxFeatureAdmissionStage<NativeContextSurfaceOwner,
     NativeContextSurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,NativeDenoiseParameters,
