@@ -2995,6 +2995,29 @@ struct NativeCreatorScopedInvocation {
     using Scope=typename NativePhysicalRegistry::DependencyAdoptionScope;
     using AdmitFn=bool(*)(void*) noexcept;
     using HandoffFn=int(*)(void*) noexcept;
+    struct BatchResult {
+        int status=5;
+        Result creator;
+    };
+    // Join construction to the existing physical dependency-adoption scope.
+    // Native output publication is adopted only after the complete creator
+    // handoff; a native success with missing handoff is an ambiguous failure,
+    // not permission to release partial owners or retry native construction.
+    // Prepared entry only: this does not replace any exported factory slot.
+    template<class Admit>
+    static BatchResult createAndAdopt(const Entry& factory,uintptr_t entry,
+        uintptr_t physical,const void* input,Admit& admit) noexcept {
+        BatchResult result;
+        result.status=NativePhysicalBackend::createContexts(physical,input,
+            [&](uintptr_t image,uintptr_t actual,const void* request,Scope& scope) noexcept -> int {
+                if(actual!=physical || request!=input || scope.image()!=image)return 5;
+                result.creator=runComplete(factory,entry,actual,request,scope,admit);
+                if(!result.creator.nativeInvoked)return 5;
+                if(result.creator.nativeResult)return result.creator.nativeResult;
+                return result.creator.handoffCompleted?0:5;
+            });
+        return result;
+    }
     template<class Admit>
     static Result runComplete(const Entry& factory,uintptr_t entry,uintptr_t physical,
         const void* input,Scope& scope,Admit& admit) noexcept {
@@ -3075,6 +3098,9 @@ template NativeCreatorScopedInvocation::Result NativeCreatorScopedInvocation::ru
 template NativeCreatorScopedInvocation::Result NativeCreatorScopedInvocation::runComplete<
     NativeCreatorScopedInvocation::AdmitFn>(const Entry&,uintptr_t,uintptr_t,const void*,
     NativeCreatorScopedInvocation::Scope&,NativeCreatorScopedInvocation::AdmitFn&) noexcept;
+template NativeCreatorScopedInvocation::BatchResult NativeCreatorScopedInvocation::createAndAdopt<
+    NativeCreatorScopedInvocation::AdmitFn>(const Entry&,uintptr_t,uintptr_t,const void*,
+    NativeCreatorScopedInvocation::AdmitFn&) noexcept;
 std::atomic<uintptr_t> nativeCreateContexts{0};
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept {
     mach_vm_size_t copied = 0;
