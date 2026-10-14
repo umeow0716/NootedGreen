@@ -335,6 +335,48 @@ using NativeFrontendAccess=TglPinnedVphalStorageAccess<NativeDataAdmission,Nativ
 using NativeFrontendEnvironment=TglNativeFrontendCpuEnvironment<decltype(&readMemory),NativeTglImageAdmission,
     decltype(&executableMemory)>;
 using NativeContextSurfaceOwner=typename TglNativeContextSurfaceOwners<NativeCodecBackend::Registry>::Owner;
+struct NativeTwoPassCscHealth {
+    NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
+    NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+    const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
+    uintptr_t image,child,execution;uint64_t generation;
+    bool operator()(uintptr_t actualSource,uintptr_t actualTarget) const noexcept {
+        if(!generation || actualSource!=reinterpret_cast<uintptr_t>(&source) ||
+            actualTarget!=reinterpret_cast<uintptr_t>(&target) ||
+            childOwner.allocationGeneration()!=generation ||
+            !childOwner.hasPrivateChildImageLease(child,image) ||
+            !executionOwner.hasExecutionLease(execution) ||
+            !sourceOwner.hasSurfaceLease(source) || !targetOwner.hasSurfaceLease(target))return false;
+        uintptr_t linked=0;uint32_t format=0;
+        return child<=UINTPTR_MAX-0x90 && readMemory(child+0x88,&linked,8) && linked==execution &&
+            readMemory(reinterpret_cast<uintptr_t>(source.prefix.data()+0x130),&format,4);
+    }
+};
+using NativeTwoPassCscQuery=TglLeasedNativeTwoPassCscQuery<NativeRendererChildOwner,
+    decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory),
+    TglNativeTwoPassCscInvoke,NativeTwoPassCscHealth>;
+struct NativeOutputCscQueryScope {
+    static bool query(NativeTwoPassCscQuery& scoped,uintptr_t source,uintptr_t target,bool& needed) noexcept {
+        return scoped(source,target,needed);
+    }
+    template<class Use> static int run(NativeTwoPassCscHealth& health,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<NativeTwoPassCscQuery&>())) &&
+            std::is_same_v<decltype(use(std::declval<NativeTwoPassCscQuery&>())),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        const auto source=reinterpret_cast<uintptr_t>(&health.source);
+        const auto target=reinterpret_cast<uintptr_t>(&health.target);
+        if(!health(source,target))return 5;
+        auto read=&readMemory;auto executable=&executableMemory;
+        NativeTglImageAdmission qualify{health.image};TglNativeTwoPassCscInvoke invoke;
+        TglTwoPassCscBinding binding;
+        if(!binding.resolve(health.image,read,qualify,executable))return 5;
+        NativeTwoPassCscQuery scoped(health.childOwner,binding,health.child,read,qualify,executable,invoke,health);
+        const int status=use(scoped);
+        return status?status:(health(source,target)?0:5);
+    }
+};
+template int NativeOutputCscQueryScope::run<int(*)(NativeTwoPassCscQuery&) noexcept>(
+    NativeTwoPassCscHealth&,int(*)(NativeTwoPassCscQuery&) noexcept) noexcept;
 using NativeSourceGraph=TglOwnedFrontendSourceGraph<NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi>;
 using NativeAdmissionHistoryStage=TglOwnedVeboxHistoryAdmissionStage<NativeRendererChildOwner,
     NativeExecutionOwner,NativeSourceGraph,NativeDataAdmission,NativeDataAdmission>;

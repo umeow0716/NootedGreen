@@ -3190,8 +3190,10 @@ public:
         owner_(owner),binding_(binding),child_(child),read_(read),qualify_(qualify),
         executable_(executable),invoke_(invoke),health_(health){}
     bool operator()(uintptr_t source,uintptr_t target,bool& needed) noexcept {
-        // Native bool cannot report a failed owned void CSC callback. The
-        // enclosing SAME producer pass must be healthy before and after it.
+        // Exact12cfc0..12d117 calls getter48/surfaceSupported90/support1b8,
+        // NOT the void matrix producer. Health must authenticate the same
+        // frame/leases and any enclosing latch before and after the query;
+        // do not require a command builder solely for this pure query.
         static_assert(noexcept(health_(source,target)) && std::is_same_v<decltype(health_(source,target)),bool>);
         if(!health_(source,target)) return false;
         static_assert(noexcept(owner_.describePrivateCscLease(child_,binding_.image,
