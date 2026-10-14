@@ -17173,16 +17173,17 @@ int main() {
                             assert(framePin.get()==owner);
                             auto siblingPin=OwnerRouter::pinFrame(image,0x90000,ticket.generation,creatorAddress);
                             assert(siblingPin.get()==owner && !OwnerRouter::pinForInitialization(creatorAddress).get());
+                            TglPinnedVphalStorageAccess access(creatorAdmit,qualify,ownerExecutable);
                             auto useBorrowed=[&](auto& storage,const auto& view) noexcept -> int {
                                 assert(&storage.children()==&children && view.creator==creatorAddress);
-                                assert(owner->withPinnedStorage(siblingPin,creatorAdmit,qualify,ownerExecutable,producer)==5);
+                                assert(access(siblingPin,producer)==5);
                                 assert(!owner->recoverDestruction([](auto&&...) noexcept {assert(false);return false;}));
                                 return 31;
                             };
-                            assert(owner->withPinnedStorage(framePin,creatorAdmit,qualify,ownerExecutable,useBorrowed)==31);
-                            assert(owner->withPinnedStorage(siblingPin,creatorAdmit,qualify,ownerExecutable,useBorrowed)==31);
+                            assert(access(framePin,useBorrowed)==31);
+                            assert(access(siblingPin,useBorrowed)==31);
                             decltype(framePin) emptyFramePin;
-                            assert(owner->withPinnedStorage(emptyFramePin,creatorAdmit,qualify,ownerExecutable,producer)==5);
+                            assert(access(emptyFramePin,producer)==5);
                             assert(!backingReleased && !ownedNativeCalls);
                             OwnerRouter::Callbacks::deletingDestroy(reinterpret_cast<void*>(creatorAddress));
                             assert(!OwnerRouter::pinForInitialization(creatorAddress).get());
@@ -23783,6 +23784,38 @@ int main() {
                                 auto* cpuAddress=storageOwner.get();
                                 auto* child0=storage.children().first().owner().constructedBase();
                                 auto* child1=storage.children().second().owner().constructedBase();
+                                {
+                                    auto borrowedParent=parents.pin(base,0x8000,1,parentAddress);
+                                    unsigned calls=0;
+                                    bool allowAccess=true;
+                                    auto access=[&](const auto& pin,auto use) noexcept -> int {
+                                        assert(pin.get() && pin.get()->context()==parentAddress);
+                                        if(!allowAccess)return 31;
+                                        ++calls;return use(storage,0);
+                                    };
+                                    using Borrowed=TglNativeVeboxBorrowedFrontendFrameStorage<decltype(borrowedParent),
+                                        TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf,FrameDnBackend,decltype(access)>;
+                                    Borrowed frontend(std::move(borrowedParent),reinterpret_cast<uintptr_t>(&source),
+                                        originalResolve,originalTarget,Cf{refs},11,12,frameDn,access);
+                                    assert(frontend.surfacesReady() && !frontend.requiresRetention());
+                                    for(unsigned frame=0;frame<2;++frame) {
+                                        const auto result=frontend.withCpuFrontend([&](auto& cpu,auto& src,auto& dst,auto&) noexcept {
+                                            assert(&cpu==cpuAddress && src.storage()==&source && dst.storage()==&target);
+                                            assert(frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                                assert(false);return {};
+                                            }).status==5);
+                                            return TglOwnedVeboxCommandTransactionResult{31,0,false,false,false};
+                                        });
+                                        assert(result.status==31 && !frontend.requiresRetention() && storageOwner.get()==cpuAddress);
+                                    }
+                                    assert(calls==2);
+                                    allowAccess=false;
+                                    const auto refused=frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                        assert(false);return {};
+                                    });
+                                    assert(refused.status==31 && calls==2 && !frontend.requiresRetention() && storageOwner.get()==cpuAddress);
+                                }
+                                assert(refs==originalRefs && !originalSource.borrowed && !originalTarget.borrowed && !originalHistory.borrowed);
                                 {
                                     unsigned mode=0,reads=0;
                                     auto types=[&](TglNativeFrontendCfTypes& out) noexcept {

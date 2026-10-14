@@ -23773,10 +23773,76 @@ public:
     }
 };
 
-// Creator constructs CPU children before any frame surfaces exist. Transfer
-// that SAME stable allocation into the original frontend later; never build a
-// second child pair or substitute allocated source/target images. Enclosing
-// retained-frame retirement still owns GPU completion/quiescence admission.
+// Concrete access adapter for the existing VPHAL owner, not a CPU pointer
+// resolver. Caller retains the same live physical-generation scope throughout.
+template<class Admit,class Qualify,class Executable>
+class TglPinnedVphalStorageAccess {
+    Admit admit_;Qualify qualify_;Executable executable_;
+public:
+    TglPinnedVphalStorageAccess(Admit admit,Qualify qualify,Executable executable) noexcept
+        :admit_(std::move(admit)),qualify_(std::move(qualify)),executable_(std::move(executable)) {
+        static_assert(std::is_nothrow_move_constructible_v<Admit> &&
+            std::is_nothrow_move_constructible_v<Qualify> && std::is_nothrow_move_constructible_v<Executable>);
+    }
+    template<class Pin,class Use> int operator()(const Pin& pin,Use use) const noexcept {
+        if(!pin.get())return 5;
+        return pin.get()->withPinnedStorage(pin,admit_,qualify_,executable_,use);
+    }
+};
+
+// Creator constructs CPU children before any frame surfaces exist. Borrow
+// those SAME stable allocations later; never reconstruct the child pair.
+// Production borrowing variant: CPU/children stay in the VPHAL owner. Access
+// must enter that owner's withPinnedStorage under the live physical scope.
+// Enclosing retained-frame owner MUST keep this object until certified retirement;
+// destroying it directly is not GPU completion. No CPU pointer escapes Access.
+template<class ParentLease,class SourceOwner,class TargetOwner,class CfApi,class DnBackend,class Access>
+class TglNativeVeboxBorrowedFrontendFrameStorage {
+    ParentLease parent_; // surfaces/DN release before parent pin
+    TglOwnedFrontendSourceGraph<SourceOwner,CfApi> source_;
+    TglOwnedType1BorrowedSurfaceLease<TargetOwner,CfApi> target_;
+    TglTrackedCpuOwner<DnBackend> parameters_;
+    Access access_;
+    bool busy_=false,retained_=false;
+public:
+    using SourceOwnerType=SourceOwner;
+    using TargetOwnerType=TargetOwner;
+    template<class Resolve>
+    TglNativeVeboxBorrowedFrontendFrameStorage(ParentLease&& parent,uintptr_t source,Resolve resolve,
+        TargetOwner& target,CfApi cf,uintptr_t resourceType,uintptr_t surfaceType,
+        DnBackend& parameters,Access access) noexcept
+        :parent_(std::move(parent)),source_(cf),target_(target,cf,resourceType,surfaceType),
+         parameters_(parameters),access_(std::move(access)) {
+        static_assert(std::is_nothrow_move_constructible_v<ParentLease> && std::is_nothrow_move_constructible_v<Access>);
+        if(parent_.get())source_.acquire(source,resolve,resourceType,surfaceType);
+    }
+    TglNativeVeboxBorrowedFrontendFrameStorage(const TglNativeVeboxBorrowedFrontendFrameStorage&)=delete;
+    TglNativeVeboxBorrowedFrontendFrameStorage& operator=(const TglNativeVeboxBorrowedFrontendFrameStorage&)=delete;
+    bool surfacesReady() const noexcept {return parent_.get() && source_.storage() && target_.storage();}
+    bool requiresRetention() const noexcept {return retained_;}
+    template<class Use> TglOwnedVeboxCommandTransactionResult withCpuFrontend(Use use) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        if(busy_ || retained_ || !surfacesReady())return result;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        bool entered=false;
+        const int status=access_(parent_,[&](auto& cpu,const auto&) noexcept -> int {
+            static_assert(noexcept(use(cpu,source_,target_,parameters_)) &&
+                std::is_same_v<decltype(use(cpu,source_,target_,parameters_)),TglOwnedVeboxCommandTransactionResult>);
+            if(entered || cpu.backing().retention()() ||
+               !cpu.children().first().owner().constructedBase() ||
+               !cpu.children().second().owner().constructedBase())return 5;
+            entered=true;result=use(cpu,source_,target_,parameters_);
+            if(result.writtenBack && !result.acquired && !result.status)result.status=5;
+            cpu.backing().retention().observe(result);
+            retained_=cpu.backing().retention()();
+            return result.status;
+        });
+        if(!entered)result.status=status?status:5;
+        else if(!result.status && status)result.status=status;
+        return result;
+    }
+};
+
 template<class CpuStorage,class ParentLease,class SourceOwner,class TargetOwner,class CfApi,class DnBackend>
 class TglNativeVeboxAdoptedFrontendFrameStorage {
     ParentLease parent_; // last destroyed: native OS/MHW must outlive CPU cleanup
