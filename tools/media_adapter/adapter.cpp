@@ -49,10 +49,29 @@ struct NativeTglImageAdmission {
     uintptr_t image=0;
     bool operator()(uintptr_t candidate) const noexcept {return image && candidate==image;}
 };
+using NativeCodecOwner=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,
+    decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,
+    NativeTglImageAdmission,decltype(&executableMemory)>;
+struct NativeCodecBackend {
+    using Registry=TglOwnedContextOwnerRegistry<NativeCodecOwner,64>;
+    static Registry& owners() noexcept {
+        // Registry destruction does not delete unresolved native owners. Keep
+        // its pin counters alive as long as process-owned frames can exist.
+        static Registry registry;
+        return registry;
+    }
+    template<size_t N,class Scope>
+    static int adopt(Scope& scope,uintptr_t physical,const TglNativeCreatedContextBatch<N>& batch,
+        std::array<NativeCodecOwner*,N>& persistentCandidates) noexcept {
+        // Caller must retain this ledger on partial failure. No Entry captures,
+        // native context deletion or synthetic successful-removal proof here.
+        return tglAdoptNativeCodecContextBatch(scope,physical,batch,owners(),persistentCandidates,
+            &readMemory,NativeDataPointerWriter{},NativeDataAdmission{},
+            NativeTglImageAdmission{scope.image()},&executableMemory);
+    }
+};
 struct Entry {
-    using CodecOwner=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,
-        decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,
-        NativeTglImageAdmission,decltype(&executableMemory)>;
+    using CodecOwner=NativeCodecOwner;
     // Factory table lifetime only, not the native physical context lifetime.
     // Exact TGL table slots: [0] factory data, [1] 0x135d9 physical init
     // (void **output, const void *input), [2] 0x13c8c physical destroy,
