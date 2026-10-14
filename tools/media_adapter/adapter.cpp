@@ -1649,6 +1649,27 @@ using NativeLeasedFrameInputUse=TglOwnedVeboxCommandTransactionResult(*)(NativeC
     NativeVpGraph&,TglNativeVpLineResourceStorage&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&) noexcept;
 template TglOwnedVeboxCommandTransactionResult NativeLeasedFrameInputScope::run<NativeLeasedFrameInputUse>(
     NativeLeasedFrameInputScope::Inputs&,NativeLeasedFrameInputUse) noexcept;
+// One synchronous join: original packet/surface leases and the closed reader
+// enclose the actual VP producers. No caller-supplied replacement geometry,
+// compression flags or detached producer scope crosses this boundary.
+struct NativeLeasedVpFrameInputScope {
+    using Use=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeCoreFrameDataScope&,
+        NativeVpGraph&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&,
+        NativeVpProducerFrame&,const TglOwnedVpModeState&) noexcept;
+    static TglOwnedVeboxCommandTransactionResult run(NativeLeasedFrameInputScope::Inputs& in,
+        const TglOwnedVpEntrySet& catalogue,void* context,Use use) noexcept {
+        if(!use)return {};
+        return NativeLeasedFrameInputScope::run(in,[&](NativeCoreFrameDataScope& core,
+            NativeVpGraph& graph,TglNativeVpLineResourceStorage& lines,NativeAdmissionParams& params,
+            NativeAdmissionPass& pass,NativeFrameDataRead& read) noexcept -> TglOwnedVeboxCommandTransactionResult {
+            NativeVpProducerInputScope::Inputs inputs{core,read,in.pinned,in.interfaces,lines,catalogue};
+            NativeVpProducerInputScope producers(inputs);
+            return producers.run([&](NativeVpProducerFrame& vp,const TglOwnedVpModeState& original) noexcept {
+                return use(context,core,graph,params,pass,read,vp,original);
+            });
+        });
+    }
+};
 struct NativeAdmissionStages {
     NativeAdmissionReset& reset;NativeOutputPipeSelector& select;
     NativeAdmissionHistorySetup& history;NativeAdmissionFeatureStage& feature;
