@@ -4656,6 +4656,12 @@ struct TglNativeVeboxReportInvoker {
         return reinterpret_cast<uintptr_t>(reinterpret_cast<Query>(entry)(child));
     }
 };
+struct TglNativeVeboxHelperFactoryInvoker {
+    uintptr_t operator()(uintptr_t entry) const noexcept {
+        if(!entry)return 0;
+        return reinterpret_cast<uintptr_t>(reinterpret_cast<void*(*)()>(entry)());
+    }
+};
 template<class Invoke=TglNativeVeboxReportInvoker> class TglNativeVeboxReportQuery {
     uintptr_t image_=0;
     Invoke invoke_;
@@ -23724,6 +23730,21 @@ public:
             !children_.second().owner().constructedBase() ||
             !creatorEnvironment(view,read,qualify,executable,hardware))return 5;
         return children_.first().allocateCpuShells() && children_.second().allocateCpuShells()?0:5;
+    }
+    // Preserve native helper/report ownership and paired counted destruction.
+    // Do not replace report88 with an independent execution-owner allocation.
+    template<class Read,class Qualify,class Executable,class Create=TglNativeVeboxHelperFactoryInvoker,
+        class Report=TglNativeVeboxReportInvoker>
+    int allocateHelpersFromCreator(const TglNativeVphalMhwView& view,
+        Read read,Qualify qualify,Executable executable,Create create={},Report report={}) {
+        TglVeboxHardwareBinding hardware;
+        if(backing_.retention()() || !children_.first().owner().constructedBase() ||
+            !children_.second().owner().constructedBase() ||
+            !creatorEnvironment(view,read,qualify,executable,hardware))return 5;
+        TglNativeVeboxReportQuery<Report> query(view.renderer.image,read,qualify,executable,report);
+        if(!query.bound())return 5;
+        return children_.first().owner().allocateNativeHelper(read,executable,create,query) &&
+            children_.second().owner().allocateNativeHelper(read,executable,create,query)?0:5;
     }
     // Enclosing exclusive VPHAL owner retains parent60 until THIS storage
     // (including VP resources) is destroyed, before native135020 can free it.

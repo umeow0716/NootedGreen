@@ -23484,6 +23484,11 @@ int main() {
                         const auto sfcConstructsBefore=pairInvoke.constructs,sfcDestroysBefore=pairInvoke.destroys;
                         {
                             unsigned sourceFreeCleanups=0,sourceFreeDestroys=0;
+                            alignas(8) std::array<std::array<uint8_t,0xa0>,2> creatorHelpers{};
+                            // Opaque CPU-only report identities; not a native report ABI fixture.
+                            alignas(8) std::array<std::array<uint8_t,0x40>,2> creatorReports{};
+                            std::array<bool,2> creatorHelperLive{};
+                            unsigned creatorHelperCreates=0,creatorHelperFrees=0;
                             bool handoffActive=false;auto handoffRefs=refs;
                             auto sourceFreeCleanup=[&](void* object) noexcept {
                                 if(handoffActive)assert(refs==handoffRefs && !parentDeaths);
@@ -23498,6 +23503,18 @@ int main() {
                                     uintptr_t pointer=0;std::memcpy(&pointer,owner.bytes.data()+offsets[i],8);
                                     assert(pointer==owner.shells[i]);owner.release(pointer);
                                     pointer=0;std::memcpy(owner.bytes.data()+offsets[i],&pointer,8);
+                                }
+                                const size_t child=object==pairCpu[0].bytes.data()?0:1;
+                                if(creatorHelperLive[child]) {
+                                    uintptr_t helper=0,report=0,linkedChild=0,linkedReport=0;
+                                    std::memcpy(&helper,owner.bytes.data()+0x1bb8,8);std::memcpy(&report,owner.bytes.data()+0x88,8);
+                                    std::memcpy(&linkedChild,creatorHelpers[child].data()+8,8);
+                                    std::memcpy(&linkedReport,creatorHelpers[child].data()+0x10,8);
+                                    assert(helper==reinterpret_cast<uintptr_t>(creatorHelpers[child].data()) &&
+                                        report==reinterpret_cast<uintptr_t>(creatorReports[child].data()) &&
+                                        linkedChild==reinterpret_cast<uintptr_t>(object) && linkedReport==report);
+                                    helper=report=0;std::memcpy(owner.bytes.data()+0x1bb8,&helper,8);std::memcpy(owner.bytes.data()+0x88,&report,8);
+                                    creatorHelperLive[child]=false;++creatorHelperFrees;
                                 }
                             };
                             using SourceFree=TglNativeVeboxRendererCpuStorage<UnusedFrameApi,decltype(sourceFreeCleanup),
@@ -23802,6 +23819,48 @@ int main() {
                                 const auto firstShells=pairCpu[0].shells,secondShells=pairCpu[1].shells;
                                 assert(storage.allocateCpuShellsFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw)==5 &&
                                     pairCpu[0].shells==firstShells && pairCpu[1].shells==secondShells);
+                                bool allowReportBinding=false;
+                                auto helperRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                                    if(address==base+0x126bf0 && bytes==4) {
+                                        const uint32_t size=0xa0;std::memcpy(out,&size,4);return true;
+                                    }
+                                    if(address==base+0x126be0 && bytes==16) {
+                                        constexpr uint8_t code[]={0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+                                            0x48,0x8b,0x35,0x39,0xd4,0x62,0,0xbf};
+                                        std::memcpy(out,code,16);return true;
+                                    }
+                                    if(address==base+0x757ce0 && bytes==8) {
+                                        if(!allowReportBinding)return false;
+                                        const uintptr_t entry=base+0x12ea30;std::memcpy(out,&entry,8);return true;
+                                    }
+                                    if(address==base+0x12ea30 && bytes==32) {
+                                        constexpr uint8_t code[]={0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+                                            0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8,0x48,0x83,0xb8,0x88,
+                                            0,0,0,0,0x48,0x89,0x45,0xf0,0x0f,0x85,0x0d,0};
+                                        std::memcpy(out,code,32);return true;
+                                    }
+                                    return parentSfcRead(address,out,bytes);
+                                };
+                                auto helperExecutable=[&](uintptr_t address,size_t bytes) noexcept {
+                                    return (address==base+0x126be0 && bytes==16) || (address==base+0x126bf0 && bytes==4) ||
+                                        (address==base+0x12ea30 && bytes==32) || executableMhw(address,bytes);
+                                };
+                                auto helperCreate=[&](uintptr_t entry) noexcept -> uintptr_t {
+                                    assert(entry==base+0x126be0 && creatorHelperCreates<2);
+                                    const auto child=creatorHelperCreates++;creatorHelperLive[child]=true;
+                                    return reinterpret_cast<uintptr_t>(creatorHelpers[child].data());
+                                };
+                                auto report=[&](uintptr_t entry,void* object) noexcept -> uintptr_t {
+                                    assert(entry==base+0x12ea30);
+                                    const size_t child=object==pairCpu[0].bytes.data()?0:1;
+                                    assert(object==pairCpu[child].bytes.data());
+                                    const uintptr_t value=reinterpret_cast<uintptr_t>(creatorReports[child].data());
+                                    std::memcpy(static_cast<uint8_t*>(object)+0x88,&value,8);return value;
+                                };
+                                assert(storage.allocateHelpersFromCreator(*creatorView,helperRead,qualifyMhw,helperExecutable,helperCreate,report)==5 && !creatorHelperCreates);
+                                allowReportBinding=true;
+                                assert(storage.allocateHelpersFromCreator(*creatorView,helperRead,qualifyMhw,helperExecutable,helperCreate,report)==0 && creatorHelperCreates==2);
+                                assert(storage.allocateHelpersFromCreator(*creatorView,helperRead,qualifyMhw,helperExecutable,helperCreate,report)==5 && creatorHelperCreates==2);
                                 TestFrontendOriginalOwner originalSource{source},originalTarget{target},originalHistory{history};
                                 auto originalResolve=[&](uintptr_t p) noexcept -> TestFrontendOriginalOwner* {
                                     if(p==reinterpret_cast<uintptr_t>(&source))return &originalSource;
@@ -24093,6 +24152,7 @@ int main() {
                             }
                             }
                             assert(sourceFreeCleanups==5 && sourceFreeDestroys==5);
+                            assert(creatorHelperCreates==2 && creatorHelperFrees==2 && !creatorHelperLive[0] && !creatorHelperLive[1]);
                             assert(!vpCpu.live && !vpAvsCpu.live && parentSfc[0x40]==1);
                             putNative(nativeCreator,0x60,0);
                         }
