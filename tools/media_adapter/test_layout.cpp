@@ -17081,6 +17081,50 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        std::array<uint8_t,0x139> caller{};caller.fill(0xa5);
+        std::array<uint8_t,0x60> packet{};packet.fill(0x5a);
+        const auto p=reinterpret_cast<uintptr_t>(caller.data()),q=reinterpret_cast<uintptr_t>(packet.data());
+        auto range=[&](uintptr_t at,size_t n) noexcept {
+            return (at>=p && at-p<=0x130 && n<=0x130-(at-p)) ||
+                (at>=q && at-q<=0x40 && n<=0x40-(at-q));
+        };
+        auto read=[&](uintptr_t at,void* out,size_t n) noexcept {
+            if(!range(at,n))return false;std::memcpy(out,reinterpret_cast<void*>(at),n);return true;
+        };
+        unsigned writes=0,failAt=0;
+        auto write=[&](uintptr_t at,const void* bytes,size_t n) noexcept {
+            if(!range(at,n))return false;
+            if(++writes==failAt)return false;
+            std::memcpy(reinterpret_cast<void*>(at),bytes,n);return true;
+        };
+        const auto before=caller;const auto beforePacket=packet;
+        TglNativePerPassCallerBuffers buffers;
+        assert(buffers.capture(p,q,read,range));
+        assert(!buffers.capture(p,q,read,range));
+        buffers.parameters()[0xe8]=0xfe;buffers.parameters()[0x10c]=0x17;
+        buffers.pass()[8]=0xff;buffers.pass()[0xc]=3;
+        assert(buffers.copyBack(read,write,range) && !buffers.ambiguous() && writes==19);
+        auto expected=before;auto expectedPacket=beforePacket;
+        assert(tglCopyNativePerPassParameterFields(expected,buffers.parameters()));
+        assert(tglCopyNativePerPassScalars(expectedPacket,buffers.pass()));
+        assert(caller==expected && packet==expectedPacket && caller[0x138]==0xa5 && packet[0x50]==0x5a);
+        assert(!buffers.copyBack(read,write,range));
+        caller=before;packet=beforePacket;writes=0;
+        TglNativePerPassCallerBuffers changedRoot;
+        assert(changedRoot.capture(p,q,read,range));changedRoot.parameters()[8]^=1;
+        assert(!changedRoot.copyBack(read,write,range) && writes==0);
+        TglNativePerPassCallerBuffers changedCaller;
+        assert(changedCaller.capture(p,q,read,range));caller[4]^=1;
+        assert(!changedCaller.copyBack(read,write,range) && writes==0);caller=before;
+        TglNativePerPassCallerBuffers partial;
+        assert(partial.capture(p,q,read,range));failAt=2;
+        assert(!partial.copyBack(read,write,range) && partial.ambiguous() && writes==2);
+        assert(!partial.copyBack(read,write,range) && writes==2);
+        TglNativePerPassCallerBuffers overlap,overflow;
+        assert(!overlap.capture(p,p+8,read,range));
+        assert(!overflow.capture(UINTPTR_MAX,q,read,range));
+    }
+    {
         constexpr uintptr_t image=0x10000000;
         using Table=TglNativePrimaryRendererTable;
         std::array<uintptr_t,15> words{};

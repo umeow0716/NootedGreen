@@ -13958,6 +13958,66 @@ bool tglCopyNativePerPassParameterFields(std::array<uint8_t,DestinationBytes>& d
     }
 }
 
+// Caller STACK data is not a std::array object. Capture bounded bytes into
+// owned storage, then publish ONLY native1b2530/1b2940 scalar fields. Surface
+// contents are copied by the existing leased temporary-shell transaction.
+class TglNativePerPassCallerBuffers {
+    std::array<uint8_t,0x139> parameters_{},beforeParameters_{};
+    std::array<uint8_t,0x60> pass_{},beforePass_{};
+    uintptr_t parametersAddress_=0,passAddress_=0;
+    bool attempted_=false,captured_=false,published_=false,ambiguous_=false;
+public:
+    TglNativePerPassCallerBuffers()=default;
+    TglNativePerPassCallerBuffers(const TglNativePerPassCallerBuffers&)=delete;
+    TglNativePerPassCallerBuffers& operator=(const TglNativePerPassCallerBuffers&)=delete;
+    auto& parameters() noexcept {return parameters_;}
+    auto& pass() noexcept {return pass_;}
+    bool ambiguous() const noexcept {return ambiguous_;}
+    template<class Read,class Admit>
+    bool capture(uintptr_t parameters,uintptr_t pass,Read read,Admit admit) noexcept {
+        if(attempted_)return false;attempted_=true;
+        if(!parameters || !pass || parameters>UINTPTR_MAX-0x130 || pass>UINTPTR_MAX-0x40 ||
+            (parameters<pass+0x40 && pass<parameters+0x130) ||
+            !admit(parameters,0x130) || !admit(pass,0x40))return false;
+        std::array<uint8_t,0x139> first{},second{};
+        std::array<uint8_t,0x60> a{},b{};
+        if(!read(parameters,first.data(),0x130) || !read(pass,a.data(),0x40) ||
+            !read(parameters,second.data(),0x130) || !read(pass,b.data(),0x40) ||
+            first!=second || a!=b)return false;
+        parameters_=beforeParameters_=first;pass_=beforePass_=a;
+        parametersAddress_=parameters;passAddress_=pass;captured_=true;return true;
+    }
+    template<class Read,class Write,class Admit>
+    bool copyBack(Read read,Write write,Admit admit) noexcept {
+        if(!captured_ || published_ || ambiguous_ ||
+            !admit(parametersAddress_,0x130) || !admit(passAddress_,0x40))return false;
+        std::array<uint8_t,0x139> current{};std::array<uint8_t,0x60> currentPass{};
+        if(!read(parametersAddress_,current.data(),0x130) || !read(passAddress_,currentPass.data(),0x40) ||
+            current!=beforeParameters_ || currentPass!=beforePass_)return false;
+        for(size_t i=0;i<25;++i) {
+            const size_t at=i<17?8+i*8:0x98+(i-17)*8;
+            if(std::memcmp(parameters_.data()+at,beforeParameters_.data()+at,8))return false;
+        }
+        auto output=beforeParameters_;auto outputPass=beforePass_;
+        if(!tglCopyNativePerPassParameterFields(output,parameters_) ||
+            !tglCopyNativePerPassScalars(outputPass,pass_))return false;
+        struct Field {size_t offset,size;};
+        constexpr std::array<Field,15> fields{{{0,4},{0x90,4},{0xd8,8},{0xe0,8},
+            {0xf0,8},{0x100,8},{0x10c,4},{0x11c,4},{0x128,8},
+            {0xe8,1},{0xe9,1},{0xf8,1},{0x108,1},{0x110,1},{0x120,1}}};
+        constexpr std::array<Field,4> passFields{{{8,1},{0xc,4},{0x20,1},{0x30,4}}};
+        ambiguous_=true; // any attempted write can partially publish
+        for(const auto& field:fields)
+            if(!write(parametersAddress_+field.offset,output.data()+field.offset,field.size))return false;
+        for(const auto& field:passFields)
+            if(!write(passAddress_+field.offset,outputPass.data()+field.offset,field.size))return false;
+        current={};currentPass={};
+        if(!read(parametersAddress_,current.data(),0x130) || !read(passAddress_,currentPass.data(),0x40) ||
+            current!=output || currentPass!=outputPass)return false;
+        ambiguous_=false;published_=true;return true;
+    }
+};
+
 // Exact1b1ed0 selected-root relation, NOT a memory/ownership grant. Caller
 // supplies bounded readable packet ranges and independently leased roots.
 template<class Read> bool tglMatchNativePerPassSelectedRoots(uintptr_t parameters,size_t parameterBytes,

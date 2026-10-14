@@ -3233,9 +3233,39 @@ struct NativeRetainedTemporaryExecution {
         if(context->entered || context->renderer!=reinterpret_cast<uintptr_t>(renderer))return reject();
         context->entered=true;
         auto& request=context->request;
-        if(parameters!=request.parameters.data() || pass!=request.pass.data() ||
-            request.view.renderer.renderer!=context->renderer || request.attempted || request.consumed) return reject();
+        if(request.view.renderer.renderer!=context->renderer || request.attempted || request.consumed)return reject();
+        const bool ownedParameters=parameters==request.parameters.data(),ownedPass=pass==request.pass.data();
+        if(ownedParameters!=ownedPass)return reject();
+        TglNativePerPassCallerBuffers caller;
+        if(!ownedParameters) {
+            if(!caller.capture(reinterpret_cast<uintptr_t>(parameters),reinterpret_cast<uintptr_t>(pass),
+                &readMemory,&writableDataMemory))return reject();
+            TglNativeOuterSurfaceRoles captured;
+            auto readOwned=[&](uintptr_t at,void* bytes,size_t count) noexcept {
+                const auto start=reinterpret_cast<uintptr_t>(caller.parameters().data());
+                if(at<start || at-start>caller.parameters().size() || count>caller.parameters().size()-(at-start))return false;
+                std::memcpy(bytes,caller.parameters().data()+at-start,count);return true;
+            };
+            uint32_t source=0,target=0;
+            std::memcpy(&source,caller.pass().data()+0xc,4);std::memcpy(&target,caller.pass().data()+0x30,4);
+            if(!captured.capture(reinterpret_cast<uintptr_t>(caller.parameters().data()),readOwned) ||
+                captured.sourceCount!=request.roles.sourceCount || captured.targetCount!=request.roles.targetCount ||
+                captured.sources!=request.roles.sources || captured.targets!=request.roles.targets ||
+                source!=request.sourceIndex || target!=request.targetIndex)return reject();
+            request.parameters=caller.parameters();request.pass=caller.pass();
+        }
         context->result=runRetained(context->frame,request);
+        if(!ownedParameters && request.consumed) {
+            caller.parameters()=request.parameters;caller.pass()=request.pass;
+            auto write=[](uintptr_t at,const void* bytes,size_t count) noexcept {
+                return bytes && count && count<=8 && writableDataMemory(at,count) &&
+                    mach_vm_write(mach_task_self(),at,reinterpret_cast<vm_offset_t>(bytes),
+                        static_cast<mach_msg_type_number_t>(count))==KERN_SUCCESS;
+            };
+            if(!caller.copyBack(&readMemory,write,&writableDataMemory)) {
+                (void)reject();if(!context->result.status)context->result.status=5;
+            }
+        }
         return context->result.status;
     }
     using ScopedNativeCall=int(*)(void*,int(*)(void*,void*,void*) noexcept) noexcept;
