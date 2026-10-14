@@ -11,6 +11,7 @@
 #include <atomic>
 #include <new>
 #include <memory>
+#include <tuple>
 #include "../../NootedGreen/kern_vf_device_observation.hpp"
 #if defined(__APPLE__)
 #include <dlfcn.h>
@@ -9010,6 +9011,42 @@ int tglWithCapturedOwnedSurfaceRoles(const std::array<Owner*,Count>& owners,
         return leased ? result : 5;
     };
     return enter(enter,0);
+}
+// Normalize heterogeneous current/output/temporal owners ONLY inside their
+// existing borrows. Each proxy still asks its exact owner for the shell grant.
+template<class Source,class Target,class Secondary,class Previous,class Invoke>
+int tglWithCapturedMixedSurfaceRoles(Source* source,Target* target,Secondary* secondary,Previous* previous,
+    const std::array<const TglOwnedSurfaceStorage*,4>& captured,Invoke invoke) noexcept {
+    const auto owners=std::make_tuple(source,target,secondary,previous);
+    const std::array<const void*,4> identities{source,target,secondary,previous};
+    for(size_t i=0;i<4;++i)for(size_t j=0;j<i;++j)
+        if(identities[i] && identities[i]==identities[j] && captured[i] && captured[j] &&
+            captured[i]!=captured[j])return 5;
+    std::array<TglHeldOwnedSurfaceRole*,4> roles{};
+    std::array<const TglOwnedSurfaceStorage*,4> views{};
+    auto visit=[&](auto&& self,auto index) noexcept -> int {
+        constexpr size_t i=decltype(index)::value;
+        if constexpr(i==4)return tglWithCapturedOwnedSurfaceRoles(roles,views,invoke);
+        else {
+            auto* owner=std::get<i>(owners);
+            if(!owner)return captured[i]?5:self(self,std::integral_constant<size_t,i+1>{});
+            auto enter=[&](const TglOwnedSurfaceStorage& surface) noexcept -> int {
+                if(!owner->hasSurfaceLease(surface))return 5;
+                TglHeldOwnedSurfaceRole role(*owner,surface);roles[i]=&role;views[i]=&surface;
+                const int status=self(self,std::integral_constant<size_t,i+1>{});
+                roles[i]=nullptr;views[i]=nullptr;
+                return owner->hasSurfaceLease(surface)?status:5;
+            };
+            if(captured[i])return enter(*captured[i]);
+            // Alias reuse still requires this role's own exact grant.
+            for(size_t j=0;j<i;++j)if(identities[j]==identities[i] && views[j] &&
+                owner->hasSurfaceLease(*views[j]))return enter(*views[j]);
+            int status=5;
+            const bool held=owner->withSurface([&](const TglOwnedSurfaceStorage& surface) noexcept {status=enter(surface);});
+            return held?status:5;
+        }
+    };
+    return visit(visit,std::integral_constant<size_t,0>{});
 }
 template<class Owner,size_t Count,class Invoke>
 int tglWithOwnedSurfaceRoles(const std::array<Owner*,Count>& owners,Invoke invoke) noexcept {

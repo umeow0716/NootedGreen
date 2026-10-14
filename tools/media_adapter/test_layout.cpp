@@ -17223,6 +17223,28 @@ int main() {
         input.referenceValid=true;assert(!valid());
         input.previous=&previous;assert(valid());
         TglHeldOwnedSurfaceRole originalHistory(p,previous);
+        struct HistoryRole : TglHeldOwnedSurfaceRole {using TglHeldOwnedSurfaceRole::TglHeldOwnedSurfaceRole;};
+        HistoryRole mixedHistory(p,previous);
+        TglHeldOwnedSurfaceRole heldSource(s,source),heldTarget(t,target);
+        const std::array<const TglOwnedSurfaceStorage*,4> mixedViews{&source,&target,nullptr,&previous};
+        assert(tglWithCapturedMixedSurfaceRoles(&heldSource,&heldTarget,static_cast<HistoryRole*>(nullptr),&mixedHistory,mixedViews,
+            [&](const auto& views) noexcept -> int {
+                assert(views==mixedViews);return 31;
+            })==31);
+        auto deniedMixed=[](const auto&) noexcept -> int {assert(false);return 0;};
+        p.live=false;
+        assert(tglWithCapturedMixedSurfaceRoles(&heldSource,&heldTarget,static_cast<HistoryRole*>(nullptr),&mixedHistory,
+            mixedViews,deniedMixed)==5);p.live=true;
+        auto foreignMixed=mixedViews;foreignMixed[3]=&copy;
+        assert(tglWithCapturedMixedSurfaceRoles(&heldSource,&heldTarget,static_cast<HistoryRole*>(nullptr),&mixedHistory,
+            foreignMixed,deniedMixed)==5);
+        foreignMixed=mixedViews;foreignMixed[2]=&previous;
+        assert(tglWithCapturedMixedSurfaceRoles(&heldSource,&heldTarget,static_cast<HistoryRole*>(nullptr),&mixedHistory,
+            foreignMixed,deniedMixed)==5);
+        assert(tglWithCapturedMixedSurfaceRoles(&heldSource,&heldSource,static_cast<HistoryRole*>(nullptr),&mixedHistory,
+            {},[&](const auto& views) noexcept -> int {
+                assert(views[0]==&source && views[1]==&source && !views[2] && views[3]==&previous);return 31;
+            })==31);
         assert(tglValidateOriginalDiIecpLeases(input,s,source,&t,&originalHistory));
         p.live=false;assert(!tglValidateOriginalDiIecpLeases(input,s,source,&t,&originalHistory));p.live=true;
         input.previous=&copy;assert(!tglValidateOriginalDiIecpLeases(input,s,source,&t,&originalHistory));
