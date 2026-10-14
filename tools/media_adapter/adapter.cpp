@@ -792,6 +792,38 @@ struct NativeVpPreparedCallbacks {
         });
         emission.command=previous;return fail(result);
     }
+    using AssemblyUse=int(*)(void*,void*,const TglOwnedVpEntrySet&) noexcept;
+    bool assemblyAttempted=false;
+    int withAssembly(NativeVpGraph& graph,const TglOwnedVpFramePreparation& frame,
+        uintptr_t sourceA8,void* scope,AssemblyUse use) noexcept {
+        if(error)return error;
+        if(assemblyAttempted || !sameOwners() || !scope || !use || !renderData ||
+            scalar.attempted || packet.attempted || avs.attempted || filters.attempted || emission.attempted)
+            return fail(5);
+        assemblyAttempted=true;
+        const int result=graph.withPreparedCallbackAssemblyPass(catalogue,frame,scalar.conditionalSource,
+            scalar.settings,reinterpret_cast<uintptr_t>(&scalar.target),sourceA8,
+            const_cast<TglOwnedSurfaceStorage*>(&scalar.source),renderData,
+            [&](void* child,const TglOwnedVpFramePreparation& captured,auto& owner,
+                void* data,void* source,void* target) noexcept -> int {
+                return state(child,captured,owner,data,source,target);
+            },
+            [&](void* child,const TglOwnedVpFramePreparation& captured,auto& owner) noexcept -> int {
+                return prepareAvs(child,captured,owner);
+            },
+            [&](void* child,const TglOwnedVpFramePreparation& captured,uint8_t* liveState) noexcept {
+                prepareFilters(child,captured,liveState);
+            },
+            [&](void* child,void* data,void* command) noexcept -> int {
+                return emit(child,frame,data,command);
+            },
+            [&](void* child,const TglOwnedVpEntrySet& entries) noexcept -> int {
+                if(error || child!=vp.bytes.data())return error?error:5;
+                const int status=use(scope,child,entries);
+                return status?status:error;
+            });
+        return fail(result?result:error);
+    }
 };
 struct NativeTwoPassCscHealth {
     NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;

@@ -15521,7 +15521,9 @@ public:
         void* source,void* renderData,State state,Avs avs,Ief ief,Emit emit,Invoke invoke) noexcept {
         static_assert((std::is_nothrow_invocable_r_v<int,State&,void*,decltype(frame),decltype(state_)&> ||
             std::is_nothrow_invocable_r_v<int,State&,void*,decltype(frame),decltype(state_)&,void*,void*,void*>) &&
-            noexcept(avs(nullptr,frame,avs_)) && noexcept(ief(nullptr,frame)) &&
+            noexcept(avs(nullptr,frame,avs_)) &&
+            (std::is_nothrow_invocable_v<Ief&,void*,decltype(frame),uint8_t*> ||
+             std::is_nothrow_invocable_v<Ief&,void*,decltype(frame)>) &&
             noexcept(emit(nullptr,nullptr,nullptr)),"VP callback producer ABI");
         if(!ready_ || busy_ || !source || !renderData || !target) return 5;
         Guard guard(busy_);

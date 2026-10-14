@@ -21801,7 +21801,9 @@ int main() {
                     0x6000,0x4000,0x2000,reference,&source,&data,
                     [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
                     [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
-                    [&](void*,const auto&) noexcept {++stages;},
+                    [&](void*,const auto&,uint8_t* liveState) noexcept {
+                        assert(liveState==stateCpu.bytes.data());++stages;
+                    },
                     [&](void* emittedChild,void*,void*,const TglOwnedVpEntrySet& emissionEntries) noexcept -> int {
                         assert(stages==3 && stateCpu.live && avsCpu.live);
                         assert(emittedChild==expiredPassChild && emissionEntries.setup==expiredPassEntries.setup &&
