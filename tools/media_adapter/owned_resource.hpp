@@ -26870,6 +26870,7 @@ class TglNativeContextRendererFrameStorage {
     bool busy_=false,retirementStarted_=false,retirementFailed_=false,retired_=false;
     bool flushBusy_=false,flushEntered_=false,flushUncertain_=false;
     uint32_t lossFlags_=0;
+    int renderPassFailure_=0;
     uintptr_t flushContext_=0,flushNativeContext_=0;
 public:
     // Scope::createContextRootFrame supplies its freshly authenticated roots
@@ -26912,6 +26913,24 @@ public:
     }
     uint32_t lossFlags() const noexcept {return lossFlags_;}
     bool flushUncertain() const noexcept {return flushUncertain_;}
+    int renderPassFailure() const noexcept {return renderPassFailure_;}
+    // Only an enclosing active frame scope may record a pass result. Keep
+    // FIRST failure even if a native outer loop ignores it or later returns0.
+    // Do not fold this into invalidated(): cleanup/flush/retirement must remain
+    // accessible after a render failure, especially following partial submit.
+    int recordRenderPassResult(int status) noexcept {
+        if(!busy_)return 5;
+        if(status && !renderPassFailure_)renderPassFailure_=status;
+        return renderPassFailure_;
+    }
+    template<class Use> int withRenderPass(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<Renderer&>())) &&
+            std::is_same_v<decltype(use(std::declval<Renderer&>())),int>);
+        if(renderPassFailure_)return renderPassFailure_;
+        return withFrame([&](Renderer& renderer) noexcept -> int {
+            const int status=use(renderer);return recordRenderPassResult(status);
+        });
+    }
     // Enter only from this frame's withFrame producer scope. Admit verifies
     // the flush context derives from THIS renderer's retained native owner.
     template<class Read,class Admit,class Invoke=TglNativeVideoBufferFlushInvoker>

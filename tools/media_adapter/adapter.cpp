@@ -2611,7 +2611,7 @@ struct NativeRetainedFrontendRuntime {
         TglOwnedVeboxCommandTransactionResult result;
         if(!scope || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
             frame.invalidated() || !frame.surfacesReady())return result;
-        const int status=frame.withFrame([&](NativeBorrowedFrontend& frontend) noexcept -> int {
+        const int status=frame.withRenderPass([&](NativeBorrowedFrontend& frontend) noexcept -> int {
             result=NativeFrontendRuntimeScope::run(frontend,roles,sourceIndex,targetIndex,temporal,
                 [&](NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view,NativeSourceGraph& graph,
                     NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,

@@ -16063,16 +16063,23 @@ static void testRetainedVeboxFrames() {
                     Storage retained(owners,image,0x8000,success.ticket.generation,renderRoots,address,historyAddress,
                         readGraph,admitGraph,admitGraph,construct);
                     assert(retained.surfacesReady() && retained.canDestroy() && constructed==1);
+                    assert(retained.recordRenderPassResult(-99)==5 && !retained.renderPassFailure());
                     RendererFixture* live=nullptr;
-                    assert(retained.withFrame([&](auto& frame) noexcept -> int {
+                    assert(retained.withRenderPass([&](auto& frame) noexcept -> int {
                         live=&frame;
                         typename NativeOwner::SurfaceOwnerLease sourceLease(frame.source);
                         typename NativeOwner::SurfaceOwnerLease targetLease(frame.target);
                         assert(sourceLease.storage()==&original && targetLease.storage()==&history);
                         assert(!retained.canDestroy() && !retained.clear());
                         assert(retained.withFrame([](auto&) noexcept -> int {assert(false);return 0;})==5);
-                        frame.backing().retention().pending=true;return -31;
+                        frame.backing().retention().pending=true;
+                        assert(retained.recordRenderPassResult(-31)==-31);
+                        assert(retained.recordRenderPassResult(0)==-31);
+                        return -99; // first inner error wins over outer return
                     })==-31);
+                    assert(retained.renderPassFailure()==-31);
+                    assert(retained.withRenderPass([](auto&) noexcept -> int {assert(false);return 0;})==-31);
+                    assert(retained.withFrame([](auto&) noexcept -> int {return 0;})==0); // cleanup scope is not blocked
                     assert(!retained.canDestroy() && !retained.clear() && !destroyedRenderer);
                     assert(retained.prepareRetirement([](const auto&,bool pending) noexcept -> int {
                         assert(pending);return 31;
