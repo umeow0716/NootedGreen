@@ -571,6 +571,25 @@ static void testTrackedCpuOwner() {
             assert(!tglAcquireLeasedGen12PipeFeatures(rejected,hdr,sourceOwner,source,a,targetOwner,target,b,frame));
             assert(rejected && hdr); // poisoned frame cannot be repaired and reused
         }
+        for(auto sourceHdr:{Presence::Unknown,Presence::Absent,Presence::Present,static_cast<Presence>(0xff)})
+        for(auto targetHdr:{Presence::Unknown,Presence::Absent,Presence::Present,static_cast<Presence>(0xff)}) {
+            TglVeboxPipeAcquisition frame;
+            Owner sourceOwner{&source},targetOwner{&target};
+            TglOwnedGen12SurfaceFeatures a{&source,&frame,Presence::Absent,sourceHdr};
+            TglOwnedGen12SurfaceFeatures b{&target,&frame,Presence::Unknown,targetHdr};
+            const bool malformed=sourceHdr==static_cast<Presence>(0xff) || targetHdr==static_cast<Presence>(0xff);
+            const bool present=sourceHdr==Presence::Present || targetHdr==Presence::Present;
+            const bool absent=sourceHdr==Presence::Absent && targetHdr==Presence::Absent;
+            const bool resolved=!malformed && (present || absent);
+            bool hdr=!present;
+            assert(tglAcquireLeasedGen12HdrPresence(hdr,sourceOwner,source,a,targetOwner,target,b,frame)==resolved);
+            assert(frame.healthy()==resolved && hdr==(resolved?present:!present));
+            TglVeboxPipeAcquisition combined;
+            a.frame=b.frame=&combined;bool reject=true;hdr=!present;
+            assert(tglAcquireLeasedGen12PipeFeatures(reject,hdr,sourceOwner,source,a,targetOwner,target,b,combined)==resolved);
+            assert(combined.healthy()==resolved && hdr==(resolved?present:!present));
+            assert(reject==!resolved);
+        }
     }
     {
         TglOwnedSurfaceStorage source{};

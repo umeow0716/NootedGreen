@@ -7184,6 +7184,23 @@ static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
 // request producer must supply these records under the same frame leases;
 // constructing a record alone does not authenticate native request contents.
 enum class TglOwnedFeaturePresence : uint8_t { Unknown, Absent, Present };
+// Gen12 HDR predicate is source OR target. One authenticated Present proves
+// the OR; absence needs BOTH Absent. Malformed values never become Unknown.
+inline bool tglResolveGen12HdrPresence(TglOwnedFeaturePresence source,
+    TglOwnedFeaturePresence target,bool& output) noexcept {
+    auto valid=[](TglOwnedFeaturePresence value) noexcept {
+        return value==TglOwnedFeaturePresence::Unknown || value==TglOwnedFeaturePresence::Absent ||
+            value==TglOwnedFeaturePresence::Present;
+    };
+    if(!valid(source) || !valid(target))return false;
+    if(source==TglOwnedFeaturePresence::Present || target==TglOwnedFeaturePresence::Present) {
+        output=true;return true;
+    }
+    if(source==TglOwnedFeaturePresence::Absent && target==TglOwnedFeaturePresence::Absent) {
+        output=false;return true;
+    }
+    return false;
+}
 // Conversion lane ONLY: 2343d0 control10 uploads N^3 entries to an N by N^2
 // surface and sets context204=2; control08 builds the distinct 32x8 table
 // with mode1. 237730 publishes the effective mode at sourceA8+64 (or zero
@@ -7262,16 +7279,16 @@ bool tglAcquireLeasedGen12PipeFeatures(bool& rejectLut,bool& hdr,
     auto known=[](TglOwnedFeaturePresence p) noexcept {
         return p==TglOwnedFeaturePresence::Absent || p==TglOwnedFeaturePresence::Present;
     };
+    bool candidateHdr=false;
     if(sourceFeatures.surface!=&source || targetFeatures.surface!=&target ||
        sourceFeatures.frame!=&frame || targetFeatures.frame!=&frame ||
        !sourceOwner.hasSurfaceLease(source) || !targetOwner.hasSurfaceLease(target) ||
-       !known(sourceFeatures.lut) || !known(sourceFeatures.hdr) || !known(targetFeatures.hdr)) {
+       !known(sourceFeatures.lut) ||
+       !tglResolveGen12HdrPresence(sourceFeatures.hdr,targetFeatures.hdr,candidateHdr)) {
         frame.fail();return false;
     }
     uint32_t format=0;std::memcpy(&format,target.prefix.data()+0x130,4);
     const bool candidate=tglRejectGen12LutOutput(sourceFeatures.lut==TglOwnedFeaturePresence::Present,format);
-    const bool candidateHdr=sourceFeatures.hdr==TglOwnedFeaturePresence::Present ||
-        targetFeatures.hdr==TglOwnedFeaturePresence::Present;
     rejectLut=candidate;hdr=candidateHdr;return true;
 }
 // Acquire only the predicate's actual dependencies. HDR is consulted later
@@ -7297,13 +7314,11 @@ bool tglAcquireLeasedGen12HdrPresence(bool& hdr,
     TglVeboxPipeAcquisition& frame) noexcept {
     static_assert(noexcept(sourceOwner.hasSurfaceLease(source)) && noexcept(targetOwner.hasSurfaceLease(target)));
     if(!frame.healthy())return false;
-    auto known=[](TglOwnedFeaturePresence p) noexcept {
-        return p==TglOwnedFeaturePresence::Absent || p==TglOwnedFeaturePresence::Present;
-    };
+    bool candidate=false;
     if(a.surface!=&source || b.surface!=&target || a.frame!=&frame || b.frame!=&frame ||
         !sourceOwner.hasSurfaceLease(source) || !targetOwner.hasSurfaceLease(target) ||
-        !known(a.hdr) || !known(b.hdr)) {frame.fail();return false;}
-    hdr=a.hdr==TglOwnedFeaturePresence::Present || b.hdr==TglOwnedFeaturePresence::Present;return true;
+        !tglResolveGen12HdrPresence(a.hdr,b.hdr,candidate)) {frame.fail();return false;}
+    hdr=candidate;return true;
 }
 // Concrete non-SFC portion of the Gen12 platform policy. Use through
 // tglSelectOwnedVpOutputPipe: that scope supplies the real VP extent callback.
