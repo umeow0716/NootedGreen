@@ -901,8 +901,8 @@ struct NativeVpPreparedCallbacks {
         return fail(result?result:error);
     }
 };
-// Concrete per-frame VP assembly. Caches/resources remain the original graph's
-// borrowed owners; only producer state and the one-shot output query live here.
+// Concrete per-frame VP assembly. CPU caches belong to the enclosing frame
+// scope; GPU resources remain the original graph's borrowed owners.
 class NativeVpProducerFrame {
 public:
     struct Inputs {
@@ -954,6 +954,65 @@ public:
 };
 template int NativeVpProducerFrame::run<int(*)(NativeVpPreparedCallbacks&) noexcept>(
     int(*)(NativeVpPreparedCallbacks&) noexcept) noexcept;
+class NativeVpProducerInputScope {
+public:
+    struct Inputs {
+        NativeCoreFrameDataScope& core;NativeFrameDataRead& read;
+        const TglNativeCreatedVeboxRendererView& pinned;
+        const TglVeboxAdmissionBorrowedInterfaces& interfaces;
+        TglNativeVpLineResourceStorage& lines;const TglOwnedVpEntrySet& catalogue;
+        bool rgbAdaptive,eightTapChroma,compressionEnabled;
+        TglOwnedSfcCompressionMode compressionMode;
+    };
+private:
+    Inputs& in_;bool attempted_=false;
+    TglOwnedSfcFillCache fillCache_;
+    TglOwnedSfcAvsTables avsCache_;
+    TglOwnedVpCscCache cscCache_;
+    TglOwnedSfcCommandParameters commands_;
+public:
+    explicit NativeVpProducerInputScope(Inputs& in) noexcept:in_(in) {}
+    NativeVpProducerInputScope(const NativeVpProducerInputScope&)=delete;
+    NativeVpProducerInputScope& operator=(const NativeVpProducerInputScope&)=delete;
+    template<class Use> TglOwnedVeboxCommandTransactionResult run(Use use) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;auto& in=in_;auto& core=in.core;
+        if constexpr(std::is_pointer_v<Use>)if(!use)return result;
+        if(attempted_ || !core.live() || in.pinned.image!=core.image ||
+            (in.pinned.originalChildren[0]!=core.child && in.pinned.originalChildren[1]!=core.child))return result;
+        attempted_=true;
+        NativeVpStateHealth health(core.childOwner,core.executionOwner,core.sourceOwner,core.targetOwner,
+            reinterpret_cast<void*>(core.child),core.execution,core.image,in.interfaces.os,core.source,core.target);
+        if(!health.qualifiesImage(core.image) || !health.qualifiesVp(reinterpret_cast<uintptr_t>(core.vp.bytes.data())))return result;
+        TglFillCscBinding fill;TglNativeVpCompressionBinding compression;
+        TglSfcMhwBinding commands;TglNativeSfcOutputUsageBinding usage;
+        const NativeTglImageAdmission qualify{core.image};
+        if(!fill.resolve(core.image,&readMemory,qualify,&executableMemory) ||
+            !compression.resolve(in.interfaces.os,core.image,&readMemory,qualify,&executableMemory) ||
+            !commands.resolve(core.image,&readMemory,qualify,&executableMemory) ||
+            !usage.resolve(in.interfaces.os,core.image,&readMemory,qualify,&executableMemory))return result;
+        TglOwnedVpModeState original;uint8_t flag=0;uintptr_t performance=0;
+        const auto vp=reinterpret_cast<uintptr_t>(core.vp.bytes.data());
+        if(!in.read(vp+0x998,&original.at998,4) || !in.read(vp+0x99c,&original.at99c,4) ||
+            !in.read(vp+0x923,&flag,1) || !in.read(in.pinned.configuration,&performance,8) || !core.live())return result;
+        original.at923=bool(flag&1);
+        NativeVpScalarStateProducer seed{health,in.read,core.source,core.target,fill,compression,fillCache_,
+            core.image,core.execution,in.interfaces.paramsE0,in.interfaces.paramsF0,core.vp.bytes.data()};
+        NativeVpProducerFrame::Inputs inputs{seed,core.sourceOwner,core.targetOwner,core.childOwner,
+            avsCache_,cscCache_,commands_,commands,usage,in.catalogue,core.vp,in.lines,
+            reinterpret_cast<void*>(core.child),reinterpret_cast<void*>(core.execution),performance,
+            in.rgbAdaptive,in.eightTapChroma,in.compressionEnabled,in.compressionMode};
+        NativeVpProducerFrame producers(inputs);
+        static_assert(noexcept(use(producers,original)) &&
+            std::is_same_v<decltype(use(producers,original)),TglOwnedVeboxCommandTransactionResult>);
+        result=use(producers,original);
+        if(!result.status && !core.live())result.status=5;
+        return result;
+    }
+};
+using NativeVpProducerInputUse=TglOwnedVeboxCommandTransactionResult(*)(NativeVpProducerFrame&,
+    const TglOwnedVpModeState&) noexcept;
+template TglOwnedVeboxCommandTransactionResult NativeVpProducerInputScope::run<NativeVpProducerInputUse>(
+    NativeVpProducerInputUse) noexcept;
 struct NativeTwoPassCscHealth {
     NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
     NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
