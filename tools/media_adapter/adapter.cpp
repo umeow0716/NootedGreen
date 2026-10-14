@@ -2491,6 +2491,7 @@ template<class SurfaceOwner> struct NativeFrameExecutionAssemblyFor {
         const TglVeboxRenderBinding& binding;void* argument;
         TglOwnedVeboxPacketLeases leases;
         NativeDenoiseParameters& parameters;NativeVeboxCscProducerFor<SurfaceOwner> csc;
+        NativeVeboxSendRenderScopeFor<SurfaceOwner>* sendScope=nullptr;
     };
     static typename NativeAdmissionStagesFor<SurfaceOwner>::Result run(Inputs& in) noexcept {
         typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
@@ -2503,6 +2504,7 @@ template<class SurfaceOwner> struct NativeFrameExecutionAssemblyFor {
             NativeRetainedDiIecpCaptureFor<SurfaceOwner> capture{in.planner,in.admission.read,in.view.renderer.image,&in.parameters};
             NativeCompleteFrameConsumerFor<SurfaceOwner> consumer{in.assembly,in.view,capture,in.leases,in.parameters,
                 in.csc,allocated};
+            consumer.sendScope=in.sendScope;
             result=consumer.run();
             return result.status;
         });
@@ -2520,6 +2522,7 @@ template<class SurfaceOwner> struct NativeModeFrameExecutionFor {
         const TglVeboxRenderBinding& binding;void* argument;
         TglOwnedVeboxPacketLeases leases;
         NativeDenoiseParameters& parameters;NativeVeboxCscProducerFor<SurfaceOwner> csc;
+        NativeVeboxSendRenderScopeFor<SurfaceOwner>* sendScope=nullptr;
     };
     static typename NativeAdmissionStagesFor<SurfaceOwner>::Result run(Inputs& in) noexcept {
         typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
@@ -2536,6 +2539,7 @@ template<class SurfaceOwner> struct NativeModeFrameExecutionFor {
                 auto& call=*static_cast<Call*>(context);auto& in=call.in;
                 typename NativeFrameExecutionAssemblyFor<SurfaceOwner>::Inputs execution{in.assembly,in.view,in.vp,call.stages,
                     planner,mode,in.binding,in.argument,in.leases,in.parameters,in.csc};
+                execution.sendScope=in.sendScope;
                 return NativeFrameExecutionAssemblyFor<SurfaceOwner>::run(execution);
             });
             return result.status;
@@ -2555,6 +2559,7 @@ template<class SurfaceOwner> struct NativePolicyFrameExecutionFor {
         const TglVeboxRenderBinding& binding;void* argument;
         TglOwnedVeboxPacketLeases leases;
         NativeDenoiseParameters& parameters;NativeVeboxCscProducerFor<SurfaceOwner> csc;
+        NativeVeboxSendRenderScopeFor<SurfaceOwner>* sendScope=nullptr;
     };
     static typename NativeAdmissionStagesFor<SurfaceOwner>::Result run(Inputs& in) noexcept {
         typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
@@ -2569,6 +2574,7 @@ template<class SurfaceOwner> struct NativePolicyFrameExecutionFor {
             NativeAdmissionFrameAssemblyFor<SurfaceOwner> admission(a,selector,in.read);
             typename NativeModeFrameExecutionFor<SurfaceOwner>::Inputs mode{in.assembly,in.view,in.vp,admission,in.allocation,
                 in.binding,in.argument,in.leases,in.parameters,in.csc};
+            mode.sendScope=in.sendScope;
             result=NativeModeFrameExecutionFor<SurfaceOwner>::run(mode);
             return result.status;
         });
@@ -3211,6 +3217,7 @@ struct NativeOriginalFrameExecution {
         TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
         NativeTargetDecompressionFor<SurfaceOwner>& decompression;
         void* argument;
+        NativeVeboxSendRenderScopeFor<SurfaceOwner>* sendScope=nullptr;
     };
     using Inputs=InputsFor<NativeContextSurfaceOwner>;
     template<class SurfaceOwner> static TglOwnedVeboxCommandTransactionResult run(InputsFor<SurfaceOwner>& in) noexcept {
@@ -3253,6 +3260,7 @@ struct NativeOriginalFrameExecution {
                                         typename NativePolicyFrameExecutionFor<SurfaceOwner>::Inputs execution{in.frontend.assembly,in.view,in.vp,
                                             next.policy,in.read,admission,stage.plan,state.render,in.argument,
                                             stage.packet.leases,in.frontend.denoise,state.csc};
+                                        execution.sendScope=in.sendScope;
                                         state.result=NativePolicyFrameExecutionFor<SurfaceOwner>::run(execution);
                                         return state.result.status;
                                     });
