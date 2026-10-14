@@ -1274,6 +1274,7 @@ struct NativeSfcPreparation {
     const TglOwnedVpEntrySet& base;const TglOwnedVpModeState& original;
     size_t index;void* child;uintptr_t mhw;void* renderData;
     State state;Avs avs;Ief ief;Emit emit;
+    NativeVpGraph* borrowedGraph=nullptr;TglOwnedVpSfcCallerStorage* borrowedStorage=nullptr;
     template<class Read,class Complete>
     int run(void* expectedVp,uintptr_t e0,uintptr_t f0,const TglOwnedSurfaceStorage& source,
         const TglOwnedSurfaceStorage& target,uintptr_t execution,Read read,Complete complete) noexcept {
@@ -1298,7 +1299,7 @@ struct NativeSfcPreparation {
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(ief),1) ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(emit),1))return 5;
         TglVeboxAdmissionStagesInput input;input.leasedParamsE0=e0;input.leasedParamsF0=f0;
-        return backing.withVpResources(index,[&](auto& graph,auto& storage,auto&) noexcept -> int {
+        auto prepare=[&](auto& graph,auto& storage) noexcept -> int {
             if(!live() || storage.bytes.data()!=expectedVp || !graph.ownsStorage(expectedVp))return 5;
             // This acquires/prepares the frame exactly once. Do not invoke
             // entries.prepare again, or send before admission continuation.
@@ -1313,6 +1314,13 @@ struct NativeSfcPreparation {
                     // a completion certificate or converted to a false error.
                     return status?status:(live() && graph.ownsStorage(actual)?0:5);
                 });
+        };
+        if(borrowedGraph || borrowedStorage) {
+            if(!borrowedGraph || !borrowedStorage)return 5;
+            return prepare(*borrowedGraph,*borrowedStorage);
+        }
+        return backing.withVpResources(index,[&](auto& graph,auto& storage,auto&) noexcept -> int {
+            return prepare(graph,storage);
         });
     }
 };
@@ -1757,6 +1765,7 @@ public:
         const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         const TglOwnedVpEntrySet& catalogue;const TglOwnedVpModeState& mode;
         size_t index;void* child;uintptr_t execution;void* vp;uintptr_t mhw;void* renderData;
+        NativeVpGraph* borrowedGraph=nullptr;TglOwnedVpSfcCallerStorage* borrowedStorage=nullptr;
     };
 private:
     NativeAdmissionReset reset_;
@@ -1775,7 +1784,8 @@ public:
              in.parameters,in.child,in.execution,in.source,in.target,&readMemory,
              NativeTglImageAdmission{in.featureBinding.image},&executableMemory},
          sfc_{in.backing,in.childOwner,in.executionOwner,in.sourceOwner,in.targetOwner,
-             in.catalogue,in.mode,in.index,in.child,in.mhw,in.renderData,nullptr,nullptr,nullptr,nullptr},
+             in.catalogue,in.mode,in.index,in.child,in.mhw,in.renderData,nullptr,nullptr,nullptr,nullptr,
+             in.borrowedGraph,in.borrowedStorage},
          dn_{in.sourceOwner,in.parameters},
          stages_{reset_,select,history_,feature_,sfc_,dn_,in.params,in.pass,in.interfaces,read} {}
     NativeAdmissionFrameAssembly(const NativeAdmissionFrameAssembly&)=delete;
@@ -2374,6 +2384,30 @@ struct NativeRetainedFrontendRuntime {
         uintptr_t parameters,pass;const TglOwnedVpEntrySet& catalogue;
         void* context;Use use;
     };
+    using AdmissionInputUse=int(*)(void*,const NativeAdmissionFrameAssembly::Inputs&) noexcept;
+    static int withAdmissionInputs(VpFrontend& frontend,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
+        NativeAdmissionParams& params,NativeAdmissionPass& pass,NativeFrameDataRead& read,
+        const TglOwnedVpEntrySet& catalogue,const TglOwnedVpModeState& mode,
+        NativeModeRetirementAuthority& retirement,void* context,AdmissionInputUse use) noexcept {
+        if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
+            frontend.childIndex>1 || !core.live() || core.image!=frontend.pinned.image ||
+            frontend.pinned.originalChildren[frontend.childIndex]!=core.child ||
+            !graph.ownsStorage(core.vp.bytes.data()) || frontend.assembly.backing().retention()())return 5;
+        TglVeboxFeatureBinding feature;
+        uintptr_t mhw=0,linkedVp=0;
+        if(!feature.resolve(core.image,&readMemory,NativeTglImageAdmission{core.image},&executableMemory) ||
+            !read(core.child+0x80,&linkedVp,8) || linkedVp!=reinterpret_cast<uintptr_t>(core.vp.bytes.data()) ||
+            !read(linkedVp+0x20,&mhw,8) || !mhw || !core.live())return 5;
+        // Native12c010 obtains +48's report and passes that SAME report as
+        // VP40's renderData argument, not a caller-provided substitute.
+        NativeAdmissionFrameAssembly::Inputs inputs{core.childOwner,core.executionOwner,
+            frontend.assembly.backing(),retirement,core.sourceOwner,core.targetOwner,
+            frontend.sourceGraph,frontend.denoise,core.source,core.target,feature,params,pass,
+            frontend.interfaces,catalogue,mode,frontend.childIndex,reinterpret_cast<void*>(core.child),
+            core.execution,core.vp.bytes.data(),mhw,reinterpret_cast<void*>(core.execution),&graph,&core.vp};
+        const int status=use(context,inputs);
+        return status?status:core.live()?0:5;
+    }
     static TglOwnedVeboxCommandTransactionResult runVpInputs(NativeContextRendererFrame& frame,
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,VpRequest& request) noexcept {
