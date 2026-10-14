@@ -883,6 +883,60 @@ struct NativeVpPreparedCallbacks {
         return fail(result?result:error);
     }
 };
+// Concrete per-frame VP assembly. Caches/resources remain the original graph's
+// borrowed owners; only producer state and the one-shot output query live here.
+class NativeVpProducerFrame {
+public:
+    struct Inputs {
+        const NativeVpScalarStateProducer& seed;
+        NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+        NativeRendererChildOwner& childOwner;
+        TglOwnedSfcAvsTables& avsCache;TglOwnedVpCscCache& cscCache;
+        TglOwnedSfcCommandParameters& commands;
+        const TglSfcMhwBinding& binding;const TglNativeSfcOutputUsageBinding& usage;
+        const TglOwnedVpEntrySet& catalogue;
+        TglOwnedVpSfcCallerStorage& vp;TglNativeVpLineResourceStorage& lines;
+        const TglOwnedVpRegionInput& geometry;
+        void* parent;void* renderData;uintptr_t performance;
+        bool rgbAdaptive,eightTapChroma,compressionEnabled;
+        TglOwnedSfcCompressionMode compressionMode;
+    };
+private:
+    NativeVpScalarStateProducer scalar_;
+    NativeNv12OutputQuery::State output_{};
+    NativeVpNv12PacketScope packet_;
+    NativeVpAvsProducer avs_;
+    NativeVpIefCscProducer filters_;
+    NativeVpCommandEmission emission_;
+    NativeVpPreparedCallbacks callbacks_;
+    bool attempted_=false;
+public:
+    explicit NativeVpProducerFrame(const Inputs& in) noexcept
+        :scalar_(in.seed),packet_(scalar_,in.targetOwner,{in.targetOwner,scalar_.target,output_}),
+         avs_{scalar_,scalar_.dataRead,in.avsCache,in.commands,in.performance},
+         filters_{scalar_,scalar_.dataRead,in.sourceOwner,in.commands,in.cscCache},
+         emission_{scalar_,in.childOwner,scalar_.dataRead,in.targetOwner,in.binding,in.usage,
+             in.catalogue,in.parent,nullptr,&avs_},
+         callbacks_{scalar_,packet_,avs_,filters_,emission_,in.vp,in.lines,in.catalogue,
+             in.commands,in.geometry,in.renderData,in.rgbAdaptive,in.eightTapChroma,
+             in.compressionEnabled,in.compressionMode} {}
+    NativeVpProducerFrame(const NativeVpProducerFrame&)=delete;
+    NativeVpProducerFrame& operator=(const NativeVpProducerFrame&)=delete;
+    template<class Use> int run(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<NativeVpPreparedCallbacks&>())) &&
+            std::is_same_v<decltype(use(std::declval<NativeVpPreparedCallbacks&>())),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        if(attempted_ || scalar_.attempted || scalar_.ready || scalar_.busy ||
+            !callbacks_.sameOwners() ||
+            !filters_.sourceOwner.hasSurfaceLease(scalar_.source) ||
+            !packet_.targetOwner.hasSurfaceLease(scalar_.target))return 5;
+        attempted_=true;
+        const int status=use(callbacks_);
+        return status?status:callbacks_.error;
+    }
+};
+template int NativeVpProducerFrame::run<int(*)(NativeVpPreparedCallbacks&) noexcept>(
+    int(*)(NativeVpPreparedCallbacks&) noexcept) noexcept;
 struct NativeTwoPassCscHealth {
     NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
     NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
