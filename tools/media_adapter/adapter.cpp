@@ -890,7 +890,7 @@ template<class SurfaceOwner> struct NativeVpPreparedCallbacksFor {
     template<class Use> int withAdmittedCatalogue(void* child,const TglOwnedVpEntrySet& entries,Use use) noexcept {
         if(error)return error;
         if(activeCatalogue || child!=vp.bytes.data() || !sameOwners() || !entries.allocate ||
-            entries.allocate!=catalogue.allocate || !entries.platformSend)return fail(5);
+            entries.allocate!=catalogue.allocate || !entries.platformSend || entries.missingMask())return fail(5);
         activeCatalogue=&entries;
         const int result=use(child);
         activeCatalogue=nullptr;
@@ -1881,7 +1881,7 @@ template<class SurfaceOwner> struct NativeLeasedVpFrameInputScopeFor {
                                     if(modeChild!=child)return 5;
                                     return tglWithOwnedVpPhaseDispatchEntries(child,modes,
                                         [&](void* actual,const TglOwnedVpEntrySet& phase,auto&,auto&) noexcept -> int {
-                                            if(actual!=child || phase.missingMask())return 5;
+                                            if(actual!=child)return 5;
                                             typename NativeVpProducerInputScopeFor<SurfaceOwner>::Inputs inputs{
                                                 core,read,in.pinned,in.interfaces,lines,phase};
                                             NativeVpProducerInputScopeFor<SurfaceOwner> producers(inputs);

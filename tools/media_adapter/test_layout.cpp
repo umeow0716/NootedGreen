@@ -22384,6 +22384,9 @@ int main() {
                         return tglWithOwnedVpPhaseDispatchEntries(child,prelude,
                             [&](void* actual,const TglOwnedVpEntrySet& phase,auto&,auto&) noexcept -> int {
                                 assert(actual==child && phase.platformSend && !seed.platformSend);
+                                // Phase is an outer subset: initialized SFC
+                                // callbacks are supplied by the following scope.
+                                assert(phase.missingMask()!=0);
                                 return graph.withSfcAdmissionCallbackAssembly(actual,sfcInputs,0x1000,0x2000,0x4000,0x3000,
                                     phase,{},&composed,read,
                                     [](void*,const auto&,const auto&,auto&) noexcept -> int {assert(false);return 5;},
