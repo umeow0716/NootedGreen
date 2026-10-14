@@ -2140,11 +2140,12 @@ template int NativeAllocationCallbackScopeFor<NativeTemporarySurfaceOwner>::run<
 template int NativeAllocationCallbackScope::run<int(*)(NativeAllocationContext&) noexcept>(
     NativeAllocationPlanner&,NativeModeReleaseContext&,TglOwnedVeboxFrameRetention&,
     int(*)(NativeAllocationContext&) noexcept) noexcept;
-struct NativeAllocatedAdmissionRender {
-    NativePreparedAdmissionRender& render;NativeAllocationPlanner& planner;NativeModeReleaseContext& mode;
+template<class SurfaceOwner> struct NativeAllocatedAdmissionRenderFor {
+    NativePreparedAdmissionRenderFor<SurfaceOwner>& render;
+    NativeAllocationPlannerFor<SurfaceOwner>& planner;NativeModeReleaseContext& mode;
     bool attempted=false;
-    NativeAdmissionStages::Result run() noexcept {
-        NativeAdmissionStages::Result result;
+    typename NativeAdmissionStagesFor<SurfaceOwner>::Result run() noexcept {
+        typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
         auto& admission=render.admission;
         if(attempted || planner.child!=admission.reset.child ||
             &planner.childOwner!=&admission.reset.childOwner ||
@@ -2153,8 +2154,8 @@ struct NativeAllocatedAdmissionRender {
             &planner.source!=&admission.feature.source || &planner.unwind.mode!=&mode ||
             NativeModeReleaseScope::get(planner.child)!=&mode || !mode.owns(planner.child))return result;
         attempted=true;
-        const int status=NativeAllocationCallbackScope::run(planner,mode,admission.reset.backing.retention(),
-            [&](NativeAllocationContext& allocation) noexcept -> int {
+        const int status=NativeAllocationCallbackScopeFor<SurfaceOwner>::run(planner,mode,admission.reset.backing.retention(),
+            [&](NativeAllocationContextFor<SurfaceOwner>& allocation) noexcept -> int {
                 if(!allocation.owns(planner.child))return 5;
                 result=render.run();
                 return result.status;
@@ -2163,16 +2164,18 @@ struct NativeAllocatedAdmissionRender {
         return result;
     }
 };
-struct NativeModeAllocationPlan {
+using NativeAllocatedAdmissionRender=NativeAllocatedAdmissionRenderFor<NativeContextSurfaceOwner>;
+template struct NativeAllocatedAdmissionRenderFor<NativeTemporarySurfaceOwner>;
+template<class SurfaceOwner> struct NativeModeAllocationPlanFor {
     NativeSurfaceFrameBacking& storage;NativeVpLines& lines;
     NativeSfcReleaseSelection& selection;NativeModeRetirementAuthority& retirement;
-    NativeContextSurfaceOwner& input;NativeContextSurfaceOwner& target;
-    NativeContextSurfaceOwner* secondary;NativeContextSurfaceOwner* previous;
+    SurfaceOwner& input;SurfaceOwner& target;
+    SurfaceOwner* secondary;SurfaceOwner* previous;
     NativeExecutionOwner& execution;uintptr_t report;
     const TglOwnedSurfaceStorage& source;bool reinitializeStmm,alignDi64;
-    using Use=NativeAdmissionStages::Result(*)(void*,NativeAllocationPlanner&,NativeModeReleaseContext&) noexcept;
-    NativeAdmissionStages::Result run(void* scope,Use use) noexcept {
-        NativeAdmissionStages::Result result;
+    using Use=typename NativeAdmissionStagesFor<SurfaceOwner>::Result(*)(void*,NativeAllocationPlannerFor<SurfaceOwner>&,NativeModeReleaseContext&) noexcept;
+    typename NativeAdmissionStagesFor<SurfaceOwner>::Result run(void* scope,Use use) noexcept {
+        typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
         const auto child=reinterpret_cast<uintptr_t>(selection.child);
         const auto generation=selection.owner.allocationGeneration();uintptr_t vp=0;
         if(!scope || !use || !input.hasSurfaceLease(source) || !execution.hasExecutionLease(report) ||
@@ -2180,12 +2183,12 @@ struct NativeModeAllocationPlan {
             !vp || !selection.graph.ownsStorage(reinterpret_cast<void*>(vp)))return result;
         const int status=NativeModeCallbackScope::run(storage,lines,selection,retirement,
             [&](NativeModeReleaseContext& mode) noexcept -> int {
-                NativeAllocationPlanner planner{storage,input,&target,secondary,previous,selection.owner,
+                NativeAllocationPlannerFor<SurfaceOwner> planner{storage,input,&target,secondary,previous,selection.owner,
                     execution,selection.child,report,source,&readMemory,
                     NativeAllocationSfcFormat{selection.owner,selection.child,reinterpret_cast<void*>(vp),generation},
                     NativeAllocationSfcColor{selection.owner,selection.child,reinterpret_cast<void*>(vp),generation},
-                    NativeAllocationParameterKind{input,source},TglOwnedFfdiCompressionFormatQuery{},
-                    NativeAllocationRectangle{input,target,selection.owner,execution},
+                    NativeAllocationParameterKindFor<SurfaceOwner>{input,source},TglOwnedFfdiCompressionFormatQuery{},
+                    NativeAllocationRectangleFor<SurfaceOwner>{input,target,selection.owner,execution},
                     reinitializeStmm,alignDi64,NativeDataAdmission{},NativeAllocationUnwind{mode}};
                 result=use(scope,planner,mode);
                 return result.status;
@@ -2194,6 +2197,8 @@ struct NativeModeAllocationPlan {
         return result;
     }
 };
+using NativeModeAllocationPlan=NativeModeAllocationPlanFor<NativeContextSurfaceOwner>;
+template struct NativeModeAllocationPlanFor<NativeTemporarySurfaceOwner>;
 // Stable, per-frame capabilities keep construction-time hook types identical
 // to execution-time producer resolvers. No success/default producer exists.
 struct NativeDiIecpCapture {
