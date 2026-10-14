@@ -2361,9 +2361,13 @@ struct NativeRetainedFrontendRuntime {
         return run(frame,roles,sourceIndex,targetIndex,temporal,scope,use);
     }
     struct VpRequest {
+        using Use=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeCoreFrameDataScope&,
+            NativeVpGraph&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&,
+            NativeVpProducerFrame&,const TglOwnedVpModeState&,NativeSourceGraph&,
+            NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,NativeDenoiseParameters&) noexcept;
         size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         uintptr_t parameters,pass;const TglOwnedVpEntrySet& catalogue;
-        void* context;NativeLeasedVpFrameInputScope::Use use;
+        void* context;Use use;
     };
     static TglOwnedVeboxCommandTransactionResult runVpInputs(NativeContextRendererFrame& frame,
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
@@ -2372,8 +2376,9 @@ struct NativeRetainedFrontendRuntime {
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(request.use),1))return {};
         return run(frame,roles,sourceIndex,targetIndex,temporal,&request,
             +[](void* context,NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& pinned,
+                NativeSourceGraph& sourceGraph,
                 NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
-                NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,NativeDenoiseParameters&,
+                NativeContextSurfaceOwner* secondary,NativeContextSurfaceOwner* previous,NativeDenoiseParameters& denoise,
                 NativeRendererChildLifetime& first,NativeRendererChildLifetime& second) noexcept {
                 auto& request=*static_cast<VpRequest*>(context);
                 const auto child=pinned.originalChildren[request.childIndex];
@@ -2383,7 +2388,19 @@ struct NativeRetainedFrontendRuntime {
                     return TglOwnedVeboxCommandTransactionResult{};
                 NativeLeasedFrameInputScope::Inputs inputs{cpu,request.childIndex,source,target,pinned,
                     request.interfaces,request.parameters,request.pass};
-                return NativeLeasedVpFrameInputScope::run(inputs,request.catalogue,request.context,request.use);
+                struct Continuation {
+                    VpRequest& request;NativeSourceGraph& graph;
+                    NativeContextSurfaceOwner* secondary;NativeContextSurfaceOwner* previous;
+                    NativeDenoiseParameters& denoise;
+                } continuation{request,sourceGraph,secondary,previous,denoise};
+                return NativeLeasedVpFrameInputScope::run(inputs,request.catalogue,&continuation,
+                    +[](void* context,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
+                        NativeAdmissionParams& params,NativeAdmissionPass& pass,NativeFrameDataRead& read,
+                        NativeVpProducerFrame& vp,const TglOwnedVpModeState& mode) noexcept {
+                        auto& next=*static_cast<Continuation*>(context);
+                        return next.request.use(next.request.context,core,graph,params,pass,read,vp,mode,
+                            next.graph,next.secondary,next.previous,next.denoise);
+                    });
             });
     }
     static TglOwnedVeboxCommandTransactionResult runPrepared(NativeContextRendererFrame& frame,
