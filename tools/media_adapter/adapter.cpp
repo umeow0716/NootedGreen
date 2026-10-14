@@ -1254,10 +1254,11 @@ template int NativeOutputPipeFrameScopeFor<NativeTemporarySurfaceOwner>::run<
 template int NativeOutputPipeFrameScope::run<int(*)(NativeOutputPipeSelector&) noexcept>(
     int(*)(NativeOutputPipeSelector&) noexcept) noexcept;
 using NativeSourceGraph=TglOwnedFrontendSourceGraph<NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi>;
-using NativeAdmissionHistoryStage=TglOwnedVeboxHistoryAdmissionStage<NativeRendererChildOwner,
-    NativeExecutionOwner,NativeSourceGraph,NativeDataAdmission,NativeDataAdmission>;
-struct NativeAdmissionHistorySetup {
-    NativeAdmissionHistoryStage stage;
+template<class SourceGraph> using NativeAdmissionHistoryStageFor=TglOwnedVeboxHistoryAdmissionStage<NativeRendererChildOwner,
+    NativeExecutionOwner,SourceGraph,NativeDataAdmission,NativeDataAdmission>;
+using NativeAdmissionHistoryStage=NativeAdmissionHistoryStageFor<NativeSourceGraph>;
+template<class SourceGraph> struct NativeAdmissionHistorySetupFor {
+    NativeAdmissionHistoryStageFor<SourceGraph> stage;
     bool operator()(TglLeasedAdmissionExecution& report) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(stage.child);
         const uint64_t generation=stage.childOwner.allocationGeneration();
@@ -1274,6 +1275,9 @@ struct NativeAdmissionHistorySetup {
             stage.sourceGraph.hasSurfaceLease(stage.source);
     }
 };
+using NativeAdmissionHistorySetup=NativeAdmissionHistorySetupFor<NativeSourceGraph>;
+using NativeTemporaryHistoryGraph=TglNativePerPassHistoryOverlay<NativeSourceGraph,NativeTemporarySurfaceOwner>;
+template struct NativeAdmissionHistorySetupFor<NativeTemporaryHistoryGraph>;
 using NativeDenoiseParameters=TglTrackedCpuOwner<TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>>;
 template<class SurfaceOwner> struct NativeSfcDenoiseRequestFor {
     SurfaceOwner& owner;const NativeDenoiseParameters& parameters;

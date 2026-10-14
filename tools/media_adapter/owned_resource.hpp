@@ -7238,6 +7238,9 @@ public:
         const TglOwnedSurfaceStorage* surfaceBinding() const noexcept {
             return live()?reinterpret_cast<const TglOwnedSurfaceStorage*>(temporary_.shells_[index_]):nullptr;
         }
+        const TglOwnedSurfaceStorage* originalSurfaceBinding() const noexcept {
+            return live()?temporary_.originals_[index_]:nullptr;
+        }
         template<class Parameters> bool hasNativeDenoiseAdmissionGrant(
             const TglOwnedSurfaceStorage& expected,const Parameters& parameters) const noexcept {
             return hasSurfaceLease(expected) &&
@@ -7428,6 +7431,30 @@ public:
         const auto old=shells_;shells_.fill(0);originals_.fill(nullptr);prepared_=false;
         if(generation_!=UINT64_MAX)++generation_;
         for(size_t i=old.size();i;--i)if(old[i-1])backend_.release(old[i-1]);
+    }
+};
+// Synchronous history view ONLY. Original graph retains all CF/context/root
+// leases; temporary copy contributes scalar state, not new link ownership.
+template<class Graph,class DerivedOwner> class TglNativePerPassHistoryOverlay {
+    Graph& graph_;DerivedOwner& owner_;const TglOwnedSurfaceStorage& temporary_;
+public:
+    TglNativePerPassHistoryOverlay(Graph& graph,DerivedOwner& owner,
+        const TglOwnedSurfaceStorage& temporary) noexcept:graph_(graph),owner_(owner),temporary_(temporary) {}
+    bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
+        const auto* original=owner_.originalSurfaceBinding();
+        if(&surface!=&temporary_ || !original || graph_.storage()!=original ||
+            !owner_.hasSurfaceLease(surface) || !graph_.hasSurfaceLease(*original))return false;
+        for(const auto offset:{size_t{0xc0},size_t{0xc8}}) {
+            uintptr_t copied=0;std::memcpy(&copied,surface.prefix.data()+offset,8);
+            if(copied!=reinterpret_cast<uintptr_t>(graph_.linkedStorage(*original,offset)))return false;
+        }
+        return owner_.hasSurfaceLease(surface) && graph_.hasSurfaceLease(*original);
+    }
+    const TglOwnedSurfaceStorage* linkedStorage(const TglOwnedSurfaceStorage& surface,size_t offset) const noexcept {
+        if((offset!=0xc0 && offset!=0xc8) || !hasSurfaceLease(surface))return nullptr;
+        const auto* original=owner_.originalSurfaceBinding();
+        const auto* linked=graph_.linkedStorage(*original,offset);
+        return hasSurfaceLease(surface)?linked:nullptr;
     }
 };
 // Gen12 DDI extensions are owned sidecars, NOT extra bytes in the native

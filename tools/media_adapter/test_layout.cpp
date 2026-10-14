@@ -16256,6 +16256,29 @@ static void testRetainedVeboxFrames() {
                         TglOwnedFrontendSourceGraph<typename Sidecars::Owner,CfApi,2> graph(CfApi{refs});
                         assert(graph.acquire(address,[&](uintptr_t p) noexcept {return set.resolve(p);},1,2));
                         assert(graph.valid() && graph.storage()==&original && refs==4);
+                        assert(graph.withOriginalOwner(original,[&](auto& root) noexcept -> int {
+                            struct Backend {
+                                uintptr_t allocate(size_t n) noexcept {return reinterpret_cast<uintptr_t>(std::malloc(n));}
+                                void release(uintptr_t p) noexcept {std::free(reinterpret_cast<void*>(p));}
+                            } backend;
+                            TglNativePerPassCpuShells<Backend> temporary(backend);
+                            std::array<const TglOwnedSurfaceStorage*,25> inputs{};inputs[0]=&original;
+                            assert(temporary.prepare(inputs));
+                            return temporary.withDerivedSurfaceLease(0,root,[&](auto& derived) noexcept {
+                                return derived.withMutableSurface([&](auto& copy) noexcept -> int {
+                                    TglNativePerPassHistoryOverlay<decltype(graph),std::remove_reference_t<decltype(derived)>>
+                                        overlay(graph,derived,copy);
+                                    assert(overlay.hasSurfaceLease(copy) && !overlay.hasSurfaceLease(original));
+                                    assert(overlay.linkedStorage(copy,0xc0)==&history && overlay.linkedStorage(copy,0xc8)==&history);
+                                    assert(!overlay.linkedStorage(copy,0xb8) && refs==4);
+                                    const uintptr_t zero=0;
+                                    std::memcpy(copy.prefix.data()+0xc0,&zero,8);
+                                    assert(!overlay.hasSurfaceLease(copy) && !overlay.linkedStorage(copy,0xc8));
+                                    std::memcpy(copy.prefix.data()+0xc0,&historyAddress,8);
+                                    assert(overlay.hasSurfaceLease(copy));return 31;
+                                });
+                            });
+                        })==31 && refs==4);
                         std::array<uint8_t,0x70> conversion{};
                         const uintptr_t metadata=reinterpret_cast<uintptr_t>(conversion.data()),nested=0x667700;
                         const uint32_t cube=2;
