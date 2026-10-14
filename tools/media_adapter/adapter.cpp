@@ -1481,6 +1481,56 @@ struct NativeAdmissionStages {
         return result;
     }
 };
+class NativeAdmissionFrameAssembly {
+public:
+    struct Inputs {
+        NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
+        NativeRendererBacking& backing;NativeModeRetirementAuthority& retirement;
+        NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+        NativeSourceGraph& sourceGraph;NativeDenoiseParameters& parameters;
+        const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
+        const TglVeboxFeatureBinding& featureBinding;
+        NativeOutputPipeSelector& select;NativeFrameDataRead& read;
+        NativeAdmissionParams& params;NativeAdmissionPass& pass;
+        const TglVeboxAdmissionBorrowedInterfaces& interfaces;
+        const TglOwnedVpEntrySet& catalogue;const TglOwnedVpModeState& mode;
+        size_t index;void* child;uintptr_t execution;void* vp;uintptr_t mhw;void* renderData;
+    };
+private:
+    NativeAdmissionReset reset_;
+    NativeAdmissionHistorySetup history_;
+    NativeAdmissionFeatureStage feature_;
+    NativeSfcPreparation sfc_;
+    NativeSfcDenoiseRequest dn_;
+    NativeAdmissionStages stages_;
+    bool attempted_=false;
+public:
+    explicit NativeAdmissionFrameAssembly(const Inputs& in) noexcept
+        :reset_{in.childOwner,in.executionOwner,in.backing,in.retirement,in.index,in.child,in.execution,in.vp},
+         history_{{in.childOwner,in.executionOwner,in.sourceGraph,in.child,in.execution,in.source,
+             NativeDataAdmission{},NativeDataAdmission{}}},
+         feature_{in.featureBinding,in.sourceOwner,in.targetOwner,in.childOwner,in.executionOwner,
+             in.parameters,in.child,in.execution,in.source,in.target,&readMemory,
+             NativeTglImageAdmission{in.featureBinding.image},&executableMemory},
+         sfc_{in.backing,in.childOwner,in.executionOwner,in.sourceOwner,in.targetOwner,
+             in.catalogue,in.mode,in.index,in.child,in.mhw,in.renderData,nullptr,nullptr,nullptr,nullptr},
+         dn_{in.sourceOwner,in.parameters},
+         stages_{reset_,in.select,history_,feature_,sfc_,dn_,in.params,in.pass,in.interfaces,in.read} {}
+    NativeAdmissionFrameAssembly(const NativeAdmissionFrameAssembly&)=delete;
+    NativeAdmissionFrameAssembly& operator=(const NativeAdmissionFrameAssembly&)=delete;
+    template<class Use> int run(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<NativeAdmissionStages&>())) &&
+            std::is_same_v<decltype(use(std::declval<NativeAdmissionStages&>())),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        if(attempted_ || !stages_.read.scope || !stages_.read.resolve || reset_.index>1)return 5;
+        attempted_=true;
+        // PreparedAdmissionRender installs real VP producer callbacks before
+        // stages.run; null fields here are unbound, never success stubs.
+        return use(stages_);
+    }
+};
+template int NativeAdmissionFrameAssembly::run<int(*)(NativeAdmissionStages&) noexcept>(
+    int(*)(NativeAdmissionStages&) noexcept) noexcept;
 using NativeAdmissionRenderFn=TglOwnedVeboxCommandTransactionResult(*)() noexcept;
 template NativeAdmissionStages::Result NativeAdmissionStages::run<NativeAdmissionRenderFn>(
     NativeAdmissionRenderFn&) noexcept;
