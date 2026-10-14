@@ -23784,6 +23784,41 @@ int main() {
                                 auto* cpuAddress=storageOwner.get();
                                 auto* child0=storage.children().first().owner().constructedBase();
                                 auto* child1=storage.children().second().owner().constructedBase();
+                                // CPU-only retention matrix: real constructed child pair,
+                                // isolated latch (no resources/submission, no GPU certificate).
+                                for(unsigned outcome=0;outcome<3;++outcome) {
+                                    struct LatchBacking {
+                                        TglOwnedVeboxFrameRetention keep;
+                                        auto& retention() noexcept {return keep;}
+                                    };
+                                    struct LatchCpu {
+                                        decltype(storage.children()) pair;
+                                        LatchBacking frame;
+                                        auto& children() noexcept {return pair;}
+                                        auto& backing() noexcept {return frame;}
+                                    } cpu{storage.children(),{}};
+                                    unsigned accessCalls=0;
+                                    auto access=[&](const auto&,auto use) noexcept -> int {
+                                        ++accessCalls;return use(cpu,0);
+                                    };
+                                    auto pin=parents.pin(base,0x8000,1,parentAddress);
+                                    using Borrowed=TglNativeVeboxBorrowedFrontendFrameStorage<decltype(pin),
+                                        TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf,FrameDnBackend,decltype(access)>;
+                                    Borrowed frontend(std::move(pin),reinterpret_cast<uintptr_t>(&source),originalResolve,
+                                        originalTarget,Cf{refs},11,12,frameDn,access);
+                                    const auto result=frontend.withCpuFrontend([&](auto&...) noexcept {
+                                        if(outcome==0)return TglOwnedVeboxCommandTransactionResult{31,0,true,false,false};
+                                        if(outcome==1)return TglOwnedVeboxCommandTransactionResult{0,0,false,true,false};
+                                        return TglOwnedVeboxCommandTransactionResult{31,0,false,false,true};
+                                    });
+                                    assert(result.status==(outcome==1?5:31) && frontend.requiresRetention() && cpu.backing().retention()());
+                                    assert(frontend.surfacesReady() && originalSource.borrowed && originalTarget.borrowed);
+                                    assert(frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                        assert(false);return {};
+                                    }).status==5 && accessCalls==1);
+                                    assert(storageOwner.get()==cpuAddress && !storage.backing().retention()());
+                                }
+                                assert(refs==originalRefs && !originalSource.borrowed && !originalTarget.borrowed && !originalHistory.borrowed);
                                 {
                                     auto borrowedParent=parents.pin(base,0x8000,1,parentAddress);
                                     unsigned calls=0;
