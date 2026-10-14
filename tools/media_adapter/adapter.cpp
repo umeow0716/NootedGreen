@@ -385,6 +385,9 @@ struct NativeVpScalarStateProducer {
             health.qualifiesVp(reinterpret_cast<uintptr_t>(vp))?&produced:nullptr;
     }
 };
+struct NativeVpPacketDomain {};
+struct NativeVpPacketContext {NativeVpScalarStateProducer* scalar;TglOwnedSfcCommandParameters* parameters;};
+using NativeVpPacketPublication=TglOwnedScopedContext<NativeVpPacketContext,NativeVpPacketDomain>;
 struct NativeVpAvsProducer {
     using Owner=TglOwnedSfcAvsParameters<TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>>;
     NativeVpScalarStateProducer& scalar;NativeFrameDataRead& dataRead;
@@ -397,8 +400,9 @@ struct NativeVpAvsProducer {
         static_assert(noexcept(use(parameters)) && std::is_same_v<decltype(use(parameters)),int>);
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         const auto* prefix=scalar.state();
+        const auto* packet=NativeVpPacketPublication::get(actual);
         if(attempted || !prefix || actual!=scalar.vp || &dataRead!=&scalar.dataRead ||
-            parameters.filtersInUse)return 5;
+            !packet || packet->scalar!=&scalar || packet->parameters!=&parameters || parameters.filtersInUse)return 5;
         TglOwnedSfcAvsConfiguration config;
         if(!tglReadOwnedVpAvsConfiguration(frame,*prefix,performance,dataRead,config))return 5;
         TglNativeSineBinding sine;
@@ -425,6 +429,58 @@ struct NativeVpAvsProducer {
 template int NativeVpAvsProducer::run<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
     void*,const TglOwnedVpFramePreparation&,NativeVpAvsProducer::Owner&,
     int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
+struct NativeVpIefCscProducer {
+    NativeVpScalarStateProducer& scalar;NativeFrameDataRead& dataRead;
+    NativeContextSurfaceOwner& sourceOwner;
+    TglOwnedSfcCommandParameters& parameters;TglOwnedVpCscCache& cache;
+    bool attempted=false;
+    template<class Use> int run(void* actual,const TglOwnedVpFramePreparation& frame,Use use) noexcept {
+        static_assert(noexcept(use(static_cast<const TglOwnedSfcCommandParameters&>(parameters))) &&
+            std::is_same_v<decltype(use(static_cast<const TglOwnedSfcCommandParameters&>(parameters))),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        const auto* prefix=scalar.state();const auto* packet=NativeVpPacketPublication::get(actual);
+        if(attempted || !prefix || actual!=scalar.vp || &dataRead!=&scalar.dataRead || !packet ||
+            packet->scalar!=&scalar || packet->parameters!=&parameters || parameters.filtersInUse ||
+            !sourceOwner.hasSurfaceLease(scalar.source))return 5;
+        TglOwnedSfcIefInput input;
+        input.enabled=frame.iefPresent && (frame.iefFlags&1) && frame.iefStrength>0.f;
+        if(input.enabled!=bool(frame.at922))return 5;
+        input.strength=frame.iefStrength;input.skinEnable=frame.iefSkin;
+        input.detailEnable=frame.iefDetail;input.thresholds=frame.iefThresholds;
+        auto qualify=[&](uintptr_t image) noexcept {return scalar.state()==prefix &&
+            scalar.health.qualifiesImage(image);};
+        TglOwnedIefTables tables{};
+        if(input.enabled && !tglReadQualifiedOwnedIefTables(tables,scalar.image,&readMemory,qualify))return 5;
+        const bool csc=frame.at920;uint32_t from=0,to=0;
+        TglCscCoefficientsBinding binding;
+        if(csc && (!dataRead(reinterpret_cast<uintptr_t>(&scalar.source),&from,4) ||
+            !dataRead(reinterpret_cast<uintptr_t>(&scalar.target),&to,4) ||
+            !binding.resolve(scalar.image,&readMemory,qualify,&executableMemory)))return 5;
+        attempted=true;
+        auto produce=[&](TglCscCoefficients& output,uint32_t a,uint32_t b) noexcept {
+            TglNativeCscInvoker invoke;
+            // VP+a0 uses native coefficients, NOT VEBOX+b8's extra R/B swap.
+            return tglProduceNativeCscCoefficients(binding,output,a,b,&readMemory,qualify,&executableMemory,
+                [&](uintptr_t entry,uint32_t x,uint32_t y,float* m,float* i,float* o) noexcept {
+                    invoke.coefficients(entry,x,y,m,i,o);
+                },[&](uintptr_t entry,uint32_t x,uint32_t y,float* m) noexcept {return invoke.matrix(entry,x,y,m);});
+        };
+        auto filters=[&](uintptr_t metadata,auto read) noexcept -> int {
+            return tglWithOwnedSfcFilterCommands(parameters,input,tables,cache,csc,from,to,metadata,read,produce,
+                [&](TglOwnedSfcCommandParameters& commands) noexcept -> int {
+                    if(scalar.state()!=prefix)return 5;
+                    const int status=use(static_cast<const TglOwnedSfcCommandParameters&>(commands));
+                    return status?status:(scalar.state()==prefix?0:5);
+                });
+        };
+        uintptr_t metadata=0;
+        if(csc)std::memcpy(&metadata,scalar.source.prefix.data()+0xa8,8);
+        if(metadata)return sourceOwner.withLeasedConversionMetadata(scalar.source,&readMemory,filters);
+        return filters(0,[](uintptr_t,void*,size_t) noexcept {return false;});
+    }
+};
+template int NativeVpIefCscProducer::run<int(*)(const TglOwnedSfcCommandParameters&) noexcept>(
+    void*,const TglOwnedVpFramePreparation&,int(*)(const TglOwnedSfcCommandParameters&) noexcept) noexcept;
 struct NativeNv12OutputQuery {
     struct State {bool attempted=false;TglOwnedNv12LayoutRead result{};};
     NativeContextSurfaceOwner& owner;const TglOwnedSurfaceStorage& expected;State& state;
@@ -476,6 +532,9 @@ struct NativeVpNv12PacketScope {
                         avs,ief,sfd,prefix->packet,tail,rgbAdaptive,eightTapChroma,
                         compressionEnabled,compressionMode,query);
                     if(prepared)return prepared;
+                    NativeVpPacketContext context{&scalar,&parameters};
+                    NativeVpPacketPublication scope(scalar.vp,context);
+                    if(!scope.bound())return 5;
                     // Keep resource/target scopes through AVS/IEF and send.
                     // State parameter lease is NOT held during their updates.
                     const int status=use(parameters);
