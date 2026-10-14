@@ -21662,6 +21662,10 @@ public:
             :frames_(entry.frames),physical_(entry.physical),entry_(entry) {}
     public:
         Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
+        bool matches(uintptr_t image,uintptr_t physical,uint64_t generation) const noexcept {
+            return entry_.state==State::Live && !frames_.workFaulted() &&
+                entry_.image==image && physical_==physical && entry_.generation==generation;
+        }
         // Called while the enclosing physical gate is held; no recursive lookup.
         DependencyLease retainPhysicalDependency() noexcept {
             return frames_.workFaulted()?DependencyLease{}:retainDependency(entry_);
@@ -22143,6 +22147,19 @@ public:
     const TglOwnedContextFrameVtable& frameTable() const noexcept {return state_->table;}
     bool nativeRemovalConfirmed() const noexcept {
         return state_ && state_->removed && !state_->table.requiresRetention();
+    }
+    // Actual frame entry must pin this codec owner and borrow the SAME physical
+    // generation scope. Never expose the raw table as an independent lifetime.
+    template<class OwnerLease,class Scope,class Invoke>
+    int dispatchScopedFrame(const OwnerLease& lease,Scope& physicalScope,uintptr_t request,
+        uintptr_t outputSlot,Invoke invoke) noexcept {
+        if(!state_ || lease.get()!=this || !enter())return 5;
+        Unlock unlock{state_->busy};
+        if(state_->removed || state_->table.publication()!=TglOwnedContextFrameVtable::Publication::Published ||
+            !state_->retainedIdentity() ||
+            !physicalScope.matches(state_->image,state_->physical,state_->generation) ||
+            !state_->nativeParentMatches())return 5;
+        return state_->table.dispatchScopedItem(physicalScope,state_->context,request,outputSlot,state_->read,invoke);
     }
     template<class ExclusiveLease,class ScopeAdmit,class OwnedExecutable>
     bool publishFrame(const ExclusiveLease& lease,uintptr_t hook,ScopeAdmit scope,OwnedExecutable ownedExecutable) noexcept {

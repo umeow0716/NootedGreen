@@ -14503,6 +14503,18 @@ static void testRetainedVeboxFrames() {
             TglNativeRemovedContextBatch<1> removed;removed.valid=true;removed.count=1;removed.contexts[0]=context;
             {
                 auto pin=codecs.pin(base,physical,ticket.generation,context);assert(pin.get()==owner);
+                unsigned calls=0;
+                assert(physicals.withScope(ticket,base,physical,[&](auto& active) noexcept -> int {
+                    auto invoke=[&](uintptr_t address,uintptr_t c,uintptr_t request,uintptr_t output,auto& same) noexcept -> int {
+                        ++calls;assert(address==entry && c==context && request==0x55000 && output==0x66000 && &same==&active);
+                        assert(owner->dispatchScopedFrame(pin,active,request,output,
+                            [](uintptr_t,uintptr_t,uintptr_t,uintptr_t,auto&) noexcept -> int {assert(false);return 0;})==5);
+                        return 0;
+                    };
+                    actualParent+=8;assert(owner->dispatchScopedFrame(pin,active,0x55000,0x66000,invoke)==5 && !calls);
+                    actualParent-=8;
+                    return owner->dispatchScopedFrame(pin,active,0x55000,0x66000,invoke);
+                })==0 && calls==1);
                 assert(codecs.prepareRemoval(base,physical,ticket.generation,removed,
                     [](const auto&,uint32_t) noexcept -> int {assert(false);return 0;})==5);
                 assert(physicals.destroy(ticket,base,physical,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
