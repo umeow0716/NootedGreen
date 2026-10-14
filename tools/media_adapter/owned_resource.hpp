@@ -17493,6 +17493,47 @@ struct TglNativeVideoBufferFlushInvoker {
         return reinterpret_cast<Flush>(entry)(reinterpret_cast<void*>(context),kind);
     }
 };
+// OS+2d0 is NOT an alias of a9dc:64df0 mutates wrapper/sideband state,
+// conditionally flushes and maps internal failure to27 at6501d..6503a.
+// Keep its status/one-call identity distinct from direct flush observation.
+struct TglNativeOsCommandSubmitInvoker {
+    int operator()(uintptr_t entry,uintptr_t os,void* command,uint32_t flags) const noexcept {
+        using Native=int(*)(void*,void*,uint32_t);
+        return reinterpret_cast<Native>(entry)(reinterpret_cast<void*>(os),command,flags);
+    }
+};
+class TglNativeOsCommandSubmitBinding {
+    uintptr_t os_=0,entry_=0;
+public:
+    inline static constexpr std::array<uint8_t,16> anchor{
+        0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x50,0x48,0x89,0x7d,0xf0,0x48,0x89,0x75,0xe8};
+    inline static constexpr std::array<uint8_t,9> tail{
+        0x8b,0x45,0xfc,0x48,0x83,0xc4,0x50,0x5d,0xc3};
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t os,uintptr_t image,Read read,Qualify qualify,Executable executable) noexcept {
+        os_=entry_=0;uintptr_t entry=0;auto first=anchor;auto last=tail;
+        if(!os || os>UINTPTR_MAX-0x2d8 || !image || image>UINTPTR_MAX-0x65043 || !qualify(image) ||
+            !read(os+0x2d0,&entry,8) || entry!=image+0x64df0 ||
+            !executable(entry,first.size()) || !executable(image+0x6503a,last.size()) ||
+            !read(entry,first.data(),first.size()) || first!=anchor ||
+            !read(image+0x6503a,last.data(),last.size()) || last!=tail)return false;
+        os_=os;entry_=entry;return true;
+    }
+    struct Result {
+        int nativeStatus=5;bool called=false,stable=false;
+        int status() const noexcept {return called && nativeStatus?nativeStatus:(called && stable?0:5);}
+    };
+    template<class Read,class Invoke=TglNativeOsCommandSubmitInvoker>
+    Result call(void* command,uint32_t flags,Read read,Invoke invoke={}) const noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<int,Invoke&,uintptr_t,uintptr_t,void*,uint32_t> &&
+            std::is_nothrow_invocable_r_v<bool,Read&,uintptr_t,void*,size_t>);
+        Result result;uintptr_t before=0,after=0;
+        if(!os_ || !entry_ || !command || !read(os_+0x2d0,&before,8) || before!=entry_)return result;
+        result.called=true;result.nativeStatus=invoke(entry_,os_,command,flags);
+        result.stable=read(os_+0x2d0,&after,8) && after==entry_;
+        return result; // Neither native0 nor a stable slot authorizes retirement.
+    }
+};
 class TglNativeVideoBufferFlushBinding {
     uintptr_t entry_=0;
 public:

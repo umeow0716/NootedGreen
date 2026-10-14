@@ -31300,4 +31300,37 @@ int main() {
         })==0);
         assert(owned==13 && native==13 && &packetBridge.pass==&frame.pass && &packetBridge.leases==&frame.leases);
     }
+    {
+        constexpr uintptr_t image=0x100000,entry=image+0x64df0;
+        alignas(8) std::array<uint8_t,0x2d8> os{};
+        const auto address=reinterpret_cast<uintptr_t>(os.data());
+        std::memcpy(os.data()+0x2d0,&entry,8);
+        auto read=[&](uintptr_t p,void* out,size_t size) noexcept {
+            if(p==address+0x2d0 && size==8) {std::memcpy(out,os.data()+0x2d0,8);return true;}
+            if(p==entry && size==TglNativeOsCommandSubmitBinding::anchor.size()) {
+                std::memcpy(out,TglNativeOsCommandSubmitBinding::anchor.data(),size);return true;
+            }
+            if(p==image+0x6503a && size==TglNativeOsCommandSubmitBinding::tail.size()) {
+                std::memcpy(out,TglNativeOsCommandSubmitBinding::tail.data(),size);return true;
+            }
+            return false;
+        };
+        auto qualify=[](uintptr_t p) noexcept {return p==image;};
+        auto executable=[](uintptr_t p,size_t) noexcept {return p==entry || p==image+0x6503a;};
+        TglNativeOsCommandSubmitBinding binding;
+        assert(binding.resolve(address,image,read,qualify,executable));
+        int command=0,nativeStatus=31;unsigned calls=0;bool mutate=false;
+        auto invoke=[&](uintptr_t p,uintptr_t actual,void* buffer,uint32_t flags) noexcept -> int {
+            assert(p==entry && actual==address && buffer==&command && flags==2);++calls;
+            if(mutate) {const uintptr_t changed=entry+1;std::memcpy(os.data()+0x2d0,&changed,8);}
+            return nativeStatus;
+        };
+        auto result=binding.call(&command,2,read,invoke);
+        assert(result.called && result.stable && result.status()==31 && calls==1);
+        nativeStatus=0;result=binding.call(&command,2,read,invoke);
+        assert(result.called && result.stable && result.status()==0 && calls==2);
+        mutate=true;result=binding.call(&command,2,read,invoke);
+        assert(result.called && !result.stable && result.status()==5 && calls==3);
+        result=binding.call(&command,2,read,invoke);assert(!result.called && result.status()==5 && calls==3);
+    }
 }
