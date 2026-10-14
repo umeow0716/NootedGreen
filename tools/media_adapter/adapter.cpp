@@ -63,6 +63,17 @@ struct NativeDataAdmission {
         return writableDataMemory(address,length);
     }
 };
+// Frame data capability, distinct from the qualified native image reader.
+// The retained frame supplies its closed region resolver; there is no raw
+// readMemory fallback and this object does not extend the resolver lifetime.
+struct NativeFrameDataRead {
+    void* scope=nullptr;
+    bool(*resolve)(void*,uintptr_t,void*,size_t) noexcept=nullptr;
+    bool operator()(uintptr_t address,void* output,size_t bytes) const noexcept {
+        return scope && resolve && address && output && bytes && address<=UINTPTR_MAX-bytes &&
+            resolve(scope,address,output,bytes);
+    }
+};
 struct NativeTglImageAdmission {
     uintptr_t image=0;
     bool operator()(uintptr_t candidate) const noexcept {return image && candidate==image;}
@@ -393,10 +404,10 @@ struct NativeFastFillTransaction {
         return !status && selected && acquisition.healthy();
     }
 };
-using NativeOutputPipePolicy=TglLeasedGen12VeboxOutputPolicy<decltype(&readMemory),
+using NativeOutputPipePolicy=TglLeasedGen12VeboxOutputPolicy<NativeFrameDataRead,
     NativeRendererChildOwner,NativeContextSurfaceOwner,NativeContextSurfaceOwner,
     NativeTwoPassCscQuery,NativeFastFillTransaction>;
-using NativeOutputPipeSelector=TglOwnedVpPipeSelector<decltype(&readMemory),NativeOutputPipePolicy>;
+using NativeOutputPipeSelector=TglOwnedVpPipeSelector<NativeFrameDataRead,NativeOutputPipePolicy>;
 // Compile the concrete selector/transaction bodies; no policy instance is
 // published until the compressed-resource producer has a proven native route.
 struct NativeOutputPipeSelection {
@@ -569,9 +580,9 @@ struct NativeSfcPreparation {
         });
     }
 };
-template int NativeSfcPreparation::run<decltype(&readMemory),int(*)(void*) noexcept>(
+template int NativeSfcPreparation::run<NativeFrameDataRead,int(*)(void*) noexcept>(
     void*,uintptr_t,uintptr_t,const TglOwnedSurfaceStorage&,const TglOwnedSurfaceStorage&,
-    uintptr_t,decltype(&readMemory),int(*)(void*) noexcept) noexcept;
+    uintptr_t,NativeFrameDataRead,int(*)(void*) noexcept) noexcept;
 template<class Read> struct NativeSfcPrepareCall {
     NativeSfcPreparation& preparation;Read& read;
     template<class Complete> int operator()(void* vp,uintptr_t e0,uintptr_t f0,
@@ -597,8 +608,8 @@ struct NativeSfcAdmission {
         return stage(report,input,finish);
     }
 };
-template bool NativeSfcAdmission::run<decltype(&readMemory),bool(*)() noexcept>(
-    NativeSfcPreparation&,decltype(&readMemory)&,const NativeSfcDenoiseRequest&,void*,uintptr_t,
+template bool NativeSfcAdmission::run<NativeFrameDataRead,bool(*)() noexcept>(
+    NativeSfcPreparation&,NativeFrameDataRead&,const NativeSfcDenoiseRequest&,void*,uintptr_t,
     const TglOwnedSurfaceStorage&,const TglOwnedSurfaceStorage&,TglLeasedAdmissionExecution&,
     const TglVeboxAdmissionStagesInput&,bool(*)() noexcept) noexcept;
 struct NativeAdmissionReset {
