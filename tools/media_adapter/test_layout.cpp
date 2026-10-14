@@ -17411,6 +17411,33 @@ int main() {
                             using RetirementLookup=TglOwnedScopedContext<TglOwnedVphalRetirementContext,TglOwnedVphalRetirementDomain>;
                             assert(!RetirementLookup::get(storageIdentity));
                             unsigned retirementProofs=0;
+                            using ChildLookup=TglOwnedScopedContext<TglOwnedVphalChildAdmissionContext,TglOwnedVphalChildAdmissionDomain>;
+                            unsigned childProofs=0;
+                            using RouteLookup=TglOwnedScopedContext<TglOwnedVphalRoutingContext,TglOwnedVphalRoutingDomain>;
+                            assert(physicalOwners.withDependencyAdoption(ticket,image,0x90000,[&](auto& physicalScope) noexcept -> int {
+                                return tglWithVphalRouterIdentity(physicalScope,image,0x90000,ticket.generation,creatorAddress,[&]() noexcept -> int {
+                                    auto* route=RouteLookup::get(reinterpret_cast<void*>(creatorAddress));assert(route);
+                                    assert(route->matches(image,0x90000,ticket.generation,creatorAddress));
+                                    assert(!route->matches(image,0x90000,ticket.generation+1,creatorAddress));
+                                    assert(tglWithVphalRouterIdentity(physicalScope,image,0x90000,ticket.generation,creatorAddress,
+                                        []() noexcept -> int {assert(false);return 0;})==5);
+                                    return 0;
+                                });
+                            })==0 && !RouteLookup::get(reinterpret_cast<void*>(creatorAddress)));
+                            auto childProof=[&](auto& storage,void* renderer,uint64_t generation,uintptr_t a,uintptr_t b) noexcept -> bool {
+                                ++childProofs;assert(&storage==storageIdentity && renderer==reinterpret_cast<void*>(r) &&
+                                    generation==ticket.generation && a==0x1110 && b==0x2220);return true;
+                            };
+                            assert(physicalOwners.withDependencyAdoption(ticket,image,0x90000,[&](auto& physicalScope) noexcept -> int {
+                                return owner->withChildAdmissionAuthority(initialization,physicalScope,childProof,[&]() noexcept -> int {
+                                    auto* active=ChildLookup::get(reinterpret_cast<void*>(r));assert(active && active->admit);
+                                    assert(!active->admit(active->scope,reinterpret_cast<void*>(r),ticket.generation+1,0x1110,0x2220));
+                                    assert(active->admit(active->scope,reinterpret_cast<void*>(r),ticket.generation,0x1110,0x2220));
+                                    assert(owner->withChildAdmissionAuthority(initialization,physicalScope,childProof,
+                                        []() noexcept -> int {assert(false);return 0;})==5);
+                                    return 0;
+                                });
+                            })==0 && childProofs==1 && !ChildLookup::get(reinterpret_cast<void*>(r)));
                             auto proof=[&](void* child,uint64_t generation,size_t index) noexcept -> int {
                                 ++retirementProofs;assert(child==reinterpret_cast<void*>(0xabc0) && generation==7 && index==1);return 31;
                             };

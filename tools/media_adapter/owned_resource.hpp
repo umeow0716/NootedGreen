@@ -222,6 +222,34 @@ struct TglOwnedVphalRetirementContext {
     void* scope=nullptr;
     int(*admit)(void*,void*,uint64_t,size_t) noexcept=nullptr;
 };
+struct TglOwnedVphalChildAdmissionDomain {};
+struct TglOwnedVphalChildAdmissionContext {
+    void* scope=nullptr;
+    bool(*admit)(void*,void*,uint64_t,uintptr_t,uintptr_t) noexcept=nullptr;
+};
+struct TglOwnedVphalRoutingDomain {};
+struct TglOwnedVphalRoutingContext {
+    uintptr_t image=0,physical=0,object=0;uint64_t generation=0;
+    void* scope=nullptr;bool(*live)(void*) noexcept=nullptr;
+    bool matches(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t o) const noexcept {
+        return i==image && p==physical && g==generation && o==object && scope && live && live(scope);
+    }
+};
+// Initialization/destruction caller must supply the actual physical mutation
+// scope, not a copied epoch or an inferred GPU completion status.
+template<class PhysicalScope,class Use>
+int tglWithVphalRouterIdentity(PhysicalScope& physical,uintptr_t image,uintptr_t address,
+    uint64_t generation,uintptr_t object,Use use) noexcept {
+    static_assert(noexcept(use()) && std::is_same_v<decltype(use()),int>);
+    if(!image || !address || !generation || !object || !physical.matches(image,address,generation))return 5;
+    struct Payload {PhysicalScope& physical;uintptr_t image,address;uint64_t generation;};
+    Payload payload{physical,image,address,generation};
+    TglOwnedVphalRoutingContext context{image,address,object,generation,&payload,[](void* value) noexcept {
+        auto& p=*static_cast<Payload*>(value);return p.physical.matches(p.image,p.address,p.generation);
+    }};
+    TglOwnedScopedContext<TglOwnedVphalRoutingContext,TglOwnedVphalRoutingDomain> scope(reinterpret_cast<void*>(object),context);
+    return scope.bound()?use():5;
+}
 struct TglOwnedVpFactoryContext {
     void* child=nullptr;
     bool called=false,valid=true;
@@ -22507,6 +22535,30 @@ public:
             return status?status:(valid()?0:5);
         }};
         TglOwnedScopedContext<TglOwnedVphalRetirementContext,TglOwnedVphalRetirementDomain> scope(state_->storage,context);
+        return scope.bound()?use():5;
+    }
+    template<class ExclusiveLease,class PhysicalScope,class Proof,class Use>
+    int withChildAdmissionAuthority(const ExclusiveLease& lease,PhysicalScope& physical,Proof proof,Use use) noexcept {
+        static_assert(noexcept(proof(std::declval<Storage&>(),static_cast<void*>(nullptr),uint64_t{},uintptr_t{},uintptr_t{})) &&
+            std::is_same_v<decltype(proof(std::declval<Storage&>(),static_cast<void*>(nullptr),uint64_t{},uintptr_t{},uintptr_t{})),bool> &&
+            noexcept(use()) && std::is_same_v<decltype(use()),int>);
+        if(!state_ || lease.get()!=this || !lease.exclusive() || !state_->storage ||
+            !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
+            !physical.matches(state_->image,state_->physical,state_->generation) ||
+            !state_->boundRenderer() || !state_->boundPhysicalOs())return 5;
+        struct Payload {const ExclusiveLease& lease;PhysicalScope& physical;Proof& proof;
+            TglOwnedVphalRendererOwner* owner;Storage* storage;uintptr_t image,physicalAddress,renderer;uint64_t generation;};
+        Payload payload{lease,physical,proof,this,state_->storage,state_->image,state_->physical,state_->renderer,state_->generation};
+        TglOwnedVphalChildAdmissionContext context{&payload,[](void* value,void* renderer,uint64_t generation,uintptr_t a,uintptr_t b) noexcept -> bool {
+            auto& p=*static_cast<Payload*>(value);
+            auto valid=[&]() noexcept {return p.lease.get()==p.owner && p.lease.exclusive() &&
+                p.owner->state_->storage==p.storage && p.physical.matches(p.image,p.physicalAddress,p.generation);};
+            if(!a || !b || a==b || reinterpret_cast<uintptr_t>(renderer)!=p.renderer || generation!=p.generation || !valid())return false;
+            const bool admitted=p.proof(*p.storage,renderer,generation,a,b);
+            return admitted && valid();
+        }};
+        TglOwnedScopedContext<TglOwnedVphalChildAdmissionContext,TglOwnedVphalChildAdmissionDomain> scope(
+            reinterpret_cast<void*>(state_->renderer),context);
         return scope.bound()?use():5;
     }
     // Ordinary parent pin outlives this synchronous scope and any retained frame.

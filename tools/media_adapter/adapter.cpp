@@ -194,11 +194,10 @@ public:
     // allocation on any partial construction/cleanup/native teardown refusal.
 };
 struct NativeRendererChildAdmission {
-    void* scope=nullptr;
-    bool(*admit)(void*,void*,uint64_t,uintptr_t,uintptr_t) noexcept=nullptr;
     bool operator()(void* renderer,uint64_t generation,uintptr_t first,uintptr_t second) const noexcept {
-        return scope && admit && renderer && generation && first && second && first!=second &&
-            admit(scope,renderer,generation,first,second);
+        auto* context=TglOwnedScopedContext<TglOwnedVphalChildAdmissionContext,TglOwnedVphalChildAdmissionDomain>::get(renderer);
+        return context && context->scope && context->admit &&
+            context->admit(context->scope,renderer,generation,first,second);
     }
 };
 struct NativeVphalDestructorInvoker {
@@ -212,6 +211,19 @@ using NativeVphalOwner=TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglO
     decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,NativeRendererChildAdmission,
     NativeVphalDestructorInvoker>;
 static_assert(!std::is_copy_constructible_v<NativeVphalOwner>);
+struct NativeVphalRoutingPolicy {
+    static bool admit(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t object) noexcept {
+        auto* context=TglOwnedScopedContext<TglOwnedVphalRoutingContext,TglOwnedVphalRoutingDomain>::get(reinterpret_cast<void*>(object));
+        return context && context->matches(image,physical,generation,object);
+    }
+    static void unresolved(uintptr_t,TglOwnedVphalDestructionState::Kind kind,bool faulted) noexcept {
+        os_log_error(OS_LOG_DEFAULT,"NGRN_VPHAL_ROUTER_UNRESOLVED kind=%{public}u faulted=%{public}d",unsigned(kind),int(faulted));
+    }
+    static void retained(NativeVphalOwner&,TglOwnedVphalDestructionState::Kind kind,bool quarantined) noexcept {
+        os_log_error(OS_LOG_DEFAULT,"NGRN_VPHAL_ROUTER_RETAINED kind=%{public}u quarantined=%{public}d",unsigned(kind),int(quarantined));
+    }
+};
+using NativeVphalRouter=TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
 struct Entry {
     using CodecOwner=NativeCodecOwner;
     // Factory table lifetime only, not the native physical context lifetime.
@@ -351,6 +363,7 @@ template class TglNativeVeboxRendererCpuStorage<TglDarwinStmmSurfaceApi,NativeRe
 template class TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhysicalDependencyLease,
     decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,NativeRendererChildAdmission,
     NativeVphalDestructorInvoker>;
+template class TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
 
 extern "C" __attribute__((visibility("default")))
 int NGRN_ObservedCreateContexts(void *context, const void *input) {
