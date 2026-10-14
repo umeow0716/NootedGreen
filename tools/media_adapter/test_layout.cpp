@@ -13518,6 +13518,24 @@ static void testSfcFilterRotation() {
     std::array<uint8_t,0xb8> packet{};
     tglPrepareOwnedSfcFilterRotation(packet,1,UINT32_MAX,0,0);
     assert(packet[0x74]==0 && packet[0x6c]==0);
+    for(uint32_t format:{1u,0x19u,0x52u,0x50u,0xdu})for(unsigned flags=0;flags<4;++flags) {
+        std::array<uint8_t,0xb8> prefix{};uint32_t siting=0;
+        tglPrepareOwnedSfcInputChroma(prefix,siting,format,bool(flags&1),bool(flags&2));
+        tglPrepareOwnedSfcFilterRotation(prefix,format,0,1,0);
+        TglOwnedSfcGen12FilterFlags captured;
+        assert(tglReadOwnedSfcGen12FilterFlags(prefix,captured));
+        TglOwnedSfcStateParametersPacket translated{};
+        tglPrepareOwnedSfcGen12FilterFields(translated,captured.rgbAdaptive,captured.eightTapChroma);
+        assert(translated[0x66]==prefix[0x66] && translated[0x6a]==prefix[0x6a]);
+    }
+    for(unsigned corrupt=0;corrupt<3;++corrupt) {
+        std::array<uint8_t,0xb8> prefix{};
+        prefix[0x66]=corrupt==0?2:corrupt==2?1:0;
+        prefix[0x6a]=corrupt==1?2:0;
+        TglOwnedSfcGen12FilterFlags unchanged{true,true};
+        assert(!tglReadOwnedSfcGen12FilterFlags(prefix,unchanged));
+        assert(unchanged.rgbAdaptive && unchanged.eightTapChroma);
+    }
 }
 
 static void testSfcAlpha() {

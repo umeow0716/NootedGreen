@@ -830,6 +830,14 @@ inline void tglPrepareOwnedSfcGen12FilterFields(
     packet[0x66]=rgbAdaptive ? 1u : 0u;
     packet[0x6a]=eightTapChroma ? 1u : 0u;
 }
+struct TglOwnedSfcGen12FilterFlags {bool rgbAdaptive=false,eightTapChroma=false;};
+// Native input-chroma1df4a4 and filter1dfd48 produce these SAME bytes.
+// Do not replace them with unrelated caller booleans at Gen12 translation.
+inline bool tglReadOwnedSfcGen12FilterFlags(const std::array<uint8_t,0xb8>& prefix,
+    TglOwnedSfcGen12FilterFlags& output) noexcept {
+    if(prefix[0x66]>1 || prefix[0x6a]>1 || (prefix[0x66] && !prefix[0x6a]))return false;
+    output={bool(prefix[0x66]),bool(prefix[0x6a])};return true;
+}
 enum class TglOwnedSfcCompressionMode : uint32_t {
     Disabled=0, Media=3, Render=4
 };

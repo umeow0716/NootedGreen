@@ -614,7 +614,7 @@ struct NativeVpNv12PacketScope {
     NativeVpNv12PacketScope& operator=(const NativeVpNv12PacketScope&)=delete;
     template<class Use> int run(TglOwnedVpSfcCallerStorage& vp,TglOwnedSfcStateParameters<CpuBackend>& state,
         TglNativeVpLineResourceStorage& lines,const TglOwnedVpEntrySet& catalogue,
-        TglOwnedSfcCommandParameters& parameters,bool rgbAdaptive,bool eightTapChroma,
+        TglOwnedSfcCommandParameters& parameters,
         bool compressionEnabled,TglOwnedSfcCompressionMode compressionMode,Use use) noexcept {
         static_assert(noexcept(use(parameters)) && std::is_same_v<decltype(use(parameters)),int>);
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
@@ -625,7 +625,9 @@ struct NativeVpNv12PacketScope {
             !lines.lines().boundToVp(vp) || &query.owner!=&targetOwner || &query.expected!=&scalar.target ||
             !targetOwner.hasSurfaceLease(scalar.target) || parameters.filtersInUse)return 5;
         TglOwnedSfcGen12Tail tail;
-        if(!tglPrepareOwnedVeboxSfcGen12Tail(prefix->packet,tail))return 5;
+        TglOwnedSfcGen12FilterFlags filters;
+        if(!tglReadOwnedSfcGen12FilterFlags(prefix->packet,filters) ||
+            !tglPrepareOwnedVeboxSfcGen12Tail(prefix->packet,tail))return 5;
         attempted=true;
         uint32_t input=0,scaled=0;
         std::memcpy(&input,prefix->packet.data()+0x30,4);std::memcpy(&scaled,prefix->packet.data()+0x4c,4);
@@ -639,7 +641,7 @@ struct NativeVpNv12PacketScope {
                 return targetOwner.withMutableSurface([&](TglOwnedSurfaceStorage& output) noexcept -> int {
                     if(&output!=&scalar.target || scalar.state()!=prefix)return 5;
                     const int prepared=tglPrepareOwnedVpLeasedSurfaceState(parameters,state,output,
-                        avs,ief,sfd,prefix->packet,tail,rgbAdaptive,eightTapChroma,
+                        avs,ief,sfd,prefix->packet,tail,filters.rgbAdaptive,filters.eightTapChroma,
                         compressionEnabled,compressionMode,query);
                     if(prepared)return prepared;
                     NativeVpPacketContext context{&scalar,&parameters};
@@ -685,8 +687,8 @@ public:
     // retains the allocations until send or qualified retirement.
     int prepare(TglOwnedVpSfcCallerStorage& vp,StateOwner& state,TglNativeVpLineResourceStorage& lines,
         const TglOwnedVpEntrySet& catalogue,TglOwnedSfcCommandParameters& parameters,
-        bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,TglOwnedSfcCompressionMode mode) noexcept {
-        const int status=run(vp,state,lines,catalogue,parameters,rgbAdaptive,eightTapChroma,compressionEnabled,mode,
+        bool compressionEnabled,TglOwnedSfcCompressionMode mode) noexcept {
+        const int status=run(vp,state,lines,catalogue,parameters,compressionEnabled,mode,
             [&](TglOwnedSfcCommandParameters& commands) noexcept -> int {
                 preparedState_=&state;preparedVp_=&vp;preparedLines_=&lines;preparedCommands_=&commands;
                 preparedData_=state.data();layout_=layout(scalar.target);
@@ -767,7 +769,7 @@ int NativeVpIefCscProducer::prepare(void* actual,const TglOwnedVpFramePreparatio
 template int NativeVpNv12PacketScope::run<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
     TglOwnedVpSfcCallerStorage&,TglOwnedSfcStateParameters<NativeVpNv12PacketScope::CpuBackend>&,
     TglNativeVpLineResourceStorage&,const TglOwnedVpEntrySet&,TglOwnedSfcCommandParameters&,
-    bool,bool,bool,TglOwnedSfcCompressionMode,int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
+    bool,TglOwnedSfcCompressionMode,int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
 template int NativeVpNv12PacketScope::withPreparedInputs<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
     int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
 struct NativeVpCommandEmission {
@@ -821,7 +823,7 @@ struct NativeVpPreparedCallbacks {
     NativeVpAvsProducer& avs;NativeVpIefCscProducer& filters;NativeVpCommandEmission& emission;
     TglOwnedVpSfcCallerStorage& vp;TglNativeVpLineResourceStorage& lines;const TglOwnedVpEntrySet& catalogue;
     TglOwnedSfcCommandParameters& commands;
-    void* renderData;bool rgbAdaptive,eightTapChroma,compressionEnabled;
+    void* renderData;bool compressionEnabled;
     TglOwnedSfcCompressionMode compressionMode;
     int error=0;
     TglOwnedVpFramePreparation capturedFrame{};
@@ -841,7 +843,7 @@ struct NativeVpPreparedCallbacks {
         int result=scalar.prepare(actual,frame,capturedGeometry);
         if(result)return fail(result);
         result=packet.prepare(vp,owner,lines,
-            catalogue,commands,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode);
+            catalogue,commands,compressionEnabled,compressionMode);
         if(!result) {capturedFrame=frame;frameCaptured=true;}
         return fail(result);
     }
@@ -915,7 +917,7 @@ public:
         const TglOwnedVpEntrySet& catalogue;
         TglOwnedVpSfcCallerStorage& vp;TglNativeVpLineResourceStorage& lines;
         void* parent;void* renderData;uintptr_t performance;
-        bool rgbAdaptive,eightTapChroma,compressionEnabled;
+        bool compressionEnabled;
         TglOwnedSfcCompressionMode compressionMode;
     };
 private:
@@ -935,7 +937,7 @@ public:
          emission_{scalar_,in.childOwner,scalar_.dataRead,in.targetOwner,in.binding,in.usage,
              in.catalogue,in.parent,nullptr,&avs_},
          callbacks_{scalar_,packet_,avs_,filters_,emission_,in.vp,in.lines,in.catalogue,
-             in.commands,in.renderData,in.rgbAdaptive,in.eightTapChroma,
+             in.commands,in.renderData,
              in.compressionEnabled,in.compressionMode} {}
     NativeVpProducerFrame(const NativeVpProducerFrame&)=delete;
     NativeVpProducerFrame& operator=(const NativeVpProducerFrame&)=delete;
@@ -961,7 +963,7 @@ public:
         const TglNativeCreatedVeboxRendererView& pinned;
         const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         TglNativeVpLineResourceStorage& lines;const TglOwnedVpEntrySet& catalogue;
-        bool rgbAdaptive,eightTapChroma,compressionEnabled;
+        bool compressionEnabled;
         TglOwnedSfcCompressionMode compressionMode;
     };
 private:
@@ -1000,7 +1002,7 @@ public:
         NativeVpProducerFrame::Inputs inputs{seed,core.sourceOwner,core.targetOwner,core.childOwner,
             avsCache_,cscCache_,commands_,commands,usage,in.catalogue,core.vp,in.lines,
             reinterpret_cast<void*>(core.child),reinterpret_cast<void*>(core.execution),performance,
-            in.rgbAdaptive,in.eightTapChroma,in.compressionEnabled,in.compressionMode};
+            in.compressionEnabled,in.compressionMode};
         NativeVpProducerFrame producers(inputs);
         static_assert(noexcept(use(producers,original)) &&
             std::is_same_v<decltype(use(producers,original)),TglOwnedVeboxCommandTransactionResult>);
