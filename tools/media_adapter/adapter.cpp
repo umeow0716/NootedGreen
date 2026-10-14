@@ -156,15 +156,17 @@ using NativeRendererCleanup=TglOwnedVeboxVpCleanupCallback<NativeRendererCleanup
 using NativeRendererCpu=TglNativeVeboxRendererCpuStorage<TglDarwinStmmSurfaceApi,NativeRendererCleanup>;
 static_assert(sizeof(NativeRendererCpu)>0 && !std::is_copy_constructible_v<NativeRendererCpu>);
 class NativeRendererCpuAssembly {
-    // Authority belongs to the enclosing creator state and outlives THIS
-    // assembly. Contexts precede CPU: child cleanup cannot outlive its context.
+    // Value-owned authority outlives contexts, which outlive CPU/child teardown.
+    // Its scope pointee must still be the creator-retained authenticated state,
+    // never a constructor-local token or a transient factory Entry.
+    NativeRendererRetirementAuthority authority_;
     NativeRendererCleanupContext firstCleanup_,secondCleanup_;
     NativeRendererCpu cpu_;
     bool cleanupBound_=false;
 public:
-    NativeRendererCpuAssembly(NativeRendererRetirementAuthority& authority,uintptr_t image,
+    NativeRendererCpuAssembly(NativeRendererRetirementAuthority authority,uintptr_t image,
         const TglNativeVphalResourceEnvironment& environment)
-        :firstCleanup_(authority),secondCleanup_(authority),
+        :authority_(authority),firstCleanup_(authority_),secondCleanup_(authority_),
          cpu_(image,&readMemory,NativeTglImageAdmission{image},&executableMemory,
             environment.resources,environment.pageSize,environment.fill,
             std::array<TglNativeTrackedCpuInvoker,2>{},
