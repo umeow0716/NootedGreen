@@ -1700,6 +1700,10 @@ public:
     }
     // Only after installing ALL eight fields into a private constructed child:
     // native non-deleting destructor12de30 then owns their paired436d0 frees.
+    // This does NOT retire resource tokens held by those shells. Distinct
+    // native-owned embedded records:12df96 reads signed count child1150,
+    //12dfb1 strides1a0 from child1158,12dfd6 invokes OS18 callback+a30.
+    // Owned cleanup must not duplicate that embedded-record release loop.
     // Never retain ownership here as well, or native teardown double-frees them.
     // Caller must hold the child/image lease and handle all returned ownership.
     std::array<uintptr_t,8> relinquishToNative() noexcept {
