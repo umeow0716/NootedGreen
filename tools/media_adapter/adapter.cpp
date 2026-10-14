@@ -1476,7 +1476,7 @@ struct NativeModeCallbackScope {
         const int status=use(mode);
         if(!selection.owner.hasPrivateChildLease(child) || selection.owner.allocationGeneration()!=generation)
             return status?status:5;
-        return status;
+        return status?status:(mode.releaseAttempted()?mode.status():0);
     }
 };
 // The context and its frame-local authority must enclose the native callback.
@@ -1540,6 +1540,37 @@ struct NativeAllocatedAdmissionRender {
             [&](NativeAllocationContext& allocation) noexcept -> int {
                 if(!allocation.owns(planner.child))return 5;
                 result=render.run();
+                return result.status;
+            });
+        if(status) {result.status=status;result.admitted=false;}
+        return result;
+    }
+};
+struct NativeModeAllocationPlan {
+    NativeSurfaceFrameBacking& storage;NativeVpLines& lines;
+    NativeSfcReleaseSelection& selection;NativeModeRetirementAuthority& retirement;
+    NativeContextSurfaceOwner& input;NativeContextSurfaceOwner& target;
+    NativeContextSurfaceOwner* secondary;NativeContextSurfaceOwner* previous;
+    NativeExecutionOwner& execution;uintptr_t report;
+    const TglOwnedSurfaceStorage& source;bool reinitializeStmm,alignDi64;
+    using Use=NativeAdmissionStages::Result(*)(void*,NativeAllocationPlanner&,NativeModeReleaseContext&) noexcept;
+    NativeAdmissionStages::Result run(void* scope,Use use) noexcept {
+        NativeAdmissionStages::Result result;
+        const auto child=reinterpret_cast<uintptr_t>(selection.child);
+        const auto generation=selection.owner.allocationGeneration();uintptr_t vp=0;
+        if(!scope || !use || !input.hasSurfaceLease(source) || !execution.hasExecutionLease(report) ||
+            !selection.owner.readLeasedStorage(child,generation,child+0x80,&vp,8) ||
+            !vp || !selection.graph.ownsStorage(reinterpret_cast<void*>(vp)))return result;
+        const int status=NativeModeCallbackScope::run(storage,lines,selection,retirement,
+            [&](NativeModeReleaseContext& mode) noexcept -> int {
+                NativeAllocationPlanner planner{storage,input,&target,secondary,previous,selection.owner,
+                    execution,selection.child,report,source,&readMemory,
+                    NativeAllocationSfcFormat{selection.owner,selection.child,reinterpret_cast<void*>(vp),generation},
+                    NativeAllocationSfcColor{selection.owner,selection.child,reinterpret_cast<void*>(vp),generation},
+                    NativeAllocationParameterKind{input,source},TglOwnedFfdiCompressionFormatQuery{},
+                    NativeAllocationRectangle{input,target,selection.owner,execution},
+                    reinitializeStmm,alignDi64,NativeDataAdmission{},NativeAllocationUnwind{mode}};
+                result=use(scope,planner,mode);
                 return result.status;
             });
         if(status) {result.status=status;result.admitted=false;}

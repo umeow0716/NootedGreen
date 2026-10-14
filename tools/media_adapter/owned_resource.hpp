@@ -26417,6 +26417,7 @@ public:
         });
         if(reentered_) status_=5;
     }
+    bool releaseAttempted() const noexcept {return attempted_;}
     int status() const noexcept {return status_;}
 };
 template<class Resolve> struct TglOwnedVeboxModeReleaseCallbacks {

@@ -11345,6 +11345,7 @@ static void testResourceBinding() {
                 }
                 using DeniedContext=TglOwnedVeboxModeReleaseContext<decltype(transaction),decltype(lines),decltype(denied)>;
                 DeniedContext deniedContext(&child,transaction,lines,true,denied);
+                assert(!deniedContext.releaseAttempted());
                 using DeniedScope=TglOwnedVeboxScopedContext<DeniedContext>;
                 using DeniedCallbacks=TglOwnedVeboxModeReleaseCallbacks<DeniedScope>;
                 static_assert(std::is_same_v<decltype(&DeniedCallbacks::freeResources),void(*)(void*) noexcept>);
@@ -11354,7 +11355,7 @@ static void testResourceBinding() {
                     DeniedCallbacks::freeResources(nullptr);DeniedCallbacks::freeResources(&lines);
                     assert(!retirementCalls);
                     DeniedCallbacks::freeResources(&child);
-                    assert(deniedContext.status()==31);
+                    assert(deniedContext.releaseAttempted() && deniedContext.status()==31);
                 }
                 assert(retirementCalls==1 && api.references==3 && lineBackend.live==initialLineLive);
                 unsigned reentryAdmissions=0;
