@@ -22263,6 +22263,50 @@ int main() {
                         ++detaches;return detachStatus;
                     };
                     TglOwnedEmbeddedVpLifetimeContext lifetime(child,*actualGraph,embedded,0,retire,detach);
+                    bool completeCatalogue=false;unsigned compositionStage=0;
+                    const int compositionStatus=embedded.withVpResources([&](auto& ownerGraph,auto& storage,auto& lines) noexcept -> int {
+                        compositionStage=1;
+                        return tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,{},
+                            [&](void*,const auto& lifecycle) noexcept -> int {
+                            compositionStage=2;
+                            return ownerGraph.withResourceCatalogue(lifecycle,lines.resources(),retire,
+                                [&](void*,const auto& resources) noexcept -> int {
+                                compositionStage=3;
+                                return tglWithOwnedVpAdmissionEntries(storage,read,
+                                    [&](void*,const auto& additions) noexcept -> int {
+                                    compositionStage=4;
+                                    auto admission=resources;
+                                    assert(tglBindOwnedVpAdmissionEntries(admission,additions));
+                                    return tglWithOwnedVpModeAssembly(storage,0x1000,0x2000,0x4000,read,admission,
+                                        [&](void*,const auto& modes) noexcept -> int {
+                                        compositionStage=5;
+                                        return tglWithOwnedVpPhaseDispatchEntries(child,modes,
+                                            [&](void*,const auto& phase,auto&,auto&) noexcept -> int {
+                                            compositionStage=6;
+                                            assert(phase.missingMask());
+                                            TglVeboxAdmissionStagesInput input;
+                                            input.leasedParamsE0=0x6000;input.leasedParamsF0=0x7000;
+                                            return ownerGraph.withSfcAdmissionCallbackAssembly(child,input,
+                                                0x1000,0x2000,0x4000,0x3000,phase,{},&completeCatalogue,read,
+                                                [](void*,const auto&,const auto&,auto&) noexcept -> int {assert(false);return 5;},
+                                                [](void*,const auto&,auto&) noexcept -> int {assert(false);return 5;},
+                                                [](void*,const auto&) noexcept {assert(false);},
+                                                [](void*,void*,void*,const auto&) noexcept -> int {assert(false);return 5;},
+                                                [&](void* p,const auto& initialized) noexcept -> int {
+                                                    assert(p==child && !initialized.missingMask());
+                                                    // Catalogue-only probe deliberately does
+                                                    // not claim a completed native SFC pass.
+                                                    completeCatalogue=true;return 31;
+                                                });
+                                            });
+                                        });
+                                    });
+                                });
+                            });
+                    });
+                    std::fprintf(stderr,"VP_NATIVE_BACKING_COMPOSITION stage=%u status=%d complete=%u\n",
+                        compositionStage,compositionStatus,unsigned(completeCatalogue));
+                    assert(compositionStatus==31 && completeCatalogue && !retireCalls && !detaches);
                     assert(embedded.withVpResources([&](auto&,auto&,auto&) noexcept -> int {
                         return tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,{},
                             [&](void* p,const auto& entries) noexcept -> int {
