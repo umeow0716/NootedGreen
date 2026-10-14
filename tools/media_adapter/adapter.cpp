@@ -1271,6 +1271,32 @@ struct NativeAdmissionFrameDataScope {
         return admitted && readMemory(address,output,bytes) && self->core.live();
     }
 };
+// Created view is borrowed from the same pinned VPHAL access callback.
+// Child8 is the proven renderer+2cb0 configuration container; only its first
+// pointer and AVS's two performance DWORDs are exposed, never a whole object.
+struct NativeRendererPerformanceRead {
+    NativeAdmissionFrameDataScope& base;const TglNativeCreatedVeboxRendererView& view;
+    NativeFrameDataRead capability() noexcept {return {this,&resolve};}
+    static bool resolve(void* context,uintptr_t address,void* output,size_t bytes) noexcept {
+        auto* self=static_cast<NativeRendererPerformanceRead*>(context);
+        if(!self || !output || !bytes || !self->base.core.live())return false;
+        if(NativeAdmissionFrameDataScope::resolve(&self->base,address,output,bytes))return true;
+        auto& core=self->base.core;
+        if(self->view.image!=core.image || !self->view.renderer || self->view.renderer>UINTPTR_MAX-0x2cb8)return false;
+        const uintptr_t slot=self->view.renderer+0x2cb0;
+        uintptr_t configured=0;
+        if(!core.childOwner.readLeasedStorage(core.child,core.generation,core.child+8,&configured,8) || configured!=slot)return false;
+        if(NativeCoreFrameDataScope::contains(slot,8,address,bytes))
+            return readMemory(address,output,bytes) && core.live();
+        uintptr_t performance=0,published=0;
+        if(!readMemory(slot,&performance,8) || !performance || performance>UINTPTR_MAX-0x10)return false;
+        std::memcpy(&published,core.vp.bytes.data()+0x9c8,8);
+        if(published!=performance || !NativeCoreFrameDataScope::contains(performance+8,8,address,bytes))return false;
+        if(!readMemory(address,output,bytes) || !core.live())return false;
+        uintptr_t after=0;std::memcpy(&published,core.vp.bytes.data()+0x9c8,8);
+        return readMemory(slot,&after,8) && after==performance && published==performance;
+    }
+};
 struct NativeAdmissionStages {
     NativeAdmissionReset& reset;NativeOutputPipeSelector& select;
     NativeAdmissionHistorySetup& history;NativeAdmissionFeatureStage& feature;
@@ -1605,7 +1631,7 @@ struct NativeVeboxFrameCapabilityScope {
             &leases.source!=&planner.source || leases.renderHal!=view.renderHal ||
             !planner.target || !planner.target->hasSurfaceLease(*leases.target) ||
             !planner.input.hasSurfaceLease(leases.source))return result;
-        const int status=assembly.cpu().withCreatorDiIecpServices(view,&readMemory,
+        const int status=assembly.cpu().withBorrowedCreatorDiIecpServices(view,&readMemory,
             NativeTglImageAdmission{view.renderer.image},&executableMemory,
             [&](const TglNativeDiIecpServices& services) noexcept -> int {
                 NativeVeboxLivePacketFrame frame{{},leases,disableTemporalDenoise,capture.capability(),capture.read,
@@ -1678,16 +1704,23 @@ struct NativeFrontendRuntimeScope {
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,Use use) noexcept {
         if constexpr(std::is_pointer_v<Use>)if(!use)return {};
-        return frontend.withCpuFrontend([&](NativeRendererCpuAssembly& cpu,auto& source,auto& target,auto& parameters) noexcept {
+        return frontend.withCpuFrontend([&](NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view,
+            auto& source,auto& target,auto& parameters) noexcept {
             if(!cpu.readyForFrontend())return TglOwnedVeboxCommandTransactionResult{};
             return tglWithOriginalFrontendOwners(roles,sourceIndex,targetIndex,source,target,temporal,
                 cpu.backing().retention(),[&](auto& input,auto& output,auto* secondary,auto* previous) noexcept {
                     TglOwnedVeboxCommandTransactionResult result;
                     const int status=cpu.withChildLifetimeScopes([&](void*,void*,auto& firstLife,auto& secondLife) noexcept -> int {
-                        static_assert(noexcept(use(cpu,input,output,secondary,previous,parameters,firstLife,secondLife)) &&
-                            std::is_same_v<decltype(use(cpu,input,output,secondary,previous,parameters,firstLife,secondLife)),
-                                TglOwnedVeboxCommandTransactionResult>);
-                        result=use(cpu,input,output,secondary,previous,parameters,firstLife,secondLife);
+                        if constexpr(std::is_nothrow_invocable_r_v<TglOwnedVeboxCommandTransactionResult,Use&,
+                            NativeRendererCpuAssembly&,const TglNativeCreatedVeboxRendererView&,decltype(input),decltype(output),
+                            decltype(secondary),decltype(previous),decltype(parameters),decltype(firstLife),decltype(secondLife)>)
+                            result=use(cpu,view,input,output,secondary,previous,parameters,firstLife,secondLife);
+                        else {
+                            static_assert(noexcept(use(cpu,input,output,secondary,previous,parameters,firstLife,secondLife)) &&
+                                std::is_same_v<decltype(use(cpu,input,output,secondary,previous,parameters,firstLife,secondLife)),
+                                    TglOwnedVeboxCommandTransactionResult>);
+                            result=use(cpu,input,output,secondary,previous,parameters,firstLife,secondLife);
+                        }
                         cpu.backing().retention().observe(result);
                         return result.status;
                     });
@@ -1699,6 +1732,7 @@ struct NativeFrontendRuntimeScope {
 };
 struct NativeRetainedFrontendRuntime {
     using Use=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeRendererCpuAssembly&,
+        const TglNativeCreatedVeboxRendererView&,
         NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
         NativeDenoiseParameters&,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept;
     static TglOwnedVeboxCommandTransactionResult run(NativeContextRendererFrame& frame,
@@ -1709,11 +1743,12 @@ struct NativeRetainedFrontendRuntime {
             frame.invalidated() || !frame.surfacesReady())return result;
         const int status=frame.withFrame([&](NativeBorrowedFrontend& frontend) noexcept -> int {
             result=NativeFrontendRuntimeScope::run(frontend,roles,sourceIndex,targetIndex,temporal,
-                [&](NativeRendererCpuAssembly& cpu,NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
+                [&](NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view,
+                    NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
                     NativeContextSurfaceOwner* secondary,NativeContextSurfaceOwner* previous,
                     NativeDenoiseParameters& parameters,NativeRendererChildLifetime& first,
                     NativeRendererChildLifetime& second) noexcept -> TglOwnedVeboxCommandTransactionResult {
-                    return use(scope,cpu,source,target,secondary,previous,parameters,first,second);
+                    return use(scope,cpu,view,source,target,secondary,previous,parameters,first,second);
                 });
             return result.status;
         });

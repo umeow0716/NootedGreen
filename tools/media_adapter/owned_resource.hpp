@@ -24854,6 +24854,15 @@ public:
     TglNativeVeboxRendererCpuStorage& operator=(const TglNativeVeboxRendererCpuStorage&)=delete;
     auto& backing() noexcept {return backing_;}
     auto& children() noexcept {return children_;}
+    template<class Read,class Qualify,class Executable,class Use>
+    int withBorrowedCreatorDiIecpServices(const TglNativeVphalMhwView& view,
+        Read read,Qualify qualify,Executable executable,Use use) noexcept {
+        // This CPU aggregate borrows the original creator's MHW; it has no
+        // separately-owned MHW lease. Enclosing VPHAL pin retains that owner.
+        TglVeboxHardwareBinding hardware;
+        if(!creatorEnvironment(view,read,qualify,executable,hardware))return 5;
+        return tglWithCreatorDiIecpServices(backing_,&hardware,view,read,qualify,executable,use);
+    }
     // Creator initialization only, before private-table/renderer publication.
     // A second-child failure leaves the first child's installed shells owned
     // by that SAME native base; retain both children for qualified teardown.
@@ -25067,15 +25076,21 @@ public:
         if(busy_ || retained_ || !surfacesReady())return result;
         busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
         bool entered=false;
-        const int status=access_(parent_,[&](auto& cpu,const auto&) noexcept -> int {
-            static_assert(noexcept(use(cpu,source_,target_,parameters_)) &&
-                std::is_same_v<decltype(use(cpu,source_,target_,parameters_)),TglOwnedVeboxCommandTransactionResult>);
+        const int status=access_(parent_,[&](auto& cpu,const auto& view) noexcept -> int {
             if(entered || cpu.backing().retention()() ||
                !cpu.children().first().owner().constructedBase() ||
                !cpu.children().second().owner().constructedBase() ||
                cpu.children().first().owner().allocationGeneration()!=generation0_ ||
                cpu.children().second().owner().allocationGeneration()!=generation1_)return 5;
-            entered=true;result=use(cpu,source_,target_,parameters_);
+            entered=true;
+            if constexpr(std::is_nothrow_invocable_r_v<TglOwnedVeboxCommandTransactionResult,Use&,
+                decltype(cpu),decltype(view),decltype(source_)&,decltype(target_)&,decltype(parameters_)&>)
+                result=use(cpu,view,source_,target_,parameters_);
+            else {
+                static_assert(noexcept(use(cpu,source_,target_,parameters_)) &&
+                    std::is_same_v<decltype(use(cpu,source_,target_,parameters_)),TglOwnedVeboxCommandTransactionResult>);
+                result=use(cpu,source_,target_,parameters_);
+            }
             if(result.writtenBack && !result.acquired && !result.status)result.status=5;
             cpu.backing().retention().observe(result);
             retained_=cpu.backing().retention()();

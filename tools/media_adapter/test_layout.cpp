@@ -24984,7 +24984,8 @@ int main() {
                                     assert(!frontend.bindCpu([](auto&&...) noexcept {assert(false);return true;}));
                                     assert(frontend.surfacesReady() && !frontend.requiresRetention());
                                     for(unsigned frame=0;frame<2;++frame) {
-                                        const auto result=frontend.withCpuFrontend([&](auto& cpu,auto& src,auto& dst,auto&) noexcept {
+                                        const auto result=frontend.withCpuFrontend([&](auto& cpu,const auto& view,auto& src,auto& dst,auto&) noexcept {
+                                            assert(view==0); // SAME scoped view supplied by access, not a re-resolved parent.
                                             assert(&cpu==cpuAddress && src.storage()==&source && dst.storage()==&target);
                                             assert(frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
                                                 assert(false);return {};
