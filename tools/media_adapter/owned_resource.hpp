@@ -7139,8 +7139,9 @@ bool tglAcquireLeasedConversionLutFeatures(SourceOwner& owner,
     Read read,TglOwnedGen12SurfaceFeatures& output) noexcept {
     if(!frame.healthy()) return false;
     TglOwnedGen12SurfaceFeatures candidate{&source,&frame};
-    const int status=owner.withLeasedConversionMetadata(source,read,
+    const int status=owner.withLeasedOptionalConversionMetadata(source,read,
         [&](uintptr_t metadata,auto bounded) noexcept -> int {
+            if(!metadata) {candidate.lut=TglOwnedFeaturePresence::Absent;return 0;}
             return tglReadLeasedConversion3dLutPresence(owner,source,metadata,bounded,candidate.lut)?0:5;
         });
     if(status || !owner.hasSurfaceLease(source) || !frame.healthy() ||
@@ -18541,6 +18542,22 @@ public:
         const int status=use(metadata,bounded);
         return valid()?status:5;
     }
+    // Optional conversion field absence is distinct from an unreadable or
+    // malformed allocation. Hold the SAME borrow/fault guard for the null case.
+    template<class Read,class Use> int withLeasedOptionalConversionMetadata(
+        const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
+        if(conversionFault_ || conversionBorrowed_ || !hasSurfaceLease(expected))return 5;
+        uintptr_t metadata=0;std::memcpy(&metadata,expected.prefix.data()+0xa8,8);
+        if(metadata)return withLeasedConversionMetadata(expected,read,use);
+        conversionBorrowed_=true;
+        struct Reset {bool& busy;~Reset(){busy=false;}} reset{conversionBorrowed_};
+        auto noRead=[](uintptr_t,void*,size_t) noexcept -> bool {return false;};
+        static_assert(noexcept(use(uintptr_t{},noRead)) && std::is_same_v<decltype(use(uintptr_t{},noRead)),int>);
+        const int status=use(0,noRead);
+        uintptr_t after=0;std::memcpy(&after,expected.prefix.data()+0xa8,8);
+        if(after || !hasSurfaceLease(expected))conversionFault_=true;
+        return conversionFault_?5:status;
+    }
     class SurfaceOwnerLease {
         TglNativeContextRootSurfaceOwner* owner_=nullptr;
     public:
@@ -18664,6 +18681,11 @@ public:
         const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
         if(!busy_ || !hasSurfaceLease(expected)) return 5;
         return owner_.withLeasedConversionMetadata(expected,read,use);
+    }
+    template<class Read,class Use> int withLeasedOptionalConversionMetadata(
+        const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
+        if(!busy_ || !hasSurfaceLease(expected))return 5;
+        return owner_.withLeasedOptionalConversionMetadata(expected,read,use);
     }
 };
 // Exact1308a0 temporal registration graph. Capacity is an OWNED retention/work
@@ -18824,6 +18846,12 @@ public:
         const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
         if(!busy_ || !hasSurfaceLease(expected)) return 5;
         const int status=slots_[0].lease->withLeasedConversionMetadata(expected,read,use);
+        return valid()?status:5;
+    }
+    template<class Read,class Use> int withLeasedOptionalConversionMetadata(
+        const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
+        if(!busy_ || !hasSurfaceLease(expected))return 5;
+        const int status=slots_[0].lease->withLeasedOptionalConversionMetadata(expected,read,use);
         return valid()?status:5;
     }
 };

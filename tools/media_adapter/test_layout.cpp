@@ -15467,6 +15467,22 @@ static void testRetainedVeboxFrames() {
                         }) && diKind==123);
                     std::memcpy(original.prefix.data()+0x138,&diSample,4);
                     assert(!sidecar.readLeasedDiParameterKind(original,diAddress,diKind,readDi) && diReads==1);
+                    const uintptr_t noConversion=0;
+                    std::memcpy(original.prefix.data()+0xa8,&noConversion,8);
+                    auto neverRead=[](uintptr_t,void*,size_t) noexcept -> bool {assert(false);return false;};
+                    assert(sidecar.withLeasedOptionalConversionMetadata(original,neverRead,
+                        [&](uintptr_t metadata,auto bounded) noexcept -> int {
+                            assert(!metadata);uint32_t word=0;
+                            assert(!bounded(1,&word,4));
+                            assert(sidecar.withLeasedOptionalConversionMetadata(original,neverRead,
+                                [](uintptr_t,auto) noexcept -> int {assert(false);return 0;})==5);
+                            return 31;
+                        })==31);
+                    TglVeboxPipeAcquisition absentLutFrame;
+                    TglOwnedGen12SurfaceFeatures absentLut;
+                    assert(tglAcquireLeasedConversionLutFeatures(sidecar,original,absentLutFrame,neverRead,absentLut));
+                    assert(absentLut.surface==&original && absentLut.frame==&absentLutFrame &&
+                        absentLut.lut==TglOwnedFeaturePresence::Absent && absentLut.hdr==TglOwnedFeaturePresence::Unknown);
                     std::array<uint8_t,0x70> conversion{};
                     const uintptr_t metadata=reinterpret_cast<uintptr_t>(conversion.data()),nestedSurface=0x334400;
                     const uint32_t mode=2;
@@ -15504,6 +15520,11 @@ static void testRetainedVeboxFrames() {
                     assert(sidecar.withLeasedConversionMetadata(original,readMetadata,useMetadata)==5 && metadataReads==2);
                     const uintptr_t zero=0;std::memcpy(original.prefix.data()+0xa8,&zero,8);
                     assert(sidecar.withLeasedConversionMetadata(original,readMetadata,useMetadata)==5 && metadataReads==2);
+                    assert(sidecar.withLeasedOptionalConversionMetadata(original,readMetadata,useMetadata)==5 && metadataReads==2);
+                    TglVeboxPipeAcquisition faultedLutFrame;
+                    auto unchangedLut=absentLut;unchangedLut.lut=TglOwnedFeaturePresence::Present;
+                    assert(!tglAcquireLeasedConversionLutFeatures(sidecar,original,faultedLutFrame,readMetadata,unchangedLut));
+                    assert(!faultedLutFrame.healthy() && unchangedLut.lut==TglOwnedFeaturePresence::Present && metadataReads==2);
                 }
                 assert(!sidecar.hasSurfaceLease(original));
                 assert(!sidecar.surfaceBinding() && !sidecar.withSurface([](const auto&) noexcept {assert(false);}));
