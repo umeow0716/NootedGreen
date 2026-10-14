@@ -17171,6 +17171,19 @@ int main() {
                         {
                             auto framePin=OwnerRouter::pinFrame(image,0x90000,ticket.generation,creatorAddress);
                             assert(framePin.get()==owner);
+                            auto siblingPin=OwnerRouter::pinFrame(image,0x90000,ticket.generation,creatorAddress);
+                            assert(siblingPin.get()==owner && !OwnerRouter::pinForInitialization(creatorAddress).get());
+                            auto useBorrowed=[&](auto& storage,const auto& view) noexcept -> int {
+                                assert(&storage.children()==&children && view.creator==creatorAddress);
+                                assert(owner->withPinnedStorage(siblingPin,creatorAdmit,qualify,ownerExecutable,producer)==5);
+                                assert(!owner->recoverDestruction([](auto&&...) noexcept {assert(false);return false;}));
+                                return 31;
+                            };
+                            assert(owner->withPinnedStorage(framePin,creatorAdmit,qualify,ownerExecutable,useBorrowed)==31);
+                            assert(owner->withPinnedStorage(siblingPin,creatorAdmit,qualify,ownerExecutable,useBorrowed)==31);
+                            decltype(framePin) emptyFramePin;
+                            assert(owner->withPinnedStorage(emptyFramePin,creatorAdmit,qualify,ownerExecutable,producer)==5);
+                            assert(!backingReleased && !ownedNativeCalls);
                             OwnerRouter::Callbacks::deletingDestroy(reinterpret_cast<void*>(creatorAddress));
                             assert(!OwnerRouter::pinForInitialization(creatorAddress).get());
                             assert(!OwnerRouter::resumePending(creatorAddress,[](uintptr_t,auto) noexcept {return true;}));

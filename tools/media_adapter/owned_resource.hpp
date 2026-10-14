@@ -22161,10 +22161,26 @@ public:
     template<class ExclusiveLease,class CreatorAdmit,class Qualify,class Executable,class Use>
     int withCreatorStorage(const ExclusiveLease& lease,CreatorAdmit admit,Qualify qualify,
         Executable executable,Use use) noexcept {
+        if(!state_ || lease.get()!=this || !lease.exclusive()) return 5;
+        return withStorageScope(false,admit,qualify,executable,use);
+    }
+    // Ordinary parent pin outlives this synchronous scope and any retained frame.
+    // CPU ownership stays in State. Serializing access is NOT GPU completion:
+    // consumer must authenticate its frame and reject/retire pending backing.
+    // Never return Storage/view pointers or release the parent pin from Use.
+    template<class ParentPin,class CreatorAdmit,class Qualify,class Executable,class Use>
+    int withPinnedStorage(const ParentPin& pin,CreatorAdmit admit,Qualify qualify,
+        Executable executable,Use use) noexcept {
+        if(!state_ || pin.get()!=this) return 5;
+        return withStorageScope(true,admit,qualify,executable,use);
+    }
+private:
+    template<class CreatorAdmit,class Qualify,class Executable,class Use>
+    int withStorageScope(bool requirePublished,CreatorAdmit admit,Qualify qualify,
+        Executable executable,Use use) noexcept {
         static_assert(noexcept(use(std::declval<Storage&>(),std::declval<const TglNativeCreatedVeboxRendererView&>())) &&
             std::is_same_v<decltype(use(std::declval<Storage&>(),
                 std::declval<const TglNativeCreatedVeboxRendererView&>())),int>);
-        if(!state_ || lease.get()!=this || !lease.exclusive()) return 5;
         bool expected=false;
         if(!state_->storageBusy.compare_exchange_strong(expected,true,std::memory_order_acquire)) return 5;
         struct Reset {std::atomic<bool>& busy;~Reset(){busy.store(false,std::memory_order_release);}} reset{state_->storageBusy};
@@ -22175,6 +22191,7 @@ public:
         TglNativeCreatedVeboxRendererView created;
         using Publication=TglOwnedVphalLifetimeTable::Publication;
         const auto publication=state_->table.publication();
+        if(requirePublished && publication!=Publication::Published) return 5;
         const bool resolved=publication==Publication::Unpublished?
             created.resolve(state_->image,state_->object,state_->read,admit,qualify,executable):
             publication==Publication::Published && created.resolveOwned(state_->image,state_->object,
