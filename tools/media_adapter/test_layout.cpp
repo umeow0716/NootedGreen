@@ -32060,6 +32060,28 @@ int main() {
                     assert(transaction.writtenBack==(acquire && publish) && transactionSetups==1 &&
                         transactionBuilds==unsigned(acquire) && transactionWrites==unsigned(acquire && publish));
                     assert(childLease.busy && !Resolve::get(actualChild));
+                    if(publish) {
+                        auto ownedRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+                            if(p==nativeImage+0x12eb80 && n==TglNativeVeboxSetupHints::constructor.size()) {
+                                std::memcpy(out,TglNativeVeboxSetupHints::constructor.data(),n);return true;
+                            }
+                            if(p==nativeImage+0x3bf90 && n==TglNativeVeboxSetupHints::destructor.size()) {
+                                std::memcpy(out,TglNativeVeboxSetupHints::destructor.data(),n);return true;
+                            }
+                            return transactionRead(p,out,n);
+                        };
+                        auto ownedExecutable=[&](uintptr_t p,size_t n) noexcept {
+                            if(p==nativeImage+0x12eb80 || p==nativeImage+0x3bf90)return true;
+                            return writebackExecutable(p,n);
+                        };
+                        const auto owned=tglWithCapturedOwnedNativeVeboxCommandTransaction(
+                            sourceLease,childLease,capturedExecution,actualChild,address,source,packets,
+                            setupBinding,binding,nativeImage,osAddress,scratch,ownedRead,qualified,ownedExecutable,
+                            acquireCommand,emitCommand,publishCommand);
+                        assert(owned.status==(acquire?emitted:31) && owned.acquired==acquire &&
+                            owned.writtenBack==acquire);
+                        for(auto byte:scratch.unusedSetupArgument)assert(!byte);
+                    }
                 }
                 for(int preparation : {0,31,-7}) for(int result : {0,31,-7}) {
                     setupResult=preparation;nativeResult=result;

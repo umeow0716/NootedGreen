@@ -26035,6 +26035,27 @@ TglOwnedVeboxCommandTransactionResult tglWithCapturedNativeVeboxCommandTransacti
         });
 }
 
+// Exact Send-owned CPU locals, followed by the SAME captured native
+// setup/builder/rewind/writeback transaction. No acquisition is fabricated.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Context,
+    class Read,class Qualify,class Executable,
+    class SetupInvoke=TglNativeVeboxSetupInvoker,class BuildInvoke=TglNativeVeboxBuilderInvoker,
+    class WritebackInvoke=TglNativeCommandHeaderWritebackInvoker>
+TglOwnedVeboxCommandTransactionResult tglWithCapturedOwnedNativeVeboxCommandTransaction(
+    SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    void* child,uintptr_t execution,const TglOwnedSurfaceStorage& source,Context& context,
+    const TglNativeVeboxSetupBinding& setup,const TglNativeVeboxBuilderBinding& builder,
+    uintptr_t image,uintptr_t os,TglOwnedVeboxBuilderScratch& scratch,
+    Read read,Qualify qualify,Executable executable,
+    SetupInvoke setupInvoke={},BuildInvoke buildInvoke={},WritebackInvoke writebackInvoke={}) noexcept {
+    if(!TglNativeVeboxSetupHints::initialize(scratch.setup,image,read,qualify,executable))return {};
+    scratch.unusedSetupArgument.fill(0);
+    return tglWithCapturedNativeVeboxCommandTransaction(sourceOwner,childOwner,executionOwner,
+        child,execution,source,context,setup,builder,image,os,scratch,
+        scratch.unusedSetupArgument.data(),read,qualify,executable,
+        setupInvoke,buildInvoke,writebackInvoke);
+}
+
 // Bind the existing native setup/builder/rewind/writeback transaction to the
 // scoped packet-context consumer ABI. Construct and invoke inside the final
 // captured surface scope; every referenced owner/scratch/source outlives it.

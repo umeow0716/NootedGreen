@@ -2643,6 +2643,24 @@ struct NativeVeboxSendSubmissionStage {
         Admit admit;AdmitChild admitChild;bool entered=false;int result=5;
     };
     using SendScope=TglOwnedScopedContext<SendContext,SendDomain>;
+    template<class SourceOwner,class ChildOwner,class ExecutionOwner,class PacketContext>
+    static int buildThenSend(SendContext& context,SourceOwner& sourceOwner,ChildOwner& childOwner,
+        ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+        const TglOwnedSurfaceStorage& source,PacketContext& packets,
+        const TglNativeVeboxSetupBinding& setup,const TglNativeVeboxBuilderBinding& builder,
+        uintptr_t os) noexcept {
+        if(context.entered || !context.pass.acceptsProducer() ||
+            !context.tail.matchesChild(reinterpret_cast<uintptr_t>(child),&readMemory))return 5;
+        context.command=tglWithCapturedOwnedNativeVeboxCommandTransaction(
+            sourceOwner,childOwner,executionOwner,child,execution,source,packets,setup,builder,
+            context.image,os,context.scratch,&readMemory,NativeTglImageAdmission{context.image},&executableMemory);
+        context.retention.observe(context.command);
+        if(context.command.status) {
+            (void)context.pass.record(context.command.status);
+            return context.command.status;
+        }
+        return send(child);
+    }
     static int send(void* child) noexcept {
         auto* context=SendScope::get(child);
         if(!context)return 5;
