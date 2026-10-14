@@ -547,6 +547,49 @@ template int NativeVpNv12PacketScope::run<int(*)(TglOwnedSfcCommandParameters&) 
     TglOwnedVpSfcCallerStorage&,TglOwnedSfcStateParameters<NativeVpNv12PacketScope::CpuBackend>&,
     TglNativeVpLineResourceStorage&,const TglOwnedVpEntrySet&,TglOwnedSfcCommandParameters&,
     bool,bool,bool,TglOwnedSfcCompressionMode,int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
+struct NativeVpCommandEmission {
+    NativeVpScalarStateProducer& scalar;NativeRendererChildOwner& childOwner;
+    NativeFrameDataRead& dataRead;NativeContextSurfaceOwner& targetOwner;
+    const TglSfcMhwBinding& binding;const TglNativeSfcOutputUsageBinding& usage;
+    const TglOwnedVpEntrySet& catalogue;
+    void* parent;void* command;NativeVpAvsProducer* avs;
+    bool attempted=false;
+    int run(void* actual,const TglOwnedVpFramePreparation& frame,
+        const TglOwnedSfcCommandParameters& parameters) noexcept {
+        const auto* packet=NativeVpPacketPublication::get(actual);
+        const auto* prefix=scalar.state();
+        if(attempted || !prefix || actual!=scalar.vp || !packet || packet->scalar!=&scalar ||
+            packet->parameters!=&parameters || &dataRead!=&scalar.dataRead || !command ||
+            !scalar.health.matchesChild(childOwner,reinterpret_cast<uintptr_t>(parent)) ||
+            !targetOwner.hasSurfaceLease(scalar.target) || binding.image!=scalar.image || !catalogue.platformSend ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(catalogue.platformSend),1))return 5;
+        const uint8_t scaling=frame.regions.scale.scaling,forceAvs=frame.color.at9b8;
+        const uint8_t ief=frame.at922,csc=frame.at920;
+        if(((scaling|forceAvs)&1) && (!avs || !avs->ready || &avs->scalar!=&scalar ||
+            &avs->parameters!=&parameters))return 5;
+        if(((ief|csc)&1) && !parameters.filtersInUse)return 5;
+        uintptr_t os=0,renderHal=0,mhw=0,renderArgument=0;
+        const auto vp=reinterpret_cast<uintptr_t>(actual);
+        if(vp>UINTPTR_MAX-0x28 || !dataRead(vp+0x10,&os,8) || !dataRead(vp+0x18,&renderHal,8) ||
+            !dataRead(vp+0x20,&mhw,8) || !os || !mhw || !renderHal || renderHal>UINTPTR_MAX-0x20 ||
+            !dataRead(renderHal+0x18,&renderArgument,8) || !usage.matches(scalar.image,os))return 5;
+        auto platform=[&](std::array<uint8_t,0x38>& descriptor) noexcept -> int {
+            if(scalar.state()!=prefix || !targetOwner.hasSurfaceLease(scalar.target))return 5;
+            // Qualified owned callback reproduces the proven six-argument
+            // no-op ABI; not a fabricated generic platform-success callback.
+            const int status=catalogue.platformSend(actual,reinterpret_cast<void*>(mhw),
+                reinterpret_cast<void*>(renderArgument),reinterpret_cast<void*>(os),descriptor.data(),command);
+            return status?status:(scalar.state()==prefix?0:5);
+        };
+        attempted=true;TglNativeSfcCommandInvoker invoke;
+        const int status=tglSendOwnedVeboxSfcNativeOutputCommandsWithReaders(childOwner,parent,binding,
+            command,invoke,usage,parameters,scalar.target,scalar.settings,scaling,forceAvs,ief,csc,
+            dataRead,&readMemory,platform);
+        // Any failure after command entry requires the enclosing frame's
+        // qualified discard/retention. Never submit/discard/retire here.
+        return status?status:(scalar.state()==prefix && targetOwner.hasSurfaceLease(scalar.target)?0:5);
+    }
+};
 struct NativeTwoPassCscHealth {
     NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
     NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;

@@ -12804,6 +12804,10 @@ public:
         uintptr_t linked=0;std::memcpy(&linked,reinterpret_cast<const uint8_t*>(child_)+0x80,8);
         return linked==vp;
     }
+    bool matchesChild(const ChildOwner& owner,uintptr_t child) const noexcept {
+        return &owner==&childOwner_ && child==child_ &&
+            (*this)(reinterpret_cast<uintptr_t>(&source_),reinterpret_cast<uintptr_t>(&target_));
+    }
 };
 
 // Original surface/report bytes only. Extra must independently authenticate
@@ -14315,6 +14319,21 @@ int tglSendOwnedSfcNativeOutputCommands(const TglNativeSfcOutputUsageBinding& us
 // Native output usage and command emission share the private parent and SFC
 // reservation. OS/image/output ownership must cover this complete scope;
 // usage registration is not an asynchronous retain or completion proof.
+template<class Owner,class CommandInvoke,class Read,class NativeRead,class Platform,class Surface,
+    class UsageInvoke=TglNativeSfcOutputUsageInvoker>
+int tglSendOwnedVeboxSfcNativeOutputCommandsWithReaders(Owner& owner,void* parent,
+    const TglSfcMhwBinding& binding,void* command,CommandInvoke& invoke,
+    const TglNativeSfcOutputUsageBinding& usage,const TglOwnedSfcCommandParameters& parameters,
+    const Surface& shell,uintptr_t settings,uint8_t scaling,uint8_t forceAvs,
+    uint8_t ief,uint8_t csc,Read read,NativeRead nativeRead,Platform& platform,UsageInvoke usageInvoke=UsageInvoke{}) noexcept {
+    return owner.withLeasedSfcCommandSequence(parent,binding,command,invoke,
+        [&](auto& native) noexcept {
+            if(!native.matchesOutputUsage(usage)) return 5;
+            TglStateQualifiedSfcBackend<decltype(native),NativeRead> qualified(native,nativeRead);
+            return tglSendOwnedSfcNativeOutputCommands(usage,qualified,parameters,shell,
+                settings,scaling,forceAvs,ief,csc,read,platform,usageInvoke);
+        });
+}
 template<class Owner,class CommandInvoke,class Read,class Platform,class Surface,
     class UsageInvoke=TglNativeSfcOutputUsageInvoker>
 int tglSendOwnedVeboxSfcNativeOutputCommands(Owner& owner,void* parent,
@@ -14322,13 +14341,10 @@ int tglSendOwnedVeboxSfcNativeOutputCommands(Owner& owner,void* parent,
     const TglNativeSfcOutputUsageBinding& usage,const TglOwnedSfcCommandParameters& parameters,
     const Surface& shell,uintptr_t settings,uint8_t scaling,uint8_t forceAvs,
     uint8_t ief,uint8_t csc,Read read,Platform& platform,UsageInvoke usageInvoke=UsageInvoke{}) noexcept {
-    return owner.withLeasedSfcCommandSequence(parent,binding,command,invoke,
-        [&](auto& native) noexcept {
-            if(!native.matchesOutputUsage(usage)) return 5;
-            TglStateQualifiedSfcBackend<decltype(native),Read> qualified(native,read);
-            return tglSendOwnedSfcNativeOutputCommands(usage,qualified,parameters,shell,
-                settings,scaling,forceAvs,ief,csc,read,platform,usageInvoke);
-        });
+    // Compatibility caller explicitly supplied a combined capability. Actual
+    // product composition uses WithReaders to keep frame/native reads apart.
+    return tglSendOwnedVeboxSfcNativeOutputCommandsWithReaders(owner,parent,binding,command,invoke,
+        usage,parameters,shell,settings,scaling,forceAvs,ief,csc,read,read,platform,usageInvoke);
 }
 // Native send1e0e56..1e0eb5 uses OS+128(resource,6,1), then optional
 // OS+130(resource,6) when surface+e8 bit0 is set. Neither result is read.

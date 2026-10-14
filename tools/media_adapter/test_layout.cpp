@@ -26587,6 +26587,8 @@ int main() {
                                                 const auto originalTarget=reinterpret_cast<uintptr_t>(packets.target);
                                                 assert(stateHealth(originalSource,originalTarget) && stateHealth.qualifiesImage(base));
                                                 assert(stateHealth.qualifiesVp(reinterpret_cast<uintptr_t>(activeVp)));
+                                                assert(stateHealth.matchesChild(activeOwner,reinterpret_cast<uintptr_t>(activeChild)));
+                                                assert(!stateHealth.matchesChild(activeOwner,reinterpret_cast<uintptr_t>(activeChild)+8));
                                                 assert(!stateHealth.qualifiesVp(0) &&
                                                     !stateHealth.qualifiesVp(reinterpret_cast<uintptr_t>(activeVp)+8));
                                                 assert(!stateHealth(originalSource+8,originalTarget) && !stateHealth.qualifiesImage(base+1));
@@ -27861,11 +27863,27 @@ int main() {
                         ++usages;owner.reset();assert(cpu.live && !eventCount);
                     };
                     commandInvoke.failureEntry=0;commandInvoke.calls=0;
+                    unsigned frameReads=0,nativeReads=0;
+                    auto frameOnly=[&](uintptr_t address,void* dst,size_t size) noexcept {
+                        ++frameReads;
+                        if(address!=0x900013 && address!=0x90000b)return false;
+                        return outputRead(address,dst,size);
+                    };
+                    auto nativeOnly=[&](uintptr_t address,void* dst,size_t size) noexcept {
+                        ++nativeReads;
+                        if(address==0x900013 || address==0x90000b)return false;
+                        return outputRead(address,dst,size);
+                    };
                     assert(owner.withPrivateChild([&](void* parent) noexcept {
-                        return tglSendOwnedVeboxSfcNativeOutputCommands(owner,parent,commandBinding,&command,
-                            commandInvoke,usage,prepared,output,0x900000,1,0,1,0,outputRead,platform,useOutput);
+                        return tglSendOwnedVeboxSfcNativeOutputCommandsWithReaders(owner,parent,commandBinding,&command,
+                            commandInvoke,usage,prepared,output,0x900000,1,0,1,0,frameOnly,nativeOnly,platform,useOutput);
                     })==0);
-                    assert(usages==1 && commandInvoke.calls==7);
+                    assert(usages==1 && commandInvoke.calls==7 && frameReads && nativeReads);
+                    commandInvoke.calls=0;
+                    assert(owner.withPrivateChild([&](void* parent) noexcept {
+                        return tglSendOwnedVeboxSfcNativeOutputCommandsWithReaders(owner,parent,commandBinding,&command,
+                            commandInvoke,usage,prepared,output,0x900000,1,0,1,0,nativeOnly,frameOnly,platform,useOutput);
+                    })==5 && usages==1 && !commandInvoke.calls);
                     TglNativeSfcOutputUsageBinding foreignUsage;
                     const auto foreignOs=os+0x1000;
                     auto foreignRead=[&](uintptr_t address,void* dst,size_t size) noexcept {
