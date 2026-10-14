@@ -474,6 +474,21 @@ struct NativePhysicalBackend {
             return use(scope,ticket.generation);
         });
     }
+    template<class Native> static int createContexts(uintptr_t physical,const void* input,Native nativeCreate) noexcept {
+        using AdoptionScope=typename NativePhysicalRegistry::DependencyAdoptionScope;
+        static_assert(noexcept(nativeCreate(uintptr_t{},uintptr_t{},input,std::declval<AdoptionScope&>())) &&
+            std::is_same_v<decltype(nativeCreate(uintptr_t{},uintptr_t{},input,std::declval<AdoptionScope&>())),int>);
+        if constexpr(std::is_pointer_v<Native>)if(!nativeCreate)return 5;
+        TglNativePhysicalCallbackBinding native;
+        if(!physical || !input || !binding(native))return 5;
+        const auto ticket=registry().lookup(native.image,physical);
+        if(!ticket.generation)return 5;
+        NativePhysicalCallbacks callbacks(registry(),native,&readMemory,NativeTglImageAdmission{native.image},&executableMemory);
+        return callbacks.createContextsAndAdoptBatchScoped(ticket,physical,input,
+            [](AdoptionScope& scope,uintptr_t address,const NativeCodecBackend::Batch& batch) noexcept -> int {
+                return NativeCodecBackend::adopt(scope,address,batch);
+            },nativeCreate);
+    }
 };
 struct Entry {
     using CodecOwner=NativeCodecOwner;
@@ -771,6 +786,9 @@ template class TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,
     decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory)>;
 template int NativePhysicalBackend::withScope<int(*)(NativePhysicalFrameScope&,uint64_t) noexcept>(
     uintptr_t,int(*)(NativePhysicalFrameScope&,uint64_t) noexcept) noexcept;
+using NativeScopedContextCreate=int(*)(uintptr_t,uintptr_t,const void*,NativePhysicalRegistry::DependencyAdoptionScope&) noexcept;
+template int NativePhysicalBackend::createContexts<NativeScopedContextCreate>(
+    uintptr_t,const void*,NativeScopedContextCreate) noexcept;
 using NativeFrontendResolve=NativeContextSurfaceOwner*(*)(uintptr_t) noexcept;
 using NativeFrontendConsumer=TglOwnedVeboxCommandTransactionResult(*)(NativeRendererCpuAssembly&,
     NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
