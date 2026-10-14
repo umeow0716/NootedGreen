@@ -12799,6 +12799,11 @@ public:
     bool qualifiesImage(uintptr_t image) const noexcept {
         return image==image_ && (*this)(reinterpret_cast<uintptr_t>(&source_),reinterpret_cast<uintptr_t>(&target_));
     }
+    bool qualifiesVp(uintptr_t vp) const noexcept {
+        if(!vp || !(*this)(reinterpret_cast<uintptr_t>(&source_),reinterpret_cast<uintptr_t>(&target_)))return false;
+        uintptr_t linked=0;std::memcpy(&linked,reinterpret_cast<const uint8_t*>(child_)+0x80,8);
+        return linked==vp;
+    }
 };
 
 // Original surface/report bytes only. Extra must independently authenticate

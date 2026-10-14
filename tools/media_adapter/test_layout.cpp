@@ -26586,6 +26586,9 @@ int main() {
                                                 const auto originalSource=reinterpret_cast<uintptr_t>(&packets.source);
                                                 const auto originalTarget=reinterpret_cast<uintptr_t>(packets.target);
                                                 assert(stateHealth(originalSource,originalTarget) && stateHealth.qualifiesImage(base));
+                                                assert(stateHealth.qualifiesVp(reinterpret_cast<uintptr_t>(activeVp)));
+                                                assert(!stateHealth.qualifiesVp(0) &&
+                                                    !stateHealth.qualifiesVp(reinterpret_cast<uintptr_t>(activeVp)+8));
                                                 assert(!stateHealth(originalSource+8,originalTarget) && !stateHealth.qualifiesImage(base+1));
                                                 TglLeasedVpStateFrameHealth wrongReport(activeOwner,executionLease,activeSource,activeTarget,
                                                     activeChild,packets.execution+8,base,os,packets.source,*packets.target);

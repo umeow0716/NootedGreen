@@ -346,6 +346,45 @@ using NativeFrontendAccess=TglPinnedVphalStorageAccess<NativeDataAdmission,Nativ
 using NativeFrontendEnvironment=TglNativeFrontendCpuEnvironment<decltype(&readMemory),NativeTglImageAdmission,
     decltype(&executableMemory)>;
 using NativeContextSurfaceOwner=typename TglNativeContextSurfaceOwners<NativeCodecBackend::Registry>::Owner;
+using NativeVpStateHealth=TglLeasedVpStateFrameHealth<NativeRendererChildOwner,NativeExecutionOwner,
+    NativeContextSurfaceOwner,NativeContextSurfaceOwner>;
+struct NativeVpScalarStateProducer {
+    NativeVpStateHealth& health;NativeFrameDataRead& dataRead;
+    const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
+    const TglFillCscBinding& fill;const TglNativeVpCompressionBinding& compression;
+    TglOwnedSfcFillCache& cache;
+    uintptr_t image,settings,conditionalSource,alpha;void* vp;
+    TglOwnedVpChromaStatePrefix produced{};
+    bool attempted=false,ready=false,busy=false;
+    // The initialized graph supplies frame/geometry to its scoped State
+    // callback. This is ONLY scalar/prefix production, not a complete Gen12
+    // packet: resource allocation/binding and command emission must follow.
+    int prepare(void* actual,const TglOwnedVpFramePreparation& frame,
+        const TglOwnedVpRegionInput& geometry) noexcept {
+        if(attempted || busy || !vp || actual!=vp || !settings || !dataRead.scope || !dataRead.resolve ||
+            !health.qualifiesImage(image) || !health.qualifiesVp(reinterpret_cast<uintptr_t>(vp)))return 5;
+        attempted=busy=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy};
+        const auto sourceAddress=reinterpret_cast<uintptr_t>(&source);
+        const auto targetAddress=reinterpret_cast<uintptr_t>(&target);
+        if(!health(sourceAddress,targetAddress))return 5;
+        auto candidateCache=cache;TglOwnedVpChromaStatePrefix candidate;
+        const int status=tglPrepareNativeLeasedOwnedVpCpuState(frame,geometry,sourceAddress,target,
+            settings,conditionalSource,alpha,fill,compression,dataRead,&readMemory,
+            NativeTglImageAdmission{image},&executableMemory,
+            [&](uintptr_t s,uintptr_t t) noexcept {return health(s,t) && health.qualifiesImage(image) &&
+                health.qualifiesVp(reinterpret_cast<uintptr_t>(vp));},
+            candidateCache,candidate);
+        if(status)return status;
+        if(!health(sourceAddress,targetAddress) || !health.qualifiesImage(image) ||
+            !health.qualifiesVp(reinterpret_cast<uintptr_t>(vp)))return 5;
+        cache=candidateCache;produced=candidate;ready=true;return 0;
+    }
+    const TglOwnedVpChromaStatePrefix* state() const noexcept {
+        return ready && !busy && health.qualifiesImage(image) &&
+            health.qualifiesVp(reinterpret_cast<uintptr_t>(vp))?&produced:nullptr;
+    }
+};
 struct NativeTwoPassCscHealth {
     NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
     NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
