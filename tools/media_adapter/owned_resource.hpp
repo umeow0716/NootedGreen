@@ -7914,6 +7914,18 @@ public:
         use(static_cast<const TglOwnedSurfaceStorage&>(storage_));return true;
     }
     void reset() noexcept {if(!busy_) {storage_={};ready_=false;ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdiSecondary_=nullptr;ffdnSource_=nullptr;}}
+    template<class Use> int withReleaseReservation(Use use) noexcept {
+        if(busy_)return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} resetBusy{busy_};
+        bool released=false;
+        auto release=[&]() noexcept {
+            if(released)return;
+            released=true;storage_={};ready_=false;
+            ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdiSecondary_=nullptr;ffdnSource_=nullptr;
+        };
+        static_assert(noexcept(use(release)) && std::is_same_v<decltype(use(release)),int>);
+        return use(release);
+    }
 };
 
 // ICL1f7eba..1f7fb1 data policy only, not its virtual-base object ABI.
@@ -8345,6 +8357,21 @@ public:
         ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdiSecondary_=nullptr;resource_.reset();
         surface_.prefix.fill(0);surface_.tail.fill(0);busy_=false;
         effectiveKey_={};
+    }
+    // Reserve all owners before external retirement admission. This supplies
+    // exclusion only, NOT proof of GPU completion or permission to release.
+    template<class Use> int withReleaseReservation(Use use) noexcept {
+        if(!admitted_ || busy_ || rectangleBusy_)return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} resetBusy{busy_};
+        bool released=false;
+        auto release=[&]() noexcept {
+            if(released)return;
+            released=true;ready_=false;ffdnSource_=nullptr;
+            ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdiSecondary_=nullptr;
+            resource_.reset();surface_.prefix.fill(0);surface_.tail.fill(0);effectiveKey_={};
+        };
+        static_assert(noexcept(use(release)) && std::is_same_v<decltype(use(release)),int>);
+        return use(release);
     }
 };
 // Normalize heterogeneous frontend owners ONLY while their original scopes

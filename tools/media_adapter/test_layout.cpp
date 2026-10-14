@@ -156,6 +156,22 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        TglOwnedDescriptorOnlySurface descriptor;
+        TglOwnedFfdiAllocationRequest request;
+        request.type=1;request.kind=TglOwnedFfdiAllocationKind::DescriptorOnly;
+        request.key={64,32,0x19,1,0,false};bool changed=false;
+        assert(descriptor.prepare(request,changed) && changed);
+        assert(descriptor.withReleaseReservation([&](auto) noexcept -> int {
+            assert(descriptor.withReleaseReservation([](auto) noexcept -> int {assert(false);return 0;})==5);
+            descriptor.reset();assert(!descriptor.prepare(request,changed));return 31;
+        })==31);
+        assert(descriptor.withDescriptor([&](const auto&) noexcept {
+            assert(descriptor.withReleaseReservation([](auto) noexcept -> int {assert(false);return 0;})==5);
+        }));
+        assert(descriptor.withReleaseReservation([](auto release) noexcept -> int {release();release();return 0;})==0);
+        assert(!descriptor.withDescriptor([](const auto&) noexcept {assert(false);}));
+    }
+    {
         for(unsigned scenario=0;scenario<5;++scenario) {
             TestFeatureSurfaceOwner input,output;
             input.storage.prefix.fill(0x31);output.storage.prefix.fill(0xa7);
@@ -19054,6 +19070,7 @@ int main() {
                 assert(owner.ensure(key)==5 && backend.allocated==1);
                 assert(!owner.withSurface([](const auto&) noexcept {assert(false);}));
                 assert(persistent.storage()==&shell);
+                assert(owner.withReleaseReservation([](auto) noexcept -> int {assert(false);return 0;})==5);
             }
             assert(owner.surface()==&shell && !owner.hasSurfaceLease(shell));
             assert(owner.withSurface([&](const auto& surface) noexcept {
@@ -19061,7 +19078,13 @@ int main() {
                 owner.reset();assert(backend.released==0);
                 assert(owner.ensure(key)==5);
             }));
-            owner.reset();assert(backend.released==1 && !owner.surface());
+            assert(owner.withReleaseReservation([&](auto) noexcept -> int {
+                assert(owner.withReleaseReservation([](auto) noexcept -> int {assert(false);return 0;})==5);
+                owner.reset();assert(!backend.released && owner.ensure(key)==5);return 31;
+            })==31);
+            assert(owner.surface()==&shell && !backend.released);
+            assert(owner.withReleaseReservation([](auto release) noexcept -> int {release();release();return 0;})==0);
+            assert(backend.released==1 && !owner.surface());
             for(auto byte:shell.prefix) assert(!byte);
             backend.result=77;
             assert(owner.ensure(key)==77 && backend.released==2 && !owner.surface());
