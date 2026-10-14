@@ -15619,6 +15619,35 @@ static void testRetainedVeboxFrames() {
                     assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {
                         uintptr_t actual=0;std::memcpy(&actual,original.prefix.data()+0x90,8);
                         assert(actual==dnAddress && dn.hasNativeReleaseSlot(original.prefix.data()+0x90));
+                        {
+                            struct Backend {
+                                uintptr_t allocate(size_t n) noexcept {return reinterpret_cast<uintptr_t>(std::malloc(n));}
+                                void release(uintptr_t p) noexcept {std::free(reinterpret_cast<void*>(p));}
+                            } backend;
+                            TglNativePerPassCpuShells<Backend> temporary(backend);
+                            std::array<const TglOwnedSurfaceStorage*,25> inputs{};inputs[0]=&original;
+                            assert(temporary.prepare(inputs));
+                            assert(temporary.withDerivedSurfaceLease(0,sidecar,[&](auto& derived) noexcept {
+                                return derived.withMutableSurface([&](auto& copy) noexcept {
+                                    uint8_t request=99;unsigned reads=0;
+                                    auto read=[&](uintptr_t at,void* out,size_t n) noexcept {
+                                        assert(at==dnAddress && n==1);++reads;
+                                        std::memcpy(out,reinterpret_cast<void*>(at),n);return true;
+                                    };
+                                    assert(derived.readLeasedDenoiseRequest(copy,dn,request,read) && request==0xd5 && reads==1);
+                                    request=99;
+                                    assert(!derived.readLeasedDenoiseRequest(copy,dn,request,
+                                        [&](uintptr_t at,void* out,size_t n) noexcept {
+                                            const bool ok=read(at,out,n);std::memset(copy.prefix.data()+0x90,0,8);return ok;
+                                        }) && request==99 && reads==2);
+                                    std::memcpy(copy.prefix.data()+0x90,&dnAddress,8);
+                                    assert(!derived.readLeasedDenoiseRequest(copy,dn,request,read) && request==99 && reads==2);
+                                    assert(dn.hasNativeReleaseSlot(original.prefix.data()+0x90));
+                                    assert(!dn.hasNativeReleaseSlot(copy.prefix.data()+0x90));
+                                    return 31;
+                                });
+                            })==31);
+                        }
                         TglOwnedSurfaceStorage metadataA,metadataB;
                         const std::array<TglOwnedSurfaceStorage*,2> metadata{&metadataA,&metadataB};
                         assert(sidecar.withBorrowedDenoiseMetadataGroup(original,dn,metadata,

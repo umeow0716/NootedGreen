@@ -7196,7 +7196,7 @@ public:
     template<class Owner> class DerivedSurfaceLease {
         friend class TglNativePerPassCpuShells;
         TglNativePerPassCpuShells& temporary_;Owner& original_;
-        size_t index_;uint64_t generation_;bool busy_=false,conversionFault_=false,diFault_=false;
+        size_t index_;uint64_t generation_;bool busy_=false,conversionFault_=false,diFault_=false,dnFault_=false;
         DerivedSurfaceLease(TglNativePerPassCpuShells& temporary,Owner& original,size_t index) noexcept
             :temporary_(temporary),original_(original),index_(index),generation_(temporary.generation_) {}
     public:
@@ -7209,6 +7209,31 @@ public:
         }
         bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
             return live() && temporary_.shells_[index_]==reinterpret_cast<uintptr_t>(&surface);
+        }
+        // Read-only request borrowing during the ORIGINAL tracked native DN
+        // release-slot scope. Does not grant a second native-release slot or
+        // allow the temporary copy to free/replace the shared DN allocation.
+        template<class Parameters,class Read> bool readLeasedDenoiseRequest(
+            const TglOwnedSurfaceStorage& expected,const Parameters& parameters,
+            uint8_t& output,Read read) noexcept {
+            if(dnFault_ || !hasSurfaceLease(expected))return false;
+            uintptr_t captured=0;std::memcpy(&captured,expected.prefix.data()+0x90,8);
+            auto valid=[&]() noexcept {
+                if(!hasSurfaceLease(expected))return false;
+                uintptr_t temporary=0,original=0;
+                std::memcpy(&temporary,expected.prefix.data()+0x90,8);
+                std::memcpy(&original,temporary_.originals_[index_]->prefix.data()+0x90,8);
+                if(temporary!=captured)dnFault_=true;
+                return !dnFault_ && original==captured;
+            };
+            if(!valid())return false;
+            uint8_t candidate=0;
+            const bool copied=original_.readLeasedDenoiseRequest(*temporary_.originals_[index_],parameters,candidate,
+                [&](uintptr_t at,void* out,size_t size) noexcept {
+                    return valid() && read(at,out,size) && valid();
+                });
+            if(!copied || !valid())return false;
+            output=candidate;return true;
         }
         template<class Read> bool readLeasedDiParameterKind(const TglOwnedSurfaceStorage& expected,
             uintptr_t parameter,uint32_t& output,Read read) noexcept {
