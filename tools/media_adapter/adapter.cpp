@@ -3217,6 +3217,44 @@ struct NativeRetainedTemporaryExecution {
         return NativeRetainedFrontendRuntime::runUnselected(frame,request.roles,request.sourceIndex,request.targetIndex,
             &request,&consume);
     }
+    struct CallbackDomain;
+    struct CallbackContext {
+        NativeContextRendererFrame& frame;Request& request;uintptr_t renderer;
+        bool entered=false;int callbackError=0;TglOwnedVeboxCommandTransactionResult result{};
+    };
+    using CallbackScope=TglOwnedScopedContext<CallbackContext,CallbackDomain>;
+    // Exact1b1ed0 ABI: renderer, ORIGINAL outer parameters, ORIGINAL pass.
+    // Native ignores the+50 status in131520; caller must retain the full result
+    // below rather than treating native outer success as pass completion.
+    static int temporaryPass(void* renderer,void* parameters,void* pass) noexcept {
+        auto* context=CallbackScope::get(renderer);
+        if(!context)return 5;
+        auto reject=[&]() noexcept -> int {if(!context->callbackError)context->callbackError=5;return 5;};
+        if(context->entered || context->renderer!=reinterpret_cast<uintptr_t>(renderer))return reject();
+        context->entered=true;
+        auto& request=context->request;
+        if(parameters!=request.parameters.data() || pass!=request.pass.data() ||
+            request.view.renderer.renderer!=context->renderer || request.attempted || request.consumed) return reject();
+        context->result=runRetained(context->frame,request);
+        return context->result.status;
+    }
+    using ScopedNativeCall=int(*)(void*,int(*)(void*,void*,void*) noexcept) noexcept;
+    static TglOwnedVeboxCommandTransactionResult withNativeCall(NativeContextRendererFrame& frame,
+        Request& request,void* callContext,ScopedNativeCall call) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        const auto renderer=request.view.renderer.renderer;
+        if(!renderer || !callContext || !call || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(call),1) ||
+            request.attempted || request.consumed || frame.invalidated() || !frame.surfacesReady())return result;
+        CallbackContext context{frame,request,renderer,false,0,{}};
+        CallbackScope scope(reinterpret_cast<void*>(renderer),context);
+        if(!scope.bound())return result;
+        const int nativeStatus=call(callContext,&temporaryPass);
+        if(!context.entered || !request.consumed) {result.status=nativeStatus?nativeStatus:5;return result;}
+        result=context.result;
+        if(!result.status && context.callbackError)result.status=context.callbackError;
+        if(!result.status && nativeStatus)result.status=nativeStatus;
+        return result;
+    }
 };
 // Callback table entries carry no Entry/closure argument. Route the immutable
 // qualified native image and actual physical generation, never "current Entry".
