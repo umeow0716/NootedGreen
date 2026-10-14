@@ -2441,6 +2441,19 @@ struct NativeRetainedFrontendRuntime {
         void* context;Use use;
     };
     using AdmissionInputUse=int(*)(void*,const NativeAdmissionFrameAssembly::Inputs&) noexcept;
+    using PacketInputUse=int(*)(void*,TglOwnedVeboxPacketLeases&) noexcept;
+    static int withPacketInputs(VpFrontend& frontend,NativeCoreFrameDataScope& core,
+        void* context,PacketInputUse use) noexcept {
+        if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
+            frontend.childIndex>1 || !core.live() || frontend.pinned.image!=core.image ||
+            frontend.pinned.originalChildren[frontend.childIndex]!=core.child ||
+            frontend.assembly.backing().retention()())return 5;
+        const int status=tglWithOriginalVeboxPacketLeases(core.sourceOwner,core.source,core.targetOwner,core.target,
+            frontend.assembly.backing().command(),core.child,core.execution,
+            frontend.interfaces.renderHal,frontend.interfaces.sku,
+            [&](TglOwnedVeboxPacketLeases& leases) noexcept -> int {return use(context,leases);});
+        return status?status:core.live()?0:5;
+    }
     using AllocationInputUse=int(*)(void*,NativeModeAllocationPlan&) noexcept;
     static int withAllocationInputs(VpFrontend& frontend,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
         TglNativeVpLineResourceStorage& lines,bool reinitializeStmm,bool alignDi64,

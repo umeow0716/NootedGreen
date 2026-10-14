@@ -17578,6 +17578,36 @@ struct TglOwnedVeboxPacketLeases {
     TglOwnedVeboxStateStorage& state;
     TglOwnedDiIecpPacket& diIecp;
 };
+// Bind references to retained ORIGINAL roots, then end the short mutable
+// binding loans before policy/Render. This is not write authority: state
+// normalization must acquire its own scoped mutable-root borrow at use.
+template<class SourceOwner,class TargetOwner,class Command,class Use>
+int tglWithOriginalVeboxPacketLeases(SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,
+    TargetOwner& targetOwner,const TglOwnedSurfaceStorage& target,Command& command,
+    uintptr_t child,uintptr_t execution,uintptr_t renderHal,uintptr_t sku,Use use) noexcept {
+    static_assert(noexcept(use(std::declval<TglOwnedVeboxPacketLeases&>())) &&
+        std::is_same_v<decltype(use(std::declval<TglOwnedVeboxPacketLeases&>())),int>);
+    if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+    if(!child || !execution)return 5;
+    struct Bound {
+        alignas(TglOwnedVeboxPacketLeases) std::array<uint8_t,sizeof(TglOwnedVeboxPacketLeases)> storage{};
+        TglOwnedVeboxPacketLeases* value=nullptr;
+        ~Bound(){if(value)value->~TglOwnedVeboxPacketLeases();}
+    } bound;
+    const int captured=tglWithMutableVeboxPacketRoots(sourceOwner,source,targetOwner,target,
+        [&](TglOwnedSurfaceStorage& original,TglOwnedSurfaceStorage& peer) noexcept -> int {
+            bound.value=::new(static_cast<void*>(bound.storage.data())) TglOwnedVeboxPacketLeases(
+                command.packetLeases(child,execution,renderHal,sku,original,&peer));
+            return 0;
+        });
+    if(captured)return captured;
+    auto* leases=bound.value;
+    if(!leases || leases->child!=child || leases->execution!=execution || leases->renderHal!=renderHal ||
+        leases->sku!=sku || &leases->source!=&source || leases->target!=&target ||
+        !sourceOwner.hasSurfaceLease(source) || !targetOwner.hasSurfaceLease(target))return 5;
+    const int status=use(*leases);
+    return sourceOwner.hasSurfaceLease(source) && targetOwner.hasSurfaceLease(target)?status:5;
+}
 // Exact Submit12a230 stack extents. setup is produced by native slot128;
 // completion is written by builder138. Neither is an OS resource descriptor.
 struct TglOwnedVeboxBuilderScratch {

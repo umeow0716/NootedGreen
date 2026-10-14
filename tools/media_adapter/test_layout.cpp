@@ -15524,6 +15524,30 @@ static void testRetainedVeboxFrames() {
                     assert(tglWithMutableVeboxPacketRoots(sidecar,original,sidecar,foreignPacketRoot,
                         [](auto&,auto&) noexcept -> int {assert(false);return 0;})==5);
                     assert(sidecar.withMutableSurface([](auto&) noexcept -> int {return 0;})==0);
+                    struct PacketBindingCommand {
+                        TglOwnedSurfaceInputs surfaces;TglOwnedVeboxStateStorage state;TglOwnedDiIecpPacket di;
+                        bool foreign=false;
+                        TglOwnedVeboxPacketLeases packetLeases(uintptr_t child,uintptr_t report,uintptr_t hal,
+                            uintptr_t sku,TglOwnedSurfaceStorage& source,TglOwnedSurfaceStorage* target) noexcept {
+                            return {foreign?child+8:child,report,hal,sku,source,target,surfaces,state,di};
+                        }
+                    } packetCommand;
+                    unsigned packetBindingCalls=0;
+                    assert(tglWithOriginalVeboxPacketLeases(sidecar,original,sidecar,original,packetCommand,
+                        0x100,0x200,0x300,0x400,[&](auto& leases) noexcept -> int {
+                            ++packetBindingCalls;
+                            assert(&leases.source==&original && leases.target==&original);
+                            assert(&leases.state==&packetCommand.state);
+                            // Binding loans ended BEFORE the consumer. Real
+                            // per-stage mutable borrows remain available.
+                            assert(sidecar.withMutableSurface([](auto&) noexcept -> int {return 0;})==0);
+                            assert(tglWithMutableVeboxPacketRoots(sidecar,original,sidecar,original,
+                                [](auto&,auto&) noexcept -> int {return 0;})==0);
+                            return 31;
+                        })==31 && packetBindingCalls==1);
+                    packetCommand.foreign=true;
+                    assert(tglWithOriginalVeboxPacketLeases(sidecar,original,sidecar,original,packetCommand,
+                        0x100,0x200,0x300,0x400,[](auto&) noexcept -> int {assert(false);return 0;})==5);
                     assert(sidecar.withPeerSurface(sidecar,[&](const auto& a,const auto& b) noexcept {
                         assert(&a==&original && &b==&original);
                     }));
