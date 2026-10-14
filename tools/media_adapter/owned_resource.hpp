@@ -18099,6 +18099,16 @@ public:
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
         return storage()==&surface && owner_.hasSurfaceLease(surface);
     }
+    // Bridge retained frontend CF/context pins to native helpers requiring the
+    // ORIGINAL owner type. No owner pointer is returned or ownership moved.
+    template<class Use> int withOriginalOwner(Use use) noexcept {
+        static_assert(noexcept(use(owner_)) && std::is_same_v<decltype(use(owner_)),int>);
+        const auto* surface=storage();
+        if(busy_ || !surface || !hasSurfaceLease(*surface))return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        const int status=use(owner_);
+        return storage()==surface && hasSurfaceLease(*surface)?status:5;
+    }
     template<class Use> int withSurface(Use use) noexcept {
         static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
             std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),int>);
@@ -18216,6 +18226,19 @@ public:
                 slots_[i].lease->hasSurfaceLease(*shell)) return shell;
         }
         return nullptr;
+    }
+    // Root and temporal owners are borrowed only from this retained graph;
+    // reject foreign shells and revalidate ALL graph links after the consumer.
+    template<class Use> int withOriginalOwner(const TglOwnedSurfaceStorage& surface,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<Owner&>())) &&
+            std::is_same_v<decltype(use(std::declval<Owner&>())),int>);
+        if(busy_ || !valid())return 5;
+        for(size_t i=0;i<count_;++i)if(slots_[i].lease->storage()==&surface) {
+            busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+            const int status=slots_[i].lease->withOriginalOwner(use);
+            return valid()?status:5;
+        }
+        return 5;
     }
     template<class Use> int withMutableSurface(Use use) noexcept {
         if(busy_ || !valid()) return 5;

@@ -16762,11 +16762,29 @@ int main() {
                 TglOwnedFrontendSourceGraph<TestFrontendOriginalOwner,Api,3> graph(Api{refs});
                 assert(graph.acquire(reinterpret_cast<uintptr_t>(&root),resolve,11,12));
                 assert(graph.storage()==&root && ro.borrowed && po.borrowed && oo.borrowed);
+                assert(graph.withOriginalOwner(root,[&](auto& original) noexcept -> int {
+                    assert(&original==&ro && graph.storage()==&root);
+                    assert(graph.withOriginalOwner(previous,[](auto&) noexcept -> int {assert(false);return 0;})==5);
+                    return 31;
+                })==31);
+                assert(graph.withOriginalOwner(previous,[&](auto& original) noexcept -> int {
+                    assert(&original==&po);return 0;
+                })==0);
+                assert(graph.withOriginalOwner(shell,[](auto&) noexcept -> int {assert(false);return 0;})==5);
+                assert(graph.withOriginalOwner(root,[&](auto&) noexcept -> int {
+                    const uintptr_t zero=0;std::memcpy(root.prefix.data()+0xc8,&zero,8);return 0;
+                })==5);
+                std::memcpy(root.prefix.data()+0xc8,&p,8);assert(graph.storage()==&root);
                 for(size_t i=1;i<6;++i) assert(refs[i]==3); // shared older node pinned once
                 {
                     TestFrontendOriginalOwner targetOwner{shell};
                     TglOwnedType1BorrowedSurfaceLease<TestFrontendOriginalOwner,Api> target(
                         targetOwner,Api{refs},11,12);
+                    assert(target.withOriginalOwner([&](auto& original) noexcept -> int {
+                        assert(&original==&targetOwner && target.storage()==&shell);
+                        assert(target.withOriginalOwner([](auto&) noexcept -> int {assert(false);return 0;})==5);
+                        return 31;
+                    })==31);
                     TestFeatureExecutionOwner execution;
                     std::array<uint8_t,0x1bc0> childBytes{};
                     TestVeboxChildLease child{childBytes.data()};
