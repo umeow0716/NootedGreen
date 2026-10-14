@@ -16740,8 +16740,32 @@ int main() {
             assert(!shells.get(27) && !shells.prepare(originals));
             assert(std::memcmp(reinterpret_cast<void*>(shells.get(0)),&source,0x2a8)==0);
             assert(shells.get(0)!=shells.get(24));
+            std::array<TglOwnedSurfaceStorage*,25> destinations{};
+            destinations[0]=&source;destinations[24]=&source;
+            auto live=[&](size_t i,TglOwnedSurfaceStorage* p) noexcept {
+                return (i==0 || i==24) && p==&source;
+            };
+            reinterpret_cast<uint8_t*>(shells.get(0))[0]=0x12;
+            reinterpret_cast<uint8_t*>(shells.get(24))[0]=0x34;
+            TglOwnedSurfaceStorage foreign{};
+            destinations[24]=&foreign;
+            assert(!shells.copyBackExisting(destinations,live) && source.prefix[0]==0x79);
+            destinations[24]=&source;
+            assert(!shells.copyBackExisting(destinations,
+                [](size_t,TglOwnedSurfaceStorage*) noexcept {return false;}));
+            assert(source.prefix[0]==0x79);
+            assert(shells.copyBackExisting(destinations,live));
+            // Native loop order: duplicate originals receive the last slot.
+            assert(source.prefix[0]==0x34 && source.tail[0x17]==0x63);
             shells.reset();shells.reset();assert(b.live==0);
+            assert(!shells.copyBackExisting(destinations,live));
             assert(shells.prepare(originals));
+            bool revoked=false;
+            assert(!shells.copyBackExisting(destinations,
+                [&](size_t,TglOwnedSurfaceStorage*) noexcept {
+                    if(!revoked) {revoked=true;shells.reset();assert(shells.prepare(originals));}
+                    return true;
+                }));
         }
         assert(b.live==0);
     }

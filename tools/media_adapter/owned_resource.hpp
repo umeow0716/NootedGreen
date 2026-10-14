@@ -7185,6 +7185,8 @@ static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
 template<class Backend> class TglNativePerPassCpuShells {
     Backend& backend_;
     std::array<uintptr_t,27> shells_{};
+    std::array<const TglOwnedSurfaceStorage*,25> originals_{};
+    uint64_t generation_=0;
     bool prepared_=false;
 public:
     explicit TglNativePerPassCpuShells(Backend& backend) noexcept:backend_(backend) {}
@@ -7194,7 +7196,7 @@ public:
     bool prepare(const std::array<const TglOwnedSurfaceStorage*,25>& originals) noexcept {
         static_assert(noexcept(backend_.allocate(size_t{0x308})) &&
             noexcept(backend_.release(uintptr_t{})));
-        if(prepared_)return false;
+        if(prepared_ || generation_==UINT64_MAX)return false;
         std::array<uintptr_t,27> candidate{};
         for(size_t i=0;i<candidate.size();++i) {
             if(i<25 && !originals[i])continue;
@@ -7207,13 +7209,35 @@ public:
             // initialization/semantics for the extra allocation bytes.
             if(i<25)std::memcpy(reinterpret_cast<void*>(candidate[i]),originals[i],0x2a8);
         }
-        shells_=candidate;prepared_=true;return true;
+        shells_=candidate;originals_=originals;prepared_=true;return true;
     }
     uintptr_t get(size_t index) const noexcept {
         return prepared_ && index<shells_.size()?shells_[index]:0;
     }
+    // Existing-slot inverse copy. A real original-frame owner must attest
+    // each mutable destination lease, not just its readable/writable mapping.
+    // Topology-changing native copyback needs separate allocation authority.
+    template<class Lease> bool copyBackExisting(
+        const std::array<TglOwnedSurfaceStorage*,25>& destinations,Lease live) noexcept {
+        static_assert(noexcept(live(size_t{},static_cast<TglOwnedSurfaceStorage*>(nullptr))));
+        if(!prepared_)return false;
+        const auto expected=shells_;
+        const auto generation=generation_;
+        for(size_t i=0;i<destinations.size();++i) {
+            if(destinations[i]!=originals_[i] ||
+                (destinations[i] && !live(i,destinations[i])) ||
+                !prepared_ || generation_!=generation || shells_!=expected)return false;
+        }
+        for(size_t i=0;i<destinations.size();++i) {
+            if(!destinations[i])continue;
+            if(!live(i,destinations[i]) || !prepared_ || generation_!=generation || shells_!=expected)return false;
+            std::memcpy(destinations[i],reinterpret_cast<const void*>(shells_[i]),0x2a8);
+        }
+        return prepared_ && generation_==generation && shells_==expected;
+    }
     void reset() noexcept {
-        const auto old=shells_;shells_.fill(0);prepared_=false;
+        const auto old=shells_;shells_.fill(0);originals_.fill(nullptr);prepared_=false;
+        if(generation_!=UINT64_MAX)++generation_;
         for(size_t i=old.size();i;--i)if(old[i-1])backend_.release(old[i-1]);
     }
 };
