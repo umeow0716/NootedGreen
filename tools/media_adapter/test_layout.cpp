@@ -15615,6 +15615,35 @@ static void testRetainedVeboxFrames() {
                 {
                     typename RootOwner::SurfaceOwnerLease shell(sidecar);
                     assert(shell.storage()==&original && shell.metadataStorage()==&original && sidecar.hasSurfaceLease(original));
+                    {
+                        struct Backend {
+                            size_t live=0;
+                            uintptr_t allocate(size_t n) noexcept {
+                                void* p=std::malloc(n);if(p)++live;return reinterpret_cast<uintptr_t>(p);
+                            }
+                            void release(uintptr_t p) noexcept {--live;std::free(reinterpret_cast<void*>(p));}
+                        } backend;
+                        std::array<uint8_t,0x139> parameters{};std::array<uint8_t,0x60> pass{};
+                        std::memcpy(parameters.data()+8,&address,8);
+                        std::array<TglOwnedSurfaceStorage*,25> roots{};roots[0]=&original;
+                        TglNativePerPassTemporaryScope<Backend> scope(backend);
+                        auto held=[&](size_t,const TglOwnedSurfaceStorage* p) noexcept {
+                            return p && sidecar.hasSurfaceLease(*p);
+                        };
+                        const auto result=scope.runWithDerivedRoots(parameters,pass,roots,sidecar,sidecar,held,
+                            [&](auto& params,auto& packet,auto& source,auto& target) noexcept -> int {
+                                assert(&source==&target); // same selected index has ONE lease
+                                return source.withMutableSurface([&](auto& copy) noexcept -> int {
+                                    uintptr_t selected=0,linked=0;
+                                    std::memcpy(&selected,params.data()+8,8);std::memcpy(&linked,packet.data()+0x10,8);
+                                    assert(selected==reinterpret_cast<uintptr_t>(&copy) && linked==selected);
+                                    assert(source.hasSurfaceLease(copy) && !sidecar.hasSurfaceLease(copy));
+                                    copy.prefix[0x86]=1;return 31;
+                                });
+                            });
+                        assert(result.entered && result.copiedBack && result.nativeStatus==31 && !backend.live);
+                        assert(original.prefix[0x86]==1);original.prefix[0x86]=0;
+                    }
                     const uintptr_t dnAddress=dn.get();
                     assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {
                         uintptr_t actual=0;std::memcpy(&actual,original.prefix.data()+0x90,8);

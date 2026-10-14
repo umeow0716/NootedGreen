@@ -13648,6 +13648,33 @@ template<class Backend> class TglNativePerPassTemporaryScope {
 public:
     struct Result {bool entered=false,copiedBack=false;int nativeStatus=5;};
     explicit TglNativePerPassTemporaryScope(Backend& backend) noexcept:shells_(backend) {}
+    // The SAME temporary owner that built packet roots issues both derived
+    // leases. No caller-created copied owner or independent pointer grant.
+    template<size_t P,size_t Q,class Owner,class Lease,class Use>
+    Result runWithDerivedRoots(std::array<uint8_t,P>& parameters,std::array<uint8_t,Q>& pass,
+        const std::array<TglOwnedSurfaceStorage*,25>& originals,Owner& sourceOwner,Owner& targetOwner,
+        Lease live,Use use) noexcept {
+        if constexpr(P<0x130 || Q<0x34) {attempted_=true;return {};}
+        else {
+            uint32_t source=0,target=0;
+            std::memcpy(&source,pass.data()+0xc,4);std::memcpy(&target,pass.data()+0x30,4);
+            bool entered=false;
+            auto result=run(parameters,pass,originals,live,[&](auto& temporaryParams,auto& temporaryPass) noexcept {
+                return shells_.withDerivedSurfaceLease(source,sourceOwner,[&](auto& sourceLease) noexcept -> int {
+                    if(source==target) {
+                        if(&sourceOwner!=&targetOwner)return 5;
+                        static_assert(noexcept(use(temporaryParams,temporaryPass,sourceLease,sourceLease)));
+                        entered=true;return use(temporaryParams,temporaryPass,sourceLease,sourceLease);
+                    }
+                    return shells_.withDerivedSurfaceLease(target,targetOwner,[&](auto& targetLease) noexcept -> int {
+                        static_assert(noexcept(use(temporaryParams,temporaryPass,sourceLease,targetLease)));
+                        entered=true;return use(temporaryParams,temporaryPass,sourceLease,targetLease);
+                    });
+                });
+            });
+            result.entered=entered;return result;
+        }
+    }
     template<size_t P,size_t Q,class Lease,class Use>
     Result run(std::array<uint8_t,P>& originalParams,std::array<uint8_t,Q>& originalPass,
         const std::array<TglOwnedSurfaceStorage*,25>& originals,Lease live,Use use) noexcept {
