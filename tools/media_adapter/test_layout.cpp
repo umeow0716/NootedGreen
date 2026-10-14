@@ -14279,6 +14279,29 @@ static void testRetainedVeboxFrames() {
         };
         assert(batch.capture(0x1000,read) && batch.valid && batch.count==2 && batch.contexts==contexts);
         assert(batch.wellFormed() && batch.overlaps(batch));
+        {
+            struct Record {
+                uintptr_t image=0,physical=0;uint64_t generation=0;
+                TglNativeCreatedContextBatch<2> batch;
+                std::array<int*,2> candidates{};bool used=false,adopted=false;
+            };
+            std::array<Record,2> records{};
+            records[0]={0x10,0x20,7,batch,{},true,true};
+            TglNativeRemovedContextBatch<2> removed;removed.valid=true;removed.count=1;removed.contexts[0]=0x4000;
+            unsigned calls=0;int status=31;
+            auto reconcile=[&]() noexcept -> int {++calls;return status;}; // CPU-only release recording, no native proof.
+            auto run=[&]() noexcept {return tglReconcileCodecCreationLedger(records,0x10,0x20,7,removed,reconcile);};
+            assert(run()==31 && calls==1 && records[0].batch.contexts==batch.contexts);
+            records[0].adopted=false;assert(run()==5 && calls==1);records[0].adopted=true;
+            int candidate=0;records[0].candidates[0]=&candidate;assert(run()==5 && calls==1);
+            records[0].candidates[0]=nullptr;
+            records[1]=records[0];assert(run()==5 && calls==1);records[1]={};
+            removed.contexts[1]=0x5000;assert(run()==5 && calls==1);removed.contexts[1]=0;
+            status=0;assert(run()==0 && calls==2 && records[0].used && !records[0].batch.contexts[0] && records[0].batch.contexts[1]==0x5000);
+            assert(run()==5 && calls==2); // Already reconciled identity cannot be released twice.
+            removed.contexts[0]=0x5000;assert(run()==0 && calls==3 && !records[0].used);
+            removed={};removed.valid=true;assert(run()==0 && calls==3);
+        }
         TglNativeCreatedContextBatch<3> separate;separate.valid=true;separate.count=2;
         separate.contexts={0x6000,0,0};
         assert(separate.wellFormed() && !batch.overlaps(separate) && !separate.overlaps(batch));

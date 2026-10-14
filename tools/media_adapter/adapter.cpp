@@ -129,33 +129,10 @@ struct NativeCodecBackend {
         auto& storage=ledger();
         if(storage.gate.test_and_set(std::memory_order_acquire))return 5;
         struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{storage.gate};
-        // Validate every identity and tail before any owner or ledger release.
-        for(size_t i=0;i<16;++i) {
-            if(i>=removed.count) {if(removed.contexts[i])return 5;continue;}
-            const uintptr_t context=removed.contexts[i];
-            if(!context)return 5;
-            for(size_t j=0;j<i;++j)if(removed.contexts[j]==context)return 5;
-            unsigned matches=0;
-            for(const auto& record:storage.records)if(record.used && record.image==image &&
-                record.physical==physical && record.generation==generation) {
-                if(!record.adopted || !record.batch.wellFormed())return 5;
-                for(size_t j=0;j<record.batch.count;++j)if(record.batch.contexts[j]==context)++matches;
-            }
-            if(matches!=1)return 5;
-        }
-        const int status=owners().reconcileSuccessfulRemoval(image,physical,generation,removed,
-            [&](NativeCodecOwner& owner) noexcept -> int {return owner.confirmNativeRemoval(proof)?0:5;});
-        if(status)return status; // Includes partial confirmation: keep ALL lineage for explicit retry.
-        for(auto& record:storage.records)if(record.used && record.adopted && record.image==image &&
-            record.physical==physical && record.generation==generation) {
-            bool remaining=false;
-            for(auto& context:record.batch.contexts) {
-                for(size_t i=0;i<removed.count;++i)if(context==removed.contexts[i])context=0;
-                remaining=remaining || context!=0;
-            }
-            if(!remaining)record={}; // Only fully reconciled successful batches become reusable.
-        }
-        return 0;
+        return tglReconcileCodecCreationLedger(storage.records,image,physical,generation,removed,[&]() noexcept -> int {
+            return owners().reconcileSuccessfulRemoval(image,physical,generation,removed,
+                [&](NativeCodecOwner& owner) noexcept -> int {return owner.confirmNativeRemoval(proof)?0:5;});
+        });
     }
 };
 // Compile the real backend body even before the lifecycle callback is enabled;

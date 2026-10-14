@@ -21963,6 +21963,45 @@ template<size_t Capacity=16> struct TglNativeRemovedContextBatch {
         candidate.count=n;candidate.valid=true;*this=candidate;return true;
     }
 };
+// Caller holds ledger + empty-frame physical mutation gates and calls this
+// ONLY after native removal success. Reconcile owns the separate owner proof;
+// this metadata helper never dereferences context identities or grants fences.
+template<class Records,size_t N,class Reconcile>
+int tglReconcileCodecCreationLedger(Records& records,uintptr_t image,uintptr_t physical,
+    uint64_t generation,const TglNativeRemovedContextBatch<N>& removed,Reconcile reconcile) noexcept {
+    static_assert(noexcept(reconcile()) && std::is_same_v<decltype(reconcile()),int>);
+    if(!image || !physical || !generation || !removed.valid || removed.count>N)return 5;
+    auto same=[&](const auto& record) noexcept {
+        return record.used && record.image==image && record.physical==physical && record.generation==generation;
+    };
+    if(!removed.count) {
+        for(auto context:removed.contexts)if(context)return 5;
+        return 0; // No identity removed: no callback, no ledger recycling.
+    }
+    for(size_t i=0;i<N;++i) {
+        if(i>=removed.count) {if(removed.contexts[i])return 5;continue;}
+        const auto context=removed.contexts[i];if(!context)return 5;
+        for(size_t j=0;j<i;++j)if(removed.contexts[j]==context)return 5;
+        unsigned matches=0;
+        for(const auto& record:records)if(same(record)) {
+            if(!record.adopted || !record.batch.wellFormed())return 5;
+            for(auto* candidate:record.candidates)if(candidate)return 5;
+            for(size_t j=0;j<record.batch.count;++j)if(record.batch.contexts[j]==context)++matches;
+        }
+        if(matches!=1)return 5;
+    }
+    const int status=reconcile();
+    if(status)return status; // Preserve all lineage, even after partial owner confirmation.
+    for(auto& record:records)if(same(record) && record.adopted) {
+        bool remaining=false;
+        for(auto& context:record.batch.contexts) {
+            for(size_t i=0;i<removed.count;++i)if(context==removed.contexts[i])context=0;
+            remaining=remaining || context!=0;
+        }
+        if(!remaining)record={};
+    }
+    return 0;
+}
 struct TglNativeContextFrameInvoker {
     int operator()(uintptr_t entry,uintptr_t context,uintptr_t request,
         uintptr_t outputSlot) const noexcept {
