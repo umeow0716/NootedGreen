@@ -1286,6 +1286,16 @@ template NativeAdmissionStages::Result NativeAdmissionStages::run<NativeAdmissio
 // One scoped path from admission through actual VP producers to native Render.
 // Native Render's result is retained by admission before any callback/owner
 // scope unwinds. This entry does NOT certify completion or release the frame.
+struct NativeAdmissionHookContext {
+    NativeAdmissionStages& stages;bool active=false,consumed=false;
+    bool owns(void* child) const noexcept {return child && child==stages.reset.child;}
+    bool admit(void* params,void* pass) noexcept {
+        if(!active || consumed || params!=stages.params.data() || pass!=stages.pass.data() ||
+            !stages.compatible())return false;
+        consumed=true;return true;
+    }
+};
+using NativeAdmissionResolve=TglOwnedVeboxScopedContext<NativeAdmissionHookContext>;
 struct NativePreparedAdmissionRender {
     NativeVpPreparedCallbacks& callbacks;NativeAdmissionStages& admission;
     const TglVeboxRenderBinding& binding;void* argument;
@@ -1308,7 +1318,15 @@ struct NativePreparedAdmissionRender {
             [](void* context,NativeSfcPreparation& preparation) noexcept -> int {
                 auto& call=*static_cast<Call*>(context);auto& self=call.self;
                 if(&preparation!=&self.admission.sfc)return 5;
+                NativeAdmissionHookContext hook{self.admission};
+                NativeAdmissionResolve admissionScope(self.admission.reset.child,hook);
+                if(!admissionScope.bound())return 5;
                 auto render=[&]() noexcept -> TglOwnedVeboxCommandTransactionResult {
+                    // Native admission already finished the selected stages.
+                    // Any native hook query observes this exact continuation;
+                    // it cannot recursively execute admission or another Render.
+                    hook.active=true;
+                    struct Restore {bool& active;~Restore(){active=false;}} restore{hook.active};
                     return tglRunLeasedVeboxSurfaceRender(self.binding,self.admission.reset.childOwner,
                         self.admission.reset.child,self.argument,self.admission.feature.sourceOwner,
                         self.admission.feature.source,self.admission.feature.targetOwner,self.admission.feature.target);
@@ -1439,9 +1457,16 @@ struct NativeFrameSurfaceAdmission {
         return scope && admit && ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1)?admit(scope,surface):5;
     }
 };
+struct NativeFrameSurfaceRoleAdmission {
+    void* scope=nullptr;int(*admit)(void*,const TglOwnedSurfaceStorage&,size_t) noexcept=nullptr;
+    int operator()(const TglOwnedSurfaceStorage& surface,size_t role) const noexcept {
+        return scope && admit && role<5 && ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1)?
+            admit(scope,surface,role):5;
+    }
+};
 using NativeVeboxControlPolicy=TglOwnedDiIecpControlPolicyReader<NativeFrameDataRead>;
 using NativeVeboxLivePacketFrame=TglOwnedVeboxLivePacketContext<NativeDiIecpCapture,NativeFrameDataRead,
-    NativeFrameSurfaceAdmission,NativeFrameSurfaceAdmission,TglNativeDiIecpRegistration,
+    NativeFrameSurfaceRoleAdmission,NativeFrameSurfaceAdmission,TglNativeDiIecpRegistration,
     TglNativeDiIecpControl<NativeVeboxControlPolicy>>;
 using NativeVeboxPacketBridge=TglOwnedVeboxNativePacketBridge<NativeVeboxLivePacketFrame,NativeStackPacketAdmission>;
 using NativeVeboxProducerTypes=TglOwnedVeboxFrameProducerTypes<NativeVeboxPacketBridge,NativeRendererChildOwner,
@@ -1477,6 +1502,16 @@ struct NativeVeboxPacketProducerScope {
             });
         if(status) {result.status=status;result.admitted=false;}
         return result;
+    }
+};
+struct NativeRendererCompleteHooks {
+    using LifetimeResolve=TglOwnedVeboxScopedLifetimeResolve<NativeRendererChildLifetime>;
+    static int install(NativeRendererCpuAssembly& assembly,const TglNativeVphalMhwView& view) noexcept {
+        return assembly.withChildLifetimeScopes([&](void*,void*,auto&,auto&) noexcept -> int {
+            return tglInstallOwnedRendererCompleteTablesFromCreator<LifetimeResolve,NativeAdmissionResolve,
+                NativeAllocationResolve,NativeVeboxProducerResolve,NativeModeReleaseScope,TglOwnedFormatReader>(
+                    assembly.cpu(),view,&readMemory,NativeTglImageAdmission{view.renderer.image},&executableMemory);
+        });
     }
 };
 // Frame surfaces retain their original codec contexts; CPU children remain
