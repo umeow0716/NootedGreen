@@ -17834,6 +17834,41 @@ struct TglNativeDndiStackAdmission {
     }
 };
 
+// Native Render supplies stack packets, while owned builder invocation supplies
+// the retained packet objects directly. Bridge only packet VALUES; never adopt
+// a native stack pointer as durable storage or substitute a different pass.
+template<class Frame,class Admit> struct TglOwnedVeboxNativePacketBridge {
+    Frame& frame;Admit admit;
+    TglOwnedVeboxProducerPass& pass;
+    TglOwnedVeboxPacketLeases& leases;
+    bool busy=false;
+    TglOwnedVeboxNativePacketBridge(Frame& f,Admit a) noexcept
+        :frame(f),admit(a),pass(f.pass),leases(f.leases) {}
+    template<class Packet,class Produce>
+    int transfer(Packet& owned,void* native,Produce produce) noexcept {
+        static_assert(std::is_trivially_copyable_v<Packet> && noexcept(produce()));
+        const auto address=reinterpret_cast<uintptr_t>(native);
+        if(busy || !native)return 5;
+        if(native==&owned)return produce();
+        if(address%alignof(Packet) || address>UINTPTR_MAX-sizeof(Packet) ||
+            !admit(address,sizeof(Packet)))return 5;
+        busy=true;struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy};
+        const Packet previous=owned;
+        std::memcpy(&owned,native,sizeof(Packet));
+        const int result=produce();
+        if(result || !admit(address,sizeof(Packet))) {owned=previous;return result?result:5;}
+        std::memcpy(native,&owned,sizeof(Packet));return 0;
+    }
+    int surfaces(bool di,void* packet) noexcept {
+        return transfer(leases.surfaces,packet,[&]() noexcept {return frame.surfaces(di,&leases.surfaces);});
+    }
+    int state(bool di,void* packet) noexcept {
+        return transfer(leases.state,packet,[&]() noexcept {return frame.state(di,&leases.state);});
+    }
+    int diIecp(bool di,void* packet) noexcept {
+        return transfer(leases.diIecp,packet,[&]() noexcept {return frame.diIecp(di,&leases.diIecp);});
+    }
+};
 // Wrap the real packet context without copying its pass or resource leases.
 // CSC accepts only this frame's owned surfaces and retained execution. Produce
 // authenticates the native image and fills a private candidate, never child RAM.

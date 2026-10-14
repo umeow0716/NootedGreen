@@ -31226,4 +31226,29 @@ int main() {
     std::memcpy(scaler.data() + 0x428, &link, sizeof(link));
     assert(!bridge.build(reinterpret_cast<uintptr_t>(&descriptor), read));
     unpublished();
+    {
+        TglOwnedSurfaceStorage source;
+        TglOwnedSurfaceInputs surfaces;
+        TglOwnedVeboxStateStorage state;
+        TglOwnedDiIecpPacket di;
+        struct Frame {TglOwnedVeboxProducerPass pass;TglOwnedVeboxPacketLeases leases;};
+        Frame frame{{},{1,2,3,4,source,nullptr,surfaces,state,di}};
+        uint32_t owned=2,native=7;bool allow=true;unsigned admissions=0;
+        auto admit=[&](uintptr_t address,size_t size) noexcept {
+            ++admissions;return allow && address==reinterpret_cast<uintptr_t>(&native) && size==sizeof(native);
+        };
+        TglOwnedVeboxNativePacketBridge packetBridge(frame,admit);
+        assert(packetBridge.transfer(owned,&native,[&]() noexcept {assert(owned==7);owned=9;return 0;})==0);
+        assert(owned==9 && native==9 && admissions==2);
+        assert(packetBridge.transfer(owned,&native,[&]() noexcept {owned=11;return 31;})==31);
+        assert(owned==9 && native==9);
+        assert(packetBridge.transfer(owned,&native,[&]() noexcept {owned=12;allow=false;return 0;})==5);
+        assert(owned==9 && native==9);
+        allow=true;
+        assert(packetBridge.transfer(owned,&native,[&]() noexcept {
+            assert(packetBridge.transfer(owned,&owned,[]() noexcept {assert(false);return 0;})==5);
+            owned=13;return 0;
+        })==0);
+        assert(owned==13 && native==13 && &packetBridge.pass==&frame.pass && &packetBridge.leases==&frame.leases);
+    }
 }

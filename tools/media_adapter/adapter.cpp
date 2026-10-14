@@ -63,6 +63,15 @@ struct NativeDataAdmission {
         return writableDataMemory(address,length);
     }
 };
+struct NativeStackPacketAdmission {
+    bool operator()(uintptr_t address,size_t size) const noexcept {
+        const auto thread=pthread_self();
+        const auto top=reinterpret_cast<uintptr_t>(pthread_get_stackaddr_np(thread));
+        const size_t extent=pthread_get_stacksize_np(thread);
+        return address && size && top && extent && extent<=top && address>=top-extent &&
+            address<=UINTPTR_MAX-size && address+size<=top && writableDataMemory(address,size);
+    }
+};
 // Frame data capability, distinct from the qualified native image reader.
 // The retained frame supplies its closed region resolver; there is no raw
 // readMemory fallback and this object does not extend the resolver lifetime.
