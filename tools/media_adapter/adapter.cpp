@@ -2873,11 +2873,15 @@ struct NativeCreatorPreparation {
                 record->used=true;record->image=image;record->physical=address;
                 record->generation=generation;record->creator=creator;
                 Entry::ConstructionParent parent;TglNativeVphalResourceEnvironment environment;
-                if(!factory.constructionResourceEnvironment(std::move(pin),creator,parent,environment) || !parent.view())return 5;
+                if(!factory.constructionResourceEnvironment(std::move(pin),creator,parent,environment) || !parent.view()) {
+                    *record={};return 5; // No owned candidate/publication exists.
+                }
                 record->renderer=parent.view()->renderer.renderer;
                 try {record->storage=new(std::nothrow) NativeRendererCpuAssembly(image,environment);}
-                catch(...) {return 7;}
-                if(!record->storage)return 7;
+                catch(...) {*record={};return 7;} // Failed C++ construction unwinds its members.
+                if(!record->storage) {*record={};return 7;}
+                // From here onward a real candidate exists. Keep ALL failure
+                // records until qualified teardown, including failed adoption.
                 auto dependency=physical.retainPhysicalDependency();
                 record->owner=NativeVphalOwner::create(image,address,generation,creator,record->renderer,
                     dependency,record->storage,&readMemory,NativeDataPointerWriter{},NativeDataAdmission{},
