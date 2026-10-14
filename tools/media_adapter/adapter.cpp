@@ -2135,11 +2135,16 @@ using NativeVeboxLivePacketFrame=TglOwnedVeboxLivePacketContext<NativeDiIecpCapt
 struct NativeVeboxPacketBridge : TglOwnedVeboxNativePacketBridge<NativeVeboxLivePacketFrame,NativeStackPacketAdmission> {
     using Base=TglOwnedVeboxNativePacketBridge<NativeVeboxLivePacketFrame,NativeStackPacketAdmission>;
     NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+    NativeRendererChildOwner& childOwner;uintptr_t image;
     NativeVeboxPacketBridge(NativeVeboxLivePacketFrame& frame,NativeStackPacketAdmission admit,
-        NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target) noexcept
-        :Base(frame,admit),sourceOwner(source),targetOwner(target) {}
+        NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
+        NativeRendererChildOwner& child,uintptr_t nativeImage) noexcept
+        :Base(frame,admit),sourceOwner(source),targetOwner(target),childOwner(child),image(nativeImage) {}
     int state(bool di,void* packet) noexcept {
         if(!leases.target)return 5;
+        bool temporalPolicy=false;
+        if(!tglReadLeasedTemporalDenoisePolicy(childOwner,leases.child,image,temporalPolicy))return 5;
+        frame.disableTemporalDenoise=temporalPolicy; // refresh at actual producer use
         return transfer(leases.state,packet,[&]() noexcept -> int {
             return frame.stateWithBorrow(di,&leases.state,[&](auto produce) noexcept -> int {
                 return tglWithMutableVeboxPacketRoots(sourceOwner,leases.source,targetOwner,*leases.target,
@@ -2155,7 +2160,7 @@ struct NativeVeboxFrameCapabilityScope {
     using Use=NativeAdmissionStages::Result(*)(void*,NativeVeboxLivePacketFrame&) noexcept;
     static NativeAdmissionStages::Result run(NativeRendererCpuAssembly& assembly,
         const TglNativeVphalMhwView& view,NativeRetainedDiIecpCapture& capture,
-        TglOwnedVeboxPacketLeases leases,bool disableTemporalDenoise,void* scope,Use use) noexcept {
+        TglOwnedVeboxPacketLeases leases,void* scope,Use use) noexcept {
         NativeAdmissionStages::Result result;
         auto& planner=capture.planner;
         if(!scope || !use || capture.busy || capture.active || !leases.target ||
@@ -2163,6 +2168,9 @@ struct NativeVeboxFrameCapabilityScope {
             &leases.source!=&planner.source || leases.renderHal!=view.renderHal ||
             !planner.target || !planner.target->hasSurfaceLease(*leases.target) ||
             !planner.input.hasSurfaceLease(leases.source))return result;
+        bool disableTemporalDenoise=false;
+        if(!tglReadLeasedTemporalDenoisePolicy(planner.childOwner,leases.child,view.renderer.image,
+            disableTemporalDenoise))return result;
         const int status=assembly.cpu().withBorrowedCreatorDiIecpServices(view,&readMemory,
             NativeTglImageAdmission{view.renderer.image},&executableMemory,
             [&](const TglNativeDiIecpServices& services) noexcept -> int {
@@ -2213,7 +2221,7 @@ struct NativeVeboxPacketProducerScope {
             frame.read.resolve!=admission.read.resolve || &parameters!=&admission.feature.parameters)return result;
         DnRead dn{admission.feature.sourceOwner,parameters,leases.source};
         NativeVeboxPacketBridge bridge(frame,NativeStackPacketAdmission{},
-            admission.feature.sourceOwner,admission.feature.targetOwner);
+            admission.feature.sourceOwner,admission.feature.targetOwner,child,render.render.binding.image);
         const int status=tglWithOwnedVeboxFrameProducers(bridge,child,execution,0,&readMemory,
             TglNativeDndiStackAdmission{},csc,[&](void* object,auto& producer) noexcept -> int {
                 static_assert(std::is_same_v<std::remove_reference_t<decltype(producer)>,NativeVeboxProducerTypes::Context>);
@@ -2235,7 +2243,7 @@ struct NativeCompleteFrameConsumer {
     NativeRendererCpuAssembly& assembly;const TglNativeVphalMhwView& view;
     NativeRetainedDiIecpCapture& capture;TglOwnedVeboxPacketLeases leases;
     NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
-    NativeAllocatedAdmissionRender& render;bool disableTemporalDenoise;
+    NativeAllocatedAdmissionRender& render;
     bool attempted=false;
     NativeAdmissionStages::Result run() noexcept {
         NativeAdmissionStages::Result result;
@@ -2245,7 +2253,7 @@ struct NativeCompleteFrameConsumer {
             &admission.reset.backing!=&assembly.backing() || view.renderer.image!=render.render.binding.image ||
             assembly.backing().retention()())return result;
         attempted=true;
-        return NativeVeboxFrameCapabilityScope::run(assembly,view,capture,leases,disableTemporalDenoise,this,
+        return NativeVeboxFrameCapabilityScope::run(assembly,view,capture,leases,this,
             [](void* context,NativeVeboxLivePacketFrame& frame) noexcept -> NativeAdmissionStages::Result {
                 auto& self=*static_cast<NativeCompleteFrameConsumer*>(context);
                 return NativeVeboxPacketProducerScope::run(frame,self.parameters,self.csc,self.render);
@@ -2286,7 +2294,6 @@ struct NativeFrameExecutionAssembly {
         const TglVeboxRenderBinding& binding;void* argument;
         TglOwnedVeboxPacketLeases leases;
         NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
-        bool disableTemporalDenoise;
     };
     static NativeAdmissionStages::Result run(Inputs& in) noexcept {
         NativeAdmissionStages::Result result;
@@ -2298,7 +2305,7 @@ struct NativeFrameExecutionAssembly {
             NativeAllocatedAdmissionRender allocated{prepared,in.planner,in.mode};
             NativeRetainedDiIecpCapture capture{in.planner,in.admission.read,in.view.renderer.image,&in.parameters};
             NativeCompleteFrameConsumer consumer{in.assembly,in.view,capture,in.leases,in.parameters,
-                in.csc,allocated,in.disableTemporalDenoise};
+                in.csc,allocated};
             result=consumer.run();
             return result.status;
         });
@@ -2314,7 +2321,6 @@ struct NativeModeFrameExecution {
         const TglVeboxRenderBinding& binding;void* argument;
         TglOwnedVeboxPacketLeases leases;
         NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
-        bool disableTemporalDenoise;
     };
     static NativeAdmissionStages::Result run(Inputs& in) noexcept {
         NativeAdmissionStages::Result result;
@@ -2330,8 +2336,7 @@ struct NativeModeFrameExecution {
                 NativeModeReleaseContext& mode) noexcept -> NativeAdmissionStages::Result {
                 auto& call=*static_cast<Call*>(context);auto& in=call.in;
                 NativeFrameExecutionAssembly::Inputs execution{in.assembly,in.view,in.vp,call.stages,
-                    planner,mode,in.binding,in.argument,in.leases,in.parameters,in.csc,
-                    in.disableTemporalDenoise};
+                    planner,mode,in.binding,in.argument,in.leases,in.parameters,in.csc};
                 return NativeFrameExecutionAssembly::run(execution);
             });
             return result.status;
@@ -2347,7 +2352,7 @@ struct NativePolicyFrameExecution {
         const NativeAdmissionFrameAssembly::Inputs& admission;NativeModeAllocationPlan& allocation;
         const TglVeboxRenderBinding& binding;void* argument;
         TglOwnedVeboxPacketLeases leases;
-        NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;bool disableTemporalDenoise;
+        NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
     };
     static NativeAdmissionStages::Result run(Inputs& in) noexcept {
         NativeAdmissionStages::Result result;
@@ -2361,7 +2366,7 @@ struct NativePolicyFrameExecution {
         const int status=p.run([&](NativeOutputPipeSelector& selector) noexcept -> int {
             NativeAdmissionFrameAssembly admission(a,selector,in.read);
             NativeModeFrameExecution::Inputs mode{in.assembly,in.view,in.vp,admission,in.allocation,
-                in.binding,in.argument,in.leases,in.parameters,in.csc,in.disableTemporalDenoise};
+                in.binding,in.argument,in.leases,in.parameters,in.csc};
             result=NativeModeFrameExecution::run(mode);
             return result.status;
         });
@@ -2638,7 +2643,7 @@ struct NativeOriginalFrameExecution {
         const TglOwnedGen12SurfaceFeatures& sourceFeatures;const TglOwnedGen12SurfaceFeatures& targetFeatures;
         TglVeboxPipeAcquisition& acquisition;uint32_t& compressionFormat;int& decompressionStatus;
         NativeTargetDecompression& decompression;
-        bool disableTemporalDenoise;void* argument;
+        void* argument;
     };
     static TglOwnedVeboxCommandTransactionResult run(Inputs& in) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
@@ -2680,7 +2685,7 @@ struct NativeOriginalFrameExecution {
                                         auto& state=stage.packet.state;auto& in=state.input;
                                         NativePolicyFrameExecution::Inputs execution{in.frontend.assembly,in.view,in.vp,
                                             next.policy,in.read,admission,stage.plan,state.render,in.argument,
-                                            stage.packet.leases,in.frontend.denoise,state.csc,in.disableTemporalDenoise};
+                                            stage.packet.leases,in.frontend.denoise,state.csc};
                                         state.result=NativePolicyFrameExecution::run(execution);
                                         return state.result.status;
                                     });

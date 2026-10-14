@@ -17036,7 +17036,8 @@ inline bool tglPrepareOwnedStatePacket(std::array<uint8_t,0x188>& output,
     return true;
 }
 // Enclosing child holds all leases and its serialization lock. The temporal-DN
-// policy is owned configuration, NOT an assumed read of ICL base1baa. Resolve
+// policy must come from qualified shared-base configuration, never a cast
+// of G11's derived this to a TGL object. Resolve
 // links/SKU before normalization, then transfer the CPU packet to its native
 // allocation owner. No heap assignment, command emission or submission here.
 template<class Read>
@@ -17154,6 +17155,21 @@ bool tglReadLeasedDiIecpCacheControls(Owner& owner,uintptr_t child,uintptr_t ima
     std::array<uint32_t,11> candidate{};
     for(size_t i=0;i<6;++i)candidate[i]=words[i];
     candidate[6]=words[5];candidate[7]=words[6];output=candidate;return true;
+}
+// Shared VPHAL_VEBOX_STATE base policy, not a G11-derived-object offset:
+// exact ICL1fad80 adjusts to that RTTI-proven virtual base before reading1baa;
+// exact TGL base constructor12d4e0 initializes this same field.
+template<class Owner>
+bool tglReadLeasedTemporalDenoisePolicy(Owner& owner,uintptr_t child,uintptr_t image,bool& output) noexcept {
+    const auto generation=owner.allocationGeneration();
+    auto live=[&]() noexcept {
+        return generation && owner.allocationGeneration()==generation && owner.hasPrivateChildImageLease(child,image);
+    };
+    uint8_t flag=0,after=0;
+    if(!child || child>UINTPTR_MAX-0x1bab || !live() ||
+        !owner.readLeasedStorage(child,generation,child+0x1baa,&flag,1) || !live() ||
+        !owner.readLeasedStorage(child,generation,child+0x1baa,&after,1) || flag!=after || !live())return false;
+    output=bool(flag&1);return true;
 }
 template<class ChildOwner,class ExecutionOwner,class Read,class Query>
 bool tglApplyLeasedVeboxDirectOutputCachePolicy(ChildOwner& owner,ExecutionOwner& executionOwner,

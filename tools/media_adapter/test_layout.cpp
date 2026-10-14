@@ -159,6 +159,7 @@ static void testLeasedDiIecpCacheControls() {
         std::array<uint32_t,7> words{0x10,0x21,0x32,0x43,0x54,0x65,0x76};
         uint64_t epoch=1;unsigned reads=0;bool active=true,deny=false,change=false,revoke=false;
         uintptr_t os=0x300000,report=0x400000;unsigned writes=0;bool writeDenied=false;
+        uint8_t temporalFlag=0;
         uint64_t allocationGeneration() const noexcept {return epoch;}
         bool hasPrivateChildImageLease(uintptr_t child,uintptr_t image) const noexcept {
             return active && child==0x1000 && image==0x200000;
@@ -167,6 +168,11 @@ static void testLeasedDiIecpCacheControls() {
             if(deny || !active || child!=0x1000 || generation!=epoch)return false;
             if(bytes==8 && (address==child+0x10 || address==child+0x88)) {
                 const auto value=address==child+0x10?os:report;std::memcpy(out,&value,8);return true;
+            }
+            if(bytes==1 && address==child+0x1baa) {
+                ++reads;uint8_t value=temporalFlag;
+                if(change && reads==2)value^=1;
+                std::memcpy(out,&value,1);if(revoke)active=false;return true;
             }
             if(address!=child+0x1120 || bytes!=sizeof(words))return false;
             ++reads;std::memcpy(out,words.data(),bytes);
@@ -193,6 +199,18 @@ static void testLeasedDiIecpCacheControls() {
     assert(!tglReadLeasedDiIecpCacheControls(owner,0x1000,0x200000,controls) && owner.reads==2 && controls==unchanged);
     owner.reads=0;owner.change=false;owner.revoke=true;
     assert(!tglReadLeasedDiIecpCacheControls(owner,0x1000,0x200000,controls) && owner.reads==1 && controls==unchanged);
+    owner.active=true;owner.revoke=false;
+    for(uint8_t flag:{uint8_t(0),uint8_t(1),uint8_t(0x80),uint8_t(0x81)}) {
+        owner.temporalFlag=flag;bool output=!bool(flag&1);
+        assert(tglReadLeasedTemporalDenoisePolicy(owner,0x1000,0x200000,output) && output==bool(flag&1));
+    }
+    bool temporalPolicy=true;owner.reads=0;
+    assert(!tglReadLeasedTemporalDenoisePolicy(owner,0x1000,0x200001,temporalPolicy) && !owner.reads && temporalPolicy);
+    owner.deny=true;assert(!tglReadLeasedTemporalDenoisePolicy(owner,0x1000,0x200000,temporalPolicy) && temporalPolicy);
+    owner.deny=false;owner.change=true;owner.reads=0;
+    assert(!tglReadLeasedTemporalDenoisePolicy(owner,0x1000,0x200000,temporalPolicy) && temporalPolicy && owner.reads==2);
+    owner.change=false;owner.revoke=true;owner.reads=0;
+    assert(!tglReadLeasedTemporalDenoisePolicy(owner,0x1000,0x200000,temporalPolicy) && temporalPolicy && owner.reads==1);
     owner.active=true;owner.revoke=false;
     struct Execution {bool active=true;bool hasExecutionLease(uintptr_t p) const noexcept {return active && p==0x400000;}} execution;
     uint32_t pipe=0;unsigned queries=0;bool queryAllowed=true,changePipe=false;
