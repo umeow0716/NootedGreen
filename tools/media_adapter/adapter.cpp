@@ -2131,7 +2131,7 @@ std::map<void *, std::unique_ptr<Entry>> registry;
 struct NativeCreatorScopedInvocation {
     struct Result {
         int nativeResult=5,handoffResult=5;
-        bool nativeInvoked=false,selected=false,handoffCompleted=false;
+        bool nativeInvoked=false,selected=false,metadataCopied=false,handoffCompleted=false;
     };
     using Scope=typename NativePhysicalRegistry::DependencyAdoptionScope;
     using AdmitFn=bool(*)(void*) noexcept;
@@ -2160,15 +2160,29 @@ struct NativeCreatorScopedInvocation {
             creatorScope(nativeCreate,completeHandoff,qualifiedCreator);
         if(!creatorScope.prepare(image,&readMemory,NativeTglImageAdmission{image},
             &executableMemory,&ownedExecutableMemory))return result;
-        NativeReturnObserver observer({image+0x133c0f,0,0,0},0,0,0,0,0,0,{},0,
-            {creatorScope.table().source(),creatorScope.table().addressPoint()});
+        // Keep the proven metadata repair alive across the SAME native call.
+        // Separate observers cannot own the thread's debug state concurrently.
+        constexpr uint8_t copyAnchor[]={0xe8,0x9c,0x42,0xf3,0xff};
+        uint8_t actualCopy[sizeof(copyAnchor)]{};
+        std::vector<uint8_t> metadata;
+        try { metadata.resize(TglKernelMetadataAdapter::blobBytes); }
+        catch (...) { return result; }
+        if(!readMemory(image+0x13260f,actualCopy,sizeof(actualCopy)) ||
+            std::memcmp(actualCopy,copyAnchor,sizeof(copyAnchor)) ||
+            !readMemory(image+0x531550,metadata.data(),metadata.size()) ||
+            !TglKernelMetadataAdapter::translate(metadata))return result;
+        NativeReturnObserver observer({image+0x13260f,image+0x133c0f,0,0},
+            0,0,0,0,0,0,
+            {image+0x531550,reinterpret_cast<uintptr_t>(metadata.data()),metadata.size()},0,
+            {creatorScope.table().source(),creatorScope.table().addressPoint(),1});
         if(!observer.isArmed())return result;
         result.nativeInvoked=true;
         result.nativeResult=reinterpret_cast<int(*)(void*,const void*)>(entry)(
             reinterpret_cast<void*>(physical),input);
-        result.selected=observer.observed(0,1) && creatorScope.consumed();
+        result.selected=observer.observed(1,1) && creatorScope.consumed();
+        result.metadataCopied=observer.observed(0,1);
         result.handoffResult=creatorScope.result();
-        result.handoffCompleted=result.selected && creatorScope.handoffCompleted() &&
+        result.handoffCompleted=result.selected && result.metadataCopied && creatorScope.handoffCompleted() &&
             physicalScope.matches(image,physical,generation);
         return result;
     }
