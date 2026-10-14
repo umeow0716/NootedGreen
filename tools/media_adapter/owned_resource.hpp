@@ -2243,17 +2243,20 @@ template<class Native,class Handoff,class AdmitCreator> class TglOwnedCreatorCal
     inline static thread_local TglOwnedCreatorCallScope* active_=nullptr;
     Native& native_;Handoff& handoff_;AdmitCreator& admit_;
     TglOwnedCreatorCallTable table_;
-    bool consumed_=false,busy_=false;
+    bool consumed_=false,busy_=false,handoffCompleted_=false;
+    int result_=5;
     static int dispatch(void* creator) noexcept {
         auto* self=active_;
         if(!self || tglOwnedCreatorCallScopeActive!=self || self->consumed_ || self->busy_ || !self->admit_(creator)) return 5;
         self->consumed_=true;self->busy_=true;
         struct Exit {bool& busy;~Exit(){busy=false;}} exit{self->busy_};
         const int result=self->native_(self->table_.nativeCreate(),creator);
-        if(result)return result;
+        if(result){self->result_=result;return result;}
         TglOwnedCreatorHandoffContext context{self->table_.source()-0x75bb58};
         TglOwnedScopedContext<TglOwnedCreatorHandoffContext,TglOwnedCreatorHandoffDomain> handoff(creator,context);
-        return handoff.bound()?self->handoff_(creator):5;
+        self->result_=handoff.bound()?self->handoff_(creator):5;
+        self->handoffCompleted_=handoff.bound() && self->result_==0;
+        return self->result_;
     }
 public:
     TglOwnedCreatorCallScope(Native& native,Handoff& handoff,AdmitCreator& admit) noexcept
@@ -2278,6 +2281,9 @@ public:
     }
     static uintptr_t callbackAddress() noexcept {return reinterpret_cast<uintptr_t>(&dispatch);}
     const TglOwnedCreatorCallTable& table() const noexcept {return table_;}
+    bool consumed() const noexcept {return consumed_;}
+    bool handoffCompleted() const noexcept {return handoffCompleted_;}
+    int result() const noexcept {return result_;}
 };
 
 struct TglOwnedSurfaceStorage;

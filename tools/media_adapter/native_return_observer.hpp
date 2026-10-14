@@ -17,6 +17,17 @@ struct NativeOwnedCopy {
     uintptr_t source = 0, replacement = 0, bytes = 0;
     int journal = -1;
 };
+// Normal-stack preparation pins/qualifies both tables. The signal handler
+// selects only this exact call argument; normal owned dispatch authenticates
+// the creator before calling native. No text/IP/result modification.
+struct NativeOwnedCallTable {
+    uintptr_t source=0,replacement=0;
+    bool select(uintptr_t& table,uintptr_t creator) const noexcept {
+        if(!source || !replacement || table!=source || !creator || (creator&7) ||
+            creator>UINTPTR_MAX-0x70)return false;
+        table=replacement;return true;
+    }
+};
 
 class NativeReturnObserver {
     inline static std::mutex lock;
@@ -39,6 +50,7 @@ class NativeReturnObserver {
     uintptr_t imageBase = 0;
     uintptr_t imageBytes = 0;
     NativeOwnedCopy ownedCopy{};
+    NativeOwnedCallTable ownedCallTable{};
     volatile sig_atomic_t handlerRestore = KERN_FAILURE;
     bool installed = false;
     bool armed = false;
@@ -87,6 +99,12 @@ class NativeReturnObserver {
             raw = exact ? 1 : uintptr_t(-1);
             self->record(2, exact ? 1 : 0);
         }
+        if(self->ownedCallTable.replacement && site==0) {
+            uintptr_t table=state->uc_mcontext->__ss.__rcx;
+            const bool exact=self->ownedCallTable.select(table,state->uc_mcontext->__ss.__rdi);
+            if(exact)state->uc_mcontext->__ss.__rcx=table;
+            raw=exact?1:uintptr_t(-1);
+        }
         if (self->rcxSites & (1u << site)) raw = state->uc_mcontext->__ss.__rcx;
         // Only caller-pinned native DWORD-load sites opt in. Exactly the same
         // four bytes that the interrupted instruction will read; no RPC/allocation.
@@ -123,9 +141,10 @@ public:
         : NativeReturnObserver(std::array<uintptr_t, 4>{site, 0, 0, 0}) {}
     explicit NativeReturnObserver(const std::array<uintptr_t, 4> &selected, unsigned booleans = 0,
         unsigned rcx = 0, unsigned readRax32 = 0, unsigned rdxImage = 0,
-        uintptr_t base = 0, uintptr_t bytes = 0, NativeOwnedCopy copy = {}, unsigned rcxImage = 0)
+        uintptr_t base = 0, uintptr_t bytes = 0, NativeOwnedCopy copy = {}, unsigned rcxImage = 0,
+        NativeOwnedCallTable callTable = {})
         : sites(selected), booleanSites(booleans), rcxSites(rcx), readRax32Sites(readRax32),
-          rdxImageSites(rdxImage), rcxImageSites(rcxImage), imageBase(base), imageBytes(bytes), ownedCopy(copy) {
+          rdxImageSites(rdxImage), rcxImageSites(rcxImage), imageBase(base), imageBytes(bytes), ownedCopy(copy),ownedCallTable(callTable) {
         for (unsigned i = 0; i != 4; ++i) {
             if (!sites[i]) continue;
             for (unsigned j = 0; j != i; ++j) if (sites[j] == sites[i]) return;
@@ -143,7 +162,13 @@ public:
                 ((unsigned(wanted) & ~1u) != (rdxImageSites | rcxImageSites)) ||
                 !ownedCopy.source || !ownedCopy.replacement || ownedCopy.source == ownedCopy.replacement ||
                 ownedCopy.bytes > 0x7fffffff || ownedCopy.source + ownedCopy.bytes < ownedCopy.source ||
-                ownedCopy.replacement + ownedCopy.bytes < ownedCopy.replacement))) {
+                ownedCopy.replacement + ownedCopy.bytes < ownedCopy.replacement)) ||
+            ((ownedCallTable.source || ownedCallTable.replacement) &&
+                (wanted!=1 || booleanSites || rcxSites || readRax32Sites || rdxImageSites || rcxImageSites ||
+                 ownedCopy.bytes || !ownedCallTable.source || !ownedCallTable.replacement ||
+                 ownedCallTable.source==ownedCallTable.replacement || (ownedCallTable.source&7) ||
+                 (ownedCallTable.replacement&7) || ownedCallTable.source>UINTPTR_MAX-0x1f ||
+                 ownedCallTable.replacement>UINTPTR_MAX-0x1f))) {
             os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP busy-or-no-site");
             return;
         }

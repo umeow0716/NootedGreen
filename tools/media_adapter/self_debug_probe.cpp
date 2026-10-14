@@ -20,6 +20,21 @@ extern "C" const char owned_debug_data_site[];
 extern "C" const char owned_debug_data[];
 extern "C" uint32_t owned_debug_copy_target(void *, size_t, const void *, size_t);
 extern "C" const char owned_debug_copy_site[];
+extern "C" int owned_debug_creator_target(void *, const uintptr_t *);
+extern "C" const char owned_debug_creator_site[];
+static void *expectedCreator;
+static unsigned creatorNativeCalls, creatorOwnedCalls;
+static int creatorNative(void *creator) {
+    ++creatorNativeCalls;
+    return creator == expectedCreator ? 0x1357 : 0x2468;
+}
+static int creatorOwned(void *creator) {
+    ++creatorOwnedCalls;
+    return creatorNative(creator);
+}
+asm(".text\n.p2align 4\n.globl _owned_debug_creator_target\n"
+    "_owned_debug_creator_target:\npushq %rbp\nmovq %rsp, %rbp\nmovq %rsi, %rcx\n"
+    ".globl _owned_debug_creator_site\n_owned_debug_creator_site:\ncallq *0x18(%rcx)\npopq %rbp\nretq\n");
 extern "C" __attribute__((noinline)) uint32_t owned_debug_copy_impl(
     void *destination, size_t capacity, const void *source, size_t bytes) {
     if (capacity < bytes || bytes != sizeof(uint32_t)) return 0;
@@ -135,6 +150,23 @@ int main() {
     int result = set == KERN_SUCCESS ? owned_debug_target() : -1;
     kern_return_t restored = thread_set_state(thread, x86_DEBUG_STATE64,
         reinterpret_cast<thread_state_t>(&original), x86_DEBUG_STATE64_COUNT);
+    // Select a call-only table, never change the creator's object vptr.
+    alignas(8) unsigned char creator[0x70]{};
+    alignas(8) uintptr_t nativeTable[4]{0, 0, 0, reinterpret_cast<uintptr_t>(creatorNative)};
+    alignas(8) uintptr_t ownedTable[4]{0, 0, 0, reinterpret_cast<uintptr_t>(creatorOwned)};
+    alignas(8) uintptr_t otherTable[4]{0, 0, 0, reinterpret_cast<uintptr_t>(creatorNative)};
+    for (unsigned test = 0; test != 3; ++test) {
+        creatorNativeCalls = creatorOwnedCalls = 0;
+        expectedCreator = test == 2 ? nullptr : creator;
+        NativeReturnObserver select({reinterpret_cast<uintptr_t>(owned_debug_creator_site), 0, 0, 0},
+            0, 0, 0, 0, 0, 0, {}, 0,
+            {reinterpret_cast<uintptr_t>(nativeTable), reinterpret_cast<uintptr_t>(ownedTable)});
+        if (!select.isArmed() ||
+            owned_debug_creator_target(expectedCreator, test == 1 ? otherTable : nativeTable) != 0x1357 ||
+            !select.observed(0, test == 0 ? 1 : -1) || creatorNativeCalls != 1 ||
+            creatorOwnedCalls != (test == 0 ? 1u : 0u) ||
+            nativeTable[3] != reinterpret_cast<uintptr_t>(creatorNative) || creator[0] != 0) return 1;
+    }
     alarm(0);
     int handlerRestored = sigaction(SIGTRAP, &previous, nullptr);
     x86_debug_state64_t finalState{};

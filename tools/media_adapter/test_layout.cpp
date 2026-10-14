@@ -17935,6 +17935,7 @@ int main() {
                             return entry==Scope::callbackAddress() && size==1;
                         };
                         assert(scope.prepare(image,creatorRead,qualify,callExecutable,admitOwned));
+                        assert(!scope.consumed() && !scope.handoffCompleted() && scope.result()==5);
                         Scope nested(nativeCall,handoff,admitCreator);
                         assert(!nested.prepare(image,creatorRead,qualify,callExecutable,admitOwned) && !nested.table().addressPoint());
                         auto otherAdmit=[](void*) noexcept -> bool {return false;};
@@ -17950,6 +17951,8 @@ int main() {
                         const int expected=outcomes.first?outcomes.first:outcomes.second;
                         assert(reinterpret_cast<int(*)(void*)>(entry)(reinterpret_cast<void*>(creatorAddress))==expected);
                         assert(nativeCalls==1 && handoffs==unsigned(outcomes.first==0));
+                        assert(scope.consumed() && scope.result()==expected &&
+                            scope.handoffCompleted()==(expected==0));
                         assert(callback(reinterpret_cast<void*>(creatorAddress))==5 && nativeCalls==1);
                     }
                     assert(callback(reinterpret_cast<void*>(creatorAddress))==5 && nativeCalls==1);
