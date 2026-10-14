@@ -2635,6 +2635,19 @@ struct NativeRetainedFrontendRuntime {
 };
 // Join the concrete original-frame producers in one synchronous execution.
 // Missing metadata/retirement producers are not supplied by this assembler.
+// This is the LOWER admission+Render chain, not a renderer virtual+50 hook.
+// Exact TGL 1b1ed0 first uses 1b20d0 to copy 17 source / 8 target entries
+// (0x308 allocation, 0x2a8 copied bytes each), then resolves pass roots from
+// those temporary entries. 1b2530 copies them BACK even after native failure;
+// 1b2940 copies only pass flags/indices at +8/+c/+20/+30, not root pointers.
+// An external dispatcher must preserve that conversion/copyback and the
+// 131d10 source+134==2 gate, and latch errors ignored by caller 131520.
+// Do not substitute original root aliases or execute admission/Render twice.
+// Temporary lifetime is separate: 1b2870 frees all 17/8 copied shells;
+// 1b2400 prepares two additional 0x308 shells at pass+48/+50, destroyed
+// through 1b2b20->1337b0. Successful pass+20 handoff switches root+10 to
+// root+18 and 131e20 advances pass+40 modulo two. None of these are leases
+// on the original roots or evidence that GPU resource retirement completed.
 struct NativeOriginalFrameExecution {
     using Frontend=NativeRetainedFrontendRuntime;
     struct Request {
