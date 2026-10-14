@@ -15790,6 +15790,51 @@ static void testRetainedVeboxFrames() {
         batchContexts[1]=batchContexts[0];
         assert(batchCallbacks.createContextsAndAdoptBatch<2>(batchPhysical.ticket,0xe000,input,adoptBatch,nativeSuccess)==5);
         assert(adoptedBatches==1 && nativeAdoptions==3 && !creationRegistry.lookup(image,0xe000).generation);
+        {
+            static Registry scopedRegistry;
+            invoke.produced=0x11000;batchContexts={0x46000,0x47000};
+            TglOwnedPhysicalCallbackCoordinator scoped(scopedRegistry,binding,read,qualify,executable,invoke);
+            const auto physical=scoped.initialize(&output,input);assert(physical.published);
+            TglOwnedPhysicalDependencyLease creatorPin,codecPin;
+            unsigned calls=0,adoptions=0;
+            auto nativeScoped=[&](uintptr_t entry,uintptr_t address,const void* original,auto& scope) noexcept -> int {
+                ++calls;assert(entry==image+0x13e43 && address==0x11000 && original==input);
+                assert(scope.matches(image,address,physical.ticket.generation));
+                assert(scope.image()==image && scope.physical()==address && scope.generation()==physical.ticket.generation);
+                creatorPin=scope.retainPhysicalDependency();assert(creatorPin.matches(image,address,physical.ticket.generation));
+                assert(!scopedRegistry.pinDependency(physical.ticket,image,address).live()); // Public API would recurse.
+                assert(scopedRegistry.withDependencyAdoption(physical.ticket,image,address,
+                    [](auto&) noexcept -> int {assert(false);return 0;})==5);
+                return 0;
+            };
+            auto adoptScoped=[&](auto& scope,uintptr_t address,const TglNativeCreatedContextBatch<2>& batch) noexcept -> int {
+                ++adoptions;assert(address==0x11000 && batch.valid && batch.contexts==batchContexts);
+                codecPin=scope.retainPhysicalDependency();assert(codecPin.matches(image,address,physical.ticket.generation));
+                return 0;
+            };
+            assert(scoped.createContextsAndAdoptBatchScoped<2>(physical.ticket,0x11000,input,adoptScoped,nativeScoped)==0);
+            assert(calls==1 && adoptions==1);
+            assert(scopedRegistry.destroy(physical.ticket,image,0x11000,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
+            creatorPin.reset();
+            assert(scopedRegistry.destroy(physical.ticket,image,0x11000,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
+            codecPin.reset();assert(scopedRegistry.destroy(physical.ticket,image,0x11000,[](uintptr_t) noexcept -> int {return 0;})==0);
+            invoke.produced=0x12000;
+            TglOwnedPhysicalCallbackCoordinator failedScoped(scopedRegistry,binding,read,qualify,executable,invoke);
+            const auto failed=failedScoped.initialize(&output,input);assert(failed.published && reinterpret_cast<uintptr_t>(output)==0x12000);
+            auto failure=[&](auto& scope,uintptr_t address,const TglNativeCreatedContextBatch<2>&) noexcept -> int {
+                ++adoptions;codecPin=scope.retainPhysicalDependency();
+                assert(codecPin.matches(image,address,failed.ticket.generation));return 31;
+            };
+            unsigned legacyCalls=0;
+            auto legacy=[&](uintptr_t entry,uintptr_t address,const void* original) noexcept -> int {
+                ++legacyCalls;assert(entry==image+0x13e43 && address==0x12000 && original==input);return 0;
+            };
+            assert(failedScoped.createContextsAndAdoptBatchScoped<2>(failed.ticket,0x12000,input,failure,legacy)==31 && legacyCalls==1);
+            assert(codecPin.live() && !scopedRegistry.lookup(image,0x12000).generation);
+            codecPin.reset(); // Quarantined record still cannot reopen or destroy.
+            assert(scopedRegistry.destroy(failed.ticket,image,0x12000,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
+            assert(failedScoped.createContextsAndAdoptBatchScoped<2>(failed.ticket,0x12000,input,failure,legacy)==5 && legacyCalls==1);
+        }
         static Registry removalRegistry;
         invoke.produced=0xf000;
         TglOwnedPhysicalCallbackCoordinator removalCallbacks(removalRegistry,binding,read,qualify,executable,invoke);

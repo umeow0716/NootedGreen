@@ -21633,6 +21633,28 @@ private:
         return DependencyLease(entry.dependencies,entry.image,entry.physical,entry.generation);
     }
 public:
+    // Only lifetime adoption while the physical mutation gate is held. Unlike
+    // Scope, this exposes NO frame pool/request/mutation operations. Stack-only;
+    // synchronous native creator callbacks may borrow it, never save its address.
+    class DependencyAdoptionScope {
+        friend class TglOwnedVeboxPhysicalFrameRegistry;
+        Entry& entry_;
+        explicit DependencyAdoptionScope(Entry& entry) noexcept:entry_(entry) {}
+    public:
+        DependencyAdoptionScope(const DependencyAdoptionScope&)=delete;
+        DependencyAdoptionScope& operator=(const DependencyAdoptionScope&)=delete;
+        uintptr_t image() const noexcept {return entry_.image;}
+        uintptr_t physical() const noexcept {return entry_.physical;}
+        uint64_t generation() const noexcept {return entry_.generation;}
+        bool matches(uintptr_t image,uintptr_t physical,uint64_t generation) const noexcept {
+            return entry_.state==State::Live && !entry_.frames.workFaulted() &&
+                entry_.image==image && entry_.physical==physical && entry_.generation==generation;
+        }
+        DependencyLease retainPhysicalDependency() noexcept {
+            if(!matches(image(),physical(),generation()))return {};
+            return retainDependency(entry_);
+        }
+    };
     class Scope {
         friend class TglOwnedVeboxPhysicalFrameRegistry;
         Pool& frames_;uintptr_t physical_,context_=0;Entry& entry_;
@@ -21784,17 +21806,24 @@ public:
             return invoke(frames);
         });
     }
+    template<class Invoke> int withDependencyAdoption(Ticket ticket,uintptr_t image,
+        uintptr_t physical,Invoke invoke) noexcept {
+        static_assert(noexcept(invoke(std::declval<DependencyAdoptionScope&>())) &&
+            std::is_same_v<decltype(invoke(std::declval<DependencyAdoptionScope&>())),int>);
+        return withLive(ticket,image,physical,[&](Pool& frames) noexcept -> int {
+            if(!frames.emptyForNativeRequest())return 5;
+            auto* entry=resolve(ticket);DependencyAdoptionScope scope(*entry);
+            const int result=invoke(scope);
+            if(result)entry->state=State::Quarantined;
+            return result;
+        });
+    }
     // Slot4 can delete earlier contexts before a later batch item fails.
     // Never reopen an ambiguous partially removed generation on nonzero.
     template<class Invoke> int withContextRemoval(Ticket ticket,uintptr_t image,
         uintptr_t physical,Invoke invoke) noexcept {
         static_assert(noexcept(invoke()) && std::is_same_v<decltype(invoke()),int>);
-        return withLive(ticket,image,physical,[&](Pool& frames) noexcept -> int {
-            if(!frames.emptyForNativeRequest()) return 5;
-            const int result=invoke();
-            if(result) resolve(ticket)->state=State::Quarantined;
-            return result;
-        });
+        return withDependencyAdoption(ticket,image,physical,[&](DependencyAdoptionScope&) noexcept -> int {return invoke();});
     }
     template<class Invoke> int destroy(Ticket ticket,uintptr_t image,uintptr_t physical,Invoke invoke) noexcept {
         static_assert(noexcept(invoke(uintptr_t{})) &&
@@ -23059,8 +23088,9 @@ public:
     // removal; never adopt output contexts only from aggregate success alone.
     template<class Native=TglNativeBackingAllocateInvoker> int createContexts(
         typename Registry::Ticket ticket,uintptr_t physical,const void* input,Native native=Native{}) noexcept {
-        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
-            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+        using AdoptionScope=typename Registry::DependencyAdoptionScope;
+        static_assert(std::is_nothrow_invocable_v<Native,uintptr_t,uintptr_t,const void*,AdoptionScope&> ||
+            std::is_nothrow_invocable_v<Native,uintptr_t,uintptr_t,const void*>);
         constexpr std::array<uint8_t,20> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
             0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xe8,0x01,0x00,0x00};
         std::array<uint8_t,20> actual{};
@@ -23069,8 +23099,38 @@ public:
         if(!input || !valid() || binding_.image>UINTPTR_MAX-0x13e43-anchor.size() ||
             !executable_(binding_.image+0x13e43,anchor.size()) ||
             !read_(binding_.image+0x13e43,actual.data(),actual.size()) || actual!=anchor) return 5;
-        return withContextRemoval(ticket,physical,[&]() noexcept -> int {
-            return native(binding_.image+0x13e43,physical,input);
+        return registry_.withDependencyAdoption(ticket,binding_.image,physical,[&](AdoptionScope& scope) noexcept -> int {
+            if constexpr(std::is_nothrow_invocable_v<Native,uintptr_t,uintptr_t,const void*,AdoptionScope&>) {
+                static_assert(std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input,scope)),int>);
+                return native(binding_.image+0x13e43,physical,input,scope);
+            } else {
+                static_assert(std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+                return native(binding_.image+0x13e43,physical,input);
+            }
+        });
+    }
+    // Native creator callbacks AND post-create batch adoption can retain
+    // dependencies without recursively acquiring the already-held registry gate.
+    template<size_t Capacity=16,class Adopt,class Native=TglNativeBackingAllocateInvoker>
+    int createContextsAndAdoptBatchScoped(typename Registry::Ticket ticket,uintptr_t physical,
+        const void* input,Adopt adopt,Native native=Native{}) noexcept {
+        using Scope=typename Registry::DependencyAdoptionScope;
+        using Batch=TglNativeCreatedContextBatch<Capacity>;
+        static_assert(noexcept(adopt(std::declval<Scope&>(),uintptr_t{},std::declval<const Batch&>())) &&
+            std::is_same_v<decltype(adopt(std::declval<Scope&>(),uintptr_t{},std::declval<const Batch&>())),int>);
+        return createContexts(ticket,physical,input,[&](uintptr_t entry,uintptr_t address,const void* original,Scope& scope) noexcept -> int {
+            const int result=[&]() noexcept -> int {
+                if constexpr(std::is_nothrow_invocable_v<Native,uintptr_t,uintptr_t,const void*,Scope&>) {
+                    static_assert(std::is_same_v<decltype(native(entry,address,original,scope)),int>);
+                    return native(entry,address,original,scope);
+                } else {
+                    static_assert(noexcept(native(entry,address,original)) && std::is_same_v<decltype(native(entry,address,original)),int>);
+                    return native(entry,address,original);
+                }
+            }();
+            if(result)return result;
+            Batch batch;if(!batch.capture(reinterpret_cast<uintptr_t>(original),read_))return 5;
+            return adopt(scope,address,static_cast<const Batch&>(batch));
         });
     }
     // Adoption runs before releasing the SAME physical-generation gate. It
