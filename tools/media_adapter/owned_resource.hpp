@@ -4203,6 +4203,11 @@ struct TglVeboxHardwareBinding {
     // dc8. This excludes those TWO reset candidates,not all initialization/
     // device-state writers or context-loss paths. Raw observation ABI remains
     // diagnostic until the remaining coverage/lifetime proof is complete.
+    // start3a752 is a DIFFERENT lifecycle boundary:3a7de clears EAX and
+    //3a7fc stores that zero qword at accelerator9d8,including restart9dc.
+    // Thus restartReports is not monotonic across service start. Excluding
+    // enable/disable resets does not establish stable start/context identity;
+    // a same-valued raw reply cannot alone authorize backing rearm.
     // Context loss has separate destructive reporting: exact family ae6e
     // affectedByHardwareReset(bool,reason) conditionally sets63b|20,644 and
     // increments63c, but aeb7 ALWAYS sets63b|40 and clears68c. aecc returns
