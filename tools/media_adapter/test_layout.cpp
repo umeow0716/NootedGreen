@@ -15222,6 +15222,17 @@ static void testRetainedVeboxFrames() {
                 {
                     typename RootOwner::SurfaceOwnerLease shell(sidecar);
                     assert(shell.storage()==&original && shell.metadataStorage()==&original && sidecar.hasSurfaceLease(original));
+                    assert(sidecar.surfaceBinding()==&original);
+                    assert(sidecar.withMutableSurface([&](auto& surface) noexcept -> int {
+                        assert(&surface==&original && sidecar.hasSurfaceLease(surface) && !sidecar.canDestroy());
+                        assert(sidecar.withMutableSurface([](auto&) noexcept -> int {assert(false);return 0;})==5);
+                        assert(!sidecar.withSurface([](const auto&) noexcept {assert(false);}));
+                        return 31;
+                    })==31);
+                    assert(sidecar.withSurface([&](const auto& surface) noexcept {assert(&surface==&original);}));
+                    assert(sidecar.withPeerSurface(sidecar,[&](const auto& a,const auto& b) noexcept {
+                        assert(&a==&original && &b==&original);
+                    }));
                     typename RootOwner::SurfaceOwnerLease nested(sidecar);assert(!nested.storage());
                     shell.metadataStorage()->prefix[0x86]=1;assert(original.prefix[0x86]==1);
                     std::array<uint32_t,2> di{2,0x100};
@@ -15287,6 +15298,9 @@ static void testRetainedVeboxFrames() {
                     assert(sidecar.withLeasedConversionMetadata(original,readMetadata,useMetadata)==5 && metadataReads==2);
                 }
                 assert(!sidecar.hasSurfaceLease(original));
+                assert(!sidecar.surfaceBinding() && !sidecar.withSurface([](const auto&) noexcept {assert(false);}));
+                assert(sidecar.canDestroy());
+                assert(sidecar.withMutableSurface([](auto&) noexcept -> int {assert(false);return 0;})==5);
                 assert(owners.reconcileSuccessfulRemoval(image,0x8000,success.ticket.generation,removed)==5 && !destroyed);
                 RootOwner readOnly(owners.pin(image,0x8000,success.ticket.generation,0x20000),roots,address,
                     [](uintptr_t,size_t) noexcept {return false;});

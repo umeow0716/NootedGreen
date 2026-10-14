@@ -18026,7 +18026,7 @@ public:
 template<class ContextLease> class TglNativeContextRootSurfaceOwner {
     ContextLease context_;
     TglOwnedSurfaceStorage* shell_=nullptr;
-    bool borrowed_=false,conversionBorrowed_=false,conversionFault_=false,diBorrowed_=false,diFault_=false;
+    bool borrowed_=false,conversionBorrowed_=false,conversionFault_=false,diBorrowed_=false,diFault_=false,surfaceBusy_=false;
 public:
     template<class Writable>
     TglNativeContextRootSurfaceOwner(ContextLease&& lease,const TglNativeContextInputRoots& roots,
@@ -18047,9 +18047,40 @@ public:
     TglNativeContextRootSurfaceOwner(const TglNativeContextRootSurfaceOwner&)=delete;
     TglNativeContextRootSurfaceOwner& operator=(const TglNativeContextRootSurfaceOwner&)=delete;
     bool ready() const noexcept {return context_.get() && shell_;}
-    bool canDestroy() const noexcept {return !borrowed_;}
+    bool canDestroy() const noexcept {return !borrowed_ && !surfaceBusy_ && !conversionBorrowed_ && !diBorrowed_;}
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& shell) const noexcept {
         return context_.get() && borrowed_ && shell_==&shell;
+    }
+    const TglOwnedSurfaceStorage* surfaceBinding() const noexcept {
+        return context_.get() && borrowed_?shell_:nullptr;
+    }
+    // Borrow the already-retained original shell, never acquire a second
+    // SurfaceOwnerLease or copy a descriptor into a temporary owner.
+    template<class Use> int withMutableSurface(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<TglOwnedSurfaceStorage&>())),int>);
+        auto* original=shell_;
+        if(surfaceBusy_ || !original || !hasSurfaceLease(*original))return 5;
+        surfaceBusy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{surfaceBusy_};
+        const int status=use(*original);
+        return shell_==original && hasSurfaceLease(*original)?status:5;
+    }
+    template<class Use> bool withSurface(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>);
+        return withMutableSurface([&](auto& original) noexcept -> int {use(std::as_const(original));return 0;})==0;
+    }
+    template<class Use> bool withPeerSurface(TglNativeContextRootSurfaceOwner& peer,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
+            std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>(),
+                std::declval<const TglOwnedSurfaceStorage&>())),void>);
+        return withMutableSurface([&](auto& original) noexcept -> int {
+            if(&peer==this) {use(std::as_const(original),std::as_const(original));return 0;}
+            return peer.withMutableSurface([&](auto& target) noexcept -> int {
+                use(std::as_const(original),std::as_const(target));return 0;
+            });
+        })==0;
     }
     // TGL1119b0 owns surface88:112277..112297 allocates8 for nonzero
     // SampleType138;112242..112267 frees/clears it when SampleType becomes0.

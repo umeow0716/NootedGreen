@@ -334,6 +334,24 @@ struct NativeAllocationParameterKind {
         return owner.readLeasedDiParameterKind(source,parameter,output,&readMemory);
     }
 };
+struct NativeAllocationRectangle {
+    NativeContextSurfaceOwner& input;NativeContextSurfaceOwner& output;
+    NativeRendererChildOwner& child;NativeExecutionOwner& execution;
+    int operator()(void* actual,uintptr_t report,const TglOwnedSurfaceStorage& source,
+        const TglOwnedFfdiTailViews&,const TglOwnedFfdnTailViews&) const noexcept {
+        return output.withMutableSurface([&](auto& target) noexcept -> int {
+            return tglCopyCapturedVeboxDirectRectangle(input,source,output,target,child,
+                execution,actual,report,&readMemory);
+        });
+    }
+};
+// Compilation composition only: the production caller must supply the real
+// allocation-only unwind, never nullptr or TglOwnedVeboxFrameNoUnwind.
+using NativeAllocationUnwind=void(*)(void*,uintptr_t,const TglOwnedSurfaceStorage&) noexcept;
+using NativeAllocationPlanner=TglOwnedVeboxAllocationFramePlanner<TglDarwinStmmSurfaceApi,
+    NativeContextSurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,decltype(&readMemory),
+    NativeAllocationSfcFormat,NativeAllocationSfcColor,NativeAllocationParameterKind,
+    TglOwnedFfdiCompressionFormatQuery,NativeAllocationRectangle,NativeDataAdmission,NativeAllocationUnwind>;
 // Frame surfaces retain their original codec contexts; CPU children remain
 // in the permanent VPHAL owner and are entered only through its pinned access.
 using NativeBorrowedFrontend=TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePin,
@@ -637,6 +655,10 @@ template class TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhys
 template class TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
 template struct TglOwnedVeboxSfcModeQuery<true,NativeRendererChildOwner,NativeVpModeResolve>;
 template struct TglOwnedVeboxSfcModeQuery<false,NativeRendererChildOwner,NativeVpModeResolve>;
+template struct TglOwnedVeboxAllocationFramePlanner<TglDarwinStmmSurfaceApi,
+    NativeContextSurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,decltype(&readMemory),
+    NativeAllocationSfcFormat,NativeAllocationSfcColor,NativeAllocationParameterKind,
+    TglOwnedFfdiCompressionFormatQuery,NativeAllocationRectangle,NativeDataAdmission,NativeAllocationUnwind>;
 template int tglCopyCapturedVeboxDirectRectangle<NativeContextSurfaceOwner,NativeContextSurfaceOwner,
     NativeRendererChildOwner,NativeExecutionOwner,decltype(&readMemory)>(NativeContextSurfaceOwner&,
     const TglOwnedSurfaceStorage&,NativeContextSurfaceOwner&,TglOwnedSurfaceStorage&,
