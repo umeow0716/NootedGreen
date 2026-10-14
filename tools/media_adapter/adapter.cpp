@@ -2055,6 +2055,30 @@ struct NativeRetainedFrontendRuntime {
         const TglNativeCreatedVeboxRendererView&,
         NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
         NativeDenoiseParameters&,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept;
+    static TglOwnedVeboxCommandTransactionResult runPrepared(NativeContextRendererFrame& frame,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,NativeModeFrameExecution::Inputs& inputs) noexcept {
+        return run(frame,roles,sourceIndex,targetIndex,temporal,&inputs,
+            [](void* context,NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& pinned,
+                NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
+                NativeContextSurfaceOwner* secondary,NativeContextSurfaceOwner* previous,
+                NativeDenoiseParameters& parameters,NativeRendererChildLifetime& first,
+                NativeRendererChildLifetime& second) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                TglOwnedVeboxCommandTransactionResult result;
+                auto& in=*static_cast<NativeModeFrameExecution::Inputs*>(context);
+                auto& plan=in.allocation;
+                auto* life=TglOwnedVeboxScopedContext<NativeRendererChildLifetime>::get(plan.selection.child);
+                if(&in.assembly!=&cpu || &in.parameters!=&parameters ||
+                    &plan.input!=&source || &plan.target!=&target ||
+                    plan.secondary!=secondary || plan.previous!=previous ||
+                    !life || (life!=&first && life!=&second) ||
+                    !in.view.matchesCreated(pinned,&readMemory,NativeDataAdmission{},
+                        NativeTglImageAdmission{pinned.image}))return result;
+                const auto execution=NativeModeFrameExecution::run(in);
+                result=execution.native;result.status=execution.status;
+                return result;
+            });
+    }
     static TglOwnedVeboxCommandTransactionResult runComplete(NativeContextRendererFrame& frame,
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,NativeCompleteFrameConsumer& consumer) noexcept {
