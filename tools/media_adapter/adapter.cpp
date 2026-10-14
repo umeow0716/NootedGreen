@@ -355,6 +355,54 @@ struct NativeTwoPassCscHealth {
 using NativeTwoPassCscQuery=TglLeasedNativeTwoPassCscQuery<NativeRendererChildOwner,
     decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory),
     TglNativeTwoPassCscInvoke,NativeTwoPassCscHealth>;
+struct NativeTargetDecompression {
+    void* scope=nullptr;
+    int(*invoke)(void*,NativeContextSurfaceOwner&,const TglOwnedSurfaceStorage&) noexcept=nullptr;
+};
+struct NativeFastFillTransaction {
+    NativeContextSurfaceOwner& targetOwner;
+    TglVeboxPipeAcquisition& acquisition;
+    // Compression format comes from the enclosing authenticated resource
+    // query, never a guessed Darwin shell offset or zero-status substitute.
+    uint32_t& compressionFormat;int& decompressionStatus;
+    NativeTargetDecompression& decompression;
+    template<class Policy> bool operator()(Policy& policy) noexcept {
+        bool entered=false,selected=false;
+        const int status=targetOwner.withMutableSurface([&](TglOwnedSurfaceStorage& target) noexcept -> int {
+            entered=true;
+            bool compressed=false;auto mode=TglOwnedSfcCompressionMode::Disabled;
+            if(!policy.readTargetCompressionState(compressed,mode))return 5;
+            if(compressed && (!decompression.scope || !decompression.invoke ||
+                !ownedExecutableMemory(reinterpret_cast<uintptr_t>(decompression.invoke),1))) {
+                acquisition.fail();return 5; // Required producer is not wired yet.
+            }
+            auto decompress=[&]() noexcept -> int {
+                if(!decompression.scope || !decompression.invoke || !targetOwner.hasSurfaceLease(target)) {
+                    acquisition.fail();return 5;
+                }
+                const int native=decompression.invoke(decompression.scope,targetOwner,target);
+                if(!targetOwner.hasSurfaceLease(target))acquisition.fail();
+                return native;
+            };
+            selected=policy.runFastFillTransaction(target,compressed,mode,compressionFormat,
+                decompressionStatus,decompress);
+            return selected?0:5;
+        });
+        if(!entered)acquisition.fail();
+        return !status && selected && acquisition.healthy();
+    }
+};
+using NativeOutputPipePolicy=TglLeasedGen12VeboxOutputPolicy<decltype(&readMemory),
+    NativeRendererChildOwner,NativeContextSurfaceOwner,NativeContextSurfaceOwner,
+    NativeTwoPassCscQuery,NativeFastFillTransaction>;
+using NativeOutputPipeSelector=TglOwnedVpPipeSelector<decltype(&readMemory),NativeOutputPipePolicy>;
+// Compile the concrete selector/transaction bodies; no policy instance is
+// published until the compressed-resource producer has a proven native route.
+struct NativeOutputPipeSelection {
+    static uint32_t select(NativeOutputPipeSelector& selector,uint8_t& compositionNeeded) noexcept {
+        return selector(compositionNeeded);
+    }
+};
 struct NativeOutputCscQueryScope {
     static bool query(NativeTwoPassCscQuery& scoped,uintptr_t source,uintptr_t target,bool& needed) noexcept {
         return scoped(source,target,needed);
