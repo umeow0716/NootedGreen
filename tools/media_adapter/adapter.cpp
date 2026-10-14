@@ -3257,6 +3257,7 @@ struct NativeOriginalFrameExecution {
         bool attempted=false;
         NativeVeboxSendSubmissionStage::Admit submitAdmit=nullptr;
         NativeVeboxSendSubmissionStage::AdmitChild childAdmit=nullptr;
+        bool ownedSend=false;
     };
     // Construct execution Inputs ONLY inside the original retained frontend
     // continuation. No caller-supplied core/graph/line storage or owner copies.
@@ -3288,7 +3289,8 @@ struct NativeOriginalFrameExecution {
                 Inputs input{frontend,core,graph,lines,params,pass,read,vp,request.catalogue,mode,request.view,
                     sourceFeatures,targetFeatures,request.acquisition,request.decompressionStatus,
                     request.decompression,request.argument};
-                return request.submitAdmit?runWithSend(retained.frame,input,request.submitAdmit,request.childAdmit):run(input);
+                return (request.ownedSend || request.submitAdmit)?
+                    runWithSend(retained.frame,input,request.submitAdmit,request.childAdmit):run(input);
             }};
         return Frontend::runVpInputs(frame,roles,sourceIndex,targetIndex,temporal,vpRequest);
     }
@@ -3307,10 +3309,11 @@ struct NativeOriginalFrameExecution {
     using Inputs=InputsFor<NativeContextSurfaceOwner>;
     template<class SurfaceOwner> static TglOwnedVeboxCommandTransactionResult runWithSend(
         NativeContextRendererFrame& frame,InputsFor<SurfaceOwner>& in,
-        NativeVeboxSendSubmissionStage::Admit admit,NativeVeboxSendSubmissionStage::AdmitChild childAdmit) noexcept {
-        if(in.sendScope || !admit || !childAdmit || frame.invalidated() || !frame.surfacesReady() ||
-            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1) ||
-            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(childAdmit),1))return {};
+        NativeVeboxSendSubmissionStage::Admit admit=nullptr,
+        NativeVeboxSendSubmissionStage::AdmitChild childAdmit=nullptr) noexcept {
+        if(in.sendScope || bool(admit)!=bool(childAdmit) || frame.invalidated() || !frame.surfacesReady() ||
+            (admit && !ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1)) ||
+            (childAdmit && !ownedExecutableMemory(reinterpret_cast<uintptr_t>(childAdmit),1)))return {};
         NativeVeboxSendBindingsFor<SurfaceOwner> bindings;
         if(!bindings.resolve(in.core,in.view,in.frontend.pinned) || !bindings.live())return {};
         TglOwnedVeboxBuilderScratch scratch;
@@ -3423,7 +3426,7 @@ struct NativeTemporaryLowerContinuation {
     NativeVeboxSendSubmissionStage::AdmitChild childAdmit=nullptr;
     TglOwnedVeboxCommandTransactionResult run() noexcept {
         if(attempted || childIndex>1 || !parameters || !pass || !acquisition.healthy() ||
-            bool(sendFrame)!=bool(submitAdmit) || bool(sendFrame)!=bool(childAdmit))return {};
+            bool(submitAdmit)!=bool(childAdmit) || (!sendFrame && submitAdmit))return {};
         attempted=true;
         const auto* current=source.surfaceBinding();const auto* output=target.surfaceBinding();
         if(!current || !output)return {};
@@ -3513,6 +3516,7 @@ struct NativeRetainedTemporaryExecution {
         NativeContextRendererFrame* sendFrame=nullptr;
         NativeVeboxSendSubmissionStage::Admit submitAdmit=nullptr;
         NativeVeboxSendSubmissionStage::AdmitChild childAdmit=nullptr;
+        bool ownedSend=false;
     };
     static TglOwnedVeboxCommandTransactionResult consume(void* context,NativeRendererCpuAssembly& cpu,
         const TglNativeCreatedVeboxRendererView& pinned,NativeSourceGraph& graph,
@@ -3538,7 +3542,7 @@ struct NativeRetainedTemporaryExecution {
         if(request.attempted || request.childIndex>1 || request.sendFrame ||
             bool(request.submitAdmit)!=bool(request.childAdmit))return {};
         request.attempted=true;
-        if(request.submitAdmit)request.sendFrame=&frame;
+        if(request.ownedSend || request.submitAdmit)request.sendFrame=&frame;
         auto result=NativeRetainedFrontendRuntime::runUnselected(frame,request.roles,request.sourceIndex,request.targetIndex,
             &request,&consume);
         request.sendFrame=nullptr;
