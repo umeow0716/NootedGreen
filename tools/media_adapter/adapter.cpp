@@ -2633,9 +2633,14 @@ struct NativeFrameHistoryRetirement {
 // enclosing Send duties. Not an extra flush after whole native Render.
 struct NativeVeboxSendSubmissionStage {
     using Admit=bool(*)(const NativeBorrowedFrontend&,uintptr_t,uintptr_t,uintptr_t) noexcept;
-    static bool prepareHints(TglOwnedVeboxBuilderScratch& scratch,uintptr_t image) noexcept {
-        return TglNativeVeboxSetupHints::initialize(scratch.setup,image,&readMemory,
+    static int setup(const TglNativeVeboxSetupBinding& binding,uintptr_t child,
+        TglOwnedVeboxBuilderScratch& scratch,int32_t& remaining,uintptr_t image,
+        TglOwnedVeboxProducerPass& pass) noexcept {
+        if(!pass.acceptsProducer())return 5;
+        const int status=binding.callOwned(child,scratch,remaining,&readMemory,
             NativeTglImageAdmission{image},&executableMemory);
+        if(!pass.record(status))return status?status:5;
+        return status?status:(pass.acceptsProducer()?0:pass.submissionStatus(0));
     }
     static int run(NativeContextRendererFrame& frame,TglOwnedVeboxProducerPass& pass,
         const TglNativeOsCommandSubmitBinding& binding,TglOwnedVeboxBuilderScratch& scratch,

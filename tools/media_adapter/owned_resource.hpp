@@ -18746,10 +18746,13 @@ struct TglOwnedVeboxBuilderScratch {
     std::array<uint8_t,0x2f0> command{};
     std::array<uint8_t,0x170> surfaceCommands{};
     std::array<uint8_t,0x20> completion{},setup{};
+    // Exact129a10 saves argument4 but never consumes it. Native12a230
+    // zeroes this148-byte CPU local; it is NOT a registered GPU resource.
+    std::array<uint8_t,0x148> unusedSetupArgument{};
 };
 // Native129b70->12eb80 initializes Send's32-byte polymorphic hints object;
 // 3af60->3bf90 is empty. This is owned DATA initialization, not native command
-// allocation. The separate148-byte setup argument still needs its own lease.
+// allocation. The separate148-byte argument is the scratch's own CPU local.
 struct TglNativeVeboxSetupHints {
     inline static constexpr std::array<uint8_t,60> constructor{
         0x55,0x48,0x89,0xe5,0x48,0x8d,0x05,0x5d,0x93,0x62,0x00,0x48,0x05,0x10,0,0,0,
@@ -19079,8 +19082,9 @@ bool tglWritebackNativeVeboxCommandResult(uintptr_t image,uintptr_t os,
     return tglWritebackNativeCommandHeader(image,os,scratch,read,qualify,executable,invoke);
 }
 // Native slot128 retains its own command acquisition/context bookkeeping.
-// The caller must lease the auxiliary argument and all child/OS dependencies;
-// this binding does not manufacture them or authorize submission.
+// Legacy call keeps the caller's auxiliary memory and child/OS dependencies
+// alive. callOwned supplies exact TGL's unused fourth CPU argument,not a GPU
+// resource lease. Neither entry manufactures submission/completion authority.
 // Its int32 output is command15c remaining BEFORE child+d8, not bytes consumed.
 class TglNativeVeboxSetupBinding {
     uintptr_t image_=0,entry_=0;
@@ -19107,6 +19111,13 @@ public:
             !read(table+0x128,&entry,8) || entry!=entry_) return 5;
         return invoke(entry_,reinterpret_cast<void*>(child),scratch.command.data(),
             scratch.setup.data(),auxiliary,&consumed);
+    }
+    template<class Read,class Qualify,class Executable,class Invoke=TglNativeVeboxSetupInvoker>
+    int callOwned(uintptr_t child,TglOwnedVeboxBuilderScratch& scratch,int32_t& consumed,
+        Read read,Qualify qualify,Executable executable,Invoke invoke={}) const noexcept {
+        if(!image_ || !entry_ || !TglNativeVeboxSetupHints::initialize(scratch.setup,image_,read,qualify,executable))return 5;
+        scratch.unusedSetupArgument.fill(0);
+        return call(child,scratch,scratch.unusedSetupArgument.data(),consumed,read,invoke);
     }
 };
 struct TglNativeVeboxBuilderInvoker {

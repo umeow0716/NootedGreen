@@ -31866,6 +31866,41 @@ int main() {
                 assert(!setupBinding.resolve(nativeImage,setupRead,qualified,[](uintptr_t,size_t){return false;}));
                 assert(setupBinding.resolve(nativeImage,setupRead,qualified,setupExecutable));
                 unsigned nativeCalls=0;int nativeResult=0;
+                {
+                    unsigned ownedCalls=0;bool hintsReadable=true;
+                    auto ownedRead=[&](uintptr_t at,void* out,size_t n) {
+                        if(at==nativeImage+0x12eb80 && n==TglNativeVeboxSetupHints::constructor.size()) {
+                            if(!hintsReadable)return false;
+                            std::memcpy(out,TglNativeVeboxSetupHints::constructor.data(),n);return true;
+                        }
+                        if(at==nativeImage+0x3bf90 && n==TglNativeVeboxSetupHints::destructor.size()) {
+                            std::memcpy(out,TglNativeVeboxSetupHints::destructor.data(),n);return true;
+                        }
+                        return setupRead(at,out,n);
+                    };
+                    auto ownedExecutable=[&](uintptr_t at,size_t n) {
+                        return setupExecutable(at,n) ||
+                            (at==nativeImage+0x12eb80 && n==60) || (at==nativeImage+0x3bf90 && n==10);
+                    };
+                    int ownedStatus=0;
+                    auto ownedInvoke=[&](uintptr_t entry,void* child,void* command,
+                        void* hints,void* extra,int32_t* count) noexcept -> int {
+                        ++ownedCalls;
+                        assert(entry==setupEntry && child==actualChild && command==scratch.command.data());
+                        assert(hints==scratch.setup.data() && extra==scratch.unusedSetupArgument.data() && count==&consumed);
+                        uintptr_t table=0;std::memcpy(&table,hints,8);assert(table==nativeImage+0x757ef8);
+                        for(auto b:scratch.unusedSetupArgument)assert(!b);
+                        assert(scratch.setup[8]==0);scratch.setup[8]=0x42;*count=73;return ownedStatus;
+                    };
+                    scratch.unusedSetupArgument.fill(0xaa);
+                    assert(setupBinding.callOwned(childAddress,scratch,consumed,ownedRead,qualified,ownedExecutable,ownedInvoke)==0);
+                    assert(ownedCalls==1 && consumed==73);
+                    ownedStatus=31;
+                    assert(setupBinding.callOwned(childAddress,scratch,consumed,ownedRead,qualified,ownedExecutable,ownedInvoke)==31);
+                    hintsReadable=false;
+                    assert(setupBinding.callOwned(childAddress,scratch,consumed,ownedRead,qualified,ownedExecutable,ownedInvoke)==5);
+                    assert(ownedCalls==2 && consumed==73);
+                }
                 auto native=[&](uintptr_t entry,void* child,void* command,void* di,
                     void* surfaces,void* commands,void* state,void* completion,void* setup) noexcept {
                     ++nativeCalls;
