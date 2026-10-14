@@ -155,6 +155,13 @@ using NativeRendererBacking=TglNativeVeboxVpFrameBacking<TglDarwinStmmSurfaceApi
 using NativeRendererCleanupContext=TglOwnedVeboxVpCleanupContext<NativeRendererBacking,NativeRendererRetirementAuthority>;
 using NativeRendererCleanup=TglOwnedVeboxVpCleanupCallback<NativeRendererCleanupContext>;
 using NativeRendererCpu=TglNativeVeboxRendererCpuStorage<TglDarwinStmmSurfaceApi,NativeRendererCleanup>;
+using NativeRendererChildOwner=std::remove_reference_t<decltype(std::declval<NativeRendererCpu&>().children().first().owner())>;
+struct NativeRendererChildRetirement {
+    NativeRendererRetirementAuthority* authority;
+    void* child;uint64_t generation;size_t index;
+    int operator()() const noexcept {return (*authority)(child,generation,index);}
+};
+using NativeRendererChildLifetime=TglOwnedVeboxLifetimeContext<NativeRendererChildOwner,NativeRendererChildRetirement>;
 static_assert(sizeof(NativeRendererCpu)>0 && !std::is_copy_constructible_v<NativeRendererCpu>);
 class NativeRendererCpuAssembly {
     static int scopedRetirement(void* storage,void* child,uint64_t generation,size_t index) noexcept {
@@ -225,6 +232,26 @@ public:
         if(!firstCleanup_.bind(backing(),first,first.constructedBase(),first.allocationGeneration(),0) ||
             !secondCleanup_.bind(backing(),second,second.constructedBase(),second.allocationGeneration(),1))return false;
         cleanupBound_=true;return true;
+    }
+    template<class Use> int withChildLifetimeScopes(Use use) noexcept {
+        static_assert(noexcept(use(nullptr,nullptr,std::declval<NativeRendererChildLifetime&>(),
+            std::declval<NativeRendererChildLifetime&>())) &&
+            std::is_same_v<decltype(use(nullptr,nullptr,std::declval<NativeRendererChildLifetime&>(),
+                std::declval<NativeRendererChildLifetime&>())),int>);
+        if(!cleanupBound_ || backing().retention()())return 5;
+        auto& first=children().first().owner();auto& second=children().second().owner();
+        void* a=first.constructedBase();void* b=second.constructedBase();
+        if(!a || !b || a==b)return 5;
+        using Life=NativeRendererChildLifetime;
+        using Retirement=NativeRendererChildRetirement;
+        using Scope=TglOwnedVeboxScopedContext<Life>;
+        Life firstLife(first,Retirement{&authority_,a,first.allocationGeneration(),0});
+        Life secondLife(second,Retirement{&authority_,b,second.allocationGeneration(),1});
+        typename Scope::Pair scope(a,firstLife,b,secondLife);
+        if(!scope.bound())return 5;
+        // The consumer may build/use the typed hooks only within this scope.
+        // A missing retirement domain rejects teardown; no synchronous default.
+        return use(a,b,firstLife,secondLife);
     }
     // No implicit retirement here. Existing VPHAL owner must retain this WHOLE
     // allocation on any partial construction/cleanup/native teardown refusal.
@@ -499,6 +526,9 @@ template class TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhys
     decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,NativeRendererChildAdmission,
     NativeVphalDestructorInvoker>;
 template class TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
+template int NativeRendererCpuAssembly::withChildLifetimeScopes<
+    int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept>(
+    int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept) noexcept;
 template int NativeCreatorPreparation::prepareOwner<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 template int NativeCreatorPreparation::initializeChildren<TglOwnedPhysicalMutationAuthority>(
