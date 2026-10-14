@@ -9026,7 +9026,11 @@ int tglWithCapturedMixedSurfaceRoles(Source* source,Target* target,Secondary* se
     std::array<const TglOwnedSurfaceStorage*,4> views{};
     auto visit=[&](auto&& self,auto index) noexcept -> int {
         constexpr size_t i=decltype(index)::value;
-        if constexpr(i==4)return tglWithCapturedOwnedSurfaceRoles(roles,views,invoke);
+        if constexpr(i==4)return tglWithCapturedOwnedSurfaceRoles(roles,views,[&](const auto& held) noexcept -> int {
+            if constexpr(std::is_nothrow_invocable_r_v<int,Invoke,const decltype(views)&,const decltype(roles)&>)
+                return invoke(held,static_cast<const decltype(roles)&>(roles));
+            else return invoke(held);
+        });
         else {
             auto* owner=std::get<i>(owners);
             if(!owner)return captured[i]?5:self(self,std::integral_constant<size_t,i+1>{});
@@ -17365,9 +17369,9 @@ struct TglOwnedFfdnTailViews {
 // do not recreate outputs or infer reference validity from snapshot presence.
 // Optional DN owner is borrowed once; asynchronous retention remains outer.
 struct TglOwnedFfdnNoDenoiseBorrow {};
-template<class Targets,class Owner,class Use,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+template<class Targets,class Owner,class PreviousOwner,class Use,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
 int tglWithPreparedFfdnHistoryViews(Targets&& targets,Owner& input,
-    const TglOwnedSurfaceStorage& source,Owner* previous,
+    const TglOwnedSurfaceStorage& source,PreviousOwner* previous,
     const TglOwnedSurfaceStorage* previousView,bool referenceValid,
     TglOwnedDescriptorOnlySurface& history,TglOwnedFfdnHistorySnapshot& snapshot,
     Use use,Parameters* parameters=nullptr) noexcept {
@@ -17401,10 +17405,10 @@ int tglWithPreparedFfdnHistoryViews(Targets&& targets,Owner& input,
         return tglWithPreparedBackedFfdnPair(targets,input,source,borrowed);
     else return tglWithPreparedDescriptorFfdnPair(targets,input,source,borrowed);
 }
-template<class Owner,class Use>
+template<class Owner,class PreviousOwner,class Use>
 int tglWithPreparedDescriptorFfdnHistoryViews(
     std::array<TglOwnedDescriptorOnlySurface,2>& targets,Owner& input,
-    const TglOwnedSurfaceStorage& source,Owner* previous,
+    const TglOwnedSurfaceStorage& source,PreviousOwner* previous,
     const TglOwnedSurfaceStorage* previousView,bool referenceValid,
     TglOwnedDescriptorOnlySurface& history,TglOwnedFfdnHistorySnapshot& snapshot,
     Use use) noexcept {
@@ -22372,14 +22376,14 @@ public:
     }
     // Selection/count/flags are supplied by the admitted post-preparation
     // reader. Count0 borrows only existing secondary slot0, or bypasses FFDi.
-    template<class Owner,class Use,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
-    int withPreparedSurfaceViews(Owner& input,Owner* execution,Owner* secondary,Owner* previous,
+    template<class Owner,class TemporalOwner,class Use,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+    int withPreparedSurfaceViews(Owner& input,Owner* execution,TemporalOwner* secondary,TemporalOwner* previous,
         size_t count,TglOwnedFfdiAllocationKind kind,bool useFfdn,bool referenceValid,bool useStmm,
         Use use,Parameters* parameters=nullptr,
         std::array<const TglOwnedSurfaceStorage*,4> captured={}) noexcept {
         if(auxiliary_.retention()() || count>4) return 5;
-        return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,4>{&input,execution,secondary,previous},captured,
-            [&](const auto& roles) noexcept -> int {
+        return tglWithCapturedMixedSurfaceRoles(&input,execution,secondary,previous,captured,
+            [&](const auto& roles,const auto& held) noexcept -> int {
                 auto afterFfdi=[&](const TglOwnedFfdiTailViews& ffdi) noexcept -> int {
                         auto tail=[&](const TglOwnedFfdnTailViews& ffdn) noexcept -> int {
                             return auxiliary_.withPreparedViews(useStmm,
@@ -22403,7 +22407,7 @@ public:
                     if(kind!=TglOwnedFfdiAllocationKind::DescriptorOnly) return 5;
                     return tglWithPreparedFfdiSecondary(ffdiDescriptors_[0],*secondary,consume,roles[2]);
                 }
-                return withPreparedFfdiViews(input,execution,secondary,count,kind,
+                return withPreparedFfdiViews(*held[0],held[1],held[2],count,kind,
                     [&](const auto& inputs,const auto& outputs,size_t active) noexcept -> int {
                         TglOwnedFfdiTailViews ffdi;ffdi.inputs=inputs;ffdi.outputs=outputs;ffdi.count=active;
                         return afterFfdi(ffdi);
@@ -22412,9 +22416,9 @@ public:
     }
     // Producer-time access to retained outputs. Never reuse a pending frame;
     // reference validity comes from admitted report, not snapshot existence.
-    template<class Owner,class Use,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+    template<class Owner,class PreviousOwner,class Use,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
     int withPreparedFfdnViews(Owner& input,const TglOwnedSurfaceStorage& source,
-        Owner* previous,const TglOwnedSurfaceStorage* previousView,bool referenceValid,
+        PreviousOwner* previous,const TglOwnedSurfaceStorage* previousView,bool referenceValid,
         Use use,Parameters* parameters=nullptr) noexcept {
         if(auxiliary_.retention()() || !input.hasSurfaceLease(source)) return 5;
         uint32_t format=0;std::memcpy(&format,source.prefix.data()+0x130,4);

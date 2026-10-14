@@ -8911,6 +8911,15 @@ static void testNativeResourceBoundary() {
                                                 assert(tglWithPreparedDescriptorFfdnHistoryViews(descriptorPair,
                                                     linkedInput,current,&previous,&priorView,true,historyShell,
                                                     capturedHistory,consume)==-69);
+                                                TglHeldOwnedSurfaceRole retainedPrevious(previous,priorView);
+                                                assert(tglWithPreparedDescriptorFfdnHistoryViews(descriptorPair,
+                                                    linkedInput,current,&retainedPrevious,&priorView,true,historyShell,
+                                                    capturedHistory,[](const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                                TglOwnedFfdnHistorySnapshot mixedSnapshot;
+                                                assert(mixedSnapshot.capture(retainedPrevious,priorView));
+                                                assert(tglWithPreparedDescriptorFfdnHistoryViews(descriptorPair,
+                                                    linkedInput,current,&retainedPrevious,&priorView,true,historyShell,
+                                                    mixedSnapshot,consume)==-69);
                                                 assert(tglWithPreparedDescriptorFfdnHistoryViews(descriptorPair,
                                                     linkedInput,current,&previous,&priorView,false,historyShell,
                                                     capturedHistory,[](const auto& views) noexcept -> int {
