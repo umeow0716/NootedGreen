@@ -22235,6 +22235,30 @@ int main() {
                 assert(!backing.live && backing.releases==3 && !stateCpu.live && !avsCpu.live);
                 assert(releaseCount==2 && releaseOrder[0]==1 && releaseOrder[1]==2);
                 releaseCount=0;releaseOrder.fill(0);
+                {
+                    TglOwnedVeboxFrameRetention retention;
+                    TglNativeVpBackingStorage<NativeCpu> embedded(0x100000,allocatorRead,
+                        [](uintptr_t) noexcept {return true;},
+                        [](uintptr_t,size_t) noexcept {return true;},retention,nativeCpu);
+                    assert(embedded.initialize(binding,resources,4096,resources.context,
+                        0x8000,0x3000,noRead,1,0)==0);
+                    void* child=nullptr;unsigned retireCalls=0;
+                    auto retire=[&]() noexcept -> int {++retireCalls;return 0;};
+                    assert(embedded.withResources([&](auto&,auto& vp,auto& lines) noexcept -> int {
+                        child=vp.bytes.data();
+                        assert(lines.resources().ensure(1080,4096)==0);
+                        assert(embedded.retireEmbeddedStorage(child,retire)==5 && !retireCalls);
+                        return 0;
+                    })==0 && child && backing.live==3);
+                    assert(embedded.retireEmbeddedStorage(nullptr,retire)==5 && !retireCalls);
+                    assert(embedded.retireEmbeddedStorage(child,[]() noexcept -> int {return 31;})==31);
+                    assert(embedded.bound() && backing.live==3 && stateCpu.live && avsCpu.live);
+                    assert(embedded.retireEmbeddedStorage(child,retire)==0 && retireCalls==1);
+                    assert(!embedded.bound() && !backing.live && !stateCpu.live && !avsCpu.live);
+                    assert(embedded.retireEmbeddedStorage(child,retire)==5 && retireCalls==1);
+                    assert(releaseCount==2 && releaseOrder[0]==1 && releaseOrder[1]==2);
+                }
+                releaseCount=0;releaseOrder.fill(0);
             }
             const auto acquisitionUse=[](const auto&,const auto&,uintptr_t) noexcept {return 31;};
             calls=0;
