@@ -1860,12 +1860,29 @@ template<class SurfaceOwner> struct NativeLeasedVpFrameInputScopeFor {
             const int status=graph.withResourceCatalogue(catalogue,lines.resources(),*in.resetAuthority,
                 [&](void* child,const TglOwnedVpEntrySet& resources) noexcept -> int {
                     if(child!=core.vp.bytes.data())return 5;
-                    typename NativeVpProducerInputScopeFor<SurfaceOwner>::Inputs inputs{core,read,in.pinned,in.interfaces,lines,resources};
-                    NativeVpProducerInputScopeFor<SurfaceOwner> producers(inputs);
-                    result=producers.run([&](NativeVpProducerFrameFor<SurfaceOwner>& vp,const TglOwnedVpModeState& original) noexcept {
-                        return use(context,core,graph,lines,params,pass,read,vp,original);
-                    });
-                    return result.status;
+                    return tglWithOwnedVpAdmissionEntries(core.vp,read,
+                        [&](void* admitted,const TglOwnedVpAdmissionEntries& additions) noexcept -> int {
+                            auto admission=resources;
+                            if(admitted!=child || !tglBindOwnedVpAdmissionEntries(admission,additions))return 5;
+                            auto nativeRead=&readMemory;
+                            return tglWithOwnedVpModeAssembly(core.vp,reinterpret_cast<uintptr_t>(&core.source),
+                                reinterpret_cast<uintptr_t>(&core.target),core.execution,nativeRead,admission,
+                                [&](void* modeChild,const TglOwnedVpEntrySet& modes) noexcept -> int {
+                                    if(modeChild!=child)return 5;
+                                    return tglWithOwnedVpPhaseDispatchEntries(child,modes,
+                                        [&](void* actual,const TglOwnedVpEntrySet& phase,auto&,auto&) noexcept -> int {
+                                            if(actual!=child)return 5;
+                                            typename NativeVpProducerInputScopeFor<SurfaceOwner>::Inputs inputs{
+                                                core,read,in.pinned,in.interfaces,lines,phase};
+                                            NativeVpProducerInputScopeFor<SurfaceOwner> producers(inputs);
+                                            result=producers.run([&](NativeVpProducerFrameFor<SurfaceOwner>& vp,
+                                                const TglOwnedVpModeState& original) noexcept {
+                                                return use(context,core,graph,lines,params,pass,read,vp,original);
+                                            });
+                                            return result.status;
+                                        });
+                                });
+                        });
                 });
             if(!result.status && status)result.status=status;
             return result;

@@ -22281,6 +22281,63 @@ int main() {
                 assert(escaped && escaped(admissionVp)==5 && !resources.allocations && !resources.releases);
             }
             TglVeboxAdmissionStagesInput sfcInputs;sfcInputs.leasedParamsE0=0x6000;sfcInputs.leasedParamsF0=0x7000;
+            {
+                TestPairedVpResourceLines resources;
+                resources.vp=reinterpret_cast<TglOwnedVpSfcCallerStorage*>(admissionVp);
+                auto retire=[]() noexcept -> int {return 5;};
+                calls=0;bool composed=false;
+                assert(graph.withResourceCatalogue({},resources,retire,
+                    [&](void* child,const TglOwnedVpEntrySet& seed) noexcept -> int {
+                        return graph.withSfcAdmissionCallbackAssembly(child,sfcInputs,0x1000,0x2000,0x4000,0x3000,
+                            seed,{},&composed,read,
+                            [](void*,const auto&,const auto&,auto&) noexcept -> int {assert(false);return 5;},
+                            [](void*,const auto&,auto&) noexcept -> int {assert(false);return 5;},
+                            [](void*,const auto&) noexcept {assert(false);},
+                            [](void*,void*,void*,const auto&) noexcept -> int {assert(false);return 5;},
+                            [&](void* actual,const TglOwnedVpEntrySet& entries) noexcept -> int {
+                                assert(actual==admissionVp && entries.allocate==seed.allocate &&
+                                    entries.freeResources==seed.freeResources && entries.platformSend==seed.platformSend);
+                                std::printf("VP_REAL_PHASE_CATALOGUE_MISSING=%08x\n",entries.missingMask());
+                                composed=true;return 31;
+                            });
+                    })==31 && composed && !resources.allocations && !resources.releases);
+                for(bool completePrelude:{false,true}) {
+                calls=0;composed=false;
+                assert(graph.withResourceCatalogue({},resources,retire,
+                    [&](void* child,const TglOwnedVpEntrySet& seed) noexcept -> int {
+                        auto phaseBody=[&](const TglOwnedVpEntrySet& prelude) noexcept -> int {
+                        return tglWithOwnedVpPhaseDispatchEntries(child,prelude,
+                            [&](void* actual,const TglOwnedVpEntrySet& phase,auto&,auto&) noexcept -> int {
+                                assert(actual==child && phase.platformSend && !seed.platformSend);
+                                return graph.withSfcAdmissionCallbackAssembly(actual,sfcInputs,0x1000,0x2000,0x4000,0x3000,
+                                    phase,{},&composed,read,
+                                    [](void*,const auto&,const auto&,auto&) noexcept -> int {assert(false);return 5;},
+                                    [](void*,const auto&,auto&) noexcept -> int {assert(false);return 5;},
+                                    [](void*,const auto&) noexcept {assert(false);},
+                                    [](void*,void*,void*,const auto&) noexcept -> int {assert(false);return 5;},
+                                    [&](void* object,const TglOwnedVpEntrySet& entries) noexcept -> int {
+                                        assert(object==child && entries.platformSend==phase.platformSend &&
+                                            entries.allocate==seed.allocate);
+                                        std::printf("VP_FRAME_PRELUDE_%u_CATALOGUE_MISSING=%08x\n",unsigned(completePrelude),entries.missingMask());
+                                        std::fflush(stdout);
+                                        assert(entries.missingMask()==(completePrelude?3U:0x00c3f49bU));
+                                        composed=true;return 31;
+                                    });
+                            });
+                        };
+                        if(!completePrelude)return phaseBody(seed);
+                        return tglWithOwnedVpAdmissionEntries(*resources.vp,read,
+                            [&](void* actual,const TglOwnedVpAdmissionEntries& additions) noexcept -> int {
+                                assert(actual==child);auto admission=seed;
+                                assert(tglBindOwnedVpAdmissionEntries(admission,additions));
+                                return tglWithOwnedVpModeAssembly(*resources.vp,0x1000,0x2000,0x4000,read,admission,
+                                    [&](void* object,const TglOwnedVpEntrySet& modes) noexcept -> int {
+                                        assert(object==child);return phaseBody(modes);
+                                    });
+                            });
+                    })==31 && composed && !resources.allocations && !resources.releases);
+                }
+            }
             for(unsigned stageFailure=0;stageFailure<13;++stageFailure) {
                 calls=0;unsigned states=0,emits=0;int data=0,command=0;
                 const bool conflict=(stageFailure>=3 && stageFailure<=7) || stageFailure==11 || stageFailure==12;
