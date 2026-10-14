@@ -17112,6 +17112,15 @@ int main() {
                         {
                             auto initialization=OwnerRouter::pinForInitialization(creatorAddress);
                             assert(initialization.get()==owner && initialization.exclusive());
+                            unsigned admissionCalls=0;
+                            auto reentrantQualify=[&](uintptr_t address) noexcept {
+                                ++admissionCalls;
+                                assert(owner->withCreatorStorage(initialization,creatorAdmit,qualify,ownerExecutable,producer)==5);
+                                return qualify(address);
+                            };
+                            assert(owner->withCreatorStorage(initialization,creatorAdmit,reentrantQualify,ownerExecutable,
+                                [](auto&,const auto&) noexcept -> int {return 31;})==31);
+                            assert(admissionCalls);
                             assert(owner->withCreatorStorage(initialization,creatorAdmit,qualify,ownerExecutable,
                                 [&](auto&,const auto&) noexcept -> int {
                                     assert(owner->withCreatorStorage(initialization,creatorAdmit,qualify,ownerExecutable,producer)==5);
