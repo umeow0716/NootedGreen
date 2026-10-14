@@ -28486,7 +28486,8 @@ int main() {
                     void release(uintptr_t p) noexcept {assert(p==reinterpret_cast<uintptr_t>(bytes.data()));++releases;}
                 } cpu;
                 unsigned cleanups=0,destroys=0,nativeCalls=0;
-                auto cleanup=[&](void* p) noexcept {assert(p==cpu.bytes.data());++cleanups;};
+                bool cleanupAllowed=true;
+                auto cleanup=[&](void* p) noexcept {assert(p==cpu.bytes.data());++cleanups;return cleanupAllowed;};
                 auto destroy=[&](uintptr_t entry,void* p) noexcept {
                     assert(entry==base+0x12de30 && p==cpu.bytes.data());++destroys;};
                 TglOwnedVeboxBaseOwner owned(cpu,invoke,cleanup,destroy);
@@ -28509,10 +28510,15 @@ int main() {
                 result=0;
                 assert(initialize()==TglOwnedBaseConstruction::ConstructedSuccess && nativeCalls==2);
                 assert(owned.constructedBase()==cpu.bytes.data());
-                owned.reset();assert(cleanups==2 && destroys==2 && cpu.releases==2);
+                cleanupAllowed=false;
+                assert(!owned.destroyInPlace() && !owned.constructedBase());
+                assert(owned.ownsLifecycleAllocation(cpu.bytes.data(),owned.allocationGeneration()));
+                assert(cleanups==2 && destroys==1 && cpu.releases==1);
+                cleanupAllowed=true; // Explicit CPU-only retry after cleanup admission restored.
+                owned.reset();assert(cleanups==3 && destroys==2 && cpu.releases==2);
                 ++veboxMhw.os;
                 assert(initialize()==TglOwnedBaseConstruction::NotCalled && nativeCalls==2);
-                assert(cleanups==2 && destroys==2 && cpu.releases==3);
+                assert(cleanups==3 && destroys==2 && cpu.releases==3);
                 --veboxMhw.os;
             }
             corruptOwnerOs=true;result=0;

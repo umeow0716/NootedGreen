@@ -4785,6 +4785,8 @@ public:
         :storage_(cpu),sfc_(sfc),cleanup_(cleanup),destroy_(destroy) {
         static_assert(noexcept(cleanup_(nullptr)) && noexcept(destroy_(uintptr_t{},nullptr)),
                       "native base cleanup must not throw");
+        static_assert(std::is_same_v<decltype(cleanup_(nullptr)),void> ||
+            std::is_same_v<decltype(cleanup_(nullptr)),bool>,"cleanup is legacy void or explicit bool admission");
     }
     TglOwnedVeboxBaseOwner(const TglOwnedVeboxBaseOwner&)=delete;
     TglOwnedVeboxBaseOwner& operator=(const TglOwnedVeboxBaseOwner&)=delete;
@@ -5391,7 +5393,6 @@ private:
         busy_=true;
         ready_=false;
         if(constructed_) {
-            constructed_=false;
             void* object=reinterpret_cast<void*>(storage_.get());
             // Native12de30 overwrites vptr with base757c98 at12de4d, then
             // frees CPU shells (12de6f etc). Retire bound resource tokens here,
@@ -5403,7 +5404,14 @@ private:
             // An owned/borrowed VP must therefore be detached by cleanup,
             // or have a separately proved native allocation-accounting pair.
             // Merely providing an owned deleting-destructor slot is NOT enough.
-            cleanup_(object);
+            if constexpr(std::is_same_v<decltype(cleanup_(object)),bool>) {
+                if(!cleanup_(object)) {
+                    // Enclosing creator MUST retain this whole storage on
+                    // refusal; do not destroy it or interpret reset as success.
+                    busy_=false;return false;
+                }
+            } else cleanup_(object);
+            constructed_=false;
             destroy_(destructor_,object);
         }
         destructor_=image_=0;
