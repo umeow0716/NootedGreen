@@ -17546,6 +17546,30 @@ int tglPublishOwnedSurfacesToBuilder(TglOwnedSurfaceInputs& leasedPacket,
     leasedPacket=candidate;
     return 0;
 }
+// State packet normalization writes original chroma siting. Borrow roots only
+// for that synchronous producer, never around policy selection or whole Render.
+template<class SourceOwner,class TargetOwner,class Use>
+int tglWithMutableVeboxPacketRoots(SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,
+    TargetOwner& targetOwner,const TglOwnedSurfaceStorage& target,Use use) noexcept {
+    static_assert(noexcept(use(std::declval<TglOwnedSurfaceStorage&>(),std::declval<TglOwnedSurfaceStorage&>())) &&
+        std::is_same_v<decltype(use(std::declval<TglOwnedSurfaceStorage&>(),std::declval<TglOwnedSurfaceStorage&>())),int>);
+    if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+    if(!sourceOwner.hasSurfaceLease(source) || !targetOwner.hasSurfaceLease(target))return 5;
+    return sourceOwner.withMutableSurface([&](TglOwnedSurfaceStorage& original) noexcept -> int {
+        if(&original!=&source)return 5;
+        if(&source==&target) {
+            if constexpr(std::is_same_v<SourceOwner,TargetOwner>) {
+                if(&sourceOwner==&targetOwner)return use(original,original);
+            }
+            return 5; // one shell cannot be normalized through two owners
+        }
+        return targetOwner.withMutableSurface([&](TglOwnedSurfaceStorage& peer) noexcept -> int {
+            if(&peer!=&target || !sourceOwner.hasSurfaceLease(original))return 5;
+            const int status=use(original,peer);
+            return sourceOwner.hasSurfaceLease(original) && targetOwner.hasSurfaceLease(peer)?status:5;
+        });
+    });
+}
 struct TglOwnedVeboxPacketLeases {
     uintptr_t child,execution,renderHal,sku;
     TglOwnedSurfaceStorage& source;

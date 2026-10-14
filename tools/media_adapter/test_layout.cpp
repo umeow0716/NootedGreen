@@ -15490,6 +15490,21 @@ static void testRetainedVeboxFrames() {
                         return 31;
                     })==31);
                     assert(sidecar.withSurface([&](const auto& surface) noexcept {assert(&surface==&original);}));
+                    unsigned packetRootCalls=0;
+                    assert(tglWithMutableVeboxPacketRoots(sidecar,original,sidecar,original,
+                        [&](auto& a,auto& b) noexcept -> int {
+                            ++packetRootCalls;assert(&a==&original && &b==&original);
+                            assert(sidecar.withMutableSurface([](auto&) noexcept -> int {assert(false);return 0;})==5);
+                            return 31;
+                        })==31 && packetRootCalls==1);
+                    assert(sidecar.withMutableSurface([&](auto&) noexcept -> int {
+                        return tglWithMutableVeboxPacketRoots(sidecar,original,sidecar,original,
+                            [](auto&,auto&) noexcept -> int {assert(false);return 0;});
+                    })==5);
+                    TglOwnedSurfaceStorage foreignPacketRoot;
+                    assert(tglWithMutableVeboxPacketRoots(sidecar,original,sidecar,foreignPacketRoot,
+                        [](auto&,auto&) noexcept -> int {assert(false);return 0;})==5);
+                    assert(sidecar.withMutableSurface([](auto&) noexcept -> int {return 0;})==0);
                     assert(sidecar.withPeerSurface(sidecar,[&](const auto& a,const auto& b) noexcept {
                         assert(&a==&original && &b==&original);
                     }));
