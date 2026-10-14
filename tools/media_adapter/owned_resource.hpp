@@ -19035,6 +19035,9 @@ public:
     template<class Read> bool flags(Read read,uint32_t& output) const noexcept {
         if(!available(read) || !live(read))return false;output=snapshot_.flags;return true;
     }
+    template<class Read> bool matchesChild(uintptr_t child,Read read) const noexcept {
+        return child==child_ && available(read) && live(read);
+    }
     template<class Read,class Admit,class Invoke=TglNativeVeboxPostWritebackInvoker>
     int postWriteback(Read read,Admit admit,Invoke invoke={}) noexcept {
         if(postAttempted_ || finishAttempted_)return 5;postAttempted_=true;

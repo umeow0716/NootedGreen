@@ -2634,6 +2634,45 @@ struct NativeFrameHistoryRetirement {
 struct NativeVeboxSendSubmissionStage {
     using Admit=bool(*)(const NativeBorrowedFrontend&,uintptr_t,uintptr_t,uintptr_t) noexcept;
     using AdmitChild=bool(*)(uintptr_t,uintptr_t,uintptr_t) noexcept;
+    struct SendDomain;
+    struct SendContext {
+        NativeContextRendererFrame& frame;TglOwnedVeboxProducerPass& pass;
+        TglNativeVeboxSendTailBinding& tail;const TglNativeOsCommandSubmitBinding& binding;
+        TglOwnedVeboxBuilderScratch& scratch;TglOwnedVeboxCommandTransactionResult& command;
+        TglOwnedVeboxFrameRetention& retention;uintptr_t image;
+        Admit admit;AdmitChild admitChild;bool entered=false;int result=5;
+    };
+    using SendScope=TglOwnedScopedContext<SendContext,SendDomain>;
+    static int send(void* child) noexcept {
+        auto* context=SendScope::get(child);
+        if(!context)return 5;
+        if(context->entered) {
+            if(!context->command.status)context->command.status=5;
+            (void)context->pass.record(5);
+            context->retention.observe(context->command);
+            return 5;
+        }
+        context->entered=true;
+        context->result=runTail(context->frame,context->pass,context->tail,context->binding,
+            context->scratch,context->command,context->retention,context->image,
+            context->admit,context->admitChild);
+        return context->result;
+    }
+    using NativeCall=int(*)(void*) noexcept;
+    static int withSendScope(void* child,SendContext& context,void* argument,NativeCall call) noexcept {
+        if(!child || !argument || !call || context.entered || context.frame.invalidated() ||
+            !context.frame.surfacesReady() ||
+            !context.tail.matchesChild(reinterpret_cast<uintptr_t>(child),&readMemory) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(call),1))return 5;
+        SendScope scope(child,context);
+        if(!scope.bound())return 5;
+        const int native=call(argument);
+        // Native outer code must not wash away a rejected/repeated Send.
+        if(context.command.status)return context.command.status;
+        if(context.entered && context.result)return context.result;
+        if(native)return native;
+        return context.entered?0:5;
+    }
     static int runTail(NativeContextRendererFrame& frame,TglOwnedVeboxProducerPass& pass,
         TglNativeVeboxSendTailBinding& tail,const TglNativeOsCommandSubmitBinding& binding,
         TglOwnedVeboxBuilderScratch& scratch,TglOwnedVeboxCommandTransactionResult& command,

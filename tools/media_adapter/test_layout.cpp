@@ -4523,6 +4523,7 @@ static void testVeboxHardwareBinding() {
             auto tailExecutable=[](uintptr_t,size_t) noexcept {return true;};
             TglNativeVeboxSendTailBinding tail;
             assert(tail.capture(image,object,b,tailRead,qualify,tailExecutable));
+            assert(tail.matchesChild(object,tailRead) && !tail.matchesChild(object+8,tailRead));
             assert(!tail.capture(image,object,b,tailRead,qualify,tailExecutable));
             uint32_t flag=99;assert(tail.flags(tailRead,flag) && flag==(mode==1?1U:0U));
             unsigned posts=0,tailMarks=0;
