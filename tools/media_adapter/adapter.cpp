@@ -1698,7 +1698,7 @@ template TglOwnedVeboxCommandTransactionResult NativeLeasedFrameInputScope::run<
 // compression flags or detached producer scope crosses this boundary.
 struct NativeLeasedVpFrameInputScope {
     using Use=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeCoreFrameDataScope&,
-        NativeVpGraph&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&,
+        NativeVpGraph&,TglNativeVpLineResourceStorage&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&,
         NativeVpProducerFrame&,const TglOwnedVpModeState&) noexcept;
     static TglOwnedVeboxCommandTransactionResult run(NativeLeasedFrameInputScope::Inputs& in,
         const TglOwnedVpEntrySet& catalogue,void* context,Use use) noexcept {
@@ -1709,7 +1709,7 @@ struct NativeLeasedVpFrameInputScope {
             NativeVpProducerInputScope::Inputs inputs{core,read,in.pinned,in.interfaces,lines,catalogue};
             NativeVpProducerInputScope producers(inputs);
             return producers.run([&](NativeVpProducerFrame& vp,const TglOwnedVpModeState& original) noexcept {
-                return use(context,core,graph,params,pass,read,vp,original);
+                return use(context,core,graph,lines,params,pass,read,vp,original);
             });
         });
     }
@@ -2413,10 +2413,11 @@ struct NativeRetainedFrontendRuntime {
         size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         NativeSourceGraph& sourceGraph;NativeContextSurfaceOwner* secondary;
         NativeContextSurfaceOwner* previous;NativeDenoiseParameters& denoise;
+        NativeModeRetirementAuthority& retirement;
     };
     struct VpRequest {
         using Use=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeCoreFrameDataScope&,
-            NativeVpGraph&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&,
+            NativeVpGraph&,TglNativeVpLineResourceStorage&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&,
             NativeVpProducerFrame&,const TglOwnedVpModeState&,VpFrontend&) noexcept;
         size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         uintptr_t parameters,pass;const TglOwnedVpEntrySet& catalogue;
@@ -2424,6 +2425,23 @@ struct NativeRetainedFrontendRuntime {
         void* context;Use use;
     };
     using AdmissionInputUse=int(*)(void*,const NativeAdmissionFrameAssembly::Inputs&) noexcept;
+    using AllocationInputUse=int(*)(void*,NativeModeAllocationPlan&) noexcept;
+    static int withAllocationInputs(VpFrontend& frontend,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
+        TglNativeVpLineResourceStorage& lines,bool reinitializeStmm,bool alignDi64,
+        void* context,AllocationInputUse use) noexcept {
+        if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
+            frontend.childIndex>1 || !core.live() || frontend.pinned.image!=core.image ||
+            frontend.pinned.originalChildren[frontend.childIndex]!=core.child ||
+            !graph.ownsStorage(core.vp.bytes.data()) || !lines.lines().boundToVp(core.vp) ||
+            frontend.assembly.backing().retention()())return 5;
+        NativeSfcReleaseSelection selection{core.childOwner,reinterpret_cast<void*>(core.child),
+            frontend.interfaces.renderHal,frontend.interfaces.sku,graph};
+        NativeModeAllocationPlan allocation{frontend.assembly.backing().command().backing(),lines.resources(),
+            selection,frontend.retirement,core.sourceOwner,core.targetOwner,frontend.secondary,frontend.previous,
+            core.executionOwner,core.execution,core.source,reinitializeStmm,alignDi64};
+        const int status=use(context,allocation);
+        return status?status:(core.live() && graph.ownsStorage(core.vp.bytes.data())?0:5);
+    }
     using PolicyInputUse=int(*)(void*,NativeOutputPipeFrameScope&) noexcept;
     static int withPolicyInputs(NativeCoreFrameDataScope& core,NativeAdmissionParams& params,
         NativeAdmissionPass& pass,NativeFrameDataRead& read,const TglVeboxAdmissionBorrowedInterfaces& interfaces,
@@ -2450,7 +2468,7 @@ struct NativeRetainedFrontendRuntime {
     static int withAdmissionInputs(VpFrontend& frontend,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
         NativeAdmissionParams& params,NativeAdmissionPass& pass,NativeFrameDataRead& read,
         const TglOwnedVpEntrySet& catalogue,const TglOwnedVpModeState& mode,
-        NativeModeRetirementAuthority& retirement,void* context,AdmissionInputUse use) noexcept {
+        void* context,AdmissionInputUse use) noexcept {
         if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
             frontend.childIndex>1 || !core.live() || core.image!=frontend.pinned.image ||
             frontend.pinned.originalChildren[frontend.childIndex]!=core.child ||
@@ -2463,7 +2481,7 @@ struct NativeRetainedFrontendRuntime {
         // Native12c010 obtains +48's report and passes that SAME report as
         // VP40's renderData argument, not a caller-provided substitute.
         NativeAdmissionFrameAssembly::Inputs inputs{core.childOwner,core.executionOwner,
-            frontend.assembly.backing(),retirement,core.sourceOwner,core.targetOwner,
+            frontend.assembly.backing(),frontend.retirement,core.sourceOwner,core.targetOwner,
             frontend.sourceGraph,frontend.denoise,core.source,core.target,feature,params,pass,
             frontend.interfaces,catalogue,mode,frontend.childIndex,reinterpret_cast<void*>(core.child),
             core.execution,core.vp.bytes.data(),mhw,reinterpret_cast<void*>(core.execution),&graph,&core.vp,core.preparedReset};
@@ -2490,14 +2508,14 @@ struct NativeRetainedFrontendRuntime {
                 NativeLeasedFrameInputScope::Inputs inputs{cpu,request.childIndex,source,target,pinned,
                     request.interfaces,request.parameters,request.pass,&request.retirement};
                 VpFrontend frontend{cpu,pinned,request.childIndex,request.interfaces,sourceGraph,
-                    secondary,previous,denoise};
+                    secondary,previous,denoise,request.retirement};
                 struct Continuation {VpRequest& request;VpFrontend& frontend;} continuation{request,frontend};
                 return NativeLeasedVpFrameInputScope::run(inputs,request.catalogue,&continuation,
-                    +[](void* context,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
+                    +[](void* context,NativeCoreFrameDataScope& core,NativeVpGraph& graph,TglNativeVpLineResourceStorage& lines,
                         NativeAdmissionParams& params,NativeAdmissionPass& pass,NativeFrameDataRead& read,
                         NativeVpProducerFrame& vp,const TglOwnedVpModeState& mode) noexcept {
                         auto& next=*static_cast<Continuation*>(context);
-                        return next.request.use(next.request.context,core,graph,params,pass,read,vp,mode,next.frontend);
+                        return next.request.use(next.request.context,core,graph,lines,params,pass,read,vp,mode,next.frontend);
                     });
             });
     }
