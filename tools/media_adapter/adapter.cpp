@@ -3847,6 +3847,45 @@ struct NativePreparedVphalFrameDispatch {
         return result; // Codec caller binds its output receipt AFTER235b00 returns.
     }
 };
+struct NativePreparedCodecRequestDispatch {
+    using Consume=TglOwnedVeboxCommandTransactionResult(*)(void*,NativePhysicalFrameScope&,
+        uintptr_t,uintptr_t,uintptr_t) noexcept;
+    struct Bootstrap {
+        void* context;Consume consume;
+        TglOwnedVeboxCommandTransactionResult operator()(NativePhysicalFrameScope& physical,
+            uintptr_t codec,uintptr_t creator,uintptr_t parameters) noexcept {
+            return consume(context,physical,codec,creator,parameters);
+        }
+    };
+    using Prepared=TglOwnedPreparedVphalRequest<NativePhysicalFrameScope,decltype(&readMemory),Bootstrap>;
+    struct Result {
+        TglOwnedVeboxCommandTransactionResult work{};
+        TglNativeFrameOutputReceipt receipt{};
+        int status=5,nativeStatus=5;bool nativeInvoked=false,consumed=false;
+    };
+    static Result run(NativeRetainedContextFrameDispatch::Lease& lease,NativePhysicalFrameScope& physical,
+        uintptr_t input,uintptr_t output,void* context,Consume consume) noexcept {
+        Result result;
+        auto* owner=lease.get();
+        if(!owner || !input || !output || !context || !consume ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(consume),1))return result;
+        const uintptr_t codec=owner->context();uintptr_t creator=0;
+        if(!codec || codec>UINTPTR_MAX-0x12f0 || !readMemory(codec+0x12e0,&creator,8) || !creator)return result;
+        result.status=owner->dispatchScopedFrameWithReceipt(lease,physical,input,output,
+            [&](uintptr_t entry,uintptr_t actual,uintptr_t request,uintptr_t slot,NativePhysicalFrameScope& active) noexcept -> int {
+                if(result.nativeInvoked || actual!=codec || request!=input || slot!=output)return 5;
+                auto read=&readMemory;Bootstrap bootstrap{context,consume};
+                Prepared prepared(active,codec,creator,read,bootstrap);
+                Prepared::Binding binding(reinterpret_cast<void*>(creator),prepared);
+                if(!binding.bound())return 5;
+                result.nativeInvoked=true;
+                result.nativeStatus=TglNativeContextFrameInvoker{}(entry,codec,input,output);
+                result.consumed=prepared.consumed();result.work=prepared.finish(result.nativeStatus);
+                return result.nativeStatus?result.nativeStatus:result.work.status;
+            },result.receipt);
+        return result;
+    }
+};
 // Callback table entries carry no Entry/closure argument. Route the immutable
 // qualified native image and actual physical generation, never "current Entry".
 // Prepared backend only; factory callback publication remains disabled.

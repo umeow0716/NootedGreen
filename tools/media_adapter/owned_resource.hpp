@@ -24976,6 +24976,49 @@ int tglPrepareOwnedVphalStorageRemoval(TglOwnedVphalLifetimeTable& table,Storage
 
 // Stable source-free VPHAL owner, adopted BEFORE renderer initialization.
 // Original native image remains process-retained by the qualified adapter.
+// One codec request may consume its prepared VPHAL boundary once. The native
+// request processor stays responsible for populating context12e8; no roots are
+// sampled before this callback and no native entry is retried on failure.
+template<class Scope,class Read,class Bootstrap> class TglOwnedPreparedVphalRequest {
+    Scope& scope_;Read& read_;Bootstrap& bootstrap_;
+    uintptr_t context_,creator_;
+    unsigned attempts_=0;bool running_=false;int failure_=0;
+    TglOwnedVeboxCommandTransactionResult work_{};
+public:
+    struct Domain;
+    using Binding=TglOwnedScopedContext<TglOwnedPreparedVphalRequest,Domain>;
+    TglOwnedPreparedVphalRequest(Scope& scope,uintptr_t context,uintptr_t creator,Read& read,Bootstrap& bootstrap) noexcept
+        :scope_(scope),read_(read),bootstrap_(bootstrap),context_(context),creator_(creator) {}
+    TglOwnedPreparedVphalRequest(const TglOwnedPreparedVphalRequest&)=delete;
+    TglOwnedPreparedVphalRequest& operator=(const TglOwnedPreparedVphalRequest&)=delete;
+    static int callback(void* creator,void* parameters) noexcept {
+        auto* request=Binding::get(creator);
+        return request?request->render(reinterpret_cast<uintptr_t>(creator),reinterpret_cast<uintptr_t>(parameters)):5;
+    }
+    int render(uintptr_t creator,uintptr_t parameters) noexcept {
+        if(attempts_ || running_){failure_=5;return 5;}
+        ++attempts_;
+        if constexpr(std::is_pointer_v<Read>)if(!read_){failure_=5;return 5;}
+        uintptr_t actualCreator=0,input=0;
+        if(!context_ || context_>UINTPTR_MAX-0x12f0 || !creator || creator!=creator_ || !parameters ||
+            !read_(context_+0x12e0,&actualCreator,8) || actualCreator!=creator_ ||
+            !read_(context_+0x12e8,&input,8) || input!=parameters){failure_=5;return 5;}
+        if constexpr(std::is_pointer_v<Bootstrap>)if(!bootstrap_){failure_=5;return 5;}
+        running_=true;
+        static_assert(noexcept(bootstrap_(scope_,context_,creator_,parameters)) &&
+            std::is_same_v<decltype(bootstrap_(scope_,context_,creator_,parameters)),TglOwnedVeboxCommandTransactionResult>);
+        work_=bootstrap_(scope_,context_,creator_,parameters);
+        running_=false;
+        return work_.status?work_.status:failure_;
+    }
+    bool consumed() const noexcept {return attempts_==1 && !failure_;}
+    TglOwnedVeboxCommandTransactionResult finish(int nativeStatus) const noexcept {
+        auto result=work_;
+        if(!attempts_)result.status=nativeStatus?nativeStatus:5;
+        else if(!result.status)result.status=failure_?failure_:nativeStatus;
+        return result;
+    }
+};
 // Physical and image identity are NOT inferred from a factory Entry. Concrete
 // retirement admission must cover every outstanding frame/resource dependency.
 template<class Storage,class PhysicalLease,class Read,class Write,

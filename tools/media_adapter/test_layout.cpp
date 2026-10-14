@@ -15099,6 +15099,56 @@ static void testRetainedVeboxFrames() {
                         assert(!pending);return 0; // Unsubmitted CPU fixture only.
                     });
                 })==0);
+                {
+                    bool prepared=false;unsigned bootstraps=0;
+                    TglOwnedVeboxRetainedFrames<ItemFrame>::Ticket lateTicket;
+                    auto lateRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                        if(bytes==8 && (address==context+0x12e0 || address==context+0x12e8 ||
+                            (address>=0x88000 && address<0x880d8))) {
+                            const uintptr_t value=address==context+0x12e0?0x99000:
+                                address==context+0x12e8 && prepared?0x88000:0;
+                            std::memcpy(out,&value,8);return true;
+                        }
+                        return ownerRead(address,out,bytes);
+                    };
+                    assert(physicals.withScope(ticket,base,physical,[&](auto& active) noexcept -> int {
+                        TglNativeFrameOutputReceipt receipt;
+                        return owner->dispatchScopedFrameWithReceipt(pin,active,0x55000,0x66000,
+                            [&](uintptr_t target,uintptr_t c,uintptr_t input,uintptr_t output,auto& same) noexcept -> int {
+                                assert(target==entry && c==context && input==0x55000 && output==0x66000);
+                                assert(!same.createContextRootFrame(lateRead,rootAdmit).generation);
+                                auto bootstrap=[&](auto& admitted,uintptr_t codec,uintptr_t creator,uintptr_t parameters) noexcept {
+                                    ++bootstraps;
+                                    assert(&admitted==&same && prepared && codec==context && creator==0x99000 && parameters==0x88000);
+                                    lateTicket=admitted.createContextRootFrame(lateRead,rootAdmit);
+                                    assert(lateTicket.generation);
+                                    return admitted.runContextRootFrame([](ItemFrame&) noexcept {
+                                        return TglOwnedVeboxCommandTransactionResult{31,0,false,false};
+                                    });
+                                };
+                                using Prepared=TglOwnedPreparedVphalRequest<std::remove_reference_t<decltype(same)>,
+                                    decltype(lateRead),decltype(bootstrap)>;
+                                Prepared request(same,context,0x99000,lateRead,bootstrap);
+                                assert(request.finish(0).status==5 && request.finish(7).status==7);
+                                assert(Prepared::callback(reinterpret_cast<void*>(0x99000),reinterpret_cast<void*>(0x88000))==5);
+                                {
+                                    typename Prepared::Binding binding(reinterpret_cast<void*>(0x99000),request);
+                                    assert(binding.bound());prepared=true; // CPU fixture of native request preparation.
+                                    assert(Prepared::callback(reinterpret_cast<void*>(0x99008),reinterpret_cast<void*>(0x88000))==5);
+                                    assert(Prepared::callback(reinterpret_cast<void*>(0x99000),reinterpret_cast<void*>(0x88000))==31);
+                                    assert(request.consumed() && request.finish(11).status==31);
+                                    assert(Prepared::callback(reinterpret_cast<void*>(0x99000),reinterpret_cast<void*>(0x88000))==5 && !request.consumed());
+                                }
+                                assert(Prepared::callback(reinterpret_cast<void*>(0x99000),reinterpret_cast<void*>(0x88000))==5);
+                                return 11; // Native codec's translation; preserve raw callback31 separately.
+                            },receipt);
+                    })==11 && bootstraps==1);
+                    assert(physicals.withLive(ticket,base,physical,[&](auto& pool) noexcept -> int {
+                        return pool.retire(lateTicket,[](const ItemFrame&,bool pending,const auto&) noexcept -> int {
+                            assert(!pending);return 0;
+                        });
+                    })==0);
+                }
                 assert(codecs.prepareRemoval(base,physical,ticket.generation,removed,
                     [](const auto&,uint32_t) noexcept -> int {assert(false);return 0;})==5);
                 assert(physicals.destroy(ticket,base,physical,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
