@@ -3801,12 +3801,24 @@ struct Entry {
     std::array<uintptr_t, 17> callbacks{};
     void *native = nullptr;
 };
+enum class NativeRendererCallbackDomain : uint8_t {Original,Temporary};
+struct NativeRendererConstructionSelection {
+    NativeRendererCallbackDomain domain=NativeRendererCallbackDomain::Original;
+    bool ownedSend=false;
+    constexpr bool valid() const noexcept {
+        return domain==NativeRendererCallbackDomain::Original || domain==NativeRendererCallbackDomain::Temporary;
+    }
+};
+static_assert(NativeRendererConstructionSelection{}.valid());
+static_assert(NativeRendererConstructionSelection{NativeRendererCallbackDomain::Temporary,true}.valid());
+static_assert(!NativeRendererConstructionSelection{static_cast<NativeRendererCallbackDomain>(2),true}.valid());
 struct NativeCreatorPreparation {
     struct Record {
         uintptr_t image=0,physical=0,creator=0,renderer=0;uint64_t generation=0;
         NativeRendererCpuAssembly* storage=nullptr;NativeVphalOwner* owner=nullptr;
         bool used=false,adopted=false,lifetimePublished=false,childrenReady=false;
         bool publicationAttempted=false,childrenPublished=false;
+        NativeRendererConstructionSelection selection;
     };
     struct Ledger {std::atomic_flag gate=ATOMIC_FLAG_INIT;std::array<Record,64> records{};};
     static Ledger& ledger() noexcept {static Ledger value;return value;}
@@ -3814,7 +3826,8 @@ struct NativeCreatorPreparation {
     // children before returning success from the full native creator handoff.
     template<class PhysicalScope>
     static int prepareOwner(PhysicalScope& physical,const Entry& factory,uintptr_t image,
-        uintptr_t address,uint64_t generation,uintptr_t creator) noexcept {
+        uintptr_t address,uint64_t generation,uintptr_t creator,NativeRendererConstructionSelection selection={}) noexcept {
+        if(!selection.valid())return 5;
         return TglOwnedCreatorConstructionLease::withCreatorHandoff(physical,image,address,generation,creator,
             [&](TglOwnedCreatorConstructionLease&& pin) noexcept -> int {
                 auto& storage=ledger();
@@ -3828,6 +3841,7 @@ struct NativeCreatorPreparation {
                 if(!record)return 5;
                 record->used=true;record->image=image;record->physical=address;
                 record->generation=generation;record->creator=creator;
+                record->selection=selection;
                 Entry::ConstructionParent parent;TglNativeVphalResourceEnvironment environment;
                 if(!factory.constructionResourceEnvironment(std::move(pin),creator,parent,environment) || !parent.view()) {
                     *record={};return 5; // No owned candidate/publication exists.
@@ -3908,7 +3922,12 @@ struct NativeCreatorPreparation {
                         [](const NativeVphalOwner& owner,const TglNativeVphalMhwView& view) noexcept {
                             return owner.context()==view.parent && owner.lifetime().object()==view.parent;
                         }) || !parent.view() || assembly.backing().retention()())return 5;
-                    const int installed=NativeRendererCompleteHooks::install(assembly,*parent.view());
+                    const auto send=record->selection.ownedSend?&NativeVeboxSendSubmissionStage::send:nullptr;
+                    const std::array<int(*)(void*) noexcept,2> sends{send,send};
+                    if(!record->selection.valid())return 5;
+                    const int installed=record->selection.domain==NativeRendererCallbackDomain::Temporary?
+                        NativeTemporaryRendererCompleteHooks::install(assembly,*parent.view(),sends):
+                        NativeRendererCompleteHooks::install(assembly,*parent.view(),sends);
                     if(installed)return installed;
                     auto configuration=[&](uintptr_t renderer,uint64_t epoch,uintptr_t slot) noexcept {
                         return physical.matches(image,address,generation) && renderer==record->renderer &&
@@ -3933,8 +3952,8 @@ struct NativeCreatorPreparation {
     // construction or destroys objects still owned by the native creator.
     template<class PhysicalScope>
     static int complete(PhysicalScope& physical,const Entry& factory,uintptr_t image,
-        uintptr_t address,uint64_t generation,uintptr_t creator) noexcept {
-        const int owner=prepareOwner(physical,factory,image,address,generation,creator);
+        uintptr_t address,uint64_t generation,uintptr_t creator,NativeRendererConstructionSelection selection={}) noexcept {
+        const int owner=prepareOwner(physical,factory,image,address,generation,creator,selection);
         if(owner)return owner;
         if(!physical.matches(image,address,generation))return 5;
         const int children=initializeChildren(physical,image,address,generation,creator);
@@ -3966,8 +3985,9 @@ struct NativeCreatorScopedInvocation {
     // Prepared entry only: this does not replace any exported factory slot.
     template<class Admit>
     static BatchResult createAndAdopt(const Entry& factory,uintptr_t entry,
-        uintptr_t physical,const void* input,Admit& admit) noexcept {
+        uintptr_t physical,const void* input,Admit& admit,NativeRendererConstructionSelection selection={}) noexcept {
         BatchResult result;
+        if(!selection.valid())return result;
         TglNativePhysicalCallbackBinding selected;
         if(!factory.physical.matchesCreatorInputs(factory.nativeCpu,entry) ||
             !NativePhysicalBackend::binding(selected) || selected.image!=factory.physical.image ||
@@ -3976,7 +3996,7 @@ struct NativeCreatorScopedInvocation {
         result.status=NativePhysicalBackend::createContexts(physical,input,
             [&](uintptr_t image,uintptr_t actual,const void* request,Scope& scope) noexcept -> int {
                 if(actual!=physical || request!=input || scope.image()!=image)return 5;
-                result.creator=runComplete(factory,entry,actual,request,scope,admit);
+                result.creator=runComplete(factory,entry,actual,request,scope,admit,selection);
                 if(!result.creator.nativeInvoked)return 5;
                 if(result.creator.nativeResult)return result.creator.nativeResult;
                 return result.creator.handoffCompleted?0:5;
@@ -3985,10 +4005,10 @@ struct NativeCreatorScopedInvocation {
     }
     template<class Admit>
     static Result runComplete(const Entry& factory,uintptr_t entry,uintptr_t physical,
-        const void* input,Scope& scope,Admit& admit) noexcept {
+        const void* input,Scope& scope,Admit& admit,NativeRendererConstructionSelection selection={}) noexcept {
         const uintptr_t image=scope.image();
         const uint64_t generation=scope.generation();
-        if(image!=factory.physical.image || !factory.physical.matchesCreatorInputs(factory.nativeCpu,entry))
+        if(!selection.valid() || image!=factory.physical.image || !factory.physical.matchesCreatorInputs(factory.nativeCpu,entry))
             return {};
         // Borrow the mutation capability from the SAME batch adoption scope;
         // never synthesize a second physical owner or let authority escape.
@@ -3996,7 +4016,7 @@ struct NativeCreatorScopedInvocation {
             if(!scope.matches(image,physical,generation))return 5;
             return scope.withMutationAuthority([&](TglOwnedPhysicalMutationAuthority& authority) noexcept -> int {
                 return NativeCreatorPreparation::complete(authority,factory,image,physical,generation,
-                    reinterpret_cast<uintptr_t>(creator));
+                    reinterpret_cast<uintptr_t>(creator),selection);
             });
         };
         return run(entry,physical,input,scope,admit,handoff);
@@ -4064,10 +4084,10 @@ template NativeCreatorScopedInvocation::Result NativeCreatorScopedInvocation::ru
     NativeCreatorScopedInvocation::AdmitFn&,NativeCreatorScopedInvocation::HandoffFn&) noexcept;
 template NativeCreatorScopedInvocation::Result NativeCreatorScopedInvocation::runComplete<
     NativeCreatorScopedInvocation::AdmitFn>(const Entry&,uintptr_t,uintptr_t,const void*,
-    NativeCreatorScopedInvocation::Scope&,NativeCreatorScopedInvocation::AdmitFn&) noexcept;
+    NativeCreatorScopedInvocation::Scope&,NativeCreatorScopedInvocation::AdmitFn&,NativeRendererConstructionSelection) noexcept;
 template NativeCreatorScopedInvocation::BatchResult NativeCreatorScopedInvocation::createAndAdopt<
     NativeCreatorScopedInvocation::AdmitFn>(const Entry&,uintptr_t,uintptr_t,const void*,
-    NativeCreatorScopedInvocation::AdmitFn&) noexcept;
+    NativeCreatorScopedInvocation::AdmitFn&,NativeRendererConstructionSelection) noexcept;
 std::atomic<uintptr_t> nativeCreateContexts{0};
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept {
     mach_vm_size_t copied = 0;
@@ -4234,13 +4254,13 @@ template int NativeRendererCpuAssembly::withChildLifetimeScopes<
     int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept>(
     int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept) noexcept;
 template int NativeCreatorPreparation::prepareOwner<TglOwnedPhysicalMutationAuthority>(
-    TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
+    TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t,NativeRendererConstructionSelection) noexcept;
 template int NativeCreatorPreparation::initializeChildren<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 template int NativeCreatorPreparation::publishChildren<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 template int NativeCreatorPreparation::complete<TglOwnedPhysicalMutationAuthority>(
-    TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
+    TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t,NativeRendererConstructionSelection) noexcept;
 
 extern "C" __attribute__((visibility("default")))
 int NGRN_ObservedCreateContexts(void *context, const void *input) {
