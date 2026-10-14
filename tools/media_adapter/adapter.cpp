@@ -2589,6 +2589,26 @@ struct NativeRetainedInspectionEntry {
         return frontend.withRetainedInspection(use);
     }
 };
+struct NativeRendererHistoryInspection {
+    static TglNativeHistoryCacheInspection run(NativeBorrowedFrontend& frontend) noexcept {
+        TglNativeHistoryCacheInspection result;
+        const int status=frontend.withRetainedInspection([&](const auto&,const auto& pinned,
+            const auto& graph,const auto& target,bool) noexcept -> int {
+            auto live=[&]() noexcept {
+                uintptr_t renderer=0,table=0;
+                return pinned.image && pinned.image<=UINTPTR_MAX-0x75bba0 &&
+                    NativeTglImageAdmission{pinned.image}(pinned.image) &&
+                    NativeDataAdmission{}(pinned.creator,0x70) && NativeDataAdmission{}(pinned.renderer,0x9b8) &&
+                    readMemory(pinned.creator+0x68,&renderer,8) && renderer==pinned.renderer &&
+                    readMemory(renderer,&table,8) && table==pinned.image+0x75bba0;
+            };
+            result=tglInspectNativeHistoryCache(pinned.renderer,graph,target,&readMemory,live);
+            return result.observed?0:5;
+        });
+        if(status)result={};
+        return result;
+    }
+};
 using NativeContextRendererFrame=TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,
     NativeBorrowedFrontend>;
 using NativePhysicalRegistry=TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;

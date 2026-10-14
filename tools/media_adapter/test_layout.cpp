@@ -18014,6 +18014,36 @@ int main() {
                 TglOwnedFrontendSourceGraph<TestFrontendOriginalOwner,Api,3> graph(Api{refs});
                 assert(graph.acquire(reinterpret_cast<uintptr_t>(&root),resolve,11,12));
                 assert(graph.storage()==&root && ro.borrowed && po.borrowed && oo.borrowed);
+                {
+                    struct Target {const TglOwnedSurfaceStorage* surface;
+                        const TglOwnedSurfaceStorage* storage() const noexcept {return surface;}} target{&shell};
+                    std::array<uint8_t,0x9b8> renderer{};
+                    const auto base=reinterpret_cast<uintptr_t>(renderer.data());
+                    unsigned reads=0;bool allowed=true,stable=true,held=true;
+                    auto readCache=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                        ++reads;assert(at==base+0x928 && bytes==144);
+                        if(!allowed)return false;
+                        std::memcpy(out,renderer.data()+0x928,bytes);
+                        if(!stable && (reads&1)==0)static_cast<uintptr_t*>(out)[17]^=1;
+                        return true;
+                    };
+                    auto inspect=[&]() noexcept {
+                        reads=0;return tglInspectNativeHistoryCache(base,graph,target,readCache,[&]() noexcept {return held;});
+                    };
+                    auto result=inspect();assert(result.observed && !result.referencesFrame && reads==2);
+                    std::memcpy(renderer.data()+0x928+17*8,&p,8);
+                    result=inspect();assert(result.observed && result.referencesFrame);
+                    const auto destination=reinterpret_cast<uintptr_t>(&shell);
+                    std::memcpy(renderer.data()+0x928+17*8,&destination,8);
+                    result=inspect();assert(result.observed && result.referencesFrame);
+                    const uintptr_t foreign=1;std::memcpy(renderer.data()+0x928+17*8,&foreign,8);
+                    result=inspect();assert(result.observed && !result.referencesFrame);
+                    stable=false;result=inspect();assert(!result.observed && result.referencesFrame);stable=true;
+                    allowed=false;result=inspect();assert(!result.observed && result.referencesFrame);allowed=true;
+                    held=false;result=inspect();assert(!result.observed && result.referencesFrame && !reads);held=true;
+                    result=tglInspectNativeHistoryCache(UINTPTR_MAX,graph,target,readCache,[]() noexcept {return true;});
+                    assert(!result.observed && result.referencesFrame && !reads);
+                }
                 assert(graph.withOriginalOwner(root,[&](auto& original) noexcept -> int {
                     assert(&original==&ro && graph.storage()==&root);
                     assert(graph.withOriginalOwner(previous,[](auto&) noexcept -> int {assert(false);return 0;})==5);
