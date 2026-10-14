@@ -18026,7 +18026,7 @@ public:
 template<class ContextLease> class TglNativeContextRootSurfaceOwner {
     ContextLease context_;
     TglOwnedSurfaceStorage* shell_=nullptr;
-    bool borrowed_=false,conversionBorrowed_=false,conversionFault_=false;
+    bool borrowed_=false,conversionBorrowed_=false,conversionFault_=false,diBorrowed_=false,diFault_=false;
 public:
     template<class Writable>
     TglNativeContextRootSurfaceOwner(ContextLease&& lease,const TglNativeContextInputRoots& roots,
@@ -18050,6 +18050,30 @@ public:
     bool canDestroy() const noexcept {return !borrowed_;}
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& shell) const noexcept {
         return context_.get() && borrowed_ && shell_==&shell;
+    }
+    // TGL1119b0 owns surface88:112277..112297 allocates8 for nonzero
+    // SampleType138;112242..112267 frees/clears it when SampleType becomes0.
+    // The actual context-root pin and enclosing physical frame exclusion must
+    // prevent native reconfiguration. Borrow only its proven first DWORD;
+    // never adopt/free this allocation or substitute the owned DN90 backend.
+    template<class Read> bool readLeasedDiParameterKind(const TglOwnedSurfaceStorage& expected,
+        uintptr_t parameter,uint32_t& output,Read read) noexcept {
+        static_assert(noexcept(read(parameter,&output,size_t{4})) &&
+            std::is_same_v<decltype(read(parameter,&output,size_t{4})),bool>);
+        if(diBorrowed_ || diFault_ || !parameter || parameter>UINTPTR_MAX-3 ||
+            !hasSurfaceLease(expected))return false;
+        uintptr_t actual=0;uint32_t sample=0;
+        std::memcpy(&actual,expected.prefix.data()+0x88,8);
+        std::memcpy(&sample,expected.prefix.data()+0x138,4);
+        if(actual!=parameter || !sample)return false;
+        diBorrowed_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{diBorrowed_};
+        uint32_t candidate=0;const bool copied=read(parameter,&candidate,4);
+        uintptr_t after=0;uint32_t afterSample=0;
+        std::memcpy(&after,expected.prefix.data()+0x88,8);
+        std::memcpy(&afterSample,expected.prefix.data()+0x138,4);
+        if(!hasSurfaceLease(expected) || after!=parameter || afterSample!=sample)diFault_=true;
+        if(!copied || diFault_)return false;
+        output=candidate;return true;
     }
     // The retained context/frame excludes native reconfiguration/destruction;
     // the original shell owns this native237730 0x70 allocation. Borrow it,

@@ -328,6 +328,12 @@ using NativeFrontendAccess=TglPinnedVphalStorageAccess<NativeDataAdmission,Nativ
 using NativeFrontendEnvironment=TglNativeFrontendCpuEnvironment<decltype(&readMemory),NativeTglImageAdmission,
     decltype(&executableMemory)>;
 using NativeContextSurfaceOwner=typename TglNativeContextSurfaceOwners<NativeCodecBackend::Registry>::Owner;
+struct NativeAllocationParameterKind {
+    NativeContextSurfaceOwner& owner;const TglOwnedSurfaceStorage& source;
+    bool operator()(uintptr_t parameter,uint32_t& output) const noexcept {
+        return owner.readLeasedDiParameterKind(source,parameter,output,&readMemory);
+    }
+};
 // Frame surfaces retain their original codec contexts; CPU children remain
 // in the permanent VPHAL owner and are entered only through its pinned access.
 using NativeBorrowedFrontend=TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePin,

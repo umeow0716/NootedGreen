@@ -15224,6 +15224,30 @@ static void testRetainedVeboxFrames() {
                     assert(shell.storage()==&original && shell.metadataStorage()==&original && sidecar.hasSurfaceLease(original));
                     typename RootOwner::SurfaceOwnerLease nested(sidecar);assert(!nested.storage());
                     shell.metadataStorage()->prefix[0x86]=1;assert(original.prefix[0x86]==1);
+                    std::array<uint32_t,2> di{2,0x100};
+                    const uintptr_t diAddress=reinterpret_cast<uintptr_t>(di.data());
+                    const uint32_t diSample=1;
+                    std::memcpy(original.prefix.data()+0x88,&diAddress,8);
+                    std::memcpy(original.prefix.data()+0x138,&diSample,4);
+                    unsigned diReads=0;uint32_t diKind=123;
+                    auto readDi=[&](uintptr_t at,void* out,size_t size) noexcept {
+                        ++diReads;assert(at==diAddress && size==4);
+                        uint32_t ignored=99;
+                        assert(!sidecar.readLeasedDiParameterKind(original,diAddress,ignored,
+                            [](uintptr_t,void*,size_t) noexcept {assert(false);return false;}) && ignored==99);
+                        std::memcpy(out,di.data(),size);return true;
+                    };
+                    assert(sidecar.readLeasedDiParameterKind(original,diAddress,diKind,readDi) && diKind==2 && diReads==1);
+                    diKind=123;
+                    assert(!sidecar.readLeasedDiParameterKind(original,diAddress+4,diKind,readDi) && diKind==123 && diReads==1);
+                    assert(!sidecar.readLeasedDiParameterKind(original,diAddress,diKind,
+                        [](uintptr_t,void*,size_t) noexcept {return false;}) && diKind==123);
+                    assert(!sidecar.readLeasedDiParameterKind(original,diAddress,diKind,
+                        [&](uintptr_t,void*,size_t) noexcept {
+                            const uint32_t zero=0;std::memcpy(original.prefix.data()+0x138,&zero,4);return true;
+                        }) && diKind==123);
+                    std::memcpy(original.prefix.data()+0x138,&diSample,4);
+                    assert(!sidecar.readLeasedDiParameterKind(original,diAddress,diKind,readDi) && diReads==1);
                     std::array<uint8_t,0x70> conversion{};
                     const uintptr_t metadata=reinterpret_cast<uintptr_t>(conversion.data()),nestedSurface=0x334400;
                     const uint32_t mode=2;
