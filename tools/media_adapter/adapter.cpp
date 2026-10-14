@@ -30,11 +30,29 @@ std::once_flag loadOnce;
 std::mutex registryLock;
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept;
 bool executableMemory(uintptr_t address,size_t length) noexcept;
+bool writableDataMemory(uintptr_t address,size_t length) noexcept;
+struct NativeDataPointerWriter {
+    bool operator()(uintptr_t address,uintptr_t value) const noexcept {
+        // Caller holds exact owner/physical exclusive admission. A failed write
+        // is ambiguous; the owner retains its table and dependency, not rollback.
+        if(address%alignof(uintptr_t) || !writableDataMemory(address,sizeof(value)))return false;
+        return mach_vm_write(mach_task_self(),address,
+            reinterpret_cast<vm_offset_t>(&value),sizeof(value))==KERN_SUCCESS;
+    }
+};
+struct NativeDataAdmission {
+    bool operator()(uintptr_t address,size_t length) const noexcept {
+        return writableDataMemory(address,length);
+    }
+};
 struct NativeTglImageAdmission {
     uintptr_t image=0;
     bool operator()(uintptr_t candidate) const noexcept {return image && candidate==image;}
 };
 struct Entry {
+    using CodecOwner=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,
+        decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,
+        NativeTglImageAdmission,decltype(&executableMemory)>;
     // Factory table lifetime only, not the native physical context lifetime.
     // Exact TGL table slots: [0] factory data, [1] 0x135d9 physical init
     // (void **output, const void *input), [2] 0x13c8c physical destroy,
@@ -73,7 +91,7 @@ bool readMemory(uintptr_t address, void *output, size_t length) noexcept {
 }
 // Read native leaf protections, not a shared-region parent's coarse policy.
 // This performs no vm_protect, text writes or policy changes.
-bool executableMemory(uintptr_t address,size_t length) noexcept {
+bool leafMemoryPermissions(uintptr_t address,size_t length,vm_prot_t required,vm_prot_t forbidden) noexcept {
     if(!address || !length || address>UINTPTR_MAX-length)return false;
     natural_t depth=0;
     for(unsigned attempt=0;attempt<16;++attempt) {
@@ -85,10 +103,15 @@ bool executableMemory(uintptr_t address,size_t length) noexcept {
             count!=VM_REGION_SUBMAP_INFO_COUNT_64 || region>address ||
             address-region>span || length>span-(address-region))return false;
         if(info.is_submap){if(depth>=16)return false;++depth;continue;}
-        return (info.protection&(VM_PROT_READ|VM_PROT_EXECUTE))==(VM_PROT_READ|VM_PROT_EXECUTE) &&
-            !(info.protection&VM_PROT_WRITE);
+        return (info.protection&required)==required && !(info.protection&forbidden);
     }
     return false;
+}
+bool executableMemory(uintptr_t address,size_t length) noexcept {
+    return leafMemoryPermissions(address,length,VM_PROT_READ|VM_PROT_EXECUTE,VM_PROT_WRITE);
+}
+bool writableDataMemory(uintptr_t address,size_t length) noexcept {
+    return leafMemoryPermissions(address,length,VM_PROT_READ|VM_PROT_WRITE,VM_PROT_EXECUTE);
 }
 uintptr_t qualifiedIoAcceleratorFramework(uintptr_t address) noexcept {
     Dl_info info{};
