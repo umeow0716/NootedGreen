@@ -3379,8 +3379,12 @@ struct NativeTemporaryLowerContinuation {
     TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
     NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;
     void* argument;bool attempted=false;
+    NativeContextRendererFrame* sendFrame=nullptr;
+    NativeVeboxSendSubmissionStage::Admit submitAdmit=nullptr;
+    NativeVeboxSendSubmissionStage::AdmitChild childAdmit=nullptr;
     TglOwnedVeboxCommandTransactionResult run() noexcept {
-        if(attempted || childIndex>1 || !parameters || !pass || !acquisition.healthy())return {};
+        if(attempted || childIndex>1 || !parameters || !pass || !acquisition.healthy() ||
+            bool(sendFrame)!=bool(submitAdmit) || bool(sendFrame)!=bool(childAdmit))return {};
         attempted=true;
         const auto* current=source.surfaceBinding();const auto* output=target.surfaceBinding();
         if(!current || !output)return {};
@@ -3405,7 +3409,8 @@ struct NativeTemporaryLowerContinuation {
                 NativeOriginalFrameExecution::InputsFor<NativeTemporarySurfaceOwner> execution{
                     call.frontend,core,graph,lines,params,pass,read,vp,self.catalogue,mode,self.view,
                     sourceFeatures,targetFeatures,self.acquisition,self.decompressionStatus,self.decompression,self.argument};
-                return NativeOriginalFrameExecution::run(execution);
+                return self.sendFrame?NativeOriginalFrameExecution::runWithSend(*self.sendFrame,execution,
+                    self.submitAdmit,self.childAdmit):NativeOriginalFrameExecution::run(execution);
             });
     }
 };
@@ -3420,6 +3425,9 @@ struct NativeRetainedTemporaryTransaction {
     const TglNativeVphalMhwView& view;TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
     NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;void* argument;
     bool attempted=false;
+    NativeContextRendererFrame* sendFrame=nullptr;
+    NativeVeboxSendSubmissionStage::Admit submitAdmit=nullptr;
+    NativeVeboxSendSubmissionStage::AdmitChild childAdmit=nullptr;
     TglNativePerPassCommandResult run(std::array<uint8_t,0x139>& parameters,std::array<uint8_t,0x60>& pass,
         const TglNativeOuterSurfaceRoles& roles) noexcept {
         if(attempted || childIndex>1 || !backend.bound() || backend.image()!=pinned.image ||
@@ -3446,6 +3454,7 @@ struct NativeRetainedTemporaryTransaction {
                             denoise,childIndex,interfaces,reinterpret_cast<uintptr_t>(params.data()),
                             reinterpret_cast<uintptr_t>(packet.data()),catalogue,retirement,view,acquisition,
                             decompressionStatus,decompression,argument};
+                        lower.sendFrame=sendFrame;lower.submitAdmit=submitAdmit;lower.childAdmit=childAdmit;
                         return lower.run();
                     });
             });
@@ -3462,6 +3471,9 @@ struct NativeRetainedTemporaryExecution {
         TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;void* argument;
         bool attempted=false,consumed=false;
+        NativeContextRendererFrame* sendFrame=nullptr;
+        NativeVeboxSendSubmissionStage::Admit submitAdmit=nullptr;
+        NativeVeboxSendSubmissionStage::AdmitChild childAdmit=nullptr;
     };
     static TglOwnedVeboxCommandTransactionResult consume(void* context,NativeRendererCpuAssembly& cpu,
         const TglNativeCreatedVeboxRendererView& pinned,NativeSourceGraph& graph,
@@ -3479,13 +3491,19 @@ struct NativeRetainedTemporaryExecution {
         NativeRetainedTemporaryTransaction transaction{request.backend,cpu,pinned,graph,target,request.temporal,
             denoise,request.childIndex,request.interfaces,request.catalogue,request.retirement,request.view,
             request.acquisition,request.decompressionStatus,request.decompression,request.argument};
+        transaction.sendFrame=request.sendFrame;
+        transaction.submitAdmit=request.submitAdmit;transaction.childAdmit=request.childAdmit;
         return transaction.run(request.parameters,request.pass,request.roles).native;
     }
     static TglOwnedVeboxCommandTransactionResult runRetained(NativeContextRendererFrame& frame,Request& request) noexcept {
-        if(request.attempted || request.childIndex>1)return {};
+        if(request.attempted || request.childIndex>1 || request.sendFrame ||
+            bool(request.submitAdmit)!=bool(request.childAdmit))return {};
         request.attempted=true;
-        return NativeRetainedFrontendRuntime::runUnselected(frame,request.roles,request.sourceIndex,request.targetIndex,
+        if(request.submitAdmit)request.sendFrame=&frame;
+        auto result=NativeRetainedFrontendRuntime::runUnselected(frame,request.roles,request.sourceIndex,request.targetIndex,
             &request,&consume);
+        request.sendFrame=nullptr;
+        return result;
     }
     struct CallbackDomain;
     using PassProducer=TglOwnedVeboxCommandTransactionResult(*)(void*,NativeContextRendererFrame&,uintptr_t,void*,void*) noexcept;
