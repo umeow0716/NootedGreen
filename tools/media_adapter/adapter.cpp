@@ -2682,7 +2682,7 @@ struct NativeVeboxSendSubmissionStage {
         }
         context.buildAttempted=true;
         if(!context.entered || &packets.pass!=&context.pass || !context.pass.acceptsProducer() ||
-            !context.tail.matchesChild(reinterpret_cast<uintptr_t>(child),&readMemory))return 5;
+            !context.tail.matchesIdentity(reinterpret_cast<uintptr_t>(child),&readMemory))return 5;
         context.command=tglWithCapturedOwnedNativeVeboxCommandTransaction(
             sourceOwner,childOwner,executionOwner,child,execution,source,packets,setup,builder,
             context.image,os,context.scratch,&readMemory,NativeTglImageAdmission{context.image},&executableMemory,
@@ -2774,7 +2774,7 @@ struct NativeVeboxSendSubmissionStage {
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(admitChild),1)))prior=5;
         const int status=pass.withSubmission(prior,[&]() noexcept -> int {
             uint32_t flags=0;
-            if(!tail.flags(&readMemory,flags))return 5;
+            if(!tail.prepareTail(&readMemory) || !tail.flags(&readMemory,flags))return 5;
             const int post=tail.postWriteback(&readMemory,admitChild);
             if(post)return post;
             const auto observed=frame.observeNativeOsSubmit(binding,scratch.command.data(),flags,&readMemory,admit);

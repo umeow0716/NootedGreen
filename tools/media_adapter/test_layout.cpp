@@ -4522,9 +4522,15 @@ static void testVeboxHardwareBinding() {
             };
             auto tailExecutable=[](uintptr_t,size_t) noexcept {return true;};
             TglNativeVeboxSendTailBinding tail;
+            if(mode==1)child[0x1ba8]=0; // before native Allocate's policy publication
             assert(tail.capture(image,object,b,tailRead,qualify,tailExecutable));
             assert(tail.matchesChild(object,tailRead) && !tail.matchesChild(object+8,tailRead));
             assert(!tail.capture(image,object,b,tailRead,qualify,tailExecutable));
+            if(mode==1) {
+                child[0x1ba8]=1;
+                assert(tail.matchesIdentity(object,tailRead) && !tail.matchesChild(object,tailRead));
+            }
+            assert(tail.prepareTail(tailRead) && !tail.prepareTail(tailRead));
             uint32_t flag=99;assert(tail.flags(tailRead,flag) && flag==(mode==1?1U:0U));
             unsigned posts=0,tailMarks=0;
             auto post=[&](uintptr_t p,uintptr_t c) noexcept -> int {

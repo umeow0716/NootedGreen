@@ -19019,6 +19019,7 @@ class TglNativeVeboxSendTailBinding {
     uintptr_t image_=0,child_=0;
     TglVeboxHardwareBinding hardware_{};
     bool attempted_=false,ready_=false,postAttempted_=false,postReady_=false,finishAttempted_=false;
+    bool prepareAttempted_=false,prepared_=false;
     template<class F> static bool available(const F& fn) noexcept {
         if constexpr(std::is_pointer_v<F>)return fn!=nullptr;
         else return true;
@@ -19059,11 +19060,27 @@ public:
     template<class Read> bool matchesChild(uintptr_t child,Read read) const noexcept {
         return child==child_ && available(read) && live(read);
     }
+    template<class Read> bool matchesIdentity(uintptr_t child,Read read) const noexcept {
+        Snapshot current;
+        if(child!=child_ || !ready_ || !available(read) || !load(child_,read,current))return false;
+        current.flags=snapshot_.flags;return current.same(snapshot_);
+    }
+    // Allocate writes1ba8 inside outer Render. Refresh ONLY this bit once,
+    // after command building; never refresh identity or post-submit state.
+    template<class Read> bool prepareTail(Read read) noexcept {
+        if(prepareAttempted_ || postAttempted_ || finishAttempted_)return false;
+        prepareAttempted_=true;Snapshot first,second;
+        if(!matchesIdentity(child_,read) || !load(child_,read,first) ||
+            !load(child_,read,second) || !first.same(second))return false;
+        first.flags=snapshot_.flags;
+        if(!first.same(snapshot_))return false;
+        snapshot_.flags=second.flags;prepared_=true;return true;
+    }
     template<class Read,class Admit,class Invoke=TglNativeVeboxPostWritebackInvoker>
     int postWriteback(Read read,Admit admit,Invoke invoke={}) noexcept {
         if(postAttempted_ || finishAttempted_)return 5;postAttempted_=true;
         if(!available(read) || !available(admit) || !available(invoke) ||
-            !live(read) || !admit(child_,snapshot_.os,snapshot_.mhw))return 5;
+            !prepared_ || !live(read) || !admit(child_,snapshot_.os,snapshot_.mhw))return 5;
         for(auto entry:snapshot_.post) {
             const int status=invoke(entry,child_);
             if(status)return status;
