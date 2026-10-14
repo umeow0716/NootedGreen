@@ -17937,6 +17937,8 @@ struct TglOwnedVeboxDndiFrameContext {
     Frame& frame;
     ExecutionOwner& executionOwner;
     uintptr_t leasedDnParams;
+    void* parameterScope=nullptr;
+    bool(*parameterRead)(void*,const TglOwnedSurfaceStorage&,uintptr_t&) noexcept=nullptr;
     Read read;
     PacketAdmit admitPackets;
     TglOwnedVeboxProducerPass& pass;
@@ -17956,8 +17958,10 @@ struct TglOwnedVeboxDndiFrameContext {
         if(leases.execution>UINTPTR_MAX-0xd ||
             !read(leases.execution+0xb,dnFlags.data(),dnFlags.size())) return 5;
         TglOwnedDndiSource source;
+        uintptr_t currentDnParams=leasedDnParams;
+        if(parameterRead && (!parameterScope || !parameterRead(parameterScope,leases.source,currentDnParams)))return 5;
         if(!tglAdmitOwnedDndiSource(source,leases.source,(dnFlags[0]|dnFlags[1])&1,
-            leasedDnParams,read)) return 5;
+            currentDnParams,read)) return 5;
         TglOwnedDndiPackets packets;
         if(!read(lp,packets.luma.data(),0x30) || !read(cp,packets.chroma.data(),0x24)) return 5;
         const int result=tglPublishOwnedDndiInFrame(executionOwner,leases.execution,leases.child,

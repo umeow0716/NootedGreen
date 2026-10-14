@@ -5104,9 +5104,19 @@ static void testExecutionOwner() {
             struct Leases {uintptr_t child,execution;TglOwnedSurfaceStorage& source;} leases;
         } nativeFrame{{},{child,7,surface}};
         TglOwnedVeboxDndiFrameContext context(nativeFrame,owner,dnParams,packetRead,admitPackets);
+        struct DnParameterRead {const TglOwnedSurfaceStorage* source;uintptr_t pointer;bool allow=true;unsigned calls=0;};
+        DnParameterRead parameterRead{&surface,dnParams};
+        context.leasedDnParams=0; // A pre-feature snapshot must not override the current owner capability.
+        context.parameterScope=&parameterRead;
+        context.parameterRead=[](void* scope,const TglOwnedSurfaceStorage& source,uintptr_t& pointer) noexcept {
+            auto& state=*static_cast<DnParameterRead*>(scope);++state.calls;
+            if(!state.allow || state.source!=&source)return false;
+            pointer=state.pointer;return true;
+        };
         using NativeResolve=TglOwnedVeboxScopedContext<decltype(context)>;
         using NativeCallbacks=TglOwnedVeboxProducerCallbacks<NativeResolve>;
-        for(unsigned denied=0;denied<4;++denied) {
+        for(unsigned denied=0;denied<5;++denied) {
+            parameterRead.allow=denied!=4;
             stackPackets.luma.fill(0xabcdef01);stackPackets.chroma.fill(0x12345678);
             const auto saved=stackPackets;
             packetsAllowed=denied!=1;
@@ -5121,6 +5131,7 @@ static void testExecutionOwner() {
             else assert(stackPackets.luma[0]==576 && stackPackets.chroma[3]==2176);
             assert(!owner.hasExecutionLease(7) && !childLease.busy && !NativeResolve::get(childLease.child));
         }
+        assert(parameterRead.calls==2);
     }
     Backend pass;
     {

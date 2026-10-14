@@ -1671,6 +1671,18 @@ struct NativeVeboxFrameCapabilityScope {
     }
 };
 struct NativeVeboxPacketProducerScope {
+    struct DnRead {
+        NativeContextSurfaceOwner& owner;NativeDenoiseParameters& parameters;
+        const TglOwnedSurfaceStorage& source;
+        static bool resolve(void* context,const TglOwnedSurfaceStorage& actual,uintptr_t& output) noexcept {
+            auto* self=static_cast<DnRead*>(context);
+            if(!self || &actual!=&self->source || !self->owner.hasSurfaceLease(actual))return false;
+            uintptr_t pointer=0;std::memcpy(&pointer,actual.prefix.data()+0x90,8);
+            if(pointer && (!self->parameters.hasNativeReleaseSlot(actual.prefix.data()+0x90) ||
+                pointer!=self->parameters.get() || self->parameters.size()<8))return false;
+            output=pointer;return true;
+        }
+    };
     // Construction and execution name this SAME resolver specialization.
     // This is only the producer portion, never a complete publishable table.
     static std::array<uintptr_t,20> producerHooks(std::array<uintptr_t,20> hooks) noexcept {
@@ -1679,7 +1691,7 @@ struct NativeVeboxPacketProducerScope {
         hooks=tglBindOwnedVeboxCscHook<NativeVeboxProducerResolve>(hooks);
         return tglBindOwnedVeboxDndiHook<NativeVeboxProducerResolve>(hooks);
     }
-    static NativeAdmissionStages::Result run(NativeVeboxLivePacketFrame& frame,uintptr_t dnParams,
+    static NativeAdmissionStages::Result run(NativeVeboxLivePacketFrame& frame,NativeDenoiseParameters& parameters,
         NativeVeboxCscProducer csc,NativeAllocatedAdmissionRender& render) noexcept {
         NativeAdmissionStages::Result result;
         auto& admission=render.render.admission;auto& child=admission.reset.childOwner;
@@ -1690,16 +1702,45 @@ struct NativeVeboxPacketProducerScope {
             leases.target!=&admission.feature.target || &csc.health.childOwner!=&child ||
             &csc.health.executionOwner!=&execution || &csc.health.source!=&leases.source ||
             &csc.health.target!=leases.target || frame.read.scope!=admission.read.scope ||
-            frame.read.resolve!=admission.read.resolve)return result;
+            frame.read.resolve!=admission.read.resolve || &parameters!=&admission.feature.parameters)return result;
+        DnRead dn{admission.feature.sourceOwner,parameters,leases.source};
         NativeVeboxPacketBridge bridge(frame,NativeStackPacketAdmission{});
-        const int status=tglWithOwnedVeboxFrameProducers(bridge,child,execution,dnParams,&readMemory,
+        const int status=tglWithOwnedVeboxFrameProducers(bridge,child,execution,0,&readMemory,
             TglNativeDndiStackAdmission{},csc,[&](void* object,auto& producer) noexcept -> int {
                 static_assert(std::is_same_v<std::remove_reference_t<decltype(producer)>,NativeVeboxProducerTypes::Context>);
                 if(object!=admission.reset.child || NativeVeboxProducerResolve::get(object)!=&producer)return 5;
+                producer.frame.frame.parameterScope=&dn;
+                producer.frame.frame.parameterRead=&DnRead::resolve;
+                std::array<uintptr_t,20> hooks{};
+                using Lifetime=TglOwnedVeboxScopedLifetimeResolve<NativeRendererChildLifetime>;
+                if(!tglBuildOwnedVeboxCompleteHooks<Lifetime,NativeAdmissionResolve,NativeAllocationResolve,
+                    NativeVeboxProducerResolve,NativeModeReleaseScope,TglOwnedFormatReader>(object,hooks) ||
+                    !child.matchesPrivateVtableHooks(hooks))return 5;
                 return producer.pass.withBuilder([&]() noexcept -> int {result=render.run();return result.status;});
             });
         if(status) {result.status=status;result.admitted=false;}
         return result;
+    }
+};
+struct NativeCompleteFrameConsumer {
+    NativeRendererCpuAssembly& assembly;const TglNativeVphalMhwView& view;
+    NativeRetainedDiIecpCapture& capture;TglOwnedVeboxPacketLeases leases;
+    NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
+    NativeAllocatedAdmissionRender& render;bool disableTemporalDenoise;
+    bool attempted=false;
+    NativeAdmissionStages::Result run() noexcept {
+        NativeAdmissionStages::Result result;
+        auto& admission=render.render.admission;
+        if(attempted || &capture.planner!=&render.planner || &capture.read!=&admission.read ||
+            capture.parameters!=&parameters || &parameters!=&admission.feature.parameters ||
+            &admission.reset.backing!=&assembly.backing() || view.renderer.image!=render.render.binding.image ||
+            assembly.backing().retention()())return result;
+        attempted=true;
+        return NativeVeboxFrameCapabilityScope::run(assembly,view,capture,leases,disableTemporalDenoise,this,
+            [](void* context,NativeVeboxLivePacketFrame& frame) noexcept -> NativeAdmissionStages::Result {
+                auto& self=*static_cast<NativeCompleteFrameConsumer*>(context);
+                return NativeVeboxPacketProducerScope::run(frame,self.parameters,self.csc,self.render);
+            });
     }
 };
 struct NativeRendererCompleteHooks {
