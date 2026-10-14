@@ -25681,8 +25681,38 @@ int main() {
                                 reinterpret_cast<uintptr_t>(nativeDn.data()),nativeDn.size(),false,dnRead));
                             assert(!frameDn.live);
                             nativeDn[0x38]=0;
-                            assert(frame.surfacesReady() && frame.initializeScalarParametersFromNativeRequest(
-                                reinterpret_cast<uintptr_t>(nativeDn.data()),nativeDn.size(),false,dnRead));
+                            std::array<uint8_t,0x28> nativeCommand{};
+                            const uint32_t commandType=2;const uint64_t commandOperation=0x10000;
+                            const auto leasedRequest=reinterpret_cast<uintptr_t>(nativeDn.data());
+                            std::memcpy(nativeCommand.data(),&commandType,4);
+                            std::memcpy(nativeCommand.data()+8,&commandOperation,8);
+                            std::memcpy(nativeCommand.data()+0x20,&leasedRequest,8);
+                            unsigned payloadReads=0;
+                            auto commandRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                                if(address==reinterpret_cast<uintptr_t>(nativeCommand.data()) &&
+                                    bytes==nativeCommand.size()) {
+                                    std::memcpy(out,nativeCommand.data(),bytes);return true;
+                                }
+                                ++payloadReads;return dnRead(address,out,bytes);
+                            };
+                            assert(!frame.initializeScalarParametersFromNativeCommand(
+                                reinterpret_cast<uintptr_t>(nativeCommand.data()),nativeCommand.size(),
+                                leasedRequest+8,nativeDn.size(),false,commandRead));
+                            assert(!payloadReads && !frameDn.live);
+                            assert(!frame.initializeScalarParametersFromNativeCommand(
+                                reinterpret_cast<uintptr_t>(nativeCommand.data()),nativeCommand.size(),
+                                leasedRequest,nativeDn.size()-1,false,commandRead));
+                            assert(!payloadReads && !frameDn.live);
+                            nativeDn[0x38]=1;
+                            assert(!frame.initializeScalarParametersFromNativeCommand(
+                                reinterpret_cast<uintptr_t>(nativeCommand.data()),nativeCommand.size(),
+                                leasedRequest,nativeDn.size(),false,commandRead));
+                            assert(payloadReads==1 && !frameDn.live);
+                            nativeDn[0x38]=0;
+                            assert(frame.surfacesReady() && frame.initializeScalarParametersFromNativeCommand(
+                                reinterpret_cast<uintptr_t>(nativeCommand.data()),nativeCommand.size(),
+                                leasedRequest,nativeDn.size(),false,commandRead));
+                            assert(payloadReads==2);
                             assert(!frame.initializeScalarParameters(dnRequest));
                             const auto frontendSfc=reinterpret_cast<uintptr_t>(frontendParentSfc.data());
                             putNative(frontendParentSfc,0,base+0x759420);

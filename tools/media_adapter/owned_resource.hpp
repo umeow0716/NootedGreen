@@ -26017,6 +26017,18 @@ public:
         return tglDecodeNativeDnScalarRequest(decoded,request,extent,mode3NativeDefault,read) &&
             initializeScalarParameters(decoded);
     }
+    // The request lease/extent comes from the retained caller, NOT from the
+    // untrusted command pointer. A foreign command cannot select a new owner.
+    template<class Read>
+    bool initializeScalarParametersFromNativeCommand(uintptr_t command,size_t commandExtent,
+        uintptr_t leasedRequest,size_t requestExtent,bool mode3NativeDefault,Read read) noexcept {
+        if(!surfacesReady() || backing_.retention()()) return false;
+        TglNativeDnCommand decoded;
+        if(!tglDecodeNativeDnCommand(decoded,command,commandExtent,read) ||
+            decoded.request!=leasedRequest) return false;
+        return initializeScalarParametersFromNativeRequest(leasedRequest,requestExtent,
+            mode3NativeDefault,read);
+    }
 private:
     template<class ChildOwner,class Consume>
     TglOwnedVeboxCommandTransactionResult withLeasedChildCommandFrame(
