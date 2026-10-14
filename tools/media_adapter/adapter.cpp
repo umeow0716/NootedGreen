@@ -1964,6 +1964,40 @@ struct NativeFrameExecutionAssembly {
         return result;
     }
 };
+struct NativeModeFrameExecution {
+    struct Inputs {
+        NativeRendererCpuAssembly& assembly;const TglNativeVphalMhwView& view;
+        NativeVpProducerFrame& vp;NativeAdmissionFrameAssembly& admission;
+        NativeModeAllocationPlan& allocation;
+        const TglVeboxRenderBinding& binding;void* argument;
+        const std::array<uint32_t,11>& controls;TglOwnedVeboxPacketLeases leases;
+        NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
+        bool disableTemporalDenoise;
+    };
+    static NativeAdmissionStages::Result run(Inputs& in) noexcept {
+        NativeAdmissionStages::Result result;
+        const int status=in.admission.run([&](NativeAdmissionStages& stages) noexcept -> int {
+            auto& plan=in.allocation;
+            if(&plan.retirement!=&stages.reset.retirement || plan.selection.child!=stages.reset.child ||
+                &plan.selection.owner!=&stages.reset.childOwner || plan.report!=stages.reset.execution ||
+                &plan.execution!=&stages.reset.executionOwner || &plan.input!=&stages.feature.sourceOwner ||
+                &plan.target!=&stages.feature.targetOwner || &plan.source!=&stages.feature.source)return 5;
+            struct Call {Inputs& in;NativeAdmissionStages& stages;};
+            Call call{in,stages};
+            result=plan.run(&call,[](void* context,NativeAllocationPlanner& planner,
+                NativeModeReleaseContext& mode) noexcept -> NativeAdmissionStages::Result {
+                auto& call=*static_cast<Call*>(context);auto& in=call.in;
+                NativeFrameExecutionAssembly::Inputs execution{in.assembly,in.view,in.vp,call.stages,
+                    planner,mode,in.binding,in.argument,in.controls,in.leases,in.parameters,in.csc,
+                    in.disableTemporalDenoise};
+                return NativeFrameExecutionAssembly::run(execution);
+            });
+            return result.status;
+        });
+        if(status){result.status=status;result.admitted=false;}
+        return result;
+    }
+};
 struct NativeRendererCompleteHooks {
     using LifetimeResolve=TglOwnedVeboxScopedLifetimeResolve<NativeRendererChildLifetime>;
     static int install(NativeRendererCpuAssembly& assembly,const TglNativeVphalMhwView& view) noexcept {
