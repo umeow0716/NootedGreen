@@ -16380,6 +16380,33 @@ static void testRetainedVeboxFrames() {
                                     assert(tglPlanNativePerPassHistorySave(plan,before,graph,derived,copy));
                                     assert(plan.written==1 && plan.slots[0]==historyAddress && refs==4);
                                     for(size_t i=1;i<18;++i)assert(plan.slots[i]==before[i]);
+                                    for(unsigned mode=0;mode<5;++mode) {
+                                        std::array<uint8_t,0x9b8> renderer{};
+                                        std::memcpy(renderer.data()+0x928,before.data(),sizeof(before));
+                                        const auto base=reinterpret_cast<uintptr_t>(renderer.data());
+                                        unsigned reads=0,writes=0;bool held=true;
+                                        auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                                            assert(at==base+0x928 && bytes==144);++reads;
+                                            if(mode==1 && reads==1)return false;
+                                            std::memcpy(out,renderer.data()+0x928,bytes);
+                                            if(mode==3 && reads==2)static_cast<uintptr_t*>(out)[0]^=1;
+                                            return true;
+                                        };
+                                        auto write=[&](uintptr_t at,const void* bytes,size_t count) noexcept {
+                                            assert(at==base+0x928 && count==8);++writes;
+                                            std::memcpy(renderer.data()+0x928,bytes,count);
+                                            if(mode==4)held=false;
+                                            return mode!=2; // partial-write failure still carries publication
+                                        };
+                                        const auto prepared=tglPrepareNativePerPassHistorySave(base,graph,derived,copy,
+                                            read,write,[&]() noexcept {return held;});
+                                        assert(prepared.admitted==(mode==0) && prepared.published==(mode!=1));
+                                        assert(writes==(mode!=1) && refs==4);
+                                        for(size_t i=1;i<18;++i) {
+                                            uintptr_t preserved=0;std::memcpy(&preserved,renderer.data()+0x928+i*8,8);
+                                            assert(preserved==before[i]);
+                                        }
+                                    }
                                     const uintptr_t zero=0;
                                     std::memcpy(copy.prefix.data()+0xc0,&zero,8);
                                     assert(!tglPlanNativePerPassHistorySave(plan,before,graph,derived,copy));

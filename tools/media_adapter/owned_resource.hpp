@@ -14335,6 +14335,32 @@ struct TglNativePerPassCommandResult {
 struct TglNativeHistoryPreparationResult {
     bool admitted=false,published=false;
 };
+// Owned-data implementation of exact1300f0 mode1. The caller must lend the
+// qualified renderer slot range under its original parent/generation lease.
+// An attempted write may be partial: preserve publication evidence, never
+// roll back through pointers whose ownership has become uncertain.
+template<class Graph,class Owner,class Read,class Write,class Lease>
+TglNativeHistoryPreparationResult tglPrepareNativePerPassHistorySave(uintptr_t renderer,
+    Graph& graph,Owner& owner,const TglOwnedSurfaceStorage& target,Read read,Write write,Lease live) noexcept {
+    TglNativeHistoryPreparationResult result;
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})) &&
+        std::is_same_v<decltype(read(uintptr_t{},nullptr,size_t{})),bool> &&
+        noexcept(write(uintptr_t{},static_cast<const void*>(nullptr),size_t{})) &&
+        std::is_same_v<decltype(write(uintptr_t{},static_cast<const void*>(nullptr),size_t{})),bool>);
+    if(!renderer || renderer>UINTPTR_MAX-0x9b8 || !live())return result;
+    std::array<uintptr_t,18> before{},after{};
+    TglNativePerPassHistorySavePlan plan;
+    if(!read(renderer+0x928,before.data(),sizeof(before)) || !live() ||
+        !tglPlanNativePerPassHistorySave(plan,before,graph,owner,target) || !live())return result;
+    if(!plan.written){result.admitted=true;return result;}
+    result.published=true; // even a refused/partial write must retain its source graph
+    if(!write(renderer+0x928,plan.slots.data(),plan.written*sizeof(uintptr_t)) || !live() ||
+        !read(renderer+0x928,after.data(),sizeof(after)) || after!=plan.slots || !live())return result;
+    TglNativePerPassHistorySavePlan verified;
+    if(!tglPlanNativePerPassHistorySave(verified,before,graph,owner,target) ||
+        verified.slots!=plan.slots || verified.written!=plan.written)return result;
+    result.admitted=true;return result;
+}
 // Exact TGL131d10: source134==2 gates the ENTIRE lower call. Native1300f0
 // saves target C0 history before lower execution; its void ABI is wrapped by
 // an explicit qualified preparation capability, never a default-success hook.

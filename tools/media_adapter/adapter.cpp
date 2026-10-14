@@ -3035,6 +3035,32 @@ template TglOwnedVeboxCommandTransactionResult NativeOriginalFrameExecution::run
 // Concrete synchronous lower continuation inside runWithDerivedRoots. The
 // outer retained graph/transaction owns original backing and copyback; this
 // object never installs tables, resolves new context owners or claims retirement.
+struct NativeHistorySavePreparation {
+    NativeRendererCpuAssembly& assembly;const TglNativeCreatedVeboxRendererView& pinned;
+    NativeSourceGraph& graph;bool attempted=false;
+    TglNativeHistoryPreparationResult operator()(NativeTemporarySurfaceOwner& owner,
+        const TglOwnedSurfaceStorage& target) noexcept {
+        if(attempted)return {};
+        attempted=true;
+        auto live=[&]() noexcept {
+            uintptr_t renderer=0,table=0;
+            return assembly.readyForFrontend() && graph.valid() && pinned.image &&
+                pinned.image<=UINTPTR_MAX-0x75bba0 && NativeTglImageAdmission{pinned.image}(pinned.image) &&
+                NativeDataAdmission{}(pinned.creator,0x70) && NativeDataAdmission{}(pinned.renderer,0x9b8) &&
+                readMemory(pinned.creator+0x68,&renderer,8) && renderer==pinned.renderer &&
+                readMemory(renderer,&table,8) && table==pinned.image+0x75bba0 &&
+                reinterpret_cast<uintptr_t>(assembly.children().first().owner().constructedBase())==pinned.originalChildren[0] &&
+                reinterpret_cast<uintptr_t>(assembly.children().second().owner().constructedBase())==pinned.originalChildren[1];
+        };
+        auto write=[&](uintptr_t at,const void* bytes,size_t count) noexcept -> bool {
+            if(!live() || at!=pinned.renderer+0x928 || !bytes || !count || count>144 ||
+                count%8 || !writableDataMemory(at,count))return false;
+            return mach_vm_write(mach_task_self(),at,reinterpret_cast<vm_offset_t>(bytes),
+                static_cast<mach_msg_type_number_t>(count))==KERN_SUCCESS;
+        };
+        return tglPrepareNativePerPassHistorySave(pinned.renderer,graph,owner,target,&readMemory,write,live);
+    }
+};
 struct NativeTemporaryLowerContinuation {
     NativeRendererCpuAssembly& assembly;const TglNativeCreatedVeboxRendererView& pinned;
     NativeSourceGraph& originalGraph;NativeTemporarySurfaceOwner& source;
