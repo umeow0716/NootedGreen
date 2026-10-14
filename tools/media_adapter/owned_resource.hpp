@@ -2986,6 +2986,18 @@ struct TglOwnedVeboxVtable {
         }
         entries = candidate; typeInfo = metadata[1]; return true;
     }
+    // Construct before publication only. Native Send is int(this); replacing
+    // it must not change any other native slot or the retained ABI metadata.
+    template<class Read,class Qualify,class Executable>
+    bool buildWithSend(uintptr_t image,const std::array<uintptr_t,20>& owned,
+        int(*send)(void*) noexcept,Read read,Qualify qualify,Executable executable) {
+        if(!build(image,owned,read,qualify,executable))return false;
+        const auto entry=reinterpret_cast<uintptr_t>(send);
+        if(!entry || (entry>=image && entry-image<0x23e03f) || !executable(entry,1)) {
+            offsetToTop=0;typeInfo=0;entries={};return false;
+        }
+        entries[0x148/8]=entry;return true;
+    }
 };
 static_assert(offsetof(TglOwnedVeboxVtable, entries) == 16);
 static_assert(sizeof(TglOwnedVeboxVtable) == 16 + 0x1e8);

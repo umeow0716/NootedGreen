@@ -3538,6 +3538,18 @@ static void testOwnedVeboxVtable() {
             if (TglOwnedVeboxVtable::required[j]/8 == i) expected = hooks[j];
         assert(table.entries[i] == expected);
     }
+    {
+        const auto nativeEntries=table.entries;
+        auto send=+[](void* child) noexcept -> int {return child?31:5;};
+        assert(table.buildWithSend(image,hooks,send,read,qualify,executable));
+        for(size_t i=0;i<nativeEntries.size();++i)
+            assert(table.entries[i]==(i==0x148/8?reinterpret_cast<uintptr_t>(send):nativeEntries[i]));
+        auto installed=reinterpret_cast<int(*)(void*) noexcept>(table.entries[0x148/8]);
+        assert(installed(childBytes.data())==31 && installed(nullptr)==5 && childBytes==beforeQuery);
+        assert(!table.buildWithSend(image,hooks,nullptr,read,qualify,executable));
+        assert(!table.addressPoint());for(auto entry:table.entries)assert(!entry);
+        assert(build());
+    }
     for (size_t i = 0; i < hooks.size(); ++i) {
         auto saved = hooks[i]; hooks[i] = 0;
         assert(!build());
