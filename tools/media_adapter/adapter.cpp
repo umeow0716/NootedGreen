@@ -287,6 +287,19 @@ struct NativeVphalRoutingPolicy {
     }
 };
 using NativeVphalRouter=TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
+using NativeVphalFramePin=decltype(NativeVphalRouter::pinFrame(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{}));
+using NativeFrontendAccess=TglPinnedVphalStorageAccess<NativeDataAdmission,NativeTglImageAdmission,
+    decltype(&executableMemory)>;
+using NativeFrontendEnvironment=TglNativeFrontendCpuEnvironment<decltype(&readMemory),NativeTglImageAdmission,
+    decltype(&executableMemory)>;
+using NativeContextSurfaceOwner=typename TglNativeContextSurfaceOwners<NativeCodecBackend::Registry>::Owner;
+// Frame surfaces retain their original codec contexts; CPU children remain
+// in the permanent VPHAL owner and are entered only through its pinned access.
+using NativeBorrowedFrontend=TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePin,
+    NativeContextSurfaceOwner,NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi,
+    NativeFrontendEnvironment,NativeFrontendAccess>;
+using NativeContextRendererFrame=TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,
+    NativeBorrowedFrontend>;
 struct Entry {
     using CodecOwner=NativeCodecOwner;
     // Factory table lifetime only, not the native physical context lifetime.
@@ -526,6 +539,10 @@ template class TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhys
     decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,NativeRendererChildAdmission,
     NativeVphalDestructorInvoker>;
 template class TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
+template class TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePin,
+    NativeContextSurfaceOwner,NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi,
+    NativeFrontendEnvironment,NativeFrontendAccess>;
+template class TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,NativeBorrowedFrontend>;
 template int NativeRendererCpuAssembly::withChildLifetimeScopes<
     int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept>(
     int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept) noexcept;
