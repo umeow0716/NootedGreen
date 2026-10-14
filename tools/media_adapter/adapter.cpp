@@ -193,6 +193,25 @@ public:
     // No implicit retirement here. Existing VPHAL owner must retain this WHOLE
     // allocation on any partial construction/cleanup/native teardown refusal.
 };
+struct NativeRendererChildAdmission {
+    void* scope=nullptr;
+    bool(*admit)(void*,void*,uint64_t,uintptr_t,uintptr_t) noexcept=nullptr;
+    bool operator()(void* renderer,uint64_t generation,uintptr_t first,uintptr_t second) const noexcept {
+        return scope && admit && renderer && generation && first && second && first!=second &&
+            admit(scope,renderer,generation,first,second);
+    }
+};
+struct NativeVphalDestructorInvoker {
+    void operator()(uintptr_t entry,uintptr_t object) const noexcept {
+        // Exact saved native destructor, qualified by the lifetime table;
+        // there is no status return and no substituted native counted delete.
+        reinterpret_cast<void(*)(void*)>(entry)(reinterpret_cast<void*>(object));
+    }
+};
+using NativeVphalOwner=TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhysicalDependencyLease,
+    decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,NativeRendererChildAdmission,
+    NativeVphalDestructorInvoker>;
+static_assert(!std::is_copy_constructible_v<NativeVphalOwner>);
 struct Entry {
     using CodecOwner=NativeCodecOwner;
     // Factory table lifetime only, not the native physical context lifetime.
@@ -329,6 +348,9 @@ void load() {
 // tracked allocator types. This compiles cleanup, but enables no callbacks.
 template class TglOwnedVeboxVpCleanupContext<NativeRendererBacking,NativeRendererRetirementAuthority>;
 template class TglNativeVeboxRendererCpuStorage<TglDarwinStmmSurfaceApi,NativeRendererCleanup>;
+template class TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhysicalDependencyLease,
+    decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,NativeRendererChildAdmission,
+    NativeVphalDestructorInvoker>;
 
 extern "C" __attribute__((visibility("default")))
 int NGRN_ObservedCreateContexts(void *context, const void *input) {
