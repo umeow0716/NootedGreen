@@ -745,6 +745,54 @@ struct NativeVpCommandEmission {
         return status?status:(scalar.state()==prefix && targetOwner.hasSurfaceLease(scalar.target)?0:5);
     }
 };
+// Per-frame callbacks for the graph's existing two-phase producer context.
+// Own no allocation; the enclosing graph/frame must retain every referenced
+// owner until both setup and send (or qualified failure retirement) finish.
+struct NativeVpPreparedCallbacks {
+    NativeVpScalarStateProducer& scalar;NativeVpNv12PacketScope& packet;
+    NativeVpAvsProducer& avs;NativeVpIefCscProducer& filters;NativeVpCommandEmission& emission;
+    TglOwnedVpSfcCallerStorage& vp;TglNativeVpLineResourceStorage& lines;const TglOwnedVpEntrySet& catalogue;
+    TglOwnedSfcCommandParameters& commands;const TglOwnedVpRegionInput& geometry;
+    void* renderData;bool rgbAdaptive,eightTapChroma,compressionEnabled;
+    TglOwnedSfcCompressionMode compressionMode;
+    int error=0;
+    int fail(int result) noexcept {if(result && !error)error=result;return result;}
+    bool sameOwners() const noexcept {
+        return &packet.scalar==&scalar && &avs.scalar==&scalar && &filters.scalar==&scalar &&
+            &emission.scalar==&scalar && &avs.parameters==&commands &&
+            &filters.parameters==&commands && emission.avs==&avs && scalar.vp==vp.bytes.data();
+    }
+    int state(void* actual,const TglOwnedVpFramePreparation& frame,
+        NativeVpNv12PacketScope::StateOwner& owner,void* data,void* source,void* target) noexcept {
+        if(error)return error;
+        if(!sameOwners() || data!=renderData || !data || source!=&scalar.source || target!=&scalar.target ||
+            actual!=scalar.vp)return fail(5);
+        int result=scalar.prepare(actual,frame,geometry);
+        if(result)return fail(result);
+        return fail(packet.prepare(vp,owner,lines,
+            catalogue,commands,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode));
+    }
+    int prepareAvs(void* actual,const TglOwnedVpFramePreparation& frame,NativeVpAvsProducer::Owner& owner) noexcept {
+        if(error)return error;
+        return fail(sameOwners()?avs.prepare(actual,frame,owner,packet):5);
+    }
+    void prepareFilters(void* actual,const TglOwnedVpFramePreparation& frame,uint8_t* liveState) noexcept {
+        if(error)return;
+        fail(sameOwners()?filters.prepare(actual,frame,packet,liveState):5);
+    }
+    int emit(void* actual,const TglOwnedVpFramePreparation& frame,void* data,void* command) noexcept {
+        if(error)return error;
+        if(!sameOwners() || actual!=scalar.vp || data!=renderData || !command ||
+            (emission.command && emission.command!=command))return fail(5);
+        void* previous=emission.command;emission.command=command;
+        const int result=packet.withPreparedInputs([&](TglOwnedSfcCommandParameters&) noexcept -> int {
+            return filters.withPreparedInputs(actual,[&](const TglOwnedSfcCommandParameters& inputs) noexcept {
+                return emission.run(actual,frame,inputs);
+            });
+        });
+        emission.command=previous;return fail(result);
+    }
+};
 struct NativeTwoPassCscHealth {
     NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
     NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
