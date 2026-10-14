@@ -18859,6 +18859,46 @@ public:
         int nativeStatus=5;bool called=false,stable=false;
         int status() const noexcept {return called && nativeStatus?nativeStatus:(called && stable?0:5);}
     };
+    struct Observation {
+        Result submit;
+        uintptr_t os=0,context=0,nativeContext=0;
+        uint32_t flagsBefore=0,flagsAfter=0;
+        bool observed=false;
+    };
+    // Exact64df0 obtains its a9dc wrapper from database+8+index*15c0.
+    // Do not invent OS+15b0: that is a field of the DATABASE RECORD used
+    // for the separate optional fence call. At most one a9dc occurs here,
+    // but this raw flags snapshot does not assert that its branch ran.
+    template<class Read,class Admit,class Invoke=TglNativeOsCommandSubmitInvoker>
+    Observation observeCall(void* command,uint32_t flags,Read read,Admit admit,Invoke invoke={}) const noexcept {
+        Observation result;
+        struct Snapshot {
+            uintptr_t database=0,record=0,wrapper=0,native=0;
+            uint32_t index=0,flags=0;
+            bool same(const Snapshot& other) const noexcept {
+                return database==other.database && record==other.record && wrapper==other.wrapper &&
+                    native==other.native && index==other.index;
+            }
+        };
+        auto capture=[&](Snapshot& value) noexcept {
+            if(!os_ || os_>UINTPTR_MAX-12 || !read(os_,&value.database,8) || !value.database ||
+                !read(os_+8,&value.index,4))return false;
+            const uint64_t offset=8+uint64_t{value.index}*0x15c0;
+            if(offset>UINTPTR_MAX-8 || value.database>UINTPTR_MAX-8-offset)return false;
+            value.record=value.database+uintptr_t(offset);
+            return read(value.record,&value.wrapper,8) && value.wrapper && value.wrapper<=UINTPTR_MAX-0xe4 &&
+                read(value.wrapper+8,&value.native,8) && value.native &&
+                read(value.wrapper+0x54,&value.flags,4);
+        };
+        Snapshot before,confirmed,after;
+        if(!capture(before) || !capture(confirmed) || !before.same(confirmed) ||
+            before.flags!=confirmed.flags || !admit(os_,before.wrapper,before.native))return result;
+        result.os=os_;result.context=before.wrapper;result.nativeContext=before.native;result.flagsBefore=before.flags;
+        result.submit=call(command,flags,read,invoke);
+        if(!result.submit.called || !capture(after) || !before.same(after) ||
+            !admit(os_,after.wrapper,after.native))return result;
+        result.flagsAfter=after.flags;result.observed=true;return result;
+    }
     template<class Read,class Invoke=TglNativeOsCommandSubmitInvoker>
     Result call(void* command,uint32_t flags,Read read,Invoke invoke={}) const noexcept {
         static_assert(std::is_nothrow_invocable_r_v<int,Invoke&,uintptr_t,uintptr_t,void*,uint32_t> &&

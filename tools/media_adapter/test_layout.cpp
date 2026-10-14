@@ -32850,5 +32850,43 @@ int main() {
         mutate=true;result=binding.call(&command,2,read,invoke);
         assert(result.called && !result.stable && result.status()==5 && calls==3);
         result=binding.call(&command,2,read,invoke);assert(!result.called && result.status()==5 && calls==3);
+        std::memcpy(os.data()+0x2d0,&entry,8);mutate=false;
+        uintptr_t database=0x50000,wrapper=0x60000,native=0x70000;
+        uint32_t index=1,rawFlags=0x20000000;
+        bool failFlags=false,driftWrapper=false,failAfter=false;
+        auto observationRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+            if(p==address && n==8){std::memcpy(out,&database,8);return true;}
+            if(p==address+8 && n==4){std::memcpy(out,&index,4);return true;}
+            if(p==database+8+uintptr_t{index}*0x15c0 && n==8){std::memcpy(out,&wrapper,8);return true;}
+            if(p==wrapper+8 && n==8){std::memcpy(out,&native,8);return true;}
+            if(p==wrapper+0x54 && n==4 && !failFlags){std::memcpy(out,&rawFlags,4);return true;}
+            return read(p,out,n);
+        };
+        auto admit=[&](uintptr_t o,uintptr_t w,uintptr_t c) noexcept {
+            return o==address && w==0x60000 && c==native;
+        };
+        auto observedInvoke=[&](uintptr_t p,uintptr_t o,void* buffer,uint32_t flags) noexcept {
+            const int status=invoke(p,o,buffer,flags);rawFlags=0x40000000;
+            if(failAfter)failFlags=true;
+            if(driftWrapper)wrapper+=0x1000;return status;
+        };
+        nativeStatus=31;
+        auto observed=binding.observeCall(&command,2,observationRead,admit,observedInvoke);
+        assert(observed.submit.called && observed.submit.nativeStatus==31 && observed.observed && calls==4);
+        assert(observed.flagsBefore==0x20000000 && observed.flagsAfter==0x40000000 && observed.context==wrapper);
+        observed=binding.observeCall(&command,2,observationRead,
+            [](uintptr_t,uintptr_t,uintptr_t) noexcept {return false;},observedInvoke);
+        assert(!observed.submit.called && calls==4);
+        failFlags=true;observed=binding.observeCall(&command,2,observationRead,admit,observedInvoke);
+        assert(!observed.submit.called && calls==4);failFlags=false;
+        nativeStatus=0;driftWrapper=true;
+        observed=binding.observeCall(&command,2,observationRead,admit,observedInvoke);
+        assert(observed.submit.called && observed.submit.nativeStatus==0 && !observed.observed && calls==5);
+        wrapper=0x60000;driftWrapper=false;failAfter=true;
+        observed=binding.observeCall(&command,2,observationRead,admit,observedInvoke);
+        assert(observed.submit.called && !observed.observed && observed.flagsBefore==0x40000000 && calls==6);
+        failFlags=failAfter=false;mutate=true;
+        observed=binding.observeCall(&command,2,observationRead,admit,observedInvoke);
+        assert(observed.submit.called && !observed.submit.stable && observed.observed && calls==7);
     }
 }

@@ -3861,6 +3861,10 @@ template int NativeRendererCpuAssembly::withChildExecution<
 template class TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePin,
     NativeContextSurfaceOwner,NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi,
     NativeFrontendEnvironment,NativeFrontendAccess>;
+using NativeOsSubmitObservationAdmit=bool(*)(uintptr_t,uintptr_t,uintptr_t) noexcept;
+template TglNativeOsCommandSubmitBinding::Observation TglNativeOsCommandSubmitBinding::observeCall<
+    decltype(&readMemory),NativeOsSubmitObservationAdmit,TglNativeOsCommandSubmitInvoker>(
+        void*,uint32_t,decltype(&readMemory),NativeOsSubmitObservationAdmit,TglNativeOsCommandSubmitInvoker) const noexcept;
 template class TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,NativeBorrowedFrontend>;
 template class TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;
 template class TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,
