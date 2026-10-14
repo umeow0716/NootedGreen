@@ -158,16 +158,25 @@ static void testLeasedDiIecpCacheControls() {
     struct Owner {
         std::array<uint32_t,7> words{0x10,0x21,0x32,0x43,0x54,0x65,0x76};
         uint64_t epoch=1;unsigned reads=0;bool active=true,deny=false,change=false,revoke=false;
+        uintptr_t os=0x300000,report=0x400000;unsigned writes=0;bool writeDenied=false;
         uint64_t allocationGeneration() const noexcept {return epoch;}
         bool hasPrivateChildImageLease(uintptr_t child,uintptr_t image) const noexcept {
             return active && child==0x1000 && image==0x200000;
         }
         bool readLeasedStorage(uintptr_t child,uint64_t generation,uintptr_t address,void* out,size_t bytes) noexcept {
-            if(deny || !active || child!=0x1000 || generation!=epoch || address!=child+0x1120 || bytes!=sizeof(words))return false;
+            if(deny || !active || child!=0x1000 || generation!=epoch)return false;
+            if(bytes==8 && (address==child+0x10 || address==child+0x88)) {
+                const auto value=address==child+0x10?os:report;std::memcpy(out,&value,8);return true;
+            }
+            if(address!=child+0x1120 || bytes!=sizeof(words))return false;
             ++reads;std::memcpy(out,words.data(),bytes);
             if(change && reads==2)static_cast<uint32_t*>(out)[6]^=1;
             if(revoke)active=false;
             return true;
+        }
+        bool publishLeasedDirectOutputCacheControl(uintptr_t child,uint64_t generation,uint32_t value) noexcept {
+            if(writeDenied || !active || child!=0x1000 || generation!=epoch)return false;
+            ++writes;words[5]=value;return true;
         }
     } owner;
     std::array<uint32_t,11> controls{};
@@ -184,6 +193,31 @@ static void testLeasedDiIecpCacheControls() {
     assert(!tglReadLeasedDiIecpCacheControls(owner,0x1000,0x200000,controls) && owner.reads==2 && controls==unchanged);
     owner.reads=0;owner.change=false;owner.revoke=true;
     assert(!tglReadLeasedDiIecpCacheControls(owner,0x1000,0x200000,controls) && owner.reads==1 && controls==unchanged);
+    owner.active=true;owner.revoke=false;
+    struct Execution {bool active=true;bool hasExecutionLease(uintptr_t p) const noexcept {return active && p==0x400000;}} execution;
+    uint32_t pipe=0;unsigned queries=0;bool queryAllowed=true,changePipe=false;
+    auto readPipe=[&](uintptr_t p,void* out,size_t bytes) noexcept {
+        if(p!=0x400000+0xa0c || bytes!=4)return false;std::memcpy(out,&pipe,4);return true;
+    };
+    auto query=[&](uintptr_t os,uint32_t policy,uint32_t& output) noexcept {
+        assert(os==owner.os && policy==0x70);++queries;
+        if(changePipe)pipe=1;
+        if(!queryAllowed)return false;output=0x7070;return true;
+    };
+    auto apply=[&]() noexcept {
+        return tglApplyLeasedVeboxDirectOutputCachePolicy(owner,execution,0x1000,0x400000,0x200000,readPipe,query);
+    };
+    assert(apply() && !queries && !owner.writes);pipe=1;
+    assert(apply() && !queries && !owner.writes);pipe=2;
+    const auto priorWords=owner.words;
+    assert(apply() && queries==1 && owner.writes==1 && owner.words[5]==0x7070);
+    for(size_t i=0;i<owner.words.size();++i)if(i!=5)assert(owner.words[i]==priorWords[i]);
+    queryAllowed=false;assert(!apply() && owner.writes==1);queryAllowed=true;
+    changePipe=true;assert(!apply() && pipe==1 && owner.writes==1);changePipe=false;pipe=2;
+    owner.writeDenied=true;assert(!apply() && owner.writes==1);owner.writeDenied=false;
+    execution.active=false;const auto queriesBeforeLoss=queries;
+    assert(!apply() && queries==queriesBeforeLoss && owner.writes==1);execution.active=true;
+    pipe=3;assert(!apply() && queries==queriesBeforeLoss && owner.writes==1);
 }
 
 static void testTrackedCpuOwner() {
@@ -26705,6 +26739,24 @@ int main() {
                                     assert(owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) &&
                                         graph.ownsStorage(vp) && graph.generation()==preparedGeneration+1 &&
                                         executionLease.hasExecutionLease(packets.execution));
+                                    const auto generation=owner.allocationGeneration();
+                                    std::array<uint8_t,12> beforeCache{},afterCache{};
+                                    auto* cache=static_cast<uint8_t*>(child)+0x1130;
+                                    std::memcpy(beforeCache.data(),cache,beforeCache.size());
+                                    assert(!owner.publishLeasedDirectOutputCacheControl(
+                                        reinterpret_cast<uintptr_t>(child)+8,generation,0x7070));
+                                    assert(!owner.publishLeasedDirectOutputCacheControl(
+                                        reinterpret_cast<uintptr_t>(child),generation+1,0x7070));
+                                    assert(owner.publishLeasedDirectOutputCacheControl(
+                                        reinterpret_cast<uintptr_t>(child),generation,0x7070));
+                                    std::memcpy(afterCache.data(),cache,afterCache.size());
+                                    uint32_t publishedControl=0;std::memcpy(&publishedControl,afterCache.data()+4,4);
+                                    assert(publishedControl==0x7070);
+                                    for(size_t i=0;i<beforeCache.size();++i)
+                                        if(i<4 || i>=8)assert(afterCache[i]==beforeCache[i]);
+                                    uint32_t originalControl=0;std::memcpy(&originalControl,beforeCache.data()+4,4);
+                                    assert(owner.publishLeasedDirectOutputCacheControl(
+                                        reinterpret_cast<uintptr_t>(child),generation,originalControl));
                                     TglOwnedVeboxCommandTransactionResult result;result.status=-92;return result;
                                 };
                                 const auto rejected=frame.withPreparedNativeOwnedVpCommandFrame(0,roles,0,0,

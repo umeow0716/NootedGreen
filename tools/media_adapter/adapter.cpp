@@ -1857,6 +1857,17 @@ struct NativeAdmissionHookContext {
     }
 };
 using NativeAdmissionResolve=TglOwnedVeboxScopedContext<NativeAdmissionHookContext>;
+struct NativeDirectOutputCachePublication {
+    static bool apply(NativeAdmissionStages& stages,uintptr_t image) noexcept {
+        auto query=[&](uintptr_t os,uint32_t policy,uint32_t& output) noexcept -> bool {
+            TglNativeRendererCacheBinding binding;
+            return binding.resolve(image,os,&readMemory,NativeTglImageAdmission{image},&executableMemory) &&
+                binding.query(policy,output,&readMemory,TglNativeRendererCacheInvoker{});
+        };
+        return tglApplyLeasedVeboxDirectOutputCachePolicy(stages.reset.childOwner,stages.reset.executionOwner,
+            reinterpret_cast<uintptr_t>(stages.reset.child),stages.reset.execution,image,stages.read,query);
+    }
+};
 struct NativePreparedAdmissionRender {
     NativeVpPreparedCallbacks& callbacks;NativeAdmissionStages& admission;
     const TglVeboxRenderBinding& binding;void* argument;
@@ -1886,6 +1897,8 @@ struct NativePreparedAdmissionRender {
                     // Native admission already finished the selected stages.
                     // Any native hook query observes this exact continuation;
                     // it cannot recursively execute admission or another Render.
+                    if(!NativeDirectOutputCachePublication::apply(self.admission,self.binding.image))
+                        return TglOwnedVeboxCommandTransactionResult{};
                     hook.active=true;
                     struct Restore {bool& active;~Restore(){active=false;}} restore{hook.active};
                     return tglRunLeasedVeboxSurfaceRender(self.binding,self.admission.reset.childOwner,

@@ -5415,6 +5415,13 @@ public:
             address-expected>storage_.size() || bytes>storage_.size()-(address-expected))return false;
         std::memcpy(output,reinterpret_cast<const void*>(address),bytes);return true;
     }
+    bool publishLeasedDirectOutputCacheControl(uintptr_t expected,uint64_t generation,uint32_t value) noexcept {
+        if(!generation || generation!=allocationGeneration_ || !hasPrivateChildImageLease(expected,image_) ||
+            storage_.size()<0x1138)return false;
+        // Native outer12d280 changes this ONE owned cache DWORD for pipe2.
+        // No generic pointer writer, table mutation or Apple memory write.
+        std::memcpy(reinterpret_cast<uint8_t*>(storage_.get())+0x1134,&value,4);return true;
+    }
     bool hasPrivateChildImageLease(uintptr_t expected,uintptr_t image) const noexcept {
         return image && image_==image && hasPrivateChildLease(expected);
     }
@@ -17147,6 +17154,31 @@ bool tglReadLeasedDiIecpCacheControls(Owner& owner,uintptr_t child,uintptr_t ima
     std::array<uint32_t,11> candidate{};
     for(size_t i=0;i<6;++i)candidate[i]=words[i];
     candidate[6]=words[5];candidate[7]=words[6];output=candidate;return true;
+}
+template<class ChildOwner,class ExecutionOwner,class Read,class Query>
+bool tglApplyLeasedVeboxDirectOutputCachePolicy(ChildOwner& owner,ExecutionOwner& executionOwner,
+    uintptr_t child,uintptr_t execution,uintptr_t image,Read read,Query query) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})) &&
+        std::is_same_v<decltype(read(uintptr_t{},nullptr,size_t{})),bool> &&
+        noexcept(query(uintptr_t{},uint32_t{},std::declval<uint32_t&>())) &&
+        std::is_same_v<decltype(query(uintptr_t{},uint32_t{},std::declval<uint32_t&>())),bool>);
+    const auto generation=owner.allocationGeneration();
+    auto live=[&](uint32_t& pipe) noexcept {
+        uintptr_t linked=0;
+        return child && child<=UINTPTR_MAX-0x90 && execution && execution<=UINTPTR_MAX-0xa10 && generation &&
+            owner.allocationGeneration()==generation && owner.hasPrivateChildImageLease(child,image) &&
+            executionOwner.hasExecutionLease(execution) &&
+            owner.readLeasedStorage(child,generation,child+0x88,&linked,8) && linked==execution &&
+            read(execution+0xa0c,&pipe,4) && pipe<=2;
+    };
+    uint32_t pipe=0,after=0,value=0;uintptr_t os=0,currentOs=0;
+    if(!live(pipe))return false;
+    if(pipe!=2)return true; // native does not query or rewrite cache for0/1
+    if(!owner.readLeasedStorage(child,generation,child+0x10,&os,8) || !os ||
+        !query(os,0x70,value) || !live(after) || after!=pipe ||
+        !owner.readLeasedStorage(child,generation,child+0x10,&currentOs,8) || currentOs!=os ||
+        !owner.publishLeasedDirectOutputCacheControl(child,generation,value))return false;
+    return live(after) && after==pipe;
 }
 static_assert(offsetof(TglOwnedDiIecpPacket,resources) == 0x20);
 static_assert(offsetof(TglOwnedDiIecpPacket,controls) == 0x78);
