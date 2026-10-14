@@ -18240,6 +18240,36 @@ public:
         }
         return 5;
     }
+    // Roles are supplied by the captured native selection, never inferred from
+    // link offsets. Keep all selected original owners leased simultaneously.
+    template<class Use> int withOriginalOwners(
+        const std::array<const TglOwnedSurfaceStorage*,3>& selected,Use use) noexcept {
+        using Owners=std::array<Owner*,3>;
+        static_assert(noexcept(use(std::declval<const Owners&>())) &&
+            std::is_same_v<decltype(use(std::declval<const Owners&>())),int>);
+        if(busy_ || !valid() || selected[0]!=slots_[0].lease->storage())return 5;
+        std::array<Lease*,3> leases{};Owners owners{};
+        for(size_t role=0;role<selected.size();++role) {
+            if(!selected[role])continue;
+            for(size_t i=0;i<count_;++i)
+                if(slots_[i].lease->storage()==selected[role])leases[role]=slots_[i].lease;
+            if(!leases[role])return 5;
+        }
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        auto visit=[&](auto&& self,size_t role) noexcept -> int {
+            if(role==leases.size())return use(static_cast<const Owners&>(owners));
+            if(!leases[role])return self(self,role+1);
+            // Native temporal roles may alias; one existing lease suffices.
+            for(size_t previous=0;previous<role;++previous)if(leases[previous]==leases[role]) {
+                owners[role]=owners[previous];return self(self,role+1);
+            }
+            return leases[role]->withOriginalOwner([&](Owner& owner) noexcept -> int {
+                owners[role]=&owner;return self(self,role+1);
+            });
+        };
+        const int status=visit(visit,0);
+        return valid()?status:5;
+    }
     template<class Use> int withMutableSurface(Use use) noexcept {
         if(busy_ || !valid()) return 5;
         busy_=true;const int result=slots_[0].lease->withMutableSurface(use);busy_=false;

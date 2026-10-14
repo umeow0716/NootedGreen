@@ -16775,6 +16775,26 @@ int main() {
                     const uintptr_t zero=0;std::memcpy(root.prefix.data()+0xc8,&zero,8);return 0;
                 })==5);
                 std::memcpy(root.prefix.data()+0xc8,&p,8);assert(graph.storage()==&root);
+                using OriginalOwners=std::array<TestFrontendOriginalOwner*,3>;
+                auto selected=[&](const OriginalOwners& owners) noexcept -> int {
+                    assert(owners[0]==&ro && owners[1]==&oo && owners[2]==&po);
+                    assert(graph.withOriginalOwners({&root,nullptr,nullptr},
+                        [](const OriginalOwners&) noexcept -> int {assert(false);return 0;})==5);
+                    return 31;
+                };
+                assert(graph.withOriginalOwners({&root,&older,&previous},selected)==31);
+                assert(graph.withOriginalOwners({&root,&previous,&previous},[&](const OriginalOwners& owners) noexcept -> int {
+                    assert(owners[0]==&ro && owners[1]==&po && owners[2]==&po);return 0;
+                })==0);
+                assert(graph.withOriginalOwners({&root,nullptr,nullptr},[&](const OriginalOwners& owners) noexcept -> int {
+                    assert(owners[0]==&ro && !owners[1] && !owners[2]);return 0;
+                })==0);
+                assert(graph.withOriginalOwners({&root,&shell,nullptr},selected)==5);
+                assert(graph.withOriginalOwners({&previous,nullptr,nullptr},selected)==5);
+                assert(graph.withOriginalOwners({&root,&older,&previous},[&](const OriginalOwners&) noexcept -> int {
+                    const uintptr_t zero=0;std::memcpy(root.prefix.data()+0xc8,&zero,8);return 0;
+                })==5);
+                std::memcpy(root.prefix.data()+0xc8,&p,8);assert(graph.storage()==&root);
                 for(size_t i=1;i<6;++i) assert(refs[i]==3); // shared older node pinned once
                 {
                     TestFrontendOriginalOwner targetOwner{shell};
