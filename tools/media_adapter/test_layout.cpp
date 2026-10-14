@@ -23530,6 +23530,8 @@ int main() {
                             auto& storage=*storageOwner;
                             const auto* creatorView=preparedMhw.view();assert(creatorView);
                             assert(storage.allocateCpuShellsFromCreator(*creatorView,allocatorRead,qualifyMhw,executableMhw)==5);
+                            assert(storage.initializeVpPairFromCreator(*creatorView,allocatorRead,qualifyMhw,executableMhw,
+                                [](size_t,auto&) noexcept -> int {assert(false);return 0;})==5);
                             auto foreign=*creatorView;foreign.os+=8;
                             const uintptr_t parentSfcAddress=reinterpret_cast<uintptr_t>(parentSfc.data());
                             putNative(parentSfc,0,base+0x759420);putNative(parentSfc,8,base+0x3eae0);
@@ -23606,10 +23608,10 @@ int main() {
                                 std::array<unsigned,16> vpEvents{};size_t vpEventCount=0;
                                 Cpu state0{{},vpEvents,vpEventCount},avs0{{},vpEvents,vpEventCount};
                                 Cpu state1{{},vpEvents,vpEventCount},avs1{{},vpEvents,vpEventCount};
-                                {
                                     using PairedCpuStorage=TglNativeVeboxRendererCpuStorage<UnusedFrameApi,
                                         decltype(sourceFreeCleanup),NativeCpu,TrackedSfc,decltype(sourceFreeDestroy)>;
-                                    PairedCpuStorage pairedStorage(
+                                    auto makePairedStorage=[&]() {
+                                    return std::make_unique<PairedCpuStorage>(
                                         base,allocatorRead,qualifyMhw,executableMhw,environment.resources,
                                         environment.pageSize,environment.fill,
                                         std::array<NativeCpu,2>{NativeCpu{state0,&avs0},NativeCpu{state1,&avs1}},
@@ -23618,6 +23620,9 @@ int main() {
                                         std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},
                                             TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
                                         std::array<decltype(sourceFreeDestroy),2>{sourceFreeDestroy,sourceFreeDestroy});
+                                    };
+                                {
+                                    auto pairedOwner=makePairedStorage();auto& pairedStorage=*pairedOwner;
                                     auto& paired=pairedStorage.backing();
                                     TglSfcMhwBinding nativeSfc;
                                     assert(nativeSfc.resolve(base,parentSfcRead,qualifyMhw,executableMhw));
@@ -23747,6 +23752,24 @@ int main() {
                                         parentSfcRead,qualifyMhw,executableMhw)==5);
                                 }
                                 assert(!state0.live && !state1.live && !avs0.live && !avs1.live);
+                                for(int failure:{0,1,-1}) {
+                                    vpEventCount=0;
+                                    {
+                                        auto pair=makePairedStorage();unsigned preparations=0;
+                                        const int status=pair->initializeVpPairFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw,
+                                            [&](size_t index,auto&) noexcept -> int {
+                                                ++preparations;
+                                                assert(pair->initializeVpPairFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw,
+                                                    [](size_t,auto&) noexcept -> int {assert(false);return 0;})==5);
+                                                return int(index)==failure?31:0;
+                                            });
+                                        assert(status==(failure<0?0:31) && preparations==unsigned(failure==0?1:2));
+                                        assert(pair->backing().vpBound(0)==(failure!=0) && pair->backing().vpBound(1)==(failure<0));
+                                        if(failure!=0)assert(pair->initializeVpPairFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw,
+                                            [](size_t,auto&) noexcept -> int {assert(false);return 0;})==5);
+                                    }
+                                    assert(!state0.live && !state1.live && !avs0.live && !avs1.live);
+                                }
                             }
                             bool failSourceFreeConstructor=true;
                             unsigned sourceFreeConstructorCalls=0;

@@ -23522,6 +23522,7 @@ public:
             channel,performance,prepare);
     }
     bool vpBound() const noexcept {return vp_.bound();}
+    bool hasVpStorage(size_t index) const noexcept {return index==0 || (index==1 && secondVp_);}
     bool vpBound(size_t index) const noexcept {
         return index==0?vp_.bound():index==1 && secondVp_ && secondVp_->bound();
     }
@@ -23763,6 +23764,24 @@ public:
     int initializeVpFromCreator(const TglNativeVphalMhwView& view,
         Read read,Qualify qualify,Executable executable) {
         return initializeVpFromCreator(0,view,read,qualify,executable);
+    }
+    // Whole creator pair; a partial failure retains the successful first VP
+    // for qualified owner teardown, never retries/reinitializes it implicitly.
+    template<class Read,class Qualify,class Executable,class Prepare>
+    int initializeVpPairFromCreator(const TglNativeVphalMhwView& view,
+        Read read,Qualify qualify,Executable executable,Prepare prepare) {
+        if(backing_.retention()() || !backing_.hasVpStorage(0) || !backing_.hasVpStorage(1) ||
+            backing_.vpBound(0) || backing_.vpBound(1))return 5;
+        for(size_t index=0;index<2;++index) {
+            const int status=initializeVpFromCreatorPrepared(index,view,read,qualify,executable,
+                [&](auto& graph) noexcept -> int {
+                    static_assert(noexcept(prepare(index,graph)) &&
+                        std::is_same_v<decltype(prepare(index,graph)),int>);
+                    return prepare(index,graph);
+                });
+            if(status)return status;
+        }
+        return 0;
     }
     template<class Read,class Qualify,class Executable>
     int initializeVpFromCreator(size_t index,const TglNativeVphalMhwView& view,
