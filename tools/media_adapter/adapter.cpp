@@ -396,6 +396,13 @@ struct NativeVpAvsProducer {
     uintptr_t performance;
     uint32_t phaseSourceSiting=0;
     bool attempted=false,ready=false;
+    Owner* preparedOwner=nullptr;
+    std::array<uint8_t,0x30> preparedHeader{};
+    bool readyForSend() const noexcept {
+        if(!ready || !preparedOwner || !preparedOwner->hasParametersLease() || !scalar.state())return false;
+        const auto* header=preparedOwner->parameters();
+        return header && *header==preparedHeader;
+    }
     int prepare(void* actual,const TglOwnedVpFramePreparation& frame,Owner& owner,
         NativeVpNv12PacketScope& packet) noexcept;
     template<class Use> int run(void* actual,const TglOwnedVpFramePreparation& frame,
@@ -421,6 +428,9 @@ struct NativeVpAvsProducer {
             [&](float value) noexcept {return sine.evaluate(value);},
             [&](TglOwnedSfcCommandParameters& commands) noexcept -> int {
                 if(scalar.state()!=prefix)return 5;
+                const auto* header=owner.parameters();
+                if(!owner.hasParametersLease() || !header)return 5;
+                preparedOwner=&owner;preparedHeader=*header;
                 ready=true;
                 const int result=use(commands); // coefficient/AVS lease still active
                 if(scalar.state()!=prefix) {ready=false;return result?result:5;}
@@ -662,7 +672,7 @@ struct NativeVpCommandEmission {
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(catalogue.platformSend),1))return 5;
         const uint8_t scaling=frame.regions.scale.scaling,forceAvs=frame.color.at9b8;
         const uint8_t ief=frame.at922,csc=frame.at920;
-        if(((scaling|forceAvs)&1) && (!avs || !avs->ready || &avs->scalar!=&scalar ||
+        if(((scaling|forceAvs)&1) && (!avs || !avs->readyForSend() || &avs->scalar!=&scalar ||
             &avs->parameters!=&parameters))return 5;
         if(((ief|csc)&1) && !parameters.filtersInUse)return 5;
         uintptr_t os=0,renderHal=0,mhw=0,renderArgument=0;
