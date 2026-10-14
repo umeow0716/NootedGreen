@@ -23786,7 +23786,7 @@ int main() {
                                 auto* child1=storage.children().second().owner().constructedBase();
                                 // CPU-only retention matrix: real constructed child pair,
                                 // isolated latch (no resources/submission, no GPU certificate).
-                                for(unsigned outcome=0;outcome<3;++outcome) {
+                                for(unsigned outcome=0;outcome<4;++outcome) {
                                     struct LatchBacking {
                                         TglOwnedVeboxFrameRetention keep;
                                         auto& retention() noexcept {return keep;}
@@ -23806,6 +23806,14 @@ int main() {
                                         TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf,FrameDnBackend,decltype(access)>;
                                     Borrowed frontend(std::move(pin),reinterpret_cast<uintptr_t>(&source),originalResolve,
                                         originalTarget,Cf{refs},11,12,frameDn,access);
+                                    assert(!frontend.surfacesReady());
+                                    if(outcome==3) {
+                                        cpu.backing().retention().observe(TglOwnedVeboxCommandTransactionResult{31,0,true,false,false});
+                                        assert(!frontend.bindCpu([](auto&&...) noexcept {assert(false);return true;}));
+                                        assert(!frontend.surfacesReady() && !frontend.requiresRetention() && accessCalls==1);
+                                        continue; // Pending belongs to another frame, not this refused frontend.
+                                    }
+                                    assert(frontend.bindCpu([](auto&&...) noexcept {return true;}));
                                     const auto result=frontend.withCpuFrontend([&](auto&...) noexcept {
                                         if(outcome==0)return TglOwnedVeboxCommandTransactionResult{31,0,true,false,false};
                                         if(outcome==1)return TglOwnedVeboxCommandTransactionResult{0,0,false,true,false};
@@ -23815,7 +23823,7 @@ int main() {
                                     assert(frontend.surfacesReady() && originalSource.borrowed && originalTarget.borrowed);
                                     assert(frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
                                         assert(false);return {};
-                                    }).status==5 && accessCalls==1);
+                                    }).status==5 && accessCalls==2);
                                     assert(storageOwner.get()==cpuAddress && !storage.backing().retention()());
                                 }
                                 assert(refs==originalRefs && !originalSource.borrowed && !originalTarget.borrowed && !originalHistory.borrowed);
@@ -23832,6 +23840,17 @@ int main() {
                                         TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf,FrameDnBackend,decltype(access)>;
                                     Borrowed frontend(std::move(borrowedParent),reinterpret_cast<uintptr_t>(&source),
                                         originalResolve,originalTarget,Cf{refs},11,12,frameDn,access);
+                                    assert(!frontend.surfacesReady());
+                                    assert(frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                        assert(false);return {};
+                                    }).status==5 && calls==0);
+                                    assert(!frontend.bindCpu([](auto&&...) noexcept {return false;}));
+                                    assert(!frontend.surfacesReady() && storageOwner.get()==cpuAddress);
+                                    assert(frontend.bindCpu([&](auto& cpu,const auto&,const auto* src,const auto* dst) noexcept {
+                                        assert(!frontend.bindCpu([](auto&&...) noexcept {assert(false);return true;}));
+                                        return &cpu==cpuAddress && src==&source && dst==&target;
+                                    }));
+                                    assert(!frontend.bindCpu([](auto&&...) noexcept {assert(false);return true;}));
                                     assert(frontend.surfacesReady() && !frontend.requiresRetention());
                                     for(unsigned frame=0;frame<2;++frame) {
                                         const auto result=frontend.withCpuFrontend([&](auto& cpu,auto& src,auto& dst,auto&) noexcept {
@@ -23843,12 +23862,12 @@ int main() {
                                         });
                                         assert(result.status==31 && !frontend.requiresRetention() && storageOwner.get()==cpuAddress);
                                     }
-                                    assert(calls==2);
+                                    assert(calls==4);
                                     allowAccess=false;
                                     const auto refused=frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
                                         assert(false);return {};
                                     });
-                                    assert(refused.status==31 && calls==2 && !frontend.requiresRetention() && storageOwner.get()==cpuAddress);
+                                    assert(refused.status==31 && calls==4 && !frontend.requiresRetention() && storageOwner.get()==cpuAddress);
                                 }
                                 assert(refs==originalRefs && !originalSource.borrowed && !originalTarget.borrowed && !originalHistory.borrowed);
                                 {
