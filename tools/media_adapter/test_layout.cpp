@@ -14398,6 +14398,28 @@ static void testRetainedVeboxFrames() {
         };
         auto admitVptr=[](uintptr_t address,size_t size) noexcept {return address==context && size==8;};
         {
+            unsigned deaths=0;
+            struct BatchOwner {
+                uintptr_t value;unsigned& deaths;
+                uintptr_t context() const noexcept {return value;}
+                ~BatchOwner() noexcept {++deaths;}
+            };
+            TglNativeCreatedContextBatch<2> batch;
+            batch.valid=true;batch.count=2;batch.contexts={context,context+0x10000};
+            std::array<BatchOwner*,2> candidates{new BatchOwner{batch.contexts[0],deaths},new BatchOwner{batch.contexts[1],deaths}};
+            const auto originals=candidates;
+            TglOwnedContextOwnerRegistry<BatchOwner,1> insufficient;
+            assert(!insufficient.adoptBatch(base,0x30000,1,batch,candidates) && candidates==originals && !deaths);
+            for(auto p:batch.contexts)assert(!insufficient.pin(base,0x30000,1,p).get());
+            TglOwnedContextOwnerRegistry<BatchOwner,2> enough;
+            assert(enough.adoptBatch(base,0x30000,1,batch,candidates) && !candidates[0] && !candidates[1]);
+            for(size_t i=0;i<2;++i) {
+                auto pin=enough.pin(base,0x30000,1,batch.contexts[i]);assert(pin.get()==originals[i]);
+            }
+            TglNativeRemovedContextBatch<2> removed;removed.valid=true;removed.count=2;removed.contexts=batch.contexts;
+            assert(enough.reconcileSuccessfulRemoval(base,0x30000,1,removed)==0 && deaths==2); // CPU owners only.
+        }
+        {
             // Concrete codec owner, distinct from a VPHAL renderer owner.
             constexpr uintptr_t physical=0x30000,os=0x40000,wrapper=0x50000;
             uintptr_t actualParent=physical;
@@ -14429,7 +14451,19 @@ static void testRetainedVeboxFrames() {
             assert(dependency.live());
             auto* owner=Codec::create(base,physical,ticket.generation,context,dependency,ownerRead,writeVptr,ownerAdmit,qualify,executable);
             assert(owner && !dependency.live());
-            TglOwnedContextOwnerRegistry<Codec,1> codecs;assert(codecs.adopt(base,physical,ticket.generation,owner));
+            TglOwnedContextOwnerRegistry<Codec,1> codecs;
+            TglNativeCreatedContextBatch<2> created;created.valid=true;created.count=2;created.contexts[0]=context;
+            std::array<Codec*,2> candidates{owner,nullptr};
+            auto wrong=created;wrong.contexts[0]+=8;
+            assert(!codecs.adoptBatch(base,physical,ticket.generation,wrong,candidates) && candidates[0]==owner);
+            auto duplicate=created;duplicate.contexts[1]=context;
+            candidates[1]=owner;
+            assert(!codecs.adoptBatch(base,physical,ticket.generation,duplicate,candidates) && candidates[0]==owner && candidates[1]==owner);
+            candidates[1]=nullptr;
+            assert(codecs.adoptBatch(base,physical,ticket.generation,created,candidates) && !candidates[0] && !candidates[1]);
+            candidates[0]=owner;
+            assert(!codecs.adoptBatch(base,physical,ticket.generation,created,candidates) && candidates[0]==owner);
+            candidates[0]=nullptr; // Negative alias probe above never owned the registered object.
             auto scope=[&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c) noexcept {
                 assert(!owner->prepareRemoval([](auto...) noexcept {assert(false);return true;}));
                 return i==base && p==physical && g==ticket.generation && c==context;
@@ -14453,11 +14487,19 @@ static void testRetainedVeboxFrames() {
                 assert(n==1 && selected[0]==owner);return owner->prepareRemoval(scope)?0:5;
             })==0 && vptr==base+0x75d018);
             assert(!owner->confirmNativeRemoval([](auto...) noexcept {return false;}));
+            assert(!owner->nativeRemovalConfirmed());
+            assert(codecs.reconcileSuccessfulRemoval(base,physical,ticket.generation,removed)==5);
+            assert(physicals.destroy(ticket,base,physical,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
             nativeRemoved=true; // CPU fixture for coordinator's successful native removal.
             assert(codecs.reconcileSuccessfulRemoval(base,physical,ticket.generation,removed,[&](auto& selected) noexcept -> int {
-                return selected.confirmNativeRemoval([&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c) noexcept {
+                auto proof=[&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c) noexcept {
                     return nativeRemoved && i==base && p==physical && g==ticket.generation && c==context;
-                })?0:5;
+                };
+                assert(selected.confirmNativeRemoval(proof));
+                assert(!selected.confirmNativeRemoval([](auto...) noexcept {return false;}));
+                assert(selected.confirmNativeRemoval(proof)); // Later-owner failure/retry must remain possible.
+                assert(selected.nativeRemovalConfirmed());
+                return 0;
             })==0);
             assert(physicals.destroy(ticket,base,physical,[](uintptr_t) noexcept -> int {return 0;})==0);
             assert(vptrWrites==2);vptrWrites=0; // Separate original-vtable test phase below.

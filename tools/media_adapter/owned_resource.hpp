@@ -22094,6 +22094,9 @@ public:
     }
     uintptr_t context() const noexcept {return state_?state_->context:0;}
     const TglOwnedContextFrameVtable& frameTable() const noexcept {return state_->table;}
+    bool nativeRemovalConfirmed() const noexcept {
+        return state_ && state_->removed && !state_->table.requiresRetention();
+    }
     template<class ExclusiveLease,class ScopeAdmit,class OwnedExecutable>
     bool publishFrame(const ExclusiveLease& lease,uintptr_t hook,ScopeAdmit scope,OwnedExecutable ownedExecutable) noexcept {
         if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;
@@ -22120,10 +22123,22 @@ public:
     template<class RemovedAdmit> bool confirmNativeRemoval(RemovedAdmit removed) noexcept {
         if(!enter())return false;
         Unlock unlock{state_->busy};
-        if(state_->removed || !state_->retainedIdentity() || state_->table.requiresRetention() ||
+        // Batch reconciliation can fail on a later owner. Confirmation must be
+        // idempotent for explicit retry, but still reauthenticate the SAME
+        // successful-removal proof; removed_ alone never authorizes release.
+        if(!state_->retainedIdentity() || state_->table.requiresRetention() ||
             !removed(state_->image,state_->physical,state_->generation,state_->context))return false;
         state_->removed=true;return true;
     }
+};
+
+template<class Owner> struct TglImplicitContextRelease {
+    static bool allowed(const Owner&) noexcept {return true;} // Legacy CPU-only owners.
+};
+template<class PhysicalLease,class Read,class Write,class Admit,class Qualify,class Executable>
+struct TglImplicitContextRelease<TglOwnedNativeCodecContextOwner<PhysicalLease,Read,Write,Admit,Qualify,Executable>> {
+    using Owner=TglOwnedNativeCodecContextOwner<PhysicalLease,Read,Write,Admit,Qualify,Executable>;
+    static bool allowed(const Owner& owner) noexcept {return owner.nativeRemovalConfirmed();}
 };
 
 // Pre-native context removal only, under the same empty-frame physical and
@@ -22530,6 +22545,34 @@ public:
         if(!available) return false;
         *available={image,physical,owner->context(),generation,owner,false};return true;
     }
+    // Atomic adoption for native createContextsAndAdoptBatch. NULL native
+    // outputs have NULL candidates and consume no registry slot. Validate ALL
+    // owners/capacity before taking any; caller retains every pointer on refusal
+    // and must quarantine partial native creation, never speculatively delete it.
+    template<size_t N> bool adoptBatch(uintptr_t image,uintptr_t physical,uint64_t generation,
+        const TglNativeCreatedContextBatch<N>& batch,std::array<Owner*,N>& candidates) noexcept {
+        static_assert(noexcept(std::declval<Owner&>().context()));
+        if(!image || !physical || !generation || !batch.valid || batch.count>N ||
+            gate_.test_and_set(std::memory_order_acquire))return false;
+        Unlock unlock{gate_};std::array<Entry*,N> available{};size_t needed=0,free=0;
+        for(size_t i=0;i<N;++i) {
+            if(i>=batch.count) {if(batch.contexts[i] || candidates[i])return false;continue;}
+            const auto context=batch.contexts[i];auto* owner=candidates[i];
+            if(!context) {if(owner)return false;continue;}
+            if(!owner || owner->context()!=context)return false;
+            for(size_t j=0;j<i;++j)if(batch.contexts[j]==context || candidates[j]==owner)return false;
+            for(const auto& entry:entries_)if(entry.owner && (entry.owner==owner || entry.context==context))return false;
+            ++needed;
+        }
+        for(auto& entry:entries_)if(!entry.owner && free<needed)available[free++]=&entry;
+        if(free!=needed)return false;
+        size_t slot=0;
+        for(size_t i=0;i<batch.count;++i)if(candidates[i]) {
+            *available[slot++]={image,physical,batch.contexts[i],generation,candidates[i],false};
+            candidates[i]=nullptr;
+        }
+        return true;
+    }
     template<class Use> int withOwner(uintptr_t image,uintptr_t physical,uint64_t generation,
         uintptr_t context,Use use) noexcept {
         static_assert(noexcept(use(std::declval<Owner&>())) &&
@@ -22617,7 +22660,7 @@ public:
         return reconcileSuccessfulRemoval(image,physical,generation,batch,
             [&](Owner& owner) noexcept -> int {
                 for(const auto& e:entries_) if(e.owner==&owner && e.dependencyReleaseFailed) return 5;
-                return 0;
+                return TglImplicitContextRelease<Owner>::allowed(owner)?0:5;
             });
     }
 };
