@@ -19867,6 +19867,33 @@ struct TglNativeForwardLinkChange {
     const TglOwnedSurfaceStorage* source=nullptr;
     uintptr_t next=0;
 };
+struct TglNativeHistoryReconnectPlan {
+    std::array<TglNativeForwardLinkChange,18> changes{};
+    std::array<uintptr_t,18> cache{};
+    size_t count=0,cleared=0;
+};
+// Exact1300f0(mode0), expressed as DATA only. Resolve cache addresses solely
+// through existing graph leases; never dereference a cache-provided pointer.
+// Repeated nodes are legal native writes: retain their LAST assigned C0.
+template<class Graph>
+bool tglPlanNativeHistoryReconnect(TglNativeHistoryReconnectPlan& output,
+    const std::array<uintptr_t,18>& cache,Graph& graph,
+    const TglOwnedSurfaceStorage& first) noexcept {
+    if(!graph.hasRetainedSurfaceLease(first))return false;
+    TglNativeHistoryReconnectPlan candidate;candidate.cache=cache;
+    const auto* current=&first;
+    for(size_t i=0;i<cache.size() && cache[i];++i) {
+        const auto* next=graph.retainedStorageAt(cache[i]);
+        if(!next)return false;
+        size_t slot=0;
+        while(slot<candidate.count && candidate.changes[slot].source!=current)++slot;
+        if(slot==candidate.count)++candidate.count;
+        candidate.changes[slot]={current,cache[i]};
+        candidate.cache[i]=0;++candidate.cleared;current=next;
+    }
+    if(!graph.valid())return false;
+    output=candidate;return true;
+}
 // Exact1308a0 temporal registration graph. Capacity is an OWNED retention/work
 // budget, not a claimed native count limit. Resolve returns an existing stable
 // owner under the enclosing physical/generation registry lease; no raw shell
@@ -20000,6 +20027,14 @@ public:
             if(reinterpret_cast<uintptr_t>(shell)==address && slots_[i].lease->hasSurfaceLease(*shell))return true;
         }
         return false;
+    }
+    const TglOwnedSurfaceStorage* retainedStorageAt(uintptr_t address) const noexcept {
+        if(!address || !valid())return nullptr;
+        for(size_t i=0;i<count_;++i) {
+            const auto* shell=slots_[i].lease->storage();
+            if(reinterpret_cast<uintptr_t>(shell)==address && slots_[i].lease->hasSurfaceLease(*shell))return shell;
+        }
+        return nullptr;
     }
     const TglOwnedSurfaceStorage* linkedStorage(const TglOwnedSurfaceStorage& root,
         size_t offset) const noexcept {

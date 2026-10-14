@@ -18190,6 +18190,22 @@ int main() {
                 })==5);
                 {
                     const auto heldRefs=refs;
+                    {
+                        std::array<uintptr_t,18> cache{};cache[0]=o;cache[1]=p;cache[3]=1;
+                        TglNativeHistoryReconnectPlan plan;
+                        assert(tglPlanNativeHistoryReconnect(plan,cache,graph,root));
+                        assert(plan.count==2 && plan.cleared==2 && plan.cache[0]==0 && plan.cache[1]==0 && plan.cache[3]==1);
+                        assert(plan.changes[0].source==&root && plan.changes[0].next==o);
+                        assert(plan.changes[1].source==&older && plan.changes[1].next==p);
+                        cache[1]=o;cache[2]=p;cache[3]=0;
+                        assert(tglPlanNativeHistoryReconnect(plan,cache,graph,root));
+                        assert(plan.count==2 && plan.cleared==3 && plan.changes[1].source==&older && plan.changes[1].next==p);
+                        cache[0]=1;
+                        assert(!tglPlanNativeHistoryReconnect(plan,cache,graph,root));
+                        assert(plan.count==2 && plan.cleared==3); // atomic failed output
+                        assert(!tglPlanNativeHistoryReconnect(plan,cache,graph,shell));
+                        assert(graph.valid() && refs==heldRefs);
+                    }
                     std::array<TglNativeForwardLinkChange,18> changes{};changes[0]={&root,p};
                     assert(graph.withForwardLinkReconciliation(changes,1,[&]() noexcept -> int {
                         std::memcpy(root.prefix.data()+0xc0,&p,8);
