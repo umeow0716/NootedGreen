@@ -3934,6 +3934,19 @@ struct TglVeboxHardwareBinding {
     // dc8 and event-machine termination without updating9dc in its body;
     // unchanged restart count or a sampled IOService-active bit is therefore
     // not established reset/termination exclusion. Do not infer equivalence.
+    // Context loss has separate destructive reporting: exact family ae6e
+    // affectedByHardwareReset(bool,reason) conditionally sets63b|20,644 and
+    // increments63c, but aeb7 ALWAYS sets63b|40 and clears68c. aecc returns
+    // !68c for shouldHardwareCommandNooped. Legacy submit67d2 publishes
+    // context644 -> output+4 at6f77, and (unless accelerator dc8!=0)
+    // context638 flags -> output+8 at6f98. 63b|40 means DWORD bit40000000.
+    // It then clears644/648 at6fc5 and masks638 to08000000 at6fd0, thereby
+    // consuming the40/20 loss bits. A later snapshot can miss an earlier
+    // report: preserve the SAME context's native submit output; do not call
+    // submit merely to query loss or assume fence result0 retains this state.
+    // context_finish ad8a only maps EventMachine178 result!=-1 to success;
+    // its body does not inspect638/644/68c. Caller-side loss propagation and
+    // clearing remain to be followed before using the device query as a gate.
     // get_device_info d52c returns devicef8 plus global comm-page mapping/size;
     // updateGlobalCommPage429b0 writes ONLY its trace-enable DWORD at+0.
     // get_event_machine d1dc exports event mapping/config ce0/ce4/ce8 plus
@@ -3944,8 +3957,9 @@ struct TglVeboxHardwareBinding {
     // These populate config outputs8/20/28; they are capacity interfaces,
     // not native reset/termination epochs. Subclass overrides require their
     // own image binding, never reinterpret these ABI fields as status data.
-    // A future owned read-only health query must use a distinct authenticated
-    // interface, not extend/repurpose the proven 0x7c IntelHwCapsInfo reply.
+    // Owned raw device diagnostics use a distinct authenticated interface,
+    // never extend/repurpose the proven 0x7c IntelHwCapsInfo reply. Their
+    // existence does not prove context-loss coverage or a health certificate.
     // Prove the owned allocation reaches this mapping path before relying on
     // it; external CPU buffers and failed STMM unlock remain separate cases.
     // Release-only CPU capture198a776a... at46268e is a null-guarded import
