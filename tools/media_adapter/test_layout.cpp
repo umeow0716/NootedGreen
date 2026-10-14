@@ -426,6 +426,21 @@ static void testTrackedCpuOwner() {
         }
     }
     {
+        // This Darwin adapter path has no compression-format side channel. Clearing an
+        // optional platform datum must never replace decompression itself.
+        for(int nativeStatus:{0,31}) {
+            TglSurfaceRect source{0,0,1920,1079},target{0,0,1920,1200};
+            bool fill=false,compressed=true;auto mode=TglOwnedSfcCompressionMode::Media;
+            int status=99;unsigned calls=0,clears=0;
+            assert(tglRunOwnedGen12FastFillWithClear(source,target,true,fill,compressed,mode,status,
+                []() noexcept {return true;},[&]() noexcept {++calls;return nativeStatus;},
+                []() noexcept {return true;},[&]() noexcept {++clears;}));
+            assert(calls==1 && status==nativeStatus && fill && target.bottom==1200);
+            assert(clears==(nativeStatus==0?1u:0u) && compressed==(nativeStatus!=0));
+            assert(mode==(nativeStatus?TglOwnedSfcCompressionMode::Media:TglOwnedSfcCompressionMode::Disabled));
+        }
+    }
+    {
         // Exercise the real DI acquisition through the whole selector, not
         // an invented failure callback. No later predicate may run on error.
         struct Policy {

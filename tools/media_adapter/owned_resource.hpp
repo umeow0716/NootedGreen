@@ -1329,14 +1329,14 @@ struct TglSurfaceRect {
 // Recheck observes the temporary live target rectangle. Bottom is restored
 // on every exit. Native decompression failure preserves compressed state
 // but does not cancel fast-fill; expose its exact status to the caller.
-template<class Recheck,class Decompress,class Healthy>
-bool tglRunOwnedGen12FastFill(const TglSurfaceRect& source,TglSurfaceRect& target,
+template<class Recheck,class Decompress,class Healthy,class Clear>
+bool tglRunOwnedGen12FastFillWithClear(const TglSurfaceRect& source,TglSurfaceRect& target,
     bool hasColorFill,bool& fastFill,bool& compressed,TglOwnedSfcCompressionMode& mode,
-    uint32_t& compressionFormat,int& decompressionStatus,
-    Recheck recheck,Decompress decompress,Healthy healthy) noexcept {
+    int& decompressionStatus,Recheck recheck,Decompress decompress,Healthy healthy,Clear clear) noexcept {
     static_assert(noexcept(recheck()) && noexcept(decompress()) && noexcept(healthy()) &&
         std::is_same_v<decltype(recheck()),bool> && std::is_same_v<decltype(decompress()),int> &&
         std::is_same_v<decltype(healthy()),bool>,"fast-fill synchronous resource policy ABI");
+    static_assert(noexcept(clear()) && std::is_same_v<decltype(clear()),void>);
     if(!healthy() || !hasColorFill || !source.finite() || !target.finite() ||
        source.left!=target.left || source.top!=target.top || source.right!=target.right ||
        !(source.bottom<target.bottom)) return false;
@@ -1362,10 +1362,18 @@ bool tglRunOwnedGen12FastFill(const TglSurfaceRect& source,TglSurfaceRect& targe
         // selector publication. Reflect native success even if acquisition
         // became invalid during the call; do not reuse stale compression
         // metadata on a later frame. Pipe/fast-fill publication still aborts.
-        if(status==0) {compressed=false;mode=TglOwnedSfcCompressionMode::Disabled;compressionFormat=0;}
+        if(status==0) {compressed=false;mode=TglOwnedSfcCompressionMode::Disabled;clear();}
         if(!healthy()) return false;
     }
     flag.committed=true;decompressionStatus=status;return true;
+}
+template<class Recheck,class Decompress,class Healthy>
+bool tglRunOwnedGen12FastFill(const TglSurfaceRect& source,TglSurfaceRect& target,
+    bool hasColorFill,bool& fastFill,bool& compressed,TglOwnedSfcCompressionMode& mode,
+    uint32_t& compressionFormat,int& decompressionStatus,
+    Recheck recheck,Decompress decompress,Healthy healthy) noexcept {
+    return tglRunOwnedGen12FastFillWithClear(source,target,hasColorFill,fastFill,compressed,mode,
+        decompressionStatus,recheck,decompress,healthy,[&]() noexcept {compressionFormat=0;});
 }
 // Geometry portion of Gen12 IS_OUTPUT_PIPE_VEBOX_FEASIBLE. Darwin uses float
 // rectangles at surface+30/+40/+50, not Linux integer RECT storage. Do not
@@ -7440,10 +7448,9 @@ public:
     // Mutable access must come from the enclosing owned target lease. The
     // compression references/decompressor still require resource provenance;
     // they are not inferred from undocumented Darwin surface offsets.
-    template<class Decompress>
-    bool runFastFillTransaction(TglOwnedSurfaceStorage& writableTarget,bool& compressed,
-        TglOwnedSfcCompressionMode& mode,uint32_t& compressionFormat,
-        int& decompressionStatus,Decompress& decompress) noexcept {
+    template<class Decompress,class Clear>
+    bool runFastFillTransactionWithClear(TglOwnedSurfaceStorage& writableTarget,bool& compressed,
+        TglOwnedSfcCompressionMode& mode,int& decompressionStatus,Decompress& decompress,Clear clear) noexcept {
         static_assert(noexcept(decompress()) && std::is_same_v<decltype(decompress()),int>,
             "native decompression must preserve exact status without throwing");
         if(!healthy()) return false;
@@ -7469,8 +7476,8 @@ public:
             ~Restore(){std::memcpy(destination,bytes.data(),4);}
         } restore{writableTarget.prefix.data()+0x4c,original};
         bool selected=false;
-        const bool success=tglRunOwnedGen12FastFill(sourceRect,targetRect,true,selected,
-            compressed,mode,compressionFormat,decompressionStatus,
+        const bool success=tglRunOwnedGen12FastFillWithClear(sourceRect,targetRect,true,selected,
+            compressed,mode,decompressionStatus,
             [&]() noexcept {
                 std::memcpy(writableTarget.prefix.data()+0x4c,&targetRect.bottom,4);
                 if(!direct()) return false;
@@ -7482,7 +7489,7 @@ public:
                     frame_.fail();return false;
                 }
                 return true;
-            },[&]() noexcept {return decompress();},[&]() noexcept {return healthy();});
+            },[&]() noexcept {return decompress();},[&]() noexcept {return healthy();},clear);
         // Successful decompression is irreversible even if another lease was
         // lost during the call. Preserve that fact in the actual target while
         // its own lease remains valid; never publish a pipe on frame failure.
@@ -7498,6 +7505,13 @@ public:
         if(finalCompressed!=compressed || finalMode!=mode) {frame_.fail();return false;}
         // Native donor1fb140 writes target85 only after successful recheck.
         writableTarget.prefix[0x85]=1;return selected;
+    }
+    template<class Decompress>
+    bool runFastFillTransaction(TglOwnedSurfaceStorage& writableTarget,bool& compressed,
+        TglOwnedSfcCompressionMode& mode,uint32_t& compressionFormat,
+        int& decompressionStatus,Decompress& decompress) noexcept {
+        return runFastFillTransactionWithClear(writableTarget,compressed,mode,decompressionStatus,decompress,
+            [&]() noexcept {compressionFormat=0;});
     }
     bool fastFill() noexcept {
         uintptr_t actual=0;

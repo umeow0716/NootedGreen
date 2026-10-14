@@ -1080,9 +1080,9 @@ struct NativeTargetDecompression {
 struct NativeFastFillTransaction {
     NativeContextSurfaceOwner& targetOwner;
     TglVeboxPipeAcquisition& acquisition;
-    // Compression format comes from the enclosing authenticated resource
-    // query, never a guessed Darwin shell offset or zero-status substitute.
-    uint32_t& compressionFormat;int& decompressionStatus;
+    // This Darwin policy consumes the proven compressed/mode fields; it has
+    // no compression-format side-channel consumer. Decompression remains real.
+    int& decompressionStatus;
     NativeTargetDecompression& decompression;
     template<class Policy> bool operator()(Policy& policy) noexcept {
         bool entered=false,selected=false;
@@ -1103,8 +1103,8 @@ struct NativeFastFillTransaction {
                 if(!targetOwner.hasSurfaceLease(target))acquisition.fail();
                 return native;
             };
-            selected=policy.runFastFillTransaction(target,compressed,mode,compressionFormat,
-                decompressionStatus,decompress);
+            selected=policy.runFastFillTransactionWithClear(target,compressed,mode,
+                decompressionStatus,decompress,[]() noexcept {}); // no format side channel in this path
             return selected?0:5;
         });
         if(!entered)acquisition.fail();
@@ -1150,7 +1150,7 @@ struct NativeOutputPipeFrameScope {
     const TglOwnedGen12SurfaceFeatures& sourceFeatures;
     const TglOwnedGen12SurfaceFeatures& targetFeatures;const uint8_t& compositionNeeded;
     TglVeboxPipeAcquisition& acquisition;
-    uint32_t& compressionFormat;int& decompressionStatus;NativeTargetDecompression& decompression;
+    int& decompressionStatus;NativeTargetDecompression& decompression;
     bool attempted=false;
     template<class Use> int run(Use use) noexcept {
         static_assert(noexcept(use(std::declval<NativeOutputPipeSelector&>())) &&
@@ -1158,8 +1158,7 @@ struct NativeOutputPipeFrameScope {
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         if(attempted || !read.scope || !read.resolve || !acquisition.healthy())return 5;
         attempted=true;
-        NativeFastFillTransaction fastFill{health.targetOwner,acquisition,compressionFormat,
-            decompressionStatus,decompression};
+        NativeFastFillTransaction fastFill{health.targetOwner,acquisition,decompressionStatus,decompression};
         return NativeOutputCscQueryScope::run(health,[&](NativeTwoPassCscQuery& query) noexcept -> int {
             struct LutSource {
                 NativeTwoPassCscHealth& health;TglVeboxPipeAcquisition& acquisition;
@@ -2498,7 +2497,7 @@ struct NativeRetainedFrontendRuntime {
     static int withPolicyInputs(NativeCoreFrameDataScope& core,NativeAdmissionParams& params,
         NativeAdmissionPass& pass,NativeFrameDataRead& read,const TglVeboxAdmissionBorrowedInterfaces& interfaces,
         const TglOwnedGen12SurfaceFeatures& sourceFeatures,const TglOwnedGen12SurfaceFeatures& targetFeatures,
-        TglVeboxPipeAcquisition& acquisition,uint32_t& compressionFormat,int& decompressionStatus,
+        TglVeboxPipeAcquisition& acquisition,int& decompressionStatus,
         NativeTargetDecompression& decompression,void* context,PolicyInputUse use) noexcept {
         if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
             !core.live() || !params.data() || !pass.data() || !acquisition.healthy() ||
@@ -2513,7 +2512,7 @@ struct NativeRetainedFrontendRuntime {
         NativeTwoPassCscHealth health{core.childOwner,core.executionOwner,core.sourceOwner,core.targetOwner,
             core.source,core.target,core.image,core.child,core.execution,core.generation};
         NativeOutputPipeFrameScope policy{health,read,core.vp,parameters,di,fill,sourceFeatures,targetFeatures,
-            pass.data()[8],acquisition,compressionFormat,decompressionStatus,decompression};
+            pass.data()[8],acquisition,decompressionStatus,decompression};
         const int status=use(context,policy);
         return status?status:(core.live() && acquisition.healthy()?0:5);
     }
@@ -2641,7 +2640,7 @@ struct NativeOriginalFrameExecution {
         const TglOwnedVpEntrySet& catalogue;const TglOwnedVpModeState& mode;
         const TglNativeVphalMhwView& view;
         const TglOwnedGen12SurfaceFeatures& sourceFeatures;const TglOwnedGen12SurfaceFeatures& targetFeatures;
-        TglVeboxPipeAcquisition& acquisition;uint32_t& compressionFormat;int& decompressionStatus;
+        TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
         NativeTargetDecompression& decompression;
         void* argument;
     };
@@ -2673,8 +2672,7 @@ struct NativeOriginalFrameExecution {
                         auto& packet=*static_cast<Packet*>(context);auto& in=packet.state.input;
                         struct Allocation {Packet& packet;NativeModeAllocationPlan& plan;} stage{packet,allocation};
                         return Frontend::withPolicyInputs(in.core,in.params,in.pass,in.read,in.frontend.interfaces,
-                            in.sourceFeatures,in.targetFeatures,in.acquisition,in.compressionFormat,
-                            in.decompressionStatus,in.decompression,&stage,
+                            in.sourceFeatures,in.targetFeatures,in.acquisition,in.decompressionStatus,in.decompression,&stage,
                             +[](void* context,NativeOutputPipeFrameScope& policy) noexcept -> int {
                                 auto& stage=*static_cast<Allocation*>(context);auto& in=stage.packet.state.input;
                                 struct Policy {Allocation& stage;NativeOutputPipeFrameScope& policy;} next{stage,policy};
