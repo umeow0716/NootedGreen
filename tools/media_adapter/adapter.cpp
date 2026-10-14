@@ -3244,6 +3244,8 @@ template int NativeRetainedFrontendRuntime::withPolicyInputs<NativeTemporarySurf
 // SourceOwnerType/TargetOwnerType for that persistent frame. The temporary
 // overlay must be confined to synchronous producer/packet execution while
 // this same original frame retains command/resource backing for completion.
+bool nativeOwnedSendSelectionMatches(uintptr_t image,uintptr_t creator,uintptr_t renderer,
+    uintptr_t child,uint64_t childGeneration,bool temporary) noexcept;
 struct NativeOriginalFrameExecution {
     using Frontend=NativeRetainedFrontendRuntime;
     struct Request {
@@ -3314,6 +3316,11 @@ struct NativeOriginalFrameExecution {
         if(in.sendScope || bool(admit)!=bool(childAdmit) || frame.invalidated() || !frame.surfacesReady() ||
             (admit && !ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1)) ||
             (childAdmit && !ownedExecutableMemory(reinterpret_cast<uintptr_t>(childAdmit),1)))return {};
+        static_assert(std::is_same_v<SurfaceOwner,NativeContextSurfaceOwner> ||
+            std::is_same_v<SurfaceOwner,NativeTemporarySurfaceOwner>);
+        if(!nativeOwnedSendSelectionMatches(in.core.image,in.frontend.pinned.creator,
+            in.frontend.pinned.renderer,in.core.child,in.core.generation,
+            std::is_same_v<SurfaceOwner,NativeTemporarySurfaceOwner>))return {};
         NativeVeboxSendBindingsFor<SurfaceOwner> bindings;
         if(!bindings.resolve(in.core,in.view,in.frontend.pinned) || !bindings.live())return {};
         TglOwnedVeboxBuilderScratch scratch;
@@ -3818,6 +3825,7 @@ struct NativeCreatorPreparation {
         NativeRendererCpuAssembly* storage=nullptr;NativeVphalOwner* owner=nullptr;
         bool used=false,adopted=false,lifetimePublished=false,childrenReady=false;
         bool publicationAttempted=false,childrenPublished=false;
+        bool mainPublicationAttempted=false,mainPublished=false;
         NativeRendererConstructionSelection selection;
     };
     struct Ledger {std::atomic_flag gate=ATOMIC_FLAG_INIT;std::array<Record,64> records{};};
@@ -3947,6 +3955,28 @@ struct NativeCreatorPreparation {
                 });
         });
     }
+    template<class PhysicalScope>
+    static int publishMainRenderer(PhysicalScope& physical,uintptr_t image,uintptr_t address,
+        uint64_t generation,uintptr_t creator) noexcept {
+        if(!physical.matches(image,address,generation))return 5;
+        auto& state=ledger();if(state.gate.test_and_set(std::memory_order_acquire))return 5;
+        struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
+        Record* record=nullptr;
+        for(auto& candidate:state.records)if(candidate.used && candidate.image==image && candidate.physical==address &&
+            candidate.generation==generation && candidate.creator==creator)record=&candidate;
+        if(!record || !record->owner || !record->childrenPublished || !record->lifetimePublished || !record->adopted ||
+            record->mainPublicationAttempted || record->mainPublished || !record->selection.ownedSend ||
+            record->selection.domain!=NativeRendererCallbackDomain::Temporary)return 5;
+        return tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
+            auto lease=NativeVphalRouter::pinForInitialization(creator);
+            if(lease.get()!=record->owner || !lease.exclusive())return 5;
+            record->mainPublicationAttempted=true;
+            record->mainPublished=record->owner->publishRenderer(lease,
+                reinterpret_cast<uintptr_t>(&NativeRetainedTemporaryExecution::temporaryPass),
+                NativeTglImageAdmission{image},&executableMemory,&ownedExecutableMemory);
+            return record->mainPublished?0:5;
+        });
+    }
     // Full synchronous construction handoff, not a component-success alias.
     // Each component keeps its persistent partial state; failure never retries
     // construction or destroys objects still owned by the native creator.
@@ -3959,9 +3989,34 @@ struct NativeCreatorPreparation {
         const int children=initializeChildren(physical,image,address,generation,creator);
         if(children)return children;
         if(!physical.matches(image,address,generation))return 5;
-        return publishChildren(physical,image,address,generation,creator);
+        const int published=publishChildren(physical,image,address,generation,creator);
+        if(published)return published;
+        if(selection.ownedSend && selection.domain==NativeRendererCallbackDomain::Temporary)
+            return publishMainRenderer(physical,image,address,generation,creator);
+        return 0;
     }
 };
+bool nativeOwnedSendSelectionMatches(uintptr_t image,uintptr_t creator,uintptr_t renderer,
+    uintptr_t child,uint64_t childGeneration,bool temporary) noexcept {
+    if(!image || !creator || !renderer || !child || !childGeneration)return false;
+    auto& state=NativeCreatorPreparation::ledger();
+    if(state.gate.test_and_set(std::memory_order_acquire))return false;
+    struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
+    const auto domain=temporary?NativeRendererCallbackDomain::Temporary:NativeRendererCallbackDomain::Original;
+    for(const auto& record:state.records) {
+        if(!record.used || record.image!=image || record.creator!=creator || record.renderer!=renderer)continue;
+        if(!record.owner || !record.storage || !record.adopted || !record.lifetimePublished ||
+            !record.childrenReady || !record.childrenPublished || !record.selection.valid() ||
+            !record.selection.ownedSend || record.selection.domain!=domain)return false;
+        if(temporary && !record.mainPublished)return false;
+        for(auto* owner:{&record.storage->children().first().owner(),&record.storage->children().second().owner()})
+            if(reinterpret_cast<uintptr_t>(owner->constructedBase())==child)
+                return owner->allocationGeneration()==childGeneration && owner->hasPrivateChildImageLease(child,image) &&
+                    owner->matchesPrivateSend(&NativeVeboxSendSubmissionStage::send);
+        return false;
+    }
+    return false;
+}
 std::map<void *, std::unique_ptr<Entry>> registry;
 // Prepared invocation only: factory callbacks remain unchanged until complete
 // child hooks/publication and frame retirement are supplied. Keep native status
@@ -4258,6 +4313,8 @@ template int NativeCreatorPreparation::prepareOwner<TglOwnedPhysicalMutationAuth
 template int NativeCreatorPreparation::initializeChildren<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 template int NativeCreatorPreparation::publishChildren<TglOwnedPhysicalMutationAuthority>(
+    TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
+template int NativeCreatorPreparation::publishMainRenderer<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 template int NativeCreatorPreparation::complete<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t,NativeRendererConstructionSelection) noexcept;
