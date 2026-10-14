@@ -2641,9 +2641,10 @@ struct NativeOriginalFrameExecution {
         size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         uintptr_t parameters,pass;const TglOwnedVpEntrySet& catalogue;
         NativeModeRetirementAuthority& retirement;const TglNativeVphalMhwView& view;
-        const TglOwnedGen12SurfaceFeatures& sourceFeatures;const TglOwnedGen12SurfaceFeatures& targetFeatures;
         TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
         NativeTargetDecompression& decompression;void* argument;
+        const TglOwnedGen12SurfaceFeatures* sourceFeatures=nullptr;
+        const TglOwnedGen12SurfaceFeatures* targetFeatures=nullptr;
         bool attempted=false;
     };
     // Construct execution Inputs ONLY inside the original retained frontend
@@ -2662,8 +2663,17 @@ struct NativeOriginalFrameExecution {
                 NativeFrameDataRead& read,NativeVpProducerFrame& vp,const TglOwnedVpModeState& mode,
                 Frontend::VpFrontend& frontend) noexcept -> TglOwnedVeboxCommandTransactionResult {
                 auto& request=*static_cast<Request*>(context);
+                TglOwnedGen12SurfaceFeatures sourceFeatures,targetFeatures;
+                if(!tglBindLeasedUnknownGen12SurfaceFeatures(sourceFeatures,core.sourceOwner,core.source,
+                    request.acquisition) ||
+                    !tglBindLeasedUnknownGen12SurfaceFeatures(targetFeatures,core.targetOwner,core.target,
+                    request.acquisition))return {};
+                // Optional caller-produced evidence is still checked for the
+                // EXACT original surface/frame identities by withPolicyInputs.
+                if(request.sourceFeatures)sourceFeatures=*request.sourceFeatures;
+                if(request.targetFeatures)targetFeatures=*request.targetFeatures;
                 Inputs input{frontend,core,graph,lines,params,pass,read,vp,request.catalogue,mode,request.view,
-                    request.sourceFeatures,request.targetFeatures,request.acquisition,request.decompressionStatus,
+                    sourceFeatures,targetFeatures,request.acquisition,request.decompressionStatus,
                     request.decompression,request.argument};
                 return run(input);
             }};

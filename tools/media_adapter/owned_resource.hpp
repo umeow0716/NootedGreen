@@ -7214,6 +7214,18 @@ struct TglOwnedGen12SurfaceFeatures {
     TglOwnedFeaturePresence lut=TglOwnedFeaturePresence::Unknown;
     TglOwnedFeaturePresence hdr=TglOwnedFeaturePresence::Unknown;
 };
+// Bind identity inside the original surface/frame lease. This reads NO
+// metadata and proves NO feature absence; each consumer must still acquire
+// its own evidence if it needs a known value on the selected branch.
+template<class Owner>
+bool tglBindLeasedUnknownGen12SurfaceFeatures(TglOwnedGen12SurfaceFeatures& output,
+    Owner& owner,const TglOwnedSurfaceStorage& surface,TglVeboxPipeAcquisition& frame) noexcept {
+    static_assert(noexcept(owner.hasSurfaceLease(surface)));
+    if(!frame.healthy() || !owner.hasSurfaceLease(surface))return false;
+    const TglOwnedGen12SurfaceFeatures candidate{&surface,&frame};
+    if(!owner.hasSurfaceLease(surface) || !frame.healthy())return false;
+    output=candidate;return true;
+}
 // Publish a policy record only AFTER the original metadata owner's checked
 // borrow has ended successfully. Conversion LUT evidence says nothing about
 // HDR: leave that independent producer unknown rather than invent absence.

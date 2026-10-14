@@ -16726,6 +16726,19 @@ int main() {
         TglDiIecpInputs input;input.current=&source;input.target=&target;
         auto valid=[&]() noexcept {return tglValidateOriginalDiIecpLeases(input,s,source,&t,&p);};
         assert(valid());
+        TglVeboxPipeAcquisition featureFrame;
+        TglOwnedGen12SurfaceFeatures features;
+        assert(tglBindLeasedUnknownGen12SurfaceFeatures(features,s,source,featureFrame));
+        assert(features.surface==&source && features.frame==&featureFrame &&
+            features.lut==TglOwnedFeaturePresence::Unknown && features.hdr==TglOwnedFeaturePresence::Unknown);
+        features.hdr=TglOwnedFeaturePresence::Present;
+        s.live=false;
+        assert(!tglBindLeasedUnknownGen12SurfaceFeatures(features,s,source,featureFrame));
+        assert(features.hdr==TglOwnedFeaturePresence::Present);s.live=true;
+        assert(!tglBindLeasedUnknownGen12SurfaceFeatures(features,s,copy,featureFrame));
+        featureFrame.fail();
+        assert(!tglBindLeasedUnknownGen12SurfaceFeatures(features,s,source,featureFrame));
+        assert(features.hdr==TglOwnedFeaturePresence::Present && features.surface==&source);
         t.live=false;assert(!valid());t.live=true;
         input.target=&copy;assert(!valid());input.target=&target;
         input.current=&copy;assert(!valid());input.current=&source;
