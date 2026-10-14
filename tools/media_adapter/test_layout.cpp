@@ -2133,6 +2133,25 @@ static void testTrackedCpuOwner() {
             assert(liveRender.status==0 && liveRender.nativeEntered && liveRetention() &&
                 !LiveProducers::Resolve::get(nativeChild));
             child.installed=priorHooks;
+            unsigned stateBorrows=0;
+            const auto beforeStateBorrow=liveCaptures;
+            std::array<uint8_t,0x188> stateBeforeBorrow{};
+            std::memcpy(stateBeforeBorrow.data(),state.data(),stateBeforeBorrow.size());
+            assert(livePacket.stateWithBorrow(false,&state,[&](auto) noexcept -> int {
+                assert(liveBorrow);++stateBorrows;return 31;
+            })==31 && stateBorrows==1 && liveCaptures==beforeStateBorrow+1);
+            assert(std::memcmp(stateBeforeBorrow.data(),state.data(),stateBeforeBorrow.size())==0);
+            assert(livePacket.stateWithBorrow(false,&state,[&](auto produce) noexcept -> int {
+                assert(liveBorrow);++stateBorrows;return produce();
+            })==0 && stateBorrows==2 && liveCaptures==beforeStateBorrow+2);
+            assert(livePacket.stateWithBorrow(false,&state,[](auto) noexcept -> int {return 0;})==5);
+            assert(livePacket.stateWithBorrow(false,&state,[](auto produce) noexcept -> int {
+                (void)produce();return produce();
+            })==5);
+            const auto beforeForeignState=liveCaptures;
+            assert(livePacket.stateWithBorrow(false,&foreignCommandState,[](auto) noexcept -> int {
+                assert(false);return 0;
+            })==5 && liveCaptures==beforeForeignState);
             assert(di.resources[0]==&source.resource && di.resources[5]==&target.resource &&
                 di.resources[7]==&statistics.resource);
             assert(nativeSetups==3 && nativeBuilds==3 && nativeWritebacks==3);

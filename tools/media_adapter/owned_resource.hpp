@@ -18015,15 +18015,25 @@ struct TglOwnedVeboxLivePacketContext {
         if(packet!=&leases.surfaces) return 5;
         return withInput([&](auto& view) noexcept {return view.surfaces(di,packet);});
     }
-    int state(bool di,void* packet) noexcept {
+    template<class Borrow> int stateWithBorrow(bool di,void* packet,Borrow borrow) noexcept {
         if(packet!=&leases.state) return 5;
         return withInput([&](auto& view) noexcept -> int {
             // Resource admission belongs INSIDE the same captured ownership
             // scope as packet generation, not before/after its tail views live.
             if(leases.target && admitDi(*leases.target)!=0)return 5;
-            const int result=view.state(di,packet);
+            bool entered=false,repeated=false;int produced=5;
+            auto produce=[&]() noexcept -> int {
+                if(entered) {repeated=true;return 5;}
+                entered=true;produced=view.state(di,packet);return produced;
+            };
+            static_assert(noexcept(borrow(produce)) && std::is_same_v<decltype(borrow(produce)),int>);
+            const int borrowed=borrow(produce);
+            const int result=repeated?5:!entered?(borrowed?borrowed:5):borrowed?borrowed:produced;
             return leases.target && admitDi(*leases.target)!=0?5:result;
         });
+    }
+    int state(bool di,void* packet) noexcept {
+        return stateWithBorrow(di,packet,[](auto produce) noexcept -> int {return produce();});
     }
     int diIecp(bool di,void* packet) noexcept {
         if(packet!=&leases.diIecp) return 5;

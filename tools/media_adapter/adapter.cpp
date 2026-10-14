@@ -2116,7 +2116,22 @@ using NativeVeboxControlPolicy=TglOwnedDiIecpControlPolicyReader<NativeFrameData
 using NativeVeboxLivePacketFrame=TglOwnedVeboxLivePacketContext<NativeDiIecpCapture,NativeFrameDataRead,
     NativeFrameSurfaceRoleAdmission,NativeFrameSurfaceAdmission,TglNativeDiIecpRegistration,
     TglNativeDiIecpControl<NativeVeboxControlPolicy>>;
-using NativeVeboxPacketBridge=TglOwnedVeboxNativePacketBridge<NativeVeboxLivePacketFrame,NativeStackPacketAdmission>;
+struct NativeVeboxPacketBridge : TglOwnedVeboxNativePacketBridge<NativeVeboxLivePacketFrame,NativeStackPacketAdmission> {
+    using Base=TglOwnedVeboxNativePacketBridge<NativeVeboxLivePacketFrame,NativeStackPacketAdmission>;
+    NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+    NativeVeboxPacketBridge(NativeVeboxLivePacketFrame& frame,NativeStackPacketAdmission admit,
+        NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target) noexcept
+        :Base(frame,admit),sourceOwner(source),targetOwner(target) {}
+    int state(bool di,void* packet) noexcept {
+        if(!leases.target)return 5;
+        return transfer(leases.state,packet,[&]() noexcept -> int {
+            return frame.stateWithBorrow(di,&leases.state,[&](auto produce) noexcept -> int {
+                return tglWithMutableVeboxPacketRoots(sourceOwner,leases.source,targetOwner,*leases.target,
+                    [&](auto&,auto&) noexcept -> int {return produce();});
+            });
+        });
+    }
+};
 using NativeVeboxProducerTypes=TglOwnedVeboxFrameProducerTypes<NativeVeboxPacketBridge,NativeRendererChildOwner,
     NativeExecutionOwner,decltype(&readMemory),TglNativeDndiStackAdmission,NativeVeboxCscProducer>;
 using NativeVeboxProducerResolve=typename NativeVeboxProducerTypes::Resolve;
@@ -2181,7 +2196,8 @@ struct NativeVeboxPacketProducerScope {
             &csc.health.target!=leases.target || frame.read.scope!=admission.read.scope ||
             frame.read.resolve!=admission.read.resolve || &parameters!=&admission.feature.parameters)return result;
         DnRead dn{admission.feature.sourceOwner,parameters,leases.source};
-        NativeVeboxPacketBridge bridge(frame,NativeStackPacketAdmission{});
+        NativeVeboxPacketBridge bridge(frame,NativeStackPacketAdmission{},
+            admission.feature.sourceOwner,admission.feature.targetOwner);
         const int status=tglWithOwnedVeboxFrameProducers(bridge,child,execution,0,&readMemory,
             TglNativeDndiStackAdmission{},csc,[&](void* object,auto& producer) noexcept -> int {
                 static_assert(std::is_same_v<std::remove_reference_t<decltype(producer)>,NativeVeboxProducerTypes::Context>);
