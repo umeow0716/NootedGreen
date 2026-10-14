@@ -118,7 +118,51 @@ struct NativeCodecBackend {
             NativeTglImageAdmission{scope.image()},&executableMemory);
         selected->adopted=result==0;return result;
     }
+    // Called ONLY by coordinator after native removal returned success, under
+    // the same empty-frame physical mutation gate. Never inspect freed objects.
+    template<class SuccessProof>
+    static int reconcile(uintptr_t image,uintptr_t physical,uint64_t generation,
+        const TglNativeRemovedContextBatch<16>& removed,SuccessProof proof) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<bool,SuccessProof,uintptr_t,uintptr_t,uint64_t,uintptr_t>);
+        if constexpr(std::is_pointer_v<SuccessProof>) {if(!proof)return 5;}
+        if(!image || !physical || !generation || !removed.valid || removed.count>16)return 5;
+        auto& storage=ledger();
+        if(storage.gate.test_and_set(std::memory_order_acquire))return 5;
+        struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{storage.gate};
+        // Validate every identity and tail before any owner or ledger release.
+        for(size_t i=0;i<16;++i) {
+            if(i>=removed.count) {if(removed.contexts[i])return 5;continue;}
+            const uintptr_t context=removed.contexts[i];
+            if(!context)return 5;
+            for(size_t j=0;j<i;++j)if(removed.contexts[j]==context)return 5;
+            unsigned matches=0;
+            for(const auto& record:storage.records)if(record.used && record.image==image &&
+                record.physical==physical && record.generation==generation) {
+                if(!record.adopted || !record.batch.wellFormed())return 5;
+                for(size_t j=0;j<record.batch.count;++j)if(record.batch.contexts[j]==context)++matches;
+            }
+            if(matches!=1)return 5;
+        }
+        const int status=owners().reconcileSuccessfulRemoval(image,physical,generation,removed,
+            [&](NativeCodecOwner& owner) noexcept -> int {return owner.confirmNativeRemoval(proof)?0:5;});
+        if(status)return status; // Includes partial confirmation: keep ALL lineage for explicit retry.
+        for(auto& record:storage.records)if(record.used && record.adopted && record.image==image &&
+            record.physical==physical && record.generation==generation) {
+            bool remaining=false;
+            for(auto& context:record.batch.contexts) {
+                for(size_t i=0;i<removed.count;++i)if(context==removed.contexts[i])context=0;
+                remaining=remaining || context!=0;
+            }
+            if(!remaining)record={}; // Only fully reconciled successful batches become reusable.
+        }
+        return 0;
+    }
 };
+// Compile the real backend body even before the lifecycle callback is enabled;
+// this is a build check, not invocation or a synthetic successful-removal proof.
+using NativeRemovalProof=bool(*)(uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
+template int NativeCodecBackend::reconcile<NativeRemovalProof>(uintptr_t,uintptr_t,uint64_t,
+    const TglNativeRemovedContextBatch<16>&,NativeRemovalProof) noexcept;
 struct Entry {
     using CodecOwner=NativeCodecOwner;
     // Factory table lifetime only, not the native physical context lifetime.
