@@ -24423,6 +24423,7 @@ class TglOwnedVphalRendererOwner {
         uintptr_t image,physical,object,renderer;uint64_t generation;
         Read read;Write write;TableAdmit tableAdmit;ChildAdmit childAdmit;Native native;
         TglOwnedVphalLifetimeTable table;TglOwnedVphalDestructionState destruction;
+        TglOwnedPrimaryRendererTable rendererTable;
         Storage* storage=nullptr;
         std::atomic<bool> storageBusy{false};
         State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t o,uintptr_t r,
@@ -24442,6 +24443,10 @@ class TglOwnedVphalRendererOwner {
         }
         int prepare() noexcept {
             if(!physicalLease.matches(image,physical,generation) || !boundRenderer() || !boundPhysicalOs()) return 5;
+            using Publication=TglOwnedPrimaryRendererTable::Publication;
+            if(rendererTable.publication()==Publication::Ambiguous) return 5;
+            if(rendererTable.publication()==Publication::Published &&
+                !rendererTable.detach(read,write,tableAdmit)) return 5;
             return tglPrepareOwnedVphalStorageRemoval(table,storage,reinterpret_cast<void*>(renderer),
                 generation,read,write,tableAdmit,childAdmit);
         }
@@ -24478,6 +24483,23 @@ public:
     }
     uintptr_t context() const noexcept {return state_?state_->object:0;}
     const TglOwnedVphalLifetimeTable& lifetime() const noexcept {return state_->table;}
+    const TglOwnedPrimaryRendererTable& rendererLifetime() const noexcept {return state_->rendererTable;}
+    // Initialization reservation pins THIS state/table/code until qualified
+    // destruction; callback dispatch never owns a second renderer object.
+    template<class ExclusiveLease,class Qualify,class Executable,class OwnedExecutable>
+    bool publishRenderer(const ExclusiveLease& lease,uintptr_t temporary,Qualify qualify,
+        Executable executable,OwnedExecutable ownedExecutable) noexcept {
+        if(!state_ || lease.get()!=this || !lease.exclusive() || state_->storageBusy ||
+            !state_->storage || !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
+            !state_->boundRenderer() || !state_->boundPhysicalOs() ||
+            state_->table.publication()!=TglOwnedVphalLifetimeTable::Publication::Published ||
+            state_->destruction.phase()!=TglOwnedVphalDestructionState::Phase::Idle) return false;
+        bool expected=false;
+        if(!state_->storageBusy.compare_exchange_strong(expected,true,std::memory_order_acq_rel))return false;
+        struct Unlock {std::atomic<bool>& busy;~Unlock(){busy.store(false,std::memory_order_release);}} unlock{state_->storageBusy};
+        return state_->rendererTable.build(state_->image,temporary,state_->read,qualify,executable,ownedExecutable) &&
+            state_->rendererTable.publish(state_->renderer,state_->read,state_->write,state_->tableAdmit);
+    }
     template<class ImageRead,class Qualify,class Executable,class OwnedExecutable,class CreatorAdmit>
     bool publishLifetime(uintptr_t destroy,uintptr_t deletingDestroy,ImageRead imageRead,
         Qualify qualify,Executable executable,OwnedExecutable ownedExecutable,CreatorAdmit creatorAdmit) noexcept {
@@ -24600,7 +24622,12 @@ private:
         using Publication=TglOwnedVphalLifetimeTable::Publication;
         const auto publication=state_->table.publication();
         if(requirePublished && publication!=Publication::Published) return 5;
-        const bool resolved=publication==Publication::Unpublished?
+        const auto rendererPublication=state_->rendererTable.publication();
+        const bool resolved=rendererPublication==TglOwnedPrimaryRendererTable::Publication::Published?
+            publication==Publication::Published && created.resolveOwnedRenderer(state_->image,state_->object,
+                state_->table,state_->rendererTable,state_->read,admit,qualify,executable):
+            rendererPublication==TglOwnedPrimaryRendererTable::Publication::Ambiguous?false:
+            publication==Publication::Unpublished?
             created.resolve(state_->image,state_->object,state_->read,admit,qualify,executable):
             publication==Publication::Published && created.resolveOwned(state_->image,state_->object,
                 state_->table,state_->read,admit,qualify,executable);

@@ -18930,7 +18930,22 @@ int main() {
                         uintptr_t actualRenderer=r;bool rendererReadable=true;
                         uintptr_t embeddedOs=0x91048;
                         const TglOwnedVphalLifetimeTable* activeOwnerTable=nullptr;
+                        const TglOwnedPrimaryRendererTable* activeRendererTable=nullptr;
+                        std::array<uintptr_t,15> rendererWords{};
+                        rendererWords[1]=image+0x75bc00;rendererWords[14]=image+0x811e00;
+                        for(size_t i=0;i<12;++i)rendererWords[i+2]=image+TglNativePrimaryRendererTable::offsets[i];
                         auto ownerRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                            if(size==8 && (address==image+0x75bbc0 || address==image+0x75bbc8))
+                                return creatorRead(address,bytes,size);
+                            const auto rendererStart=image+0x75bb90;
+                            if(address>=rendererStart && address-rendererStart<=sizeof(rendererWords) &&
+                                size<=sizeof(rendererWords)-(address-rendererStart)) {
+                                std::memcpy(bytes,reinterpret_cast<const uint8_t*>(rendererWords.data())+address-rendererStart,size);return true;
+                            }
+                            const auto rp=activeRendererTable?activeRendererTable->addressPoint():0;
+                            if(rp && address>=rp-16 && address-(rp-16)<=112 && size<=112-(address-(rp-16))) {
+                                std::memcpy(bytes,reinterpret_cast<const void*>(address),size);return true;
+                            }
                             const auto point=activeOwnerTable?activeOwnerTable->addressPoint():0;
                             if(point && address>=point-16 && address-(point-16)<=48 &&
                                 size<=48-(address-(point-16))) {
@@ -18949,6 +18964,7 @@ int main() {
                             return readObject(address,bytes,size) || creatorRead(address,bytes,size);
                         };
                         auto ownerWrite=[&](uintptr_t address,uintptr_t value) noexcept {
+                            if(address==r) {put(r,0,value);return true;}
                             // Publication precedes cleanup; restoring native vptr follows children.
                             if(value==lifetime.source()) assert(children.destroyed);
                             return writeObject(address,value);
@@ -18956,21 +18972,27 @@ int main() {
                         auto ownedNative=[&](uintptr_t entry,uintptr_t object) noexcept {
                             assert(entry==original[3] && object==creatorAddress);
                             assert(backingReleased && vptr==lifetime.source());
+                            uintptr_t rendererVptr=0;std::memcpy(&rendererVptr,reinterpret_cast<void*>(r),8);
+                            assert(rendererVptr==image+0x75bba0);
                             assert(physicalOwners.destroy(ticket,image,0x90000,
                                 [](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
                             ++ownedNativeCalls;
                         };
+                        auto ownerTableAdmit=[&](uintptr_t at,size_t n) noexcept {
+                            return admitObject(at,n) || (at==r && admit(at,n));
+                        };
                         using Owner=TglOwnedVphalRendererOwner<RendererStorage,
                             PhysicalRegistry::DependencyLease,decltype(ownerRead),decltype(ownerWrite),
-                            decltype(admitObject),int,decltype(ownedNative)>;
+                            decltype(ownerTableAdmit),int,decltype(ownedNative)>;
                         assert(!Owner::create(image,0x90000,ticket.generation+1,creatorAddress,r,
-                            dependency,ownedStorage,ownerRead,ownerWrite,admitObject,0,ownedNative));
+                            dependency,ownedStorage,ownerRead,ownerWrite,ownerTableAdmit,0,ownedNative));
                         assert(dependency.live() && ownedStorage);
                         auto* storageIdentity=ownedStorage;
                         auto* owner=Owner::create(image,0x90000,ticket.generation,creatorAddress,r,
-                            dependency,ownedStorage,ownerRead,ownerWrite,admitObject,0,ownedNative);
+                            dependency,ownedStorage,ownerRead,ownerWrite,ownerTableAdmit,0,ownedNative);
                         assert(owner && !ownedStorage && !dependency.live());
                         activeOwnerTable=&owner->lifetime();
+                        activeRendererTable=&owner->rendererLifetime();
                         assert(owner->context()==creatorAddress && !owner->nativeDestructionComplete());
                         assert(!TglImplicitContextRelease<Owner>::allowed(*owner));
                         auto ownerExecutable=[&](uintptr_t address,size_t size) noexcept {
@@ -19078,6 +19100,12 @@ int main() {
                             actualRenderer-=8;
                             decltype(initialization) empty;
                             assert(owner->withCreatorStorage(empty,creatorAdmit,qualify,ownerExecutable,producer)==5);
+                            auto mainExecutable=[](uintptr_t,size_t) noexcept {return true;};
+                            auto mainOwned=[](uintptr_t at,size_t) noexcept {return at==0xf200;};
+                            assert(!owner->publishRenderer(empty,0xf200,qualify,mainExecutable,mainOwned));
+                            assert(owner->publishRenderer(initialization,0xf200,qualify,mainExecutable,mainOwned));
+                            assert(owner->withCreatorStorage(initialization,creatorAdmit,qualify,ownerExecutable,
+                                [&](auto&,const auto& view) noexcept -> int {assert(view.renderer==r);return 0;})==0);
                         }
                         assert(producerCalls==1);
                         // Successful native creator return hands off through the
