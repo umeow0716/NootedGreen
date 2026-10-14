@@ -17169,6 +17169,38 @@ int main() {
         assert(!backend.allocations && !backend.releases);
     }
     {
+        std::array<uint8_t,0x28> command{};
+        uint32_t type=2;uint64_t operation=0x10000;uintptr_t pointer=0x4000;
+        std::memcpy(command.data(),&type,4);
+        std::memcpy(command.data()+8,&operation,8);
+        std::memcpy(command.data()+0x20,&pointer,8);
+        unsigned commandReads=0;bool unstable=false,deny=false;
+        auto commandRead=[&](uintptr_t address,void* out,size_t size) noexcept {
+            ++commandReads;
+            if(deny || address!=0x2000 || size!=command.size()) return false;
+            std::memcpy(out,command.data(),size);
+            if(unstable && commandReads%2==0) static_cast<uint8_t*>(out)[0]^=1;
+            return true;
+        };
+        TglNativeDnCommand decodedCommand;
+        assert(tglDecodeNativeDnCommand(decodedCommand,0x2000,0x28,commandRead));
+        assert(decodedCommand.request==pointer && commandReads==2);
+        decodedCommand.request=77;
+        for(auto address:{uintptr_t{0},UINTPTR_MAX-8})
+            assert(!tglDecodeNativeDnCommand(decodedCommand,address,0x28,commandRead));
+        assert(!tglDecodeNativeDnCommand(decodedCommand,0x2000,0x27,commandRead));
+        assert(commandReads==2 && decodedCommand.request==77);
+        unstable=true;
+        assert(!tglDecodeNativeDnCommand(decodedCommand,0x2000,0x28,commandRead));
+        unstable=false;deny=true;
+        assert(!tglDecodeNativeDnCommand(decodedCommand,0x2000,0x28,commandRead));
+        deny=false;command[0]=0x10;
+        assert(!tglDecodeNativeDnCommand(decodedCommand,0x2000,0x28,commandRead));
+        command[0]=2;command[8]=1;
+        assert(!tglDecodeNativeDnCommand(decodedCommand,0x2000,0x28,commandRead));
+        command[8]=0;std::memset(command.data()+0x20,0,8);
+        assert(!tglDecodeNativeDnCommand(decodedCommand,0x2000,0x28,commandRead));
+        assert(decodedCommand.request==77);
         TglNativeDnScalarRequest request;
         request.word20=7;request.word24=9;request.word28=11;request.word2c=13;
         request.word30=3;

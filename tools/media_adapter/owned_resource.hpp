@@ -7638,6 +7638,29 @@ bool tglRejectLeasedGen12DiOutput(bool& rejected,const TglOwnedSurfaceStorage& s
 // Exact TGL2390b0 /23a067..23a369 scalar portion of the source90 producer.
 // These are caller request DWORD offsets, not guessed DN policy parameters.
 // Nested request38 payload ownership is separate and is NOT published here.
+// Exact235b00: DWORD0=type, QWORD8=operation, QWORD20=request.
+// This only decodes the outer DN command; the caller must retain its native
+// command/request owners throughout use. No pointer dereference or HDR claim.
+struct TglNativeDnCommand {
+    uintptr_t request=0;
+};
+template<class Read>
+bool tglDecodeNativeDnCommand(TglNativeDnCommand& output,uintptr_t address,
+    size_t extent,Read read) noexcept {
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+        std::is_same_v<decltype(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),bool>);
+    constexpr size_t size=0x28;
+    if(!address || extent<size || address>UINTPTR_MAX-size) return false;
+    std::array<uint8_t,size> first{},second{};
+    if(!read(address,first.data(),size) || !read(address,second.data(),size) || first!=second)
+        return false;
+    uint32_t type=0;uint64_t operation=0;uintptr_t request=0;
+    std::memcpy(&type,first.data(),4);
+    std::memcpy(&operation,first.data()+8,8);
+    std::memcpy(&request,first.data()+0x20,8);
+    if(type!=2 || operation!=0x10000 || !request) return false;
+    output={request};return true;
+}
 struct TglNativeDnScalarRequest {
     uint32_t mode=0,word20=0,word24=0,word28=0,word2c=0,word30=0;
     bool mode3NativeDefault=false;
