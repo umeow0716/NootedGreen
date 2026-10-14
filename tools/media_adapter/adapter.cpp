@@ -2102,7 +2102,8 @@ struct NativeAllocationUnwind {
 template<class SurfaceOwner> using NativeAllocationPlannerFor=TglOwnedVeboxAllocationFramePlanner<TglDarwinStmmSurfaceApi,
     SurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,decltype(&readMemory),
     NativeAllocationSfcFormat,NativeAllocationSfcColor,NativeAllocationParameterKindFor<SurfaceOwner>,
-    TglOwnedFfdiCompressionFormatQuery,NativeAllocationRectangleFor<SurfaceOwner>,NativeDataAdmission,NativeAllocationUnwind>;
+    TglOwnedFfdiCompressionFormatQuery,NativeAllocationRectangleFor<SurfaceOwner>,NativeDataAdmission,NativeAllocationUnwind,
+    NativeContextSurfaceOwner>;
 using NativeAllocationPlanner=NativeAllocationPlannerFor<NativeContextSurfaceOwner>;
 template<class SurfaceOwner> using NativeAllocationContextFor=TglOwnedVeboxRenderAllocationContext<NativeRendererChildOwner,
     NativeAllocationPlannerFor<SurfaceOwner>>;
@@ -2173,7 +2174,7 @@ template<class SurfaceOwner> struct NativeModeAllocationPlanFor {
     NativeSurfaceFrameBacking& storage;NativeVpLines& lines;
     NativeSfcReleaseSelection& selection;NativeModeRetirementAuthority& retirement;
     SurfaceOwner& input;SurfaceOwner& target;
-    SurfaceOwner* secondary;SurfaceOwner* previous;
+    NativeContextSurfaceOwner* secondary;NativeContextSurfaceOwner* previous;
     NativeExecutionOwner& execution;uintptr_t report;
     const TglOwnedSurfaceStorage& source;bool reinitializeStmm,alignDi64;
     using Use=typename NativeAdmissionStagesFor<SurfaceOwner>::Result(*)(void*,NativeAllocationPlannerFor<SurfaceOwner>&,NativeModeReleaseContext&) noexcept;
@@ -2638,8 +2639,8 @@ struct NativeRetainedFrontendRuntime {
     template<class SurfaceOwner> struct VpFrontendFor {
         NativeRendererCpuAssembly& assembly;const TglNativeCreatedVeboxRendererView& pinned;
         size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
-        NativeAdmissionSourceGraphFor<SurfaceOwner>& sourceGraph;SurfaceOwner* secondary;
-        SurfaceOwner* previous;NativeDenoiseParameters& denoise;
+        NativeAdmissionSourceGraphFor<SurfaceOwner>& sourceGraph;NativeContextSurfaceOwner* secondary;
+        NativeContextSurfaceOwner* previous;NativeDenoiseParameters& denoise;
         NativeModeRetirementAuthority& retirement;
     };
     using VpFrontend=VpFrontendFor<NativeContextSurfaceOwner>;

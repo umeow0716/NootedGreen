@@ -9036,6 +9036,14 @@ int tglWithCapturedMixedSurfaceRoles(Source* source,Target* target,Secondary* se
             if(!owner)return captured[i]?5:self(self,std::integral_constant<size_t,i+1>{});
             auto enter=[&](const TglOwnedSurfaceStorage& surface) noexcept -> int {
                 if(!owner->hasSurfaceLease(surface))return 5;
+                // Preserve owner identity for aliased roles: native-backed
+                // batch validation rejects distinct owners of the same shell.
+                for(size_t j=0;j<i;++j)if(identities[j]==identities[i] && views[j]==&surface && roles[j]) {
+                    roles[i]=roles[j];views[i]=&surface;
+                    const int status=self(self,std::integral_constant<size_t,i+1>{});
+                    roles[i]=nullptr;views[i]=nullptr;
+                    return owner->hasSurfaceLease(surface)?status:5;
+                }
                 TglHeldOwnedSurfaceRole role(*owner,surface);roles[i]=&role;views[i]=&surface;
                 const int status=self(self,std::integral_constant<size_t,i+1>{});
                 roles[i]=nullptr;views[i]=nullptr;
@@ -17075,9 +17083,9 @@ int tglRunCapturedFfdiFromReport(std::array<TglOwnedDescriptorOnlySurface,Count>
 // report68 is an identity to reconcile with the held secondary owner, not a
 // pointer to dereference. Absent secondary bypasses slot0 entirely, as native
 // 1f7e59->1f7eba does; continuation receives two null views, not success stub.
-template<class TargetOwner,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Use>
+template<class TargetOwner,class Owner,class SecondaryOwner,class ChildOwner,class ExecutionOwner,class Read,class Use>
 int tglRunCapturedFfdiSecondaryFromReport(TglOwnedDescriptorOnlySurface& descriptor,
-    TargetOwner* backed,Owner& input,Owner* secondary,ChildOwner& childOwner,
+    TargetOwner* backed,Owner& input,SecondaryOwner* secondary,ChildOwner& childOwner,
     ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,Read read,Use use) noexcept {
     static_assert(noexcept(use(static_cast<const TglOwnedSurfaceStorage*>(nullptr),
@@ -17094,9 +17102,9 @@ int tglRunCapturedFfdiSecondaryFromReport(TglOwnedDescriptorOnlySurface& descrip
                 static_cast<const TglOwnedSurfaceStorage*>(nullptr));
             if(!secondary || address>UINTPTR_MAX-0x687 ||
                 !read(address+0x680,&slot,8) || !slot) return 5;
-            const auto* held=secondary==&input ? &source : nullptr;
+            const auto* held=static_cast<const void*>(secondary)==static_cast<const void*>(&input) ? &source : nullptr;
             auto consume=[&](const auto& s,const auto& target) noexcept -> int {return use(&s,&target);};
-            return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,1>{secondary},
+            return tglWithCapturedOwnedSurfaceRoles(std::array<SecondaryOwner*,1>{secondary},
                 std::array<const TglOwnedSurfaceStorage*,1>{held},[&](const auto& views) noexcept -> int {
                     if(reinterpret_cast<uintptr_t>(views[0])!=secondaryAddress) return 5;
                     if(slot==reinterpret_cast<uintptr_t>(descriptor.surfaceBinding()))
@@ -17110,10 +17118,10 @@ int tglRunCapturedFfdiSecondaryFromReport(TglOwnedDescriptorOnlySurface& descrip
 // Full FFDi allocation/secondary branch under one captured frame. +b0 false
 // and nonpositive loop counts still reach secondary handling; neither path
 // fabricates allocation success or suppresses the next-stage result.
-template<size_t Count,class TargetOwner,class Owner,class ChildOwner,class ExecutionOwner,
+template<size_t Count,class TargetOwner,class Owner,class SecondaryOwner,class ChildOwner,class ExecutionOwner,
     class Read,class SfcFormat,class SfcColor,class ParameterKind,class Supports,class Use,class Continue>
 int tglRunCapturedFfdiFrame(std::array<TglOwnedDescriptorOnlySurface,Count>& descriptors,
-    const std::array<TargetOwner*,Count>& backed,Owner& input,Owner* executionSurface,Owner* secondary,
+    const std::array<TargetOwner*,Count>& backed,Owner& input,Owner* executionSurface,SecondaryOwner* secondary,
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
     ParameterKind parameterKind,Supports supports,Use use,Continue next,
@@ -17143,13 +17151,14 @@ int tglRunCapturedFfdiFrame(std::array<TglOwnedDescriptorOnlySurface,Count>& des
                         (actual[0] && !executionSurface) || (actual[1] && !secondary) ||
                         (captured[0] && captured[0]!=&source) ||
                         (!actual[0] && captured[1]) || (!actual[1] && captured[2])) return 5;
-                    const std::array<Owner*,3> roles{&input,
-                        actual[0]?executionSurface:nullptr,actual[1]?secondary:nullptr};
                     captured[0]=&source;
-                    return tglWithCapturedOwnedSurfaceRoles(roles,captured,[&](const auto& views) noexcept -> int {
+                    return tglWithCapturedMixedSurfaceRoles(&input,actual[0]?executionSurface:nullptr,
+                        actual[1]?secondary:nullptr,static_cast<Owner*>(nullptr),
+                        {captured[0],captured[1],captured[2],nullptr},[&](const auto& mixed,const auto& held) noexcept -> int {
+                        const std::array<const TglOwnedSurfaceStorage*,3> views{mixed[0],mixed[1],mixed[2]};
                         if(reinterpret_cast<uintptr_t>(views[1])!=actual[0] ||
                             reinterpret_cast<uintptr_t>(views[2])!=actual[1]) return 5;
-                        return tglRunCapturedFfdiFromReport(descriptors,backed,input,roles[1],roles[2],
+                        return tglRunCapturedFfdiFromReport(descriptors,backed,*held[0],held[1],held[2],
                             childOwner,reportOwner,currentChild,currentReport,source,read,
                             sfcFormat,sfcColor,parameterKind,supports,use,views,&prepared);
                     });
@@ -17500,14 +17509,14 @@ struct TglOwnedFfdiTailViews {
 // Actual surface allocation composition, not sequential callbacks with escaped
 // views. The downstream stages execute inside both real pair scopes. This is
 // synchronous ownership only: no submit/completion lifetime is implied.
-template<bool ScopedStmm=false,size_t Count,class TargetOwner,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,
+template<bool ScopedStmm=false,size_t Count,class TargetOwner,class PriorOwner,class Owner,class TemporalOwner,class ChildOwner,class ExecutionOwner,
     class Read,class SfcFormat,class SfcColor,class ParameterKind,class Supports,
     class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind,
     class Keep=TglOwnedVeboxFrameNoRetention>
 int tglRunCapturedVeboxSurfaceFrame(std::array<TglOwnedDescriptorOnlySurface,Count>& ffdiDescriptors,
     const std::array<TargetOwner*,Count>& ffdiBacked,std::array<TglOwnedDescriptorOnlySurface,2>& ffdnDescriptors,
     const std::array<TargetOwner*,2>& ffdnBacked,PriorOwner& prior,TglOwnedDescriptorOnlySurface& history,
-    Owner& input,Owner* executionSurface,Owner* secondary,Owner* previous,
+    Owner& input,Owner* executionSurface,TemporalOwner* secondary,TemporalOwner* previous,
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
     ParameterKind parameterKind,Supports supports,Rectangle rectangle,Stmm stmm,Statistics statistics,
@@ -22489,11 +22498,11 @@ using TglDarwinVeboxSurfaceFrameStorage=TglNativeVeboxSurfaceFrameStorage<TglDar
 // Join stable native surface owners to the existing captured allocation chain.
 // STMM/statistics stages must use storage.auxiliary() and its SAME retention;
 // the final typed command consumer records acquisition before error unwind.
-template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+template<class Api,class Owner,class TemporalOwner,class ChildOwner,class ExecutionOwner,class Read,
     class SfcFormat,class SfcColor,class ParameterKind,class Supports,
     class Rectangle,class Stmm,class Statistics,class Unwind>
 int tglRunNativeVeboxSurfaceFrame(TglNativeVeboxSurfaceFrameStorage<Api>& storage,
-    Owner& input,Owner* executionSurface,Owner* secondary,Owner* previous,
+    Owner& input,Owner* executionSurface,TemporalOwner* secondary,TemporalOwner* previous,
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
     ParameterKind parameterKind,Supports supports,Rectangle rectangle,Stmm stmm,
@@ -22605,11 +22614,11 @@ auto tglMakeCapturedStatisticsFrameTail(TglStatisticsResource<TglNativeResourceB
 // Actual allocation-stage wiring, with no externally supplied STMM/statistics
 // owner graph. Final consume remains inside all surface/backing scopes and
 // must record command acquisition in auxiliary.retention() before returning.
-template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+template<class Api,class Owner,class TemporalOwner,class ChildOwner,class ExecutionOwner,class Read,
     class SfcFormat,class SfcColor,class ParameterKind,class Supports,
     class Rectangle,class Writable,class Consume,class Unwind>
 int tglRunNativeVeboxAllocationFrame(TglNativeVeboxSurfaceFrameStorage<Api>& storage,
-    Owner& input,Owner* executionSurface,Owner* secondary,Owner* previous,
+    Owner& input,Owner* executionSurface,TemporalOwner* secondary,TemporalOwner* previous,
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
     ParameterKind parameterKind,Supports supports,Rectangle rectangle,
@@ -22640,13 +22649,13 @@ int tglRunNativeVeboxAllocationFrame(TglNativeVeboxSurfaceFrameStorage<Api>& sto
 // Later +118/+148 producers reborrow that SAME storage and selection.
 template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
     class SfcFormat,class SfcColor,class ParameterKind,class Supports,
-    class Rectangle,class Writable,class Unwind>
+    class Rectangle,class Writable,class Unwind,class TemporalOwner=Owner>
 struct TglOwnedVeboxAllocationFramePlanner {
     TglNativeVeboxSurfaceFrameStorage<Api>& storage;
     Owner& input;
     Owner* target;
-    Owner* secondary;
-    Owner* previous;
+    TemporalOwner* secondary;
+    TemporalOwner* previous;
     ChildOwner& childOwner;
     ExecutionOwner& executionOwner;
     void* child;
