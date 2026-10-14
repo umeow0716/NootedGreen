@@ -13481,6 +13481,69 @@ bool tglCopyNativePerPassParameterFields(std::array<uint8_t,DestinationBytes>& d
     }
 }
 
+// Compose the proven temporary conversion with an existing-topology lower
+// pass. NOT an exported callback: topology-changing copies still need the
+// original root owner's allocation/replacement authority before activation.
+template<class Backend> class TglNativePerPassTemporaryScope {
+    TglNativePerPassCpuShells<Backend> shells_;
+    bool attempted_=false;
+public:
+    struct Result {bool entered=false,copiedBack=false;int nativeStatus=5;};
+    explicit TglNativePerPassTemporaryScope(Backend& backend) noexcept:shells_(backend) {}
+    template<size_t P,size_t Q,class Lease,class Use>
+    Result run(std::array<uint8_t,P>& originalParams,std::array<uint8_t,Q>& originalPass,
+        const std::array<TglOwnedSurfaceStorage*,25>& originals,Lease live,Use use) noexcept {
+        static_assert(noexcept(live(size_t{},originals[0])));
+        Result result;
+        if(attempted_)return result;
+        attempted_=true;
+        if constexpr(P<0x130 || Q<0x34)return result;
+        else {
+            std::array<const TglOwnedSurfaceStorage*,25> inputs{};
+            for(size_t i=0;i<25;++i) {
+                const size_t offset=i<17?8+i*8:0x98+(i-17)*8;
+                uintptr_t pointer=0;std::memcpy(&pointer,originalParams.data()+offset,8);
+                if(pointer!=reinterpret_cast<uintptr_t>(originals[i]) ||
+                    (originals[i] && !live(i,originals[i])))return result;
+                inputs[i]=originals[i];
+            }
+            uint32_t source=0,target=0;
+            std::memcpy(&source,originalPass.data()+0xc,4);
+            std::memcpy(&target,originalPass.data()+0x30,4);
+            // Exact1b1ed0 resolves BOTH pass roots from the source array.
+            if(source>=17 || target>=17 || !inputs[source] || !inputs[target] ||
+                !shells_.prepare(inputs))return result;
+            std::array<uint8_t,0x1a0> parameters{};
+            std::array<uint8_t,0x60> pass{};
+            tglCopyNativePerPassParameterFields(parameters,originalParams);
+            tglCopyNativePerPassScalars(pass,originalPass);
+            for(size_t i=0;i<25;++i) {
+                const size_t offset=i<17?8+i*8:0x98+(i-17)*8;
+                const auto pointer=shells_.get(i);std::memcpy(parameters.data()+offset,&pointer,8);
+            }
+            for(const auto& field:std::array<std::pair<size_t,size_t>,4>{{
+                {0x10,source},{0x38,target},{0x48,25},{0x50,26}}}) {
+                const auto pointer=shells_.get(field.second);std::memcpy(pass.data()+field.first,&pointer,8);
+            }
+            static_assert(noexcept(use(parameters,pass)));
+            result.entered=true;result.nativeStatus=use(parameters,pass);
+            bool same=true;
+            for(size_t i=0;i<25;++i) {
+                const size_t offset=i<17?8+i*8:0x98+(i-17)*8;
+                uintptr_t pointer=0;std::memcpy(&pointer,parameters.data()+offset,8);
+                same=same && pointer==shells_.get(i);
+            }
+            // Native copies back even when the lower pass returns failure.
+            // Never publish temporary root pointers into original arrays.
+            if(same && shells_.copyBackExisting(originals,live)) {
+                tglCopyNativePerPassParameterFields(originalParams,parameters);
+                tglCopyNativePerPassScalars(originalPass,pass);result.copiedBack=true;
+            }
+            shells_.reset();return result;
+        }
+    }
+};
+
 // Resolve the original child-owned history on each admission, under the same
 // child lease. Caller's region validators must also hold its allocation live;
 // readable/writable permission alone is not an ownership grant.

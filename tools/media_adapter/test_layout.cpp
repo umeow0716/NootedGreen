@@ -16786,6 +16786,32 @@ int main() {
                 }));
         }
         assert(b.live==0);
+        std::array<uint8_t,0x139> parameters{};
+        std::array<uint8_t,0x60> pass{};
+        const auto address=reinterpret_cast<uintptr_t>(&source);
+        std::memcpy(parameters.data()+8,&address,8);
+        std::memcpy(parameters.data()+0xd0,&address,8);
+        std::array<TglOwnedSurfaceStorage*,25> roots{};roots[0]=&source;roots[24]=&source;
+        auto lease=[&](size_t,TglOwnedSurfaceStorage* p) noexcept {return p==&source;};
+        TglNativePerPassTemporaryScope<Backend> scope(b);
+        const auto result=scope.run(parameters,pass,roots,lease,
+            [&](auto& temporary,auto& temporaryPass) noexcept {
+                uintptr_t root=0,passRoot=0;
+                std::memcpy(&root,temporary.data()+8,8);
+                std::memcpy(&passRoot,temporaryPass.data()+0x10,8);
+                assert(root && root!=address && passRoot==root && b.live==4);
+                temporary[0x110]=0xff;temporaryPass[8]=0xff;
+                return 31;
+            });
+        assert(result.entered && result.nativeStatus==31 && result.copiedBack && b.live==0);
+        assert(parameters[0x110]==1 && pass[8]==1);
+        uintptr_t after=0;std::memcpy(&after,parameters.data()+8,8);assert(after==address);
+        assert(!scope.run(parameters,pass,roots,lease,[](auto&,auto&) noexcept {return 0;}).entered);
+        TglNativePerPassTemporaryScope<Backend> changed(b);
+        const auto denied=changed.run(parameters,pass,roots,lease,[](auto& temporary,auto&) noexcept {
+            std::memset(temporary.data()+8,0,8);return 31;
+        });
+        assert(denied.entered && denied.nativeStatus==31 && !denied.copiedBack && b.live==0);
     }
     {
         std::array<uint8_t,0x60> source,destination;
