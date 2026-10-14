@@ -4083,6 +4083,42 @@ static void testVeboxHardwareBinding() {
     auto resolve = [&] { return b.resolve(mhw, os, image, read, qualify); };
     assert(resolve() && b.interface == mhw && b.os == os && b.heap == heap);
     {
+        std::array<uint8_t,16> wrapper{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x30,
+            0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+        std::array<uint8_t,16> boundary{0x55,0x48,0x89,0xe5,0x48,0x89,0x7d,0xf8,
+            0x48,0x89,0x75,0xf0,0x48,0x89,0x55,0xe8};
+        uintptr_t entry=image+0x170e30;uint8_t flag=0;unsigned flagReads=0;
+        bool admitted=true,flagReadable=true,codeExecutable=true,changeDuringRead=false;
+        auto boundaryRead=[&](uintptr_t p,void* out,size_t n) {
+            if(p==image+0x759570 && n==8) {std::memcpy(out,&entry,8);return true;}
+            if(p==image+0x170e30 && n==16) {std::memcpy(out,wrapper.data(),16);return true;}
+            if(p==image+0x170ef0 && n==16) {std::memcpy(out,boundary.data(),16);return true;}
+            if(p==mhw+0x2052 && n==1) {
+                if(!flagReadable)return false;
+                ++flagReads;uint8_t value=flag;
+                if(changeDuringRead && !(flagReads&1))value^=1;
+                std::memcpy(out,&value,1);return true;
+            }
+            return read(p,out,n);
+        };
+        auto acquire=[&](bool& output) {
+            return b.readBoundaryAlignDi64(image,boundaryRead,qualify,
+                [&](uintptr_t,size_t){return codeExecutable;},
+                [&](uintptr_t p,size_t n){return admitted && p==mhw && n==TglVeboxHardwareBinding::objectExtent;},output);
+        };
+        for(uint8_t value:{uint8_t(0),uint8_t(1),uint8_t(0x80),uint8_t(0x81)}) {
+            flag=value;bool output=!bool(flag&1);assert(acquire(output) && output==bool(flag&1));
+        }
+        bool output=true;const auto beforeDenied=flagReads;admitted=false;
+        assert(!acquire(output) && output && flagReads==beforeDenied);admitted=true;
+        entry+=8;assert(!acquire(output) && output);entry-=8;
+        wrapper[0]=0;assert(!acquire(output) && output);wrapper[0]=0x55;
+        boundary[0]=0;assert(!acquire(output) && output);boundary[0]=0x55;
+        codeExecutable=false;assert(!acquire(output) && output);codeExecutable=true;
+        flagReadable=false;assert(!acquire(output) && output);flagReadable=true;
+        flagReads=0;changeDuringRead=true;assert(!acquire(output) && output && flagReads==2);
+    }
+    {
         std::array<uint32_t,10> layout{16,128,4096,4096,8192,4096,4096,8192,0,0};
         std::array<uint8_t,16> anchor{0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x90,
             0,0,0,0x48,0x89,0x7d,0xf8,0x48};

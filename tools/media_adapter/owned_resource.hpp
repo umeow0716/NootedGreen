@@ -3800,6 +3800,27 @@ struct TglVeboxHardwareBinding {
     // must not use the native accounted-delete path without that accounting.
     static constexpr size_t objectExtent=0x2190;
     uintptr_t interface = 0, os = 0, heap = 0;
+    // Exact759520+50 ->170e30 forwards the SAME this to170ef0; its2052
+    // bit belongs to this2190-byte MHW object, never the smaller VEBOX child.
+    template<class Read,class Qualify,class Executable,class Admit>
+    bool readBoundaryAlignDi64(uintptr_t image,Read read,Qualify qualify,Executable executable,
+        Admit admit,bool& output) const {
+        TglVeboxHardwareBinding current;
+        constexpr std::array<uint8_t,16> wrapper{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x30,0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+        constexpr std::array<uint8_t,16> boundary{
+            0x55,0x48,0x89,0xe5,0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0,0x48,0x89,0x55,0xe8};
+        uintptr_t entry=0;auto a=wrapper;auto b=boundary;uint8_t flag=0,after=0;
+        if(!interface || interface>UINTPTR_MAX-objectExtent || !admit(interface,objectExtent) ||
+            !current.resolve(interface,os,image,read,qualify) || current.heap!=heap ||
+            !read(image+0x759570,&entry,8) || entry!=image+0x170e30 ||
+            !executable(entry,a.size()) || !read(entry,a.data(),a.size()) || a!=wrapper ||
+            !executable(image+0x170ef0,b.size()) || !read(image+0x170ef0,b.data(),b.size()) || b!=boundary ||
+            !read(interface+0x2052,&flag,1) || !read(interface+0x2052,&after,1) || flag!=after ||
+            !current.resolve(interface,os,image,read,qualify) || current.heap!=heap ||
+            !admit(interface,objectExtent))return false;
+        output=bool(flag&1);return true;
+    }
     // Called only by the enclosing, serialized MHW owner before publication.
     // Retain that owner even if post-call admission fails: native may already
     // own resources. Never infer retirement or invoke cleanup from this status.

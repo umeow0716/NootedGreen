@@ -2620,28 +2620,32 @@ struct NativeOriginalFrameExecution {
         const TglOwnedGen12SurfaceFeatures& sourceFeatures;const TglOwnedGen12SurfaceFeatures& targetFeatures;
         TglVeboxPipeAcquisition& acquisition;uint32_t& compressionFormat;int& decompressionStatus;
         NativeTargetDecompression& decompression;const std::array<uint32_t,11>& controls;
-        bool reinitializeStmm,alignDi64,disableTemporalDenoise;void* argument;
+        bool reinitializeStmm,disableTemporalDenoise;void* argument;
     };
     static TglOwnedVeboxCommandTransactionResult run(Inputs& in) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
         auto& core=in.core;const NativeTglImageAdmission qualify{core.image};
-        TglVeboxRenderBinding render;TglCscCoefficientsBinding coefficients;
+        TglVeboxRenderBinding render;TglCscCoefficientsBinding coefficients;bool alignDi64=false;
         if(!core.preparedReset || !core.live() ||
             !in.view.matchesCreated(in.frontend.pinned,&readMemory,NativeDataAdmission{},qualify) ||
             !render.resolve(core.image,&readMemory,qualify,&executableMemory) ||
-            !coefficients.resolve(core.image,&readMemory,qualify,&executableMemory))return result;
+            !coefficients.resolve(core.image,&readMemory,qualify,&executableMemory) ||
+            !in.view.hardware.readBoundaryAlignDi64(core.image,&readMemory,qualify,&executableMemory,
+                NativeDataAdmission{},alignDi64) ||
+            !in.view.matchesCreated(in.frontend.pinned,&readMemory,NativeDataAdmission{},qualify))return result;
         NativeTwoPassCscHealth health{core.childOwner,core.executionOwner,core.sourceOwner,core.targetOwner,
             core.source,core.target,core.image,core.child,core.execution,core.generation};
         struct State {
             Inputs& input;const TglVeboxRenderBinding& render;NativeVeboxCscProducer csc;
+            bool alignDi64;
             NativeAdmissionStages::Result result;
-        } state{in,render,{health,coefficients},{}};
+        } state{in,render,{health,coefficients},alignDi64,{}};
         const int status=Frontend::withPacketInputs(in.frontend,core,&state,
             +[](void* context,TglOwnedVeboxPacketLeases& leases) noexcept -> int {
                 auto& state=*static_cast<State*>(context);auto& in=state.input;
                 struct Packet {State& state;TglOwnedVeboxPacketLeases& leases;} packet{state,leases};
                 return Frontend::withAllocationInputs(in.frontend,in.core,in.graph,in.lines,
-                    in.reinitializeStmm,in.alignDi64,&packet,
+                    in.reinitializeStmm,state.alignDi64,&packet,
                     +[](void* context,NativeModeAllocationPlan& allocation) noexcept -> int {
                         auto& packet=*static_cast<Packet*>(context);auto& in=packet.state.input;
                         struct Allocation {Packet& packet;NativeModeAllocationPlan& plan;} stage{packet,allocation};
