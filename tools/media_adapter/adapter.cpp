@@ -2005,6 +2005,7 @@ struct NativeCreatorPreparation {
         uintptr_t image=0,physical=0,creator=0,renderer=0;uint64_t generation=0;
         NativeRendererCpuAssembly* storage=nullptr;NativeVphalOwner* owner=nullptr;
         bool used=false,adopted=false,lifetimePublished=false,childrenReady=false;
+        bool publicationAttempted=false,childrenPublished=false;
     };
     struct Ledger {std::atomic_flag gate=ATOMIC_FLAG_INIT;std::array<Record,64> records{};};
     static Ledger& ledger() noexcept {static Ledger value;return value;}
@@ -2075,6 +2076,50 @@ struct NativeCreatorPreparation {
                     if(bases)return bases;
                     const int status=assembly.initializeNativeVpPair(*parent.view(),record->owner->lifetime());
                     record->childrenReady=status==0;return status;
+                });
+        });
+    }
+    template<class PhysicalScope>
+    static int publishChildren(PhysicalScope& physical,uintptr_t image,uintptr_t address,
+        uint64_t generation,uintptr_t creator) noexcept {
+        auto* handoff=TglOwnedScopedContext<TglOwnedCreatorHandoffContext,TglOwnedCreatorHandoffDomain>::get(reinterpret_cast<void*>(creator));
+        if(!handoff || handoff->image!=image || !physical.matches(image,address,generation))return 5;
+        auto& state=ledger();if(state.gate.test_and_set(std::memory_order_acquire))return 5;
+        struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
+        Record* record=nullptr;
+        for(auto& candidate:state.records)if(candidate.used && candidate.image==image && candidate.physical==address &&
+            candidate.generation==generation && candidate.creator==creator)record=&candidate;
+        if(!record || !record->childrenReady || !record->lifetimePublished || !record->adopted ||
+            record->publicationAttempted || record->childrenPublished)return 5;
+        record->publicationAttempted=true; // Never overwrite a partially installed/pinned pair.
+        return tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
+            auto lease=NativeVphalRouter::pinForInitialization(creator);
+            if(lease.get()!=record->owner || !lease.exclusive())return 5;
+            return record->owner->withCreatorStorage(lease,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,
+                [&](NativeRendererCpuAssembly& assembly,const TglNativeCreatedVeboxRendererView&) noexcept -> int {
+                    TglNativeBorrowedVphalMhwLease<decltype(lease)> parent;
+                    if(!parent.acquireOwned(std::move(lease),image,creator,creator,record->owner->lifetime(),
+                        &readMemory,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,
+                        [](const NativeVphalOwner& owner,const TglNativeVphalMhwView& view) noexcept {
+                            return owner.context()==view.parent && owner.lifetime().object()==view.parent;
+                        }) || !parent.view() || assembly.backing().retention()())return 5;
+                    const int installed=NativeRendererCompleteHooks::install(assembly,*parent.view());
+                    if(installed)return installed;
+                    auto configuration=[&](uintptr_t renderer,uint64_t epoch,uintptr_t slot) noexcept {
+                        return physical.matches(image,address,generation) && renderer==record->renderer &&
+                            epoch==generation && renderer<=UINTPTR_MAX-0x2cb8 && slot==renderer+0x2cb0 &&
+                            writableDataMemory(slot,8);
+                    };
+                    auto publish=[&](void* renderer,uint64_t epoch,uintptr_t first,uintptr_t second) noexcept {
+                        return physical.matches(image,address,generation) && reinterpret_cast<uintptr_t>(renderer)==record->renderer &&
+                            epoch==generation && first==reinterpret_cast<uintptr_t>(assembly.children().first().owner().constructedBase()) &&
+                            second==reinterpret_cast<uintptr_t>(assembly.children().second().owner().constructedBase()) &&
+                            writableDataMemory(record->renderer,0x928);
+                    };
+                    record->childrenPublished=assembly.children().publishFromCreatorOwned(image,creator,generation,
+                        record->owner->lifetime(),&readMemory,NativeDataAdmission{},NativeTglImageAdmission{image},
+                        &executableMemory,configuration,publish);
+                    return record->childrenPublished?0:5;
                 });
         });
     }
@@ -2286,6 +2331,8 @@ template int NativeRendererCpuAssembly::withChildLifetimeScopes<
 template int NativeCreatorPreparation::prepareOwner<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 template int NativeCreatorPreparation::initializeChildren<TglOwnedPhysicalMutationAuthority>(
+    TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
+template int NativeCreatorPreparation::publishChildren<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 
 extern "C" __attribute__((visibility("default")))
