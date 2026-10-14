@@ -25500,8 +25500,13 @@ int main() {
                             hooks[15]=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported);
                             auto qualify=[](uintptr_t image) noexcept {return image==base;};
                             auto executable=[](uintptr_t,size_t) noexcept {return true;};
-                            assert(pair.first().owner().installPrivateVtable(hooks,tableRead,qualify,executable));
+                            auto ownedSend=+[](void* object) noexcept -> int {return object?31:5;};
+                            assert(pair.first().owner().installPrivateVtable(hooks,tableRead,qualify,executable,ownedSend));
                             assert(pair.second().owner().installPrivateVtable(hooks,tableRead,qualify,executable));
+                            assert(pair.first().owner().matchesPrivateSend(ownedSend) &&
+                                !pair.first().owner().matchesPrivateSend(nullptr));
+                            assert(pair.second().owner().matchesPrivateSend(nullptr) &&
+                                !pair.second().owner().matchesPrivateSend(ownedSend));
                             const auto rendererAddress=reinterpret_cast<uintptr_t>(renderer.data());
                             auto admitConfiguration=[&](uintptr_t address,uint64_t generation,uintptr_t config) noexcept {
                                 return address==rendererAddress && generation==1 && config==rendererAddress+0x2cb0;

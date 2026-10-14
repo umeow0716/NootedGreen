@@ -5684,7 +5684,8 @@ public:
     }
     template<class Read,class Qualify,class Executable>
     bool installPrivateVtable(const std::array<uintptr_t,20>& hooks,
-        Read read,Qualify qualify,Executable executable) noexcept {
+        Read read,Qualify qualify,Executable executable,
+        int(*send)(void*) noexcept=nullptr) noexcept {
         static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
             noexcept(qualify(uintptr_t{})) && noexcept(executable(uintptr_t{},size_t{})),
             "private table admission must report failure without throwing");
@@ -5697,7 +5698,8 @@ public:
         std::memcpy(&nativeTable,reinterpret_cast<void*>(storage_.get()),8);
         if(nativeTable!=image_+0x757c98) return false;
         busy_=true;
-        const bool valid=table_.build(image_,hooks,read,qualify,executable);
+        const bool valid=send?table_.buildWithSend(image_,hooks,send,read,qualify,executable):
+            table_.build(image_,hooks,read,qualify,executable);
         if(valid) {
             const auto address=table_.addressPoint();
             std::memcpy(reinterpret_cast<void*>(storage_.get()),&address,8);
@@ -5714,6 +5716,13 @@ public:
         for(size_t i=0;i<hooks.size();++i)
             if(table_.entries[TglOwnedVeboxVtable::required[i]/8]!=hooks[i]) return false;
         return true;
+    }
+    bool matchesPrivateSend(int(*send)(void*) noexcept) const noexcept {
+        if(!ready_ || !tableInstalled_)return false;
+        uintptr_t current=0;
+        std::memcpy(&current,reinterpret_cast<const void*>(storage_.get()),sizeof(current));
+        const auto expected=send?reinterpret_cast<uintptr_t>(send):image_+0x12a230;
+        return current==table_.addressPoint() && table_.entries[0x148/8]==expected;
     }
     // Owned non-deleting lifecycle: invalidate callbacks and destroy members,
     // but retain the enclosing allocation for a later deleting lifecycle.
@@ -5888,14 +5897,16 @@ public:
     // The retained owner must use its existing qualified destruction path.
     template<class Read,class Qualify,class Executable>
     bool installPrivateVtables(const std::array<std::array<uintptr_t,20>,2>& hooks,
-        Read read,Qualify qualify,Executable executable) noexcept {
+        Read read,Qualify qualify,Executable executable,
+        const std::array<int(*)(void*) noexcept,2>& send={}) noexcept {
         if(!bound()) return false;
         const auto csc=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported);
         if(hooks[0][15]!=csc || hooks[1][15]!=csc) return false;
-        if(!first_.owner().installPrivateVtable(hooks[0],read,qualify,executable) ||
-           !second_.owner().installPrivateVtable(hooks[1],read,qualify,executable)) return false;
+        if(!first_.owner().installPrivateVtable(hooks[0],read,qualify,executable,send[0]) ||
+           !second_.owner().installPrivateVtable(hooks[1],read,qualify,executable,send[1])) return false;
         return first_.owner().matchesPrivateVtableHooks(hooks[0]) &&
-            second_.owner().matchesPrivateVtableHooks(hooks[1]);
+            second_.owner().matchesPrivateVtableHooks(hooks[1]) &&
+            first_.owner().matchesPrivateSend(send[0]) && second_.owner().matchesPrivateSend(send[1]);
     }
     template<class Admit> bool canDetach(void* renderer,uint64_t generation,Admit admit) noexcept {
         return publication_.canDetach(renderer,generation,admit);
