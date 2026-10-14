@@ -2607,6 +2607,69 @@ struct NativeRetainedFrontendRuntime {
         return result;
     }
 };
+// Join the concrete original-frame producers in one synchronous execution.
+// Missing metadata/retirement producers are not supplied by this assembler.
+struct NativeOriginalFrameExecution {
+    using Frontend=NativeRetainedFrontendRuntime;
+    struct Inputs {
+        Frontend::VpFrontend& frontend;NativeCoreFrameDataScope& core;NativeVpGraph& graph;
+        TglNativeVpLineResourceStorage& lines;NativeAdmissionParams& params;NativeAdmissionPass& pass;
+        NativeFrameDataRead& read;NativeVpProducerFrame& vp;
+        const TglOwnedVpEntrySet& catalogue;const TglOwnedVpModeState& mode;
+        const TglNativeVphalMhwView& view;
+        const TglOwnedGen12SurfaceFeatures& sourceFeatures;const TglOwnedGen12SurfaceFeatures& targetFeatures;
+        TglVeboxPipeAcquisition& acquisition;uint32_t& compressionFormat;int& decompressionStatus;
+        NativeTargetDecompression& decompression;const std::array<uint32_t,11>& controls;
+        bool reinitializeStmm,alignDi64,disableTemporalDenoise;void* argument;
+    };
+    static TglOwnedVeboxCommandTransactionResult run(Inputs& in) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        auto& core=in.core;const NativeTglImageAdmission qualify{core.image};
+        TglVeboxRenderBinding render;TglCscCoefficientsBinding coefficients;
+        if(!core.preparedReset || !core.live() ||
+            !in.view.matchesCreated(in.frontend.pinned,&readMemory,NativeDataAdmission{},qualify) ||
+            !render.resolve(core.image,&readMemory,qualify,&executableMemory) ||
+            !coefficients.resolve(core.image,&readMemory,qualify,&executableMemory))return result;
+        NativeTwoPassCscHealth health{core.childOwner,core.executionOwner,core.sourceOwner,core.targetOwner,
+            core.source,core.target,core.image,core.child,core.execution,core.generation};
+        struct State {
+            Inputs& input;const TglVeboxRenderBinding& render;NativeVeboxCscProducer csc;
+            NativeAdmissionStages::Result result;
+        } state{in,render,{health,coefficients},{}};
+        const int status=Frontend::withPacketInputs(in.frontend,core,&state,
+            +[](void* context,TglOwnedVeboxPacketLeases& leases) noexcept -> int {
+                auto& state=*static_cast<State*>(context);auto& in=state.input;
+                struct Packet {State& state;TglOwnedVeboxPacketLeases& leases;} packet{state,leases};
+                return Frontend::withAllocationInputs(in.frontend,in.core,in.graph,in.lines,
+                    in.reinitializeStmm,in.alignDi64,&packet,
+                    +[](void* context,NativeModeAllocationPlan& allocation) noexcept -> int {
+                        auto& packet=*static_cast<Packet*>(context);auto& in=packet.state.input;
+                        struct Allocation {Packet& packet;NativeModeAllocationPlan& plan;} stage{packet,allocation};
+                        return Frontend::withPolicyInputs(in.core,in.params,in.pass,in.read,in.frontend.interfaces,
+                            in.sourceFeatures,in.targetFeatures,in.acquisition,in.compressionFormat,
+                            in.decompressionStatus,in.decompression,&stage,
+                            +[](void* context,NativeOutputPipeFrameScope& policy) noexcept -> int {
+                                auto& stage=*static_cast<Allocation*>(context);auto& in=stage.packet.state.input;
+                                struct Policy {Allocation& stage;NativeOutputPipeFrameScope& policy;} next{stage,policy};
+                                return Frontend::withAdmissionInputs(in.frontend,in.core,in.graph,in.params,in.pass,
+                                    in.read,in.catalogue,in.mode,&next,
+                                    +[](void* context,const NativeAdmissionFrameAssembly::Inputs& admission) noexcept -> int {
+                                        auto& next=*static_cast<Policy*>(context);auto& stage=next.stage;
+                                        auto& state=stage.packet.state;auto& in=state.input;
+                                        NativePolicyFrameExecution::Inputs execution{in.frontend.assembly,in.view,in.vp,
+                                            next.policy,in.read,admission,stage.plan,state.render,in.argument,in.controls,
+                                            stage.packet.leases,in.frontend.denoise,state.csc,in.disableTemporalDenoise};
+                                        state.result=NativePolicyFrameExecution::run(execution);
+                                        return state.result.status;
+                                    });
+                            });
+                    });
+            });
+        result=state.result.native; // keep acquisition/native-entry evidence on every failure
+        result.status=status?status:state.result.status;
+        return result;
+    }
+};
 // Callback table entries carry no Entry/closure argument. Route the immutable
 // qualified native image and actual physical generation, never "current Entry".
 // Prepared backend only; factory callback publication remains disabled.
