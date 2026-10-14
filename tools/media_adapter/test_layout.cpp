@@ -15690,6 +15690,28 @@ static void testRetainedVeboxFrames() {
                                 transaction.native.nativeEntered && transaction.native.requiresRetention());
                             assert(!backend.live);
                         }
+                        for(uint32_t kind:std::array<uint32_t,2>{0,2}) {
+                            std::memcpy(original.prefix.data()+0x134,&kind,4);
+                            for(int mode:std::array<int,3>{0,1,2}) {
+                            std::array<uint8_t,0x60> cleanPass{};int prepared=0,rendered=0;
+                            const auto result=tglRunNativePerPassCommandTransaction(backend,
+                                parameters,cleanPass,roots,sidecar,sidecar,held,
+                                [&](auto& params,auto& packet,auto& input,auto& output) noexcept {
+                                    return tglRunNativeConditionalPerPass(params,packet,input,*input.surfaceBinding(),
+                                        output,*output.surfaceBinding(),[&](auto&,const auto&) noexcept {
+                                            ++prepared;return mode!=1;
+                                        },[&]() noexcept {
+                                            ++rendered;TglOwnedVeboxCommandTransactionResult native;
+                                            native.status=mode==2?0:31;native.nativeEntered=true;return native;
+                                        });
+                                });
+                            const int expected=kind!=2?0:mode==1?5:mode==2?0:31;
+                            assert(result.entered && result.copiedBack && result.native.status==expected);
+                            assert(prepared==(kind==2) && rendered==(kind==2 && mode!=1) &&
+                                result.native.nativeEntered==(kind==2 && mode!=1));
+                            }
+                        }
+                        const uint32_t restoreKind=0;std::memcpy(original.prefix.data()+0x134,&restoreKind,4);
                     }
                     const uintptr_t dnAddress=dn.get();
                     assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {

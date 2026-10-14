@@ -14282,6 +14282,35 @@ struct TglNativePerPassCommandResult {
     TglOwnedVeboxCommandTransactionResult native{};
     bool entered=false,copiedBack=false;
 };
+// Exact TGL131d10: source134==2 gates the ENTIRE lower call. Native1300f0
+// saves target C0 history before lower execution; its void ABI is wrapped by
+// an explicit qualified preparation capability, never a default-success hook.
+template<size_t P,size_t Q,class SourceOwner,class TargetOwner,class Prepare,class Render>
+TglOwnedVeboxCommandTransactionResult tglRunNativeConditionalPerPass(
+    std::array<uint8_t,P>& parameters,std::array<uint8_t,Q>& pass,
+    SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,
+    TargetOwner& targetOwner,const TglOwnedSurfaceStorage& target,Prepare prepare,Render render) noexcept {
+    TglOwnedVeboxCommandTransactionResult result;
+    if constexpr(P<0x130 || Q<0x40)return result;
+    else {
+        static_assert(noexcept(prepare(targetOwner,target)) &&
+            std::is_same_v<decltype(prepare(targetOwner,target)),bool>);
+        static_assert(noexcept(render()) && std::is_same_v<decltype(render()),TglOwnedVeboxCommandTransactionResult>);
+        uintptr_t input=0,output=0;
+        std::memcpy(&input,pass.data()+0x10,8);std::memcpy(&output,pass.data()+0x38,8);
+        auto live=[&]() noexcept {
+            return input==reinterpret_cast<uintptr_t>(&source) && output==reinterpret_cast<uintptr_t>(&target) &&
+                sourceOwner.hasSurfaceLease(source) && targetOwner.hasSurfaceLease(target);
+        };
+        if(!live())return result;
+        uint32_t kind=0;std::memcpy(&kind,source.prefix.data()+0x134,4);
+        if(kind!=2) {result.status=0;return result;} // native branch skip, NOT Render success
+        if(!prepare(targetOwner,target) || !live())return result;
+        result=render();
+        if(!result.status && (!live() || !tglApplyNativePerPassSuccessHandoff(parameters,pass,0)))result.status=5;
+        return result;
+    }
+}
 // The native pass ABI returns int, but the enclosing retained frame needs the
 // entire transaction even on failed copyback or post-callback lease loss.
 template<class Backend,size_t P,size_t Q,class Owner,class Lease,class Use>
