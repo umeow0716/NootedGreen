@@ -1051,6 +1051,37 @@ struct NativeOutputCscQueryScope {
 };
 template int NativeOutputCscQueryScope::run<int(*)(NativeTwoPassCscQuery&) noexcept>(
     NativeTwoPassCscHealth&,int(*)(NativeTwoPassCscQuery&) noexcept) noexcept;
+struct NativeOutputPipeFrameScope {
+    NativeTwoPassCscHealth& health;NativeFrameDataRead& read;
+    TglOwnedVpSfcCallerStorage& vp;uintptr_t parameters,di,colorFill;
+    const TglOwnedGen12SurfaceFeatures& sourceFeatures;
+    const TglOwnedGen12SurfaceFeatures& targetFeatures;const uint8_t& compositionNeeded;
+    TglVeboxPipeAcquisition& acquisition;
+    uint32_t& compressionFormat;int& decompressionStatus;NativeTargetDecompression& decompression;
+    bool attempted=false;
+    template<class Use> int run(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<NativeOutputPipeSelector&>())) &&
+            std::is_same_v<decltype(use(std::declval<NativeOutputPipeSelector&>())),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        if(attempted || !read.scope || !read.resolve || !acquisition.healthy())return 5;
+        attempted=true;
+        NativeFastFillTransaction fastFill{health.targetOwner,acquisition,compressionFormat,
+            decompressionStatus,decompression};
+        return NativeOutputCscQueryScope::run(health,[&](NativeTwoPassCscQuery& query) noexcept -> int {
+            NativeOutputPipePolicy policy(read,health.childOwner,health.image,health.child,parameters,
+                reinterpret_cast<uintptr_t>(vp.bytes.data()),di,colorFill,
+                health.sourceOwner,health.source,sourceFeatures,health.targetOwner,health.target,targetFeatures,
+                compositionNeeded,acquisition,query,fastFill);
+            NativeOutputPipeSelector selector(vp,read,policy,const_cast<TglOwnedSurfaceStorage*>(&health.source),
+                const_cast<TglOwnedSurfaceStorage*>(&health.target),reinterpret_cast<void*>(parameters));
+            if(!acquisition.healthy())return 5;
+            const int status=use(selector);
+            return status?status:(acquisition.healthy()?0:5);
+        });
+    }
+};
+template int NativeOutputPipeFrameScope::run<int(*)(NativeOutputPipeSelector&) noexcept>(
+    int(*)(NativeOutputPipeSelector&) noexcept) noexcept;
 using NativeSourceGraph=TglOwnedFrontendSourceGraph<NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi>;
 using NativeAdmissionHistoryStage=TglOwnedVeboxHistoryAdmissionStage<NativeRendererChildOwner,
     NativeExecutionOwner,NativeSourceGraph,NativeDataAdmission,NativeDataAdmission>;
