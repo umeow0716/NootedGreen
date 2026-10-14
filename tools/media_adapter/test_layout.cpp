@@ -16135,6 +16135,8 @@ static void testRetainedVeboxFrames() {
                         struct Retention {bool pending=false;bool operator()() const noexcept {return pending;}};
                         struct Backing {Retention held;Retention& retention() noexcept {return held;}} backing_;
                         NativeOwner& source;NativeOwner& target;unsigned& destroyed;
+                        bool history=false;
+                        bool requiresHistoryInspection() const noexcept {return history;}
                         RendererFixture(NativeOwner& s,NativeOwner& t,unsigned& d) noexcept:source(s),target(t),destroyed(d) {}
                         ~RendererFixture() noexcept {assert(source.ready() && target.ready());++destroyed;}
                         bool surfacesReady() const noexcept {return source.ready() && target.ready();}
@@ -16174,9 +16176,18 @@ static void testRetainedVeboxFrames() {
                         assert(pending);return 31;
                     },[](auto&) noexcept -> int {assert(false);return 0;})==31);
                     assert(!retained.clear() && !destroyedRenderer && live->backing().retention().pending);
+                    live->history=true;
+                    auto denyPrepare=[](auto&) noexcept -> int {assert(false);return 0;};
+                    auto gpu=[](const auto&,bool pending) noexcept -> int {assert(pending);return 0;};
+                    assert(retained.prepareRetirement([](const auto&,bool) noexcept -> int {assert(false);return 0;},denyPrepare)==5);
+                    assert(retained.prepareRetirement([](const auto&,bool) noexcept -> int {return 31;},
+                        [](auto&) noexcept -> TglNativeHistoryCacheInspection {assert(false);return {};},denyPrepare)==31);
+                    assert(retained.prepareRetirement(gpu,[](auto&) noexcept {return TglNativeHistoryCacheInspection{};},denyPrepare)==5);
+                    assert(retained.prepareRetirement(gpu,[](auto&) noexcept {return TglNativeHistoryCacheInspection{true,true};},denyPrepare)==5);
+                    assert(!retained.canDestroy() && !retained.clear());
                     assert(retained.prepareRetirement([](const auto&,bool pending) noexcept -> int {
                         assert(pending);return 0; // Recording exact retirement authority, not a GPU fence.
-                    },[&](auto& frame) noexcept -> int {
+                    },[](auto&) noexcept {return TglNativeHistoryCacheInspection{true,false};},[&](auto& frame) noexcept -> int {
                         assert(&frame==live && !retained.clear());
                         assert(retained.withFrame([](auto&) noexcept -> int {assert(false);return 0;})==5);
                         return 0;

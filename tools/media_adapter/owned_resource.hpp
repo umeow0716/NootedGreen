@@ -26288,6 +26288,7 @@ public:
     }
     bool surfacesReady() const noexcept {return ready_ && parent_.get() && source_.storage() && target_.storage();}
     bool requiresRetention() const noexcept {return retained_;}
+    bool requiresHistoryInspection() const noexcept {return historyPublished_;}
     // Inspection is permitted for pending frames, but only const CPU/graph/
     // target views escape into this synchronous callback. No new Render,
     // retention clear or retirement certificate is manufactured here.
@@ -26376,6 +26377,7 @@ public:
     }
     bool surfacesReady() const noexcept {return frontend_.surfacesReady();}
     bool requiresRetention() const noexcept {return frontend_.requiresRetention();}
+    bool requiresHistoryInspection() const noexcept {return frontend_.requiresHistoryInspection();}
     template<class Use> TglOwnedVeboxCommandTransactionResult withCpuFrontend(Use use) noexcept {
         return frontend_.withCpuFrontend(use);
     }
@@ -27234,6 +27236,17 @@ public:
 // Construct supplies the already-qualified concrete renderer dependencies;
 // it cannot substitute fixture source/target owner types. Pending frames must
 // be retired by the enclosing registry before clear/destruction.
+template<class Renderer,class=void> struct TglRendererHistoryInspectionRequired {
+    static bool get(const Renderer&) noexcept {return false;} // legacy producer has no history publication
+};
+template<class Renderer> struct TglRendererHistoryInspectionRequired<Renderer,
+    std::void_t<decltype(std::declval<const Renderer&>().requiresHistoryInspection())>> {
+    static bool get(const Renderer& renderer) noexcept {
+        static_assert(noexcept(renderer.requiresHistoryInspection()) &&
+            std::is_same_v<decltype(renderer.requiresHistoryInspection()),bool>);
+        return renderer.requiresHistoryInspection();
+    }
+};
 template<class Registry,class Renderer,size_t Capacity=64>
 class TglNativeContextRendererFrameStorage {
     using Sidecars=TglNativeContextSurfaceOwners<Registry,Capacity>;
@@ -27352,13 +27365,33 @@ public:
             std::is_same_v<decltype(admit(std::declval<const Renderer&>(),bool{})),int> &&
             noexcept(prepare(std::declval<Renderer&>())) &&
             std::is_same_v<decltype(prepare(std::declval<Renderer&>())),int>);
-        if(busy_ || !renderer_ || retired_ || retirementFailed_ || invalidated()) return 5;
+        if(busy_ || !renderer_ || retired_ || retirementFailed_ || invalidated() ||
+            TglRendererHistoryInspectionRequired<Renderer>::get(*renderer_)) return 5;
         busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
         const int status=admit(std::as_const(*renderer_),requiresRetention());
         if(status) return status;
         retirementStarted_=true;
         const int result=prepare(*renderer_);
         if(result) {retirementFailed_=true;return result;} // Unknown partial detach: quarantine.
+        retired_=true;return 0;
+    }
+    template<class Admit,class History,class Prepare>
+    int prepareRetirement(Admit admit,History history,Prepare prepare) noexcept {
+        static_assert(noexcept(admit(std::declval<const Renderer&>(),bool{})) &&
+            std::is_same_v<decltype(admit(std::declval<const Renderer&>(),bool{})),int> &&
+            noexcept(history(std::declval<Renderer&>())) &&
+            std::is_same_v<decltype(history(std::declval<Renderer&>())),TglNativeHistoryCacheInspection> &&
+            noexcept(prepare(std::declval<Renderer&>())) &&
+            std::is_same_v<decltype(prepare(std::declval<Renderer&>())),int>);
+        if(busy_ || !renderer_ || retired_ || retirementFailed_ || invalidated())return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        const int status=admit(std::as_const(*renderer_),requiresRetention());
+        if(status)return status;
+        const auto cache=history(*renderer_);
+        if(!cache.observed || cache.referencesFrame)return 5; // retryable; no detach has begun
+        retirementStarted_=true;
+        const int result=prepare(*renderer_);
+        if(result){retirementFailed_=true;return result;}
         retired_=true;return 0;
     }
     // Separate fault teardown: certificate must prove native quiescence, NOT
@@ -27369,7 +27402,8 @@ public:
             std::is_same_v<decltype(quiescent(std::declval<const Renderer&>(),bool{},uint32_t{},bool{})),int> &&
             noexcept(prepare(std::declval<Renderer&>())) &&
             std::is_same_v<decltype(prepare(std::declval<Renderer&>())),int>);
-        if(busy_ || !renderer_ || retired_ || retirementFailed_ || !invalidated())return 5;
+        if(busy_ || !renderer_ || retired_ || retirementFailed_ || !invalidated() ||
+            TglRendererHistoryInspectionRequired<Renderer>::get(*renderer_))return 5;
         busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
         const int status=quiescent(std::as_const(*renderer_),
             requiresRetention(),lossFlags_,flushUncertain_);
