@@ -1321,6 +1321,38 @@ struct NativeOptionalVpMetadataRead {
             readMemory(reinterpret_cast<uintptr_t>(admission.params.data())+0xf0,&afterF0,8) && afterE0==e0 && afterF0==f0;
     }
 };
+// One synchronous owner for the closed reader chain. Producers receive the
+// SAME capability object; its backing scopes cannot move while they use it.
+class NativeCompleteFrameDataScope {
+    NativeCoreFrameDataScope core_;
+    NativeAdmissionFrameDataScope admission_;
+    NativeRendererPerformanceRead performance_;
+    NativeOptionalVpMetadataRead optional_;
+    NativeFrameDataRead read_;
+    bool attempted_=false;
+public:
+    NativeCompleteFrameDataScope(const NativeCoreFrameDataScope& core,NativeAdmissionParams& params,
+        NativeAdmissionPass& pass,const TglVeboxAdmissionBorrowedInterfaces& interfaces,
+        const TglNativeCreatedVeboxRendererView& pinned,const TglBorrowedVeboxByteView<12>& fill,
+        const TglBorrowedVeboxByteView<8>& alpha) noexcept
+        :core_(core),admission_{core_,params,pass,interfaces},performance_{admission_,pinned},
+         optional_{performance_,fill,alpha},read_(optional_.capability()) {}
+    NativeCompleteFrameDataScope(const NativeCompleteFrameDataScope&)=delete;
+    NativeCompleteFrameDataScope& operator=(const NativeCompleteFrameDataScope&)=delete;
+    template<class Use> int run(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<NativeFrameDataRead&>())) &&
+            std::is_same_v<decltype(use(std::declval<NativeFrameDataRead&>())),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        if(attempted_ || !core_.live() || performance_.view.image!=core_.image ||
+            !admission_.params.data() || !admission_.pass.data())return 5;
+        attempted_=true;
+        const int status=use(read_);
+        if(status)return status; // retain native error, never manufacture success
+        return core_.live()?0:5;
+    }
+};
+template int NativeCompleteFrameDataScope::run<int(*)(NativeFrameDataRead&) noexcept>(
+    int(*)(NativeFrameDataRead&) noexcept) noexcept;
 struct NativeAdmissionStages {
     NativeAdmissionReset& reset;NativeOutputPipeSelector& select;
     NativeAdmissionHistorySetup& history;NativeAdmissionFeatureStage& feature;
