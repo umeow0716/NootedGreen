@@ -1,4 +1,5 @@
 #include "../NootedGreen/kern_vf_accelerator_stop.hpp"
+#include "../NootedGreen/kern_vf_irq_gate.hpp"
 
 #include <array>
 #include <cassert>
@@ -137,6 +138,32 @@ int main() {
 		       OwnerReturnAction::Reject);
 	}
 
+	// Actual Gen11::start requires BOTH gate==0 and phase==Idle. Once
+	// stop closes external producers, draining cannot reopen observations or
+	// start, even if native startup would clear its raw restart counter.
+	const auto canStart=[](uint32_t gate,Phase phase) {
+		return gate==0 && phase==Phase::Idle;
+	};
+	assert(canStart(0,Phase::Idle));
+	for (uint32_t active : {0U,1U,3U}) {
+		uint32_t gate=active;
+		Phase phase=Phase::Finalizing;
+		gate=NGVfIrqGate::close(gate);
+		uint32_t next=0;
+		assert(!NGVfIrqGate::enter(gate,next));
+		while(NGVfIrqGate::active(gate)) {
+			assert(NGVfIrqGate::leave(gate,next));gate=next;
+			assert(NGVfIrqGate::closed(gate) && !NGVfIrqGate::enter(gate,next));
+		}
+		assert(NGVfIrqGate::drained(gate));
+		for(Phase later : {phase,Phase::Finalized,Phase::NativeStopActive,Phase::NativeStopComplete}) {
+			assert(!canStart(gate,later));
+			assert(!NGVfIrqGate::enter(gate,next));
+		}
+		// Even an erroneous reset of only ONE component cannot reopen start.
+		assert(!canStart(gate,Phase::Idle));
+		assert(!canStart(0,phase));
+	}
 	stopFirst(false);
 	stopFirst(true);
 	finalizerFirst(false);
