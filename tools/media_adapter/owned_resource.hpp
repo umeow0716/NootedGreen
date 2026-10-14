@@ -14501,6 +14501,30 @@ struct TglOwnedVeboxCommandTransactionResult {
     bool requiresRetention() const noexcept {return acquired || writtenBack || nativeEntered || nativeHistoryPublished;}
 };
 
+// Native131520 ignores each +50 return. Preserve FIRST pass error and ALL
+// retention evidence across the outer call, without granting buffer reuse.
+class TglOwnedVeboxCommandSequence {
+    TglOwnedVeboxCommandTransactionResult result_{};
+    bool observed_=false;
+public:
+    bool acceptsPass() const noexcept {return !observed_ || result_.status==0;}
+    void observe(const TglOwnedVeboxCommandTransactionResult& pass) noexcept {
+        const bool first=!observed_;observed_=true;
+        if(first || !result_.status) {
+            result_.status=pass.status;result_.builderStatus=pass.builderStatus;
+        }
+        result_.acquired=result_.acquired || pass.acquired;
+        result_.writtenBack=result_.writtenBack || pass.writtenBack;
+        result_.nativeEntered=result_.nativeEntered || pass.nativeEntered;
+        result_.nativeHistoryPublished=result_.nativeHistoryPublished || pass.nativeHistoryPublished;
+    }
+    TglOwnedVeboxCommandTransactionResult finish(int nativeOuterStatus) const noexcept {
+        auto result=result_;
+        if(!result.status && nativeOuterStatus)result.status=nativeOuterStatus;
+        return result;
+    }
+};
+
 struct TglNativePerPassCommandResult {
     TglOwnedVeboxCommandTransactionResult native{};
     bool entered=false,copiedBack=false;

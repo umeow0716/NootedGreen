@@ -17081,6 +17081,23 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        TglOwnedVeboxCommandSequence sequence;
+        assert(sequence.acceptsPass() && sequence.finish(0).status==5);
+        TglOwnedVeboxCommandTransactionResult pass;pass.status=0;pass.builderStatus=0;
+        pass.nativeHistoryPublished=true;sequence.observe(pass);
+        assert(sequence.acceptsPass() && sequence.finish(0).status==0 && sequence.finish(0).nativeHistoryPublished);
+        pass.status=31;pass.builderStatus=17;pass.nativeHistoryPublished=false;pass.acquired=true;
+        sequence.observe(pass);
+        assert(!sequence.acceptsPass() && sequence.finish(0).status==31 && sequence.finish(0).builderStatus==17);
+        pass.status=0;pass.builderStatus=0;pass.acquired=false;pass.writtenBack=true;pass.nativeEntered=true;
+        sequence.observe(pass);
+        const auto result=sequence.finish(59);
+        assert(result.status==31 && result.builderStatus==17 && result.acquired && result.writtenBack &&
+            result.nativeEntered && result.nativeHistoryPublished && result.requiresRetention());
+        TglOwnedVeboxCommandSequence nativeFailure;
+        nativeFailure.observe(pass);assert(nativeFailure.finish(59).status==59);
+    }
+    {
         std::array<uint8_t,0x139> caller{};caller.fill(0xa5);
         std::array<uint8_t,0x60> packet{};packet.fill(0x5a);
         const auto p=reinterpret_cast<uintptr_t>(caller.data()),q=reinterpret_cast<uintptr_t>(packet.data());
