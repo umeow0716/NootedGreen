@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <atomic>
 #include <new>
+#include <memory>
 #include "../../NootedGreen/kern_vf_device_observation.hpp"
 #if defined(__APPLE__)
 #include <dlfcn.h>
@@ -23687,6 +23688,71 @@ public:
     }
 };
 
+// Creator constructs CPU children before any frame surfaces exist. Transfer
+// that SAME stable allocation into the original frontend later; never build a
+// second child pair or substitute allocated source/target images. Enclosing
+// retained-frame retirement still owns GPU completion/quiescence admission.
+template<class CpuStorage,class ParentLease,class SourceOwner,class TargetOwner,class CfApi,class DnBackend>
+class TglNativeVeboxAdoptedFrontendFrameStorage {
+    ParentLease parent_; // last destroyed: native OS/MHW must outlive CPU cleanup
+    TglOwnedFrontendSourceGraph<SourceOwner,CfApi> source_;
+    TglOwnedType1BorrowedSurfaceLease<TargetOwner,CfApi> target_;
+    TglTrackedCpuOwner<DnBackend> parameters_;
+    std::unique_ptr<CpuStorage> cpu_; // first destroyed, with original surfaces/DN still pinned
+    bool busy_=false;
+public:
+    using SourceOwnerType=SourceOwner;
+    using TargetOwnerType=TargetOwner;
+    template<class Resolve>
+    TglNativeVeboxAdoptedFrontendFrameStorage(ParentLease&& parent,uintptr_t source,Resolve resolve,
+        TargetOwner& target,CfApi cf,uintptr_t resourceType,uintptr_t surfaceType,DnBackend& parameters) noexcept
+        :parent_(std::move(parent)),source_(cf),target_(target,cf,resourceType,surfaceType),parameters_(parameters) {
+        static_assert(std::is_nothrow_move_constructible_v<ParentLease> &&
+                      std::is_nothrow_destructible_v<CpuStorage>);
+        if(parent_.get())source_.acquire(source,resolve,resourceType,surfaceType);
+    }
+    TglNativeVeboxAdoptedFrontendFrameStorage(const TglNativeVeboxAdoptedFrontendFrameStorage&)=delete;
+    TglNativeVeboxAdoptedFrontendFrameStorage& operator=(const TglNativeVeboxAdoptedFrontendFrameStorage&)=delete;
+    ~TglNativeVeboxAdoptedFrontendFrameStorage() noexcept {cpu_.reset();}
+    // Admit authenticates owner/CPU and BOTH original surfaces in the SAME
+    // physical/context generation. Refusal leaves the creator's pointer intact.
+    template<class Admit> bool adoptCpu(std::unique_ptr<CpuStorage>& candidate,Admit admit) noexcept {
+        static_assert(noexcept(admit(*parent_.get(),std::declval<CpuStorage&>(),
+            source_.storage(),target_.storage())) &&
+            std::is_same_v<decltype(admit(*parent_.get(),std::declval<CpuStorage&>(),
+                source_.storage(),target_.storage())),bool>);
+        if(busy_ || cpu_ || !parent_.get() || !candidate || !source_.storage() || !target_.storage() ||
+           candidate->backing().retention()() || !candidate->children().first().owner().constructedBase() ||
+           !candidate->children().second().owner().constructedBase())return false;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        auto* cpu=candidate.get();auto* parent=parent_.get();
+        const auto* source=source_.storage();const auto* target=target_.storage();
+        const auto generation0=cpu->children().first().owner().allocationGeneration();
+        const auto generation1=cpu->children().second().owner().allocationGeneration();
+        if(!admit(*parent,*cpu,source,target) || candidate.get()!=cpu || parent_.get()!=parent ||
+           source_.storage()!=source || target_.storage()!=target || cpu->backing().retention()() ||
+           !cpu->children().first().owner().constructedBase() || !cpu->children().second().owner().constructedBase() ||
+           cpu->children().first().owner().allocationGeneration()!=generation0 ||
+           cpu->children().second().owner().allocationGeneration()!=generation1)return false;
+        cpu_=std::move(candidate);return true;
+    }
+    bool surfacesReady() const noexcept {return parent_.get() && cpu_ && source_.storage() && target_.storage();}
+    bool requiresRetention() const noexcept {return cpu_ && cpu_->backing().retention()();}
+    auto& backing() noexcept {return cpu_->backing();} // requires surfacesReady()
+    auto& children() noexcept {return cpu_->children();}
+    template<class Use> TglOwnedVeboxCommandTransactionResult withCpuFrontend(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<CpuStorage&>(),source_,target_,parameters_)) &&
+            std::is_same_v<decltype(use(std::declval<CpuStorage&>(),source_,target_,parameters_)),
+                TglOwnedVeboxCommandTransactionResult>);
+        if(busy_ || !surfacesReady() || requiresRetention())return {};
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        auto result=use(*cpu_,source_,target_,parameters_);
+        if(result.writtenBack && !result.acquired)result.status=5;
+        cpu_->backing().retention().observe(result);
+        return result;
+    }
+};
+
 // Integrated CPU ownership order: children may inspect the real frame surfaces
 // during cleanup, and surface/DN release still has its VP/command backing alive.
 // Parent/image leases and completion admission remain enclosing responsibilities.
@@ -23829,6 +23895,7 @@ class TglNativeVeboxFrontendRendererFrameStorage {
 public:
     using SourceOwnerType=SourceOwner;
     using TargetOwnerType=TargetOwner;
+    bool requiresRetention() noexcept {return backing_.retention()();}
     template<class Resolve,class Read,class Qualify,class Executable,class VpInvoke,class... Args>
     TglNativeVeboxFrontendRendererFrameStorage(uintptr_t source,Resolve resolve,
         TargetOwner& target,CfApi cf,uintptr_t resourceType,uintptr_t surfaceType,
@@ -24421,7 +24488,7 @@ public:
     bool surfacesReady() const noexcept {return renderer_ && renderer_->surfacesReady();}
     bool invalidated() const noexcept {return flushUncertain_ || lossFlags_;}
     bool requiresRetention() const noexcept {
-        return flushEntered_ || (renderer_ && renderer_->backing().retention()());
+        return flushEntered_ || (renderer_ && renderer_->requiresRetention());
     }
     uint32_t lossFlags() const noexcept {return lossFlags_;}
     bool flushUncertain() const noexcept {return flushUncertain_;}
@@ -24457,7 +24524,7 @@ public:
     }
     bool canDestroy() noexcept {
         return !busy_ && (!renderer_ || retired_ ||
-            (!retirementStarted_ && !flushEntered_ && !renderer_->backing().retention()()));
+            (!retirementStarted_ && !requiresRetention()));
     }
     // Retention is monotonic evidence of acquired/submitted work, not a flag
     // to clear. Only the enclosing exact frame/event retirement authority may
@@ -24469,7 +24536,7 @@ public:
             std::is_same_v<decltype(prepare(std::declval<Renderer&>())),int>);
         if(busy_ || !renderer_ || retired_ || retirementFailed_ || invalidated()) return 5;
         busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
-        const int status=admit(std::as_const(*renderer_),flushEntered_ || renderer_->backing().retention()());
+        const int status=admit(std::as_const(*renderer_),requiresRetention());
         if(status) return status;
         retirementStarted_=true;
         const int result=prepare(*renderer_);
@@ -24487,7 +24554,7 @@ public:
         if(busy_ || !renderer_ || retired_ || retirementFailed_ || !invalidated())return 5;
         busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
         const int status=quiescent(std::as_const(*renderer_),
-            flushEntered_ || renderer_->backing().retention()(),lossFlags_,flushUncertain_);
+            requiresRetention(),lossFlags_,flushUncertain_);
         if(status)return status;
         retirementStarted_=true;
         const int result=prepare(*renderer_);

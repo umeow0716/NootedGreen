@@ -14953,6 +14953,7 @@ static void testRetainedVeboxFrames() {
                         RendererFixture(NativeOwner& s,NativeOwner& t,unsigned& d) noexcept:source(s),target(t),destroyed(d) {}
                         ~RendererFixture() noexcept {assert(source.ready() && target.ready());++destroyed;}
                         bool surfacesReady() const noexcept {return source.ready() && target.ready();}
+                        bool requiresRetention() const noexcept {return backing_.held();}
                         Backing& backing() noexcept {return backing_;}
                     };
                     auto renderRoots=roots;renderRoots.targets[0]=historyAddress;
@@ -23361,7 +23362,9 @@ int main() {
                         const auto sfcConstructsBefore=pairInvoke.constructs,sfcDestroysBefore=pairInvoke.destroys;
                         {
                             unsigned sourceFreeCleanups=0,sourceFreeDestroys=0;
+                            bool handoffActive=false;auto handoffRefs=refs;
                             auto sourceFreeCleanup=[&](void* object) noexcept {
+                                if(handoffActive)assert(refs==handoffRefs && !parentDeaths);
                                 assert(object==pairCpu[0].bytes.data() || object==pairCpu[1].bytes.data());++sourceFreeCleanups;
                             };
                             auto sourceFreeDestroy=[&](uintptr_t entry,void*) noexcept {
@@ -23371,12 +23374,13 @@ int main() {
                                 NativeCpu,TrackedSfc,decltype(sourceFreeDestroy)>;
                             alignas(8) std::array<uint8_t,0x48> parentSfc{};
                             {
-                            SourceFree storage(base,allocatorRead,qualifyMhw,executableMhw,environment.resources,
+                            std::unique_ptr<SourceFree> storageOwner(new SourceFree(base,allocatorRead,qualifyMhw,executableMhw,environment.resources,
                                 environment.pageSize,environment.fill,NativeCpu{vpCpu,&vpAvsCpu},
                                 std::array<decltype(sourceFreeCleanup),2>{sourceFreeCleanup,sourceFreeCleanup},
                                 std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
                                 std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
-                                std::array<decltype(sourceFreeDestroy),2>{sourceFreeDestroy,sourceFreeDestroy});
+                                std::array<decltype(sourceFreeDestroy),2>{sourceFreeDestroy,sourceFreeDestroy}));
+                            auto& storage=*storageOwner;
                             const auto* creatorView=preparedMhw.view();assert(creatorView);
                             auto foreign=*creatorView;foreign.os+=8;
                             const uintptr_t parentSfcAddress=reinterpret_cast<uintptr_t>(parentSfc.data());
@@ -23656,6 +23660,51 @@ int main() {
                             assert(tglInitializeRendererChildrenFromCreator(storage,*creatorView,
                                 baseBinding,lifetime,parentSfcRead,qualifyMhw,executableMhw,
                                 constructSourceFree,sourceFreeQuery)==0);
+                            {
+                                const auto originalRefs=refs;
+                                TestFrontendOriginalOwner originalSource{source},originalTarget{target},originalHistory{history};
+                                auto originalResolve=[&](uintptr_t p) noexcept -> TestFrontendOriginalOwner* {
+                                    if(p==reinterpret_cast<uintptr_t>(&source))return &originalSource;
+                                    if(p==reinterpret_cast<uintptr_t>(&target))return &originalTarget;
+                                    if(p==reinterpret_cast<uintptr_t>(&history))return &originalHistory;
+                                    return nullptr;
+                                };
+                                auto parent=parents.pin(base,0x8000,1,parentAddress);
+                                using Adopted=TglNativeVeboxAdoptedFrontendFrameStorage<SourceFree,
+                                    decltype(parent),TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf,FrameDnBackend>;
+                                auto* cpuAddress=storageOwner.get();
+                                auto* child0=storage.children().first().owner().constructedBase();
+                                auto* child1=storage.children().second().owner().constructedBase();
+                                {
+                                    Adopted frontend(std::move(parent),reinterpret_cast<uintptr_t>(&source),originalResolve,
+                                        originalTarget,Cf{refs},11,12,frameDn);
+                                    assert(!parent.get() && !frontend.surfacesReady() && !frontend.requiresRetention());
+                                    assert(frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                        assert(false);return {};
+                                    }).status==5);
+                                    assert(!frontend.adoptCpu(storageOwner,[](auto&&...) noexcept {return false;}) && storageOwner.get()==cpuAddress);
+                                    assert(frontend.adoptCpu(storageOwner,[&](const auto& owner,auto& cpu,const auto* a,const auto* b) noexcept {
+                                        assert(!frontend.adoptCpu(storageOwner,[](auto&&...) noexcept {assert(false);return true;}));
+                                        return owner.context()==parentAddress && &cpu==cpuAddress && a==&source && b==&target;
+                                    }));
+                                    assert(!storageOwner && frontend.surfacesReady() &&
+                                        frontend.children().first().owner().constructedBase()==child0 &&
+                                        frontend.children().second().owner().constructedBase()==child1 &&
+                                        &frontend.backing()==&storage.backing());
+                                    assert(!frontend.adoptCpu(storageOwner,[](auto&&...) noexcept {assert(false);return true;}));
+                                    const auto result=frontend.withCpuFrontend([&](auto& cpu,auto& src,auto& dst,auto& dn) noexcept {
+                                        assert(&cpu==cpuAddress && src.storage()==&source && dst.storage()==&target && !dn.get());
+                                        assert(frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                            assert(false);return {};
+                                        }).status==5);
+                                        return TglOwnedVeboxCommandTransactionResult{31,0,false,false,false};
+                                    });
+                                    assert(result.status==31 && !frontend.requiresRetention());
+                                    handoffRefs=refs;handoffActive=true;
+                                }
+                                handoffActive=false;
+                                assert(refs==originalRefs && !originalSource.borrowed && !originalTarget.borrowed && !originalHistory.borrowed);
+                            }
                             }
                             assert(sourceFreeCleanups==5 && sourceFreeDestroys==5);
                             assert(!vpCpu.live && !vpAvsCpu.live && parentSfc[0x40]==1);
