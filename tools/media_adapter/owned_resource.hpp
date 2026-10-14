@@ -26751,12 +26751,13 @@ public:
     }
     template<class Read,class Qualify,class Executable>
     int installPrivateVtablesFromCreator(const TglNativeVphalMhwView& view,
-        const std::array<std::array<uintptr_t,20>,2>& hooks,Read read,Qualify qualify,Executable executable) noexcept {
+        const std::array<std::array<uintptr_t,20>,2>& hooks,Read read,Qualify qualify,Executable executable,
+        const std::array<int(*)(void*) noexcept,2>& send={}) noexcept {
         TglVeboxHardwareBinding hardware;
         if(backing_.retention()() || !children_.first().owner().constructedBase() ||
             !children_.second().owner().constructedBase() ||
             !creatorEnvironment(view,read,qualify,executable,hardware))return 5;
-        return children_.installPrivateVtables(hooks,read,qualify,executable)?0:5;
+        return children_.installPrivateVtables(hooks,read,qualify,executable,send)?0:5;
     }
     // Enclosing exclusive VPHAL owner retains parent60 until THIS storage
     // (including VP resources) is destroyed, before native135020 can free it.
@@ -28477,13 +28478,14 @@ bool tglBuildOwnedVeboxCompleteHooks(void* child,std::array<uintptr_t,20>& hooks
 template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
     class ProducerResolve,class ModeResolve,class FormatRead,class Storage,class Read,class Qualify,class Executable>
 int tglInstallOwnedRendererCompleteTablesFromCreator(Storage& storage,const TglNativeVphalMhwView& view,
-    Read read,Qualify qualify,Executable executable) noexcept {
+    Read read,Qualify qualify,Executable executable,
+    const std::array<int(*)(void*) noexcept,2>& send={}) noexcept {
     std::array<std::array<uintptr_t,20>,2> hooks{};
     if(!tglBuildOwnedVeboxCompleteHooks<LifetimeResolve,AdmissionResolve,AllocationResolve,ProducerResolve,ModeResolve,FormatRead>(
             storage.children().first().owner().constructedBase(),hooks[0]) ||
        !tglBuildOwnedVeboxCompleteHooks<LifetimeResolve,AdmissionResolve,AllocationResolve,ProducerResolve,ModeResolve,FormatRead>(
             storage.children().second().owner().constructedBase(),hooks[1]))return 5;
-    return storage.installPrivateVtablesFromCreator(view,hooks,read,qualify,executable);
+    return storage.installPrivateVtablesFromCreator(view,hooks,read,qualify,executable,send);
 }
 
 // Installation precedes the private-child lease used by native execution.

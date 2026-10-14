@@ -2588,11 +2588,12 @@ template struct NativePolicyFrameExecutionFor<NativeTemporarySurfaceOwner>;
 // tables during a frame. Execution must use that SAME SurfaceOwner domain.
 template<class SurfaceOwner> struct NativeRendererCompleteHooksFor {
     using LifetimeResolve=TglOwnedVeboxScopedLifetimeResolve<NativeRendererChildLifetime>;
-    static int install(NativeRendererCpuAssembly& assembly,const TglNativeVphalMhwView& view) noexcept {
+    static int install(NativeRendererCpuAssembly& assembly,const TglNativeVphalMhwView& view,
+        const std::array<int(*)(void*) noexcept,2>& send={}) noexcept {
         return assembly.withChildLifetimeScopes([&](void*,void*,auto&,auto&) noexcept -> int {
             return tglInstallOwnedRendererCompleteTablesFromCreator<LifetimeResolve,NativeAdmissionResolveFor<SurfaceOwner>,
                 NativeAllocationResolveFor<SurfaceOwner>,NativeVeboxProducerResolveFor<SurfaceOwner>,NativeModeReleaseScope,TglOwnedFormatReader>(
-                    assembly.cpu(),view,&readMemory,NativeTglImageAdmission{view.renderer.image},&executableMemory);
+                    assembly.cpu(),view,&readMemory,NativeTglImageAdmission{view.renderer.image},&executableMemory,send);
         });
     }
 };

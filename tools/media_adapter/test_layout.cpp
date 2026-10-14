@@ -26347,10 +26347,12 @@ int main() {
                                         }
                                         return helperRead(address,out,bytes);
                                     };
+                                    auto creatorSend=+[](void* child) noexcept -> int {return child?31:5;};
                                     auto install=[&]() noexcept {
                                         return tglInstallOwnedRendererCompleteTablesFromCreator<LifeResolve,UnboundResolve,
                                             UnboundResolve,UnboundResolve,UnboundResolve,FormatRead>(storage,*creatorView,
-                                                tableRead,qualifyMhw,[](uintptr_t,size_t) noexcept {return true;});
+                                                tableRead,qualifyMhw,[](uintptr_t,size_t) noexcept {return true;},
+                                                {creatorSend,creatorSend});
                                     };
                                     assert(install()==5); // No real child lifetime scope, no publication.
                                     Life first(storage.children().first().owner()),second(storage.children().second().owner());
@@ -26362,6 +26364,7 @@ int main() {
                                         assert((tglBuildOwnedVeboxCompleteHooks<LifeResolve,UnboundResolve,UnboundResolve,
                                             UnboundResolve,UnboundResolve,FormatRead>(child->constructedBase(),hooks)));
                                         assert(child->matchesPrivateVtableHooks(hooks));
+                                        assert(child->matchesPrivateSend(creatorSend) && !child->matchesPrivateSend(nullptr));
                                         assert(reinterpret_cast<int(*)(void*,int32_t) noexcept>(hooks[5])(child->constructedBase(),3)==5);
                                         assert(reinterpret_cast<void*(*)(void*) noexcept>(hooks[19])(child->constructedBase())==nullptr);
                                     }
