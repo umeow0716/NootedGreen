@@ -27938,6 +27938,11 @@ public:
         (void)clear();
     }
     bool surfacesReady() const noexcept {return renderer_ && renderer_->surfacesReady();}
+    // Identity check for an ALREADY active frame borrow; never reenter the
+    // frontend's inspection/access machinery from a native submit callback.
+    bool ownsActiveRenderer(const Renderer& renderer) const noexcept {
+        return busy_ && renderer_==&renderer && !retirementStarted_ && !invalidated();
+    }
     bool invalidated() const noexcept {return flushUncertain_ || lossFlags_;}
     bool requiresRetention() const noexcept {
         return flushEntered_ || (renderer_ && renderer_->requiresRetention());

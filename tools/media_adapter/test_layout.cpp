@@ -16293,6 +16293,7 @@ static void testRetainedVeboxFrames() {
                             [](uintptr_t,size_t) noexcept {return true;}));
                         int command=0;
                         auto admitSubmit=[&](const RendererFixture& r,uintptr_t o,uintptr_t w,uintptr_t c) noexcept {
+                            assert(submitted.ownsActiveRenderer(r));
                             return r.surfacesReady() && o==os && w==wrapper && c==0x78000;
                         };
                         auto never=[](uintptr_t,uintptr_t,void*,uint32_t) noexcept -> int {assert(false);return 0;};
