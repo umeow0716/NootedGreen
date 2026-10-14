@@ -255,6 +255,27 @@ public:
             return use(owner,execution,child,report);
         });
     }
+    template<class Use> TglOwnedVeboxCommandTransactionResult withChildVpResources(size_t index,Use use) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        if constexpr(std::is_pointer_v<Use>)if(!use)return result;
+        const int status=withChildExecution(index,[&](auto& owner,auto& execution,void* child,
+            uintptr_t report) noexcept -> int {
+            return backing().withVpResources(index,[&](auto& graph,auto& storage,auto& lines) noexcept -> int {
+                return owner.withLeasedBorrowedVpCpuView(child,storage.bytes.data(),
+                    [&](void* parent,void* vp) noexcept -> int {
+                        if(parent!=child || vp!=storage.bytes.data() || !execution.hasExecutionLease(report))return 5;
+                        static_assert(noexcept(use(owner,execution,parent,report,graph,storage,lines)) &&
+                            std::is_same_v<decltype(use(owner,execution,parent,report,graph,storage,lines)),
+                                TglOwnedVeboxCommandTransactionResult>);
+                        result=use(owner,execution,parent,report,graph,storage,lines);
+                        backing().retention().observe(result); // before child80/report/VP lease unwind
+                        return result.status;
+                    });
+            });
+        });
+        if(status)result.status=status;
+        return result;
+    }
     int initializeNativeBases(const TglNativeVphalMhwView& view,const TglOwnedVphalLifetimeTable& lifetime) noexcept {
         if(basesAttempted_ || view.renderer.image!=image_ || lifetime.object()!=view.parent ||
             lifetime.publication()!=TglOwnedVphalLifetimeTable::Publication::Published)return 5;
@@ -2732,6 +2753,11 @@ template NativeBorrowedFrontend* Entry::createBorrowedFrontend<TglOwnedPhysicalM
 template NativeBorrowedFrontend* Entry::createBorrowedFrontend<NativePhysicalFrameScope,
     NativeFrontendResolve,NativeFrontendAdmit>(NativePhysicalFrameScope&,uintptr_t,uint64_t,
     uintptr_t,uintptr_t,NativeFrontendResolve,NativeContextSurfaceOwner&,NativeFrontendAdmit) const noexcept;
+using NativeChildVpResourceUse=TglOwnedVeboxCommandTransactionResult(*)(NativeRendererChildOwner&,
+    NativeExecutionOwner&,void*,uintptr_t,NativeVpGraph&,TglOwnedVpSfcCallerStorage&,
+    TglNativeVpLineResourceStorage&) noexcept;
+template TglOwnedVeboxCommandTransactionResult NativeRendererCpuAssembly::withChildVpResources<NativeChildVpResourceUse>(
+    size_t,NativeChildVpResourceUse) noexcept;
 template int NativeRendererCpuAssembly::withChildLifetimeScopes<
     int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept>(
     int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept) noexcept;
