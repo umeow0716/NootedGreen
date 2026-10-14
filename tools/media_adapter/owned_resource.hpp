@@ -22043,6 +22043,89 @@ public:
     }
 };
 
+// Concrete codec-context table owner. It owns NO native context allocation:
+// native slot4 remains responsible for deleting that allocation. Its physical
+// pin/table state survive until successful native-removal reconciliation.
+template<class PhysicalLease,class Read,class Write,class Admit,class Qualify,class Executable>
+class TglOwnedNativeCodecContextOwner {
+    struct State {
+        PhysicalLease physicalPin;
+        uintptr_t image,physical,context,os,wrapper;uint64_t generation;
+        Read read;Write write;Admit admit;Qualify qualify;Executable executable;
+        TglOwnedContextFrameVtable table;
+        std::atomic<bool> busy{false};bool removed=false;
+        State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c,uintptr_t o,uintptr_t wptr,
+            Read r,Write w,Admit a,Qualify q,Executable e) noexcept
+            :image(i),physical(p),context(c),os(o),wrapper(wptr),generation(g),read(r),write(w),admit(a),qualify(q),executable(e) {}
+        bool retainedIdentity() const noexcept {return physicalPin.matches(image,physical,generation);}
+        bool nativeParentMatches() noexcept {
+            TglNativeVeboxParentView parent;
+            return parent.resolve(context,read,admit) && parent.physical==physical && parent.os==os && parent.wrapper==wrapper;
+        }
+    };
+    State* state_=nullptr;
+    explicit TglOwnedNativeCodecContextOwner(State* state) noexcept:state_(state) {}
+    struct Unlock {std::atomic<bool>& busy;~Unlock(){busy.store(false,std::memory_order_release);}};
+    bool enter() noexcept {
+        if(!state_)return false;
+        bool expected=false;return state_->busy.compare_exchange_strong(expected,true,std::memory_order_acquire);
+    }
+public:
+    static TglOwnedNativeCodecContextOwner* create(uintptr_t image,uintptr_t physical,uint64_t generation,
+        uintptr_t context,PhysicalLease& dependency,Read read,Write write,Admit admit,Qualify qualify,Executable executable) noexcept {
+        static_assert(std::is_nothrow_copy_constructible_v<Read> && std::is_nothrow_copy_constructible_v<Write> &&
+            std::is_nothrow_copy_constructible_v<Admit> && std::is_nothrow_copy_constructible_v<Qualify> &&
+            std::is_nothrow_copy_constructible_v<Executable>);
+        TglNativeVeboxParentView parent;TglNativeContextFrameBinding frame;
+        if(!dependency.matches(image,physical,generation) || !parent.resolve(context,read,admit) ||
+            parent.physical!=physical || !frame.resolve(image,context,read,qualify,executable))return nullptr;
+        auto* state=new(std::nothrow) State(image,physical,generation,context,parent.os,parent.wrapper,read,write,admit,qualify,executable);
+        if(!state)return nullptr;
+        auto* owner=new(std::nothrow) TglOwnedNativeCodecContextOwner(state);
+        if(!owner){delete state;return nullptr;}
+        state->physicalPin=std::move(dependency);return owner;
+    }
+    TglOwnedNativeCodecContextOwner(const TglOwnedNativeCodecContextOwner&)=delete;
+    TglOwnedNativeCodecContextOwner& operator=(const TglOwnedNativeCodecContextOwner&)=delete;
+    ~TglOwnedNativeCodecContextOwner() noexcept {
+        // Last-resort quarantine keeps native-referenced table AND physical pin.
+        // Never read the native context after deletion or free it here.
+        if(state_ && state_->removed && !state_->table.requiresRetention())delete state_;
+    }
+    uintptr_t context() const noexcept {return state_?state_->context:0;}
+    const TglOwnedContextFrameVtable& frameTable() const noexcept {return state_->table;}
+    template<class ExclusiveLease,class ScopeAdmit,class OwnedExecutable>
+    bool publishFrame(const ExclusiveLease& lease,uintptr_t hook,ScopeAdmit scope,OwnedExecutable ownedExecutable) noexcept {
+        if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;
+        Unlock unlock{state_->busy};
+        if(state_->removed || !state_->retainedIdentity() ||
+            !scope(state_->image,state_->physical,state_->generation,state_->context) || !state_->nativeParentMatches())return false;
+        return state_->table.build(state_->image,state_->context,hook,state_->read,state_->qualify,state_->executable,ownedExecutable) &&
+            state_->table.publish(state_->read,state_->write,state_->admit);
+    }
+    // Called by registry.prepareRemoval under its no-frame-pin gate and SAME
+    // empty-frame physical scope; scope is not a completion certificate.
+    template<class ScopeAdmit> bool prepareRemoval(ScopeAdmit scope) noexcept {
+        if(!enter())return false;
+        Unlock unlock{state_->busy};
+        if(state_->removed || !state_->retainedIdentity() ||
+            !scope(state_->image,state_->physical,state_->generation,state_->context) || !state_->nativeParentMatches())return false;
+        using P=TglOwnedContextFrameVtable::Publication;
+        const auto publication=state_->table.publication();
+        if(publication==P::Unpublished || publication==P::Detached)return true;
+        return publication==P::Published && state_->table.detach(state_->read,state_->write,state_->admit);
+    }
+    // ONLY successful-native-removal reconcile callback may supply this proof.
+    // Identity is metadata: do not dereference the already deleted context.
+    template<class RemovedAdmit> bool confirmNativeRemoval(RemovedAdmit removed) noexcept {
+        if(!enter())return false;
+        Unlock unlock{state_->busy};
+        if(state_->removed || !state_->retainedIdentity() || state_->table.requiresRetention() ||
+            !removed(state_->image,state_->physical,state_->generation,state_->context))return false;
+        state_->removed=true;return true;
+    }
+};
+
 // Pre-native context removal only, under the same empty-frame physical and
 // context-owner gates. Neither validation nor success certifies GPU retirement.
 // Caller quarantines the composite owner on ANY failure, retaining its images,

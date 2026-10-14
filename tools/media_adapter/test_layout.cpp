@@ -14397,6 +14397,71 @@ static void testRetainedVeboxFrames() {
             ++vptrWrites;assert(address==context);vptr=value;return true;
         };
         auto admitVptr=[](uintptr_t address,size_t size) noexcept {return address==context && size==8;};
+        {
+            // Concrete codec owner, distinct from a VPHAL renderer owner.
+            constexpr uintptr_t physical=0x30000,os=0x40000,wrapper=0x50000;
+            uintptr_t actualParent=physical;
+            bool nativeRemoved=false;
+            auto ownerRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                assert(!nativeRemoved); // No native-object read after successful removal.
+                if(bytes==8) {
+                    uintptr_t value=0;
+                    if(address==context+0x128)value=actualParent;
+                    else if(address==context+0x12f0)value=os;
+                    else if(address==physical+0x50)value=wrapper;
+                    else if(address==os+8)value=wrapper+0x48;
+                    else return read(address,out,bytes);
+                    std::memcpy(out,&value,8);return true;
+                }
+                return read(address,out,bytes);
+            };
+            auto ownerAdmit=[](uintptr_t p,size_t bytes) noexcept {
+                return (p==context && (bytes==8 || bytes==0x12f8)) || (p==physical && bytes==0x58) ||
+                    (p==os && bytes==0x10) || (p==wrapper && bytes==0x50);
+            };
+            using Physical=TglOwnedVeboxPhysicalFrameRegistry<ItemFrame,1>;
+            Physical physicals;const auto ticket=physicals.reserve(base);
+            assert(physicals.publish(ticket,base,physical));
+            auto dependency=physicals.pinDependency(ticket,base,physical);assert(dependency.live());
+            using Codec=TglOwnedNativeCodecContextOwner<Physical::DependencyLease,decltype(ownerRead),
+                decltype(writeVptr),decltype(ownerAdmit),decltype(qualify),decltype(executable)>;
+            assert(!Codec::create(base,physical,ticket.generation+1,context,dependency,ownerRead,writeVptr,ownerAdmit,qualify,executable));
+            assert(dependency.live());
+            auto* owner=Codec::create(base,physical,ticket.generation,context,dependency,ownerRead,writeVptr,ownerAdmit,qualify,executable);
+            assert(owner && !dependency.live());
+            TglOwnedContextOwnerRegistry<Codec,1> codecs;assert(codecs.adopt(base,physical,ticket.generation,owner));
+            auto scope=[&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c) noexcept {
+                assert(!owner->prepareRemoval([](auto...) noexcept {assert(false);return true;}));
+                return i==base && p==physical && g==ticket.generation && c==context;
+            };
+            {
+                auto exclusive=codecs.pinExclusive(base,physical,ticket.generation,context);
+                assert(exclusive.get()==owner);
+                actualParent+=8;assert(!owner->publishFrame(exclusive,hook,scope,ownedExecutable) && !vptrWrites);
+                actualParent-=8;assert(owner->publishFrame(exclusive,hook,scope,ownedExecutable));
+                assert(owner->frameTable().nativeFrame()==entry && owner->frameTable().requiresRetention());
+                assert(!owner->confirmNativeRemoval([](auto...) noexcept {assert(false);return true;}));
+            }
+            TglNativeRemovedContextBatch<1> removed;removed.valid=true;removed.count=1;removed.contexts[0]=context;
+            {
+                auto pin=codecs.pin(base,physical,ticket.generation,context);assert(pin.get()==owner);
+                assert(codecs.prepareRemoval(base,physical,ticket.generation,removed,
+                    [](const auto&,uint32_t) noexcept -> int {assert(false);return 0;})==5);
+                assert(physicals.destroy(ticket,base,physical,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
+            }
+            assert(codecs.prepareRemoval(base,physical,ticket.generation,removed,[&](const auto& selected,uint32_t n) noexcept -> int {
+                assert(n==1 && selected[0]==owner);return owner->prepareRemoval(scope)?0:5;
+            })==0 && vptr==base+0x75d018);
+            assert(!owner->confirmNativeRemoval([](auto...) noexcept {return false;}));
+            nativeRemoved=true; // CPU fixture for coordinator's successful native removal.
+            assert(codecs.reconcileSuccessfulRemoval(base,physical,ticket.generation,removed,[&](auto& selected) noexcept -> int {
+                return selected.confirmNativeRemoval([&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c) noexcept {
+                    return nativeRemoved && i==base && p==physical && g==ticket.generation && c==context;
+                })?0:5;
+            })==0);
+            assert(physicals.destroy(ticket,base,physical,[](uintptr_t) noexcept -> int {return 0;})==0);
+            assert(vptrWrites==2);vptrWrites=0; // Separate original-vtable test phase below.
+        }
         assert(!privateTable.publish(read,writeVptr,[](uintptr_t,size_t) noexcept {return false;}) && !vptrWrites);
         assert(privateTable.publish(read,writeVptr,admitVptr) && vptrWrites==1 && privateTable.requiresRetention());
         assert(!privateTable.publish(read,writeVptr,admitVptr) && vptrWrites==1);
