@@ -1633,7 +1633,8 @@ template<class Backend> class TglTrackedCpuOwner {
     uintptr_t storage = 0;
     size_t extent = 0;
     bool borrowed = false;
-    const uint8_t* nativeReleaseSlot_=nullptr;
+    uint8_t* nativeReleaseSlot_=nullptr;
+    bool nativeAliasBorrowed_=false;
 public:
     explicit TglTrackedCpuOwner(Backend& b) : backend(b) {}
     TglTrackedCpuOwner(const TglTrackedCpuOwner&) = delete;
@@ -1656,6 +1657,26 @@ public:
         if(!borrowed || !slot || slot!=nativeReleaseSlot_) return false;
         uintptr_t published=0;std::memcpy(&published,slot,sizeof(published));
         return !published || published==storage;
+    }
+    // Exact shallow-copy handoff: one temporary slot borrows the already
+    // active ORIGINAL release transaction. A native null is propagated to
+    // the original slot so the enclosing transaction relinquishes storage
+    // once; unchanged stays owned. Foreign publication propagates failure,
+    // never adoption. Caller authenticates the native consumer and both slots.
+    template<class Use> bool withNativeReleaseAlias(uint8_t* alias,Use use) noexcept {
+        static_assert(noexcept(use()) && std::is_same_v<decltype(use()),void>);
+        if(!borrowed || !nativeReleaseSlot_ || nativeAliasBorrowed_ || !alias || alias==nativeReleaseSlot_)return false;
+        uintptr_t original=0,published=0;
+        std::memcpy(&original,nativeReleaseSlot_,8);std::memcpy(&published,alias,8);
+        if(original!=published || (published && published!=storage))return false;
+        nativeAliasBorrowed_=true;
+        struct Reset {bool& value;~Reset(){value=false;}} reset{nativeAliasBorrowed_};
+        use();
+        uintptr_t currentOriginal=0,observed=0;
+        std::memcpy(&currentOriginal,nativeReleaseSlot_,8);std::memcpy(&observed,alias,8);
+        if(currentOriginal!=original)return false;
+        std::memcpy(nativeReleaseSlot_,&observed,8);
+        return !observed || observed==published;
     }
     // Non-consuming synchronous borrow. No native release/ownership transfer
     // is permitted; reset, reallocation and consuming-slot entry stay blocked.
@@ -7209,6 +7230,18 @@ public:
         }
         bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
             return live() && temporary_.shells_[index_]==reinterpret_cast<uintptr_t>(&surface);
+        }
+        template<class Parameters,class Use> bool withNativeDenoiseParameters(
+            const TglOwnedSurfaceStorage& expected,Parameters& parameters,Use use) noexcept {
+            if(dnFault_ || !hasSurfaceLease(expected) ||
+                !parameters.hasNativeReleaseSlot(temporary_.originals_[index_]->prefix.data()+0x90))return false;
+            auto* copy=reinterpret_cast<TglOwnedSurfaceStorage*>(temporary_.shells_[index_]);
+            bool entered=false;
+            const bool reconciled=parameters.withNativeReleaseAlias(copy->prefix.data()+0x90,[&]() noexcept {
+                entered=true;use();
+            });
+            if(entered && (!reconciled || !hasSurfaceLease(expected)))dnFault_=true;
+            return entered && reconciled && !dnFault_;
         }
         // Read-only request borrowing during the ORIGINAL tracked native DN
         // release-slot scope. Does not grant a second native-release slot or

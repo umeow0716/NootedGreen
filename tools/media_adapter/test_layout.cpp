@@ -15683,8 +15683,28 @@ static void testRetainedVeboxFrames() {
                     assert(!sidecar.withNativeDenoiseParameters(original,dn,[]() noexcept {assert(false);}));
                     populated=0;std::memcpy(original.prefix.data()+0x90,&populated,8);
                     assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {
-                        dnBackend.release(dnAddress);
-                        std::memcpy(original.prefix.data()+0x90,&populated,8);
+                        struct Backend {
+                            uintptr_t allocate(size_t n) noexcept {return reinterpret_cast<uintptr_t>(std::malloc(n));}
+                            void release(uintptr_t p) noexcept {std::free(reinterpret_cast<void*>(p));}
+                        } backend;
+                        TglNativePerPassCpuShells<Backend> temporary(backend);
+                        std::array<const TglOwnedSurfaceStorage*,25> inputs{};inputs[0]=&original;
+                        assert(temporary.prepare(inputs));
+                        assert(temporary.withDerivedSurfaceLease(0,sidecar,[&](auto& derived) noexcept {
+                            return derived.withMutableSurface([&](auto& copy) noexcept {
+                                assert(derived.withNativeDenoiseParameters(copy,dn,[&]() noexcept {
+                                    assert(!derived.withNativeDenoiseParameters(copy,dn,[]() noexcept {assert(false);}));
+                                })); // unchanged alias leaves original transaction/storage intact
+                                assert(dn.get()==dnAddress && dnBackend.releases==0);
+                                assert(derived.withNativeDenoiseParameters(copy,dn,[&]() noexcept {
+                                    dnBackend.release(dnAddress);
+                                    std::memset(copy.prefix.data()+0x90,0,8);
+                                }));
+                                uintptr_t reconciled=1;std::memcpy(&reconciled,original.prefix.data()+0x90,8);
+                                assert(!reconciled && dn.hasNativeReleaseSlot(original.prefix.data()+0x90));
+                                return 31;
+                            });
+                        })==31);
                     }) && !dn.get() && !dn.size() && dnBackend.releases==1);
                     assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {
                         assert(dn.hasNativeReleaseSlot(original.prefix.data()+0x90));
