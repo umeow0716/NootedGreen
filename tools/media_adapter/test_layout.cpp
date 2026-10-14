@@ -16805,6 +16805,33 @@ int main() {
                         assert(target.withOriginalOwner([](auto&) noexcept -> int {assert(false);return 0;})==5);
                         return 31;
                     })==31);
+                    TglNativeOuterSurfaceRoles roleSnapshot;
+                    roleSnapshot.sourceCount=roleSnapshot.targetCount=1;
+                    roleSnapshot.sources[0]=reinterpret_cast<uintptr_t>(&root);
+                    roleSnapshot.targets[0]=reinterpret_cast<uintptr_t>(&shell);
+                    TglOwnedVeboxFrameRetention ownerRetention;
+                    auto renderOwners=[&](auto& input,auto& output,auto* secondary,auto* prior) noexcept {
+                        assert(&input==&ro && &output==&targetOwner && secondary==&oo && prior==&po);
+                        return TglOwnedVeboxCommandTransactionResult{31,0,false,false,false};
+                    };
+                    assert(tglWithOriginalFrontendOwners(roleSnapshot,0,0,graph,target,{&older,&previous},
+                        ownerRetention,renderOwners).status==31 && !ownerRetention());
+                    assert(tglWithOriginalFrontendOwners(roleSnapshot,1,0,graph,target,{&older,&previous},
+                        ownerRetention,[](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                            assert(false);return {};
+                        }).status==5);
+                    const auto changed=tglWithOriginalFrontendOwners(roleSnapshot,0,0,graph,target,{&older,&previous},
+                        ownerRetention,[&](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                            const uintptr_t zero=0;std::memcpy(root.prefix.data()+0xc8,&zero,8);
+                            return {0,0,true,true,true};
+                        });
+                    assert(changed.status==5 && changed.acquired && changed.writtenBack &&
+                        changed.nativeEntered && ownerRetention());
+                    std::memcpy(root.prefix.data()+0xc8,&p,8);
+                    assert(tglWithOriginalFrontendOwners(roleSnapshot,0,0,graph,target,{&older,&previous},
+                        ownerRetention,[](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                            assert(false);return {};
+                        }).status==5);
                     TestFeatureExecutionOwner execution;
                     std::array<uint8_t,0x1bc0> childBytes{};
                     TestVeboxChildLease child{childBytes.data()};

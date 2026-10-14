@@ -309,6 +309,30 @@ using NativeBorrowedFrontend=TglNativeVeboxBorrowedFrontendWithCpuAllocator<Nati
     NativeFrontendEnvironment,NativeFrontendAccess>;
 using NativeContextRendererFrame=TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,
     NativeBorrowedFrontend>;
+struct NativeFrontendRuntimeScope {
+    template<class Use> static TglOwnedVeboxCommandTransactionResult run(NativeBorrowedFrontend& frontend,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,Use use) noexcept {
+        if constexpr(std::is_pointer_v<Use>)if(!use)return {};
+        return frontend.withCpuFrontend([&](NativeRendererCpuAssembly& cpu,auto& source,auto& target,auto& parameters) noexcept {
+            if(!cpu.readyForFrontend())return TglOwnedVeboxCommandTransactionResult{};
+            return tglWithOriginalFrontendOwners(roles,sourceIndex,targetIndex,source,target,temporal,
+                cpu.backing().retention(),[&](auto& input,auto& output,auto* secondary,auto* previous) noexcept {
+                    TglOwnedVeboxCommandTransactionResult result;
+                    const int status=cpu.withChildLifetimeScopes([&](void*,void*,auto& firstLife,auto& secondLife) noexcept -> int {
+                        static_assert(noexcept(use(cpu,input,output,secondary,previous,parameters,firstLife,secondLife)) &&
+                            std::is_same_v<decltype(use(cpu,input,output,secondary,previous,parameters,firstLife,secondLife)),
+                                TglOwnedVeboxCommandTransactionResult>);
+                        result=use(cpu,input,output,secondary,previous,parameters,firstLife,secondLife);
+                        cpu.backing().retention().observe(result);
+                        return result.status;
+                    });
+                    if(!result.status && status)result.status=status;
+                    return result;
+                });
+        });
+    }
+};
 struct Entry {
     using CodecOwner=NativeCodecOwner;
     // Factory table lifetime only, not the native physical context lifetime.
@@ -584,6 +608,12 @@ template class TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePi
     NativeFrontendEnvironment,NativeFrontendAccess>;
 template class TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,NativeBorrowedFrontend>;
 using NativeFrontendResolve=NativeContextSurfaceOwner*(*)(uintptr_t) noexcept;
+using NativeFrontendConsumer=TglOwnedVeboxCommandTransactionResult(*)(NativeRendererCpuAssembly&,
+    NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
+    TglTrackedCpuOwner<TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>>&,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept;
+template TglOwnedVeboxCommandTransactionResult NativeFrontendRuntimeScope::run<NativeFrontendConsumer>(
+    NativeBorrowedFrontend&,const TglNativeOuterSurfaceRoles&,size_t,size_t,
+    const std::array<const TglOwnedSurfaceStorage*,2>&,NativeFrontendConsumer) noexcept;
 using NativeFrontendAdmit=bool(*)(NativeRendererCpuAssembly&,const TglNativeCreatedVeboxRendererView&,
     const TglOwnedSurfaceStorage*,const TglOwnedSurfaceStorage*) noexcept;
 template NativeBorrowedFrontend* Entry::createBorrowedFrontend<TglOwnedPhysicalMutationAuthority,

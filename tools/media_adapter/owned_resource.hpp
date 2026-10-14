@@ -18304,6 +18304,38 @@ public:
         return valid()?status:5;
     }
 };
+// Bridge the retained frontend to native Render's uniform original-owner API.
+// Role snapshot is captured by the enclosing native frame; this is not a new
+// role selector or GPU completion proof. Observe entry/acquisition BEFORE pins
+// unwind, including consumers that fail or invalidate graph metadata.
+template<class SourceGraph,class TargetLease,class Use>
+TglOwnedVeboxCommandTransactionResult tglWithOriginalFrontendOwners(
+    const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+    SourceGraph& source,TargetLease& target,
+    const std::array<const TglOwnedSurfaceStorage*,2>& temporal,
+    TglOwnedVeboxFrameRetention& retention,Use use) noexcept {
+    TglOwnedVeboxCommandTransactionResult result;
+    const auto* input=source.storage();const auto* output=target.storage();
+    if(retention() || !input || !output || !roles.sourceMatches(sourceIndex,source,*input) ||
+        !roles.targetMatches(targetIndex,target,*output))return result;
+    const int status=source.withOriginalOwners({input,temporal[0],temporal[1]},
+        [&](const auto& owners) noexcept -> int {
+            return target.withOriginalOwner([&](auto& targetOwner) noexcept -> int {
+                static_assert(noexcept(use(*owners[0],targetOwner,owners[1],owners[2])) &&
+                    std::is_same_v<decltype(use(*owners[0],targetOwner,owners[1],owners[2])),
+                        TglOwnedVeboxCommandTransactionResult>);
+                result=use(*owners[0],targetOwner,owners[1],owners[2]);
+                if(result.writtenBack && !result.acquired && !result.status)result.status=5;
+                retention.observe(result);
+                return result.status;
+            });
+        });
+    if(!result.status && (status || source.storage()!=input || target.storage()!=output ||
+        !roles.sourceMatches(sourceIndex,source,*input) || !roles.targetMatches(targetIndex,target,*output)))
+        result.status=status?status:5;
+    return result;
+}
+
 // Actual IOSurface layout snapshot, not native shell-field publication. Caller
 // retains the original resource and holds a successful CPU lock throughout.
 struct TglOwnedNv12Layout {
