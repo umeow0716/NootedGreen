@@ -841,6 +841,26 @@ inline bool tglReadOwnedSfcGen12FilterFlags(const std::array<uint8_t,0xb8>& pref
 enum class TglOwnedSfcCompressionMode : uint32_t {
     Disabled=0, Media=3, Render=4
 };
+struct TglOwnedGen12TargetCompression {
+    bool enabled=false;TglOwnedSfcCompressionMode mode=TglOwnedSfcCompressionMode::Disabled;
+};
+struct TglOwnedSurfaceStorage;
+// Original held target resource fields consumed by52bf0/native surface control,
+// NOT donor VP prefix modes1/2. Read a stable pair before atomic publication.
+template<class Owner,class Read>
+bool tglReadLeasedGen12TargetCompression(Owner& owner,const TglOwnedSurfaceStorage& target,
+    Read read,TglOwnedGen12TargetCompression& output) noexcept {
+    static_assert(noexcept(owner.hasSurfaceLease(target)) && noexcept(read(uintptr_t{},nullptr,size_t{})));
+    if(!owner.hasSurfaceLease(target))return false;
+    const auto base=reinterpret_cast<uintptr_t>(&target);
+    if(base>UINTPTR_MAX-0x2a0)return false;
+    uint8_t flag=0,afterFlag=0;uint32_t mode=0,afterMode=0;
+    if(!read(base+0x29a,&flag,1) || !read(base+0x29c,&mode,4) ||
+        (mode!=0 && mode!=3 && mode!=4) || !owner.hasSurfaceLease(target) ||
+        !read(base+0x29a,&afterFlag,1) || !read(base+0x29c,&afterMode,4) ||
+        flag!=afterFlag || mode!=afterMode || !owner.hasSurfaceLease(target))return false;
+    output={bool(flag&1),static_cast<TglOwnedSfcCompressionMode>(mode)};return true;
+}
 // TGL168390 enables compression only for modes3/4, selecting render with4.
 // ICL175950 tests mode2 instead. Never reinterpret its mode1/2 producer.
 // This encodes an already-qualified resource mode; it does not enable MMC
@@ -7384,16 +7404,10 @@ public:
     // this read does not create backing, enable MMC or prove completion.
     bool readTargetCompressionState(bool& compressed,TglOwnedSfcCompressionMode& mode) noexcept {
         if(!healthy()) return false;
-        uint8_t flag=0;uint32_t raw=0;
-        if(!gate_(reinterpret_cast<uintptr_t>(&target_)+0x29a,&flag,1) ||
-           !gate_(reinterpret_cast<uintptr_t>(&target_)+0x29c,&raw,4)) return false;
-        if(raw!=static_cast<uint32_t>(TglOwnedSfcCompressionMode::Disabled) &&
-           raw!=static_cast<uint32_t>(TglOwnedSfcCompressionMode::Media) &&
-           raw!=static_cast<uint32_t>(TglOwnedSfcCompressionMode::Render)) {
-            frame_.fail();return false;
-        }
+        TglOwnedGen12TargetCompression current;
+        if(!tglReadLeasedGen12TargetCompression(targetOwner_,target_,gate_,current)) {frame_.fail();return false;}
         if(!healthy()) return false;
-        compressed=(flag&1)!=0;mode=static_cast<TglOwnedSfcCompressionMode>(raw);return true;
+        compressed=current.enabled;mode=current.mode;return true;
     }
     // Mutable access must come from the enclosing owned target lease. The
     // compression references/decompressor still require resource provenance;

@@ -607,6 +607,7 @@ struct NativeVpNv12PacketScope {
     using StateOwner=TglOwnedSfcStateParameters<CpuBackend>;
     NativeVpScalarStateProducer& scalar;NativeContextSurfaceOwner& targetOwner;
     NativeNv12OutputQuery query;
+    TglOwnedGen12TargetCompression preparedCompression_{};
     bool attempted=false;
     NativeVpNv12PacketScope(NativeVpScalarStateProducer& producer,NativeContextSurfaceOwner& target,
         NativeNv12OutputQuery outputQuery) noexcept:scalar(producer),targetOwner(target),query(outputQuery) {}
@@ -615,7 +616,7 @@ struct NativeVpNv12PacketScope {
     template<class Use> int run(TglOwnedVpSfcCallerStorage& vp,TglOwnedSfcStateParameters<CpuBackend>& state,
         TglNativeVpLineResourceStorage& lines,const TglOwnedVpEntrySet& catalogue,
         TglOwnedSfcCommandParameters& parameters,
-        bool compressionEnabled,TglOwnedSfcCompressionMode compressionMode,Use use) noexcept {
+        Use use) noexcept {
         static_assert(noexcept(use(parameters)) && std::is_same_v<decltype(use(parameters)),int>);
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         const auto* prefix=scalar.state();
@@ -626,7 +627,9 @@ struct NativeVpNv12PacketScope {
             !targetOwner.hasSurfaceLease(scalar.target) || parameters.filtersInUse)return 5;
         TglOwnedSfcGen12Tail tail;
         TglOwnedSfcGen12FilterFlags filters;
+        TglOwnedGen12TargetCompression compression;
         if(!tglReadOwnedSfcGen12FilterFlags(prefix->packet,filters) ||
+            !tglReadLeasedGen12TargetCompression(targetOwner,scalar.target,scalar.dataRead,compression) ||
             !tglPrepareOwnedVeboxSfcGen12Tail(prefix->packet,tail))return 5;
         attempted=true;
         uint32_t input=0,scaled=0;
@@ -642,8 +645,12 @@ struct NativeVpNv12PacketScope {
                     if(&output!=&scalar.target || scalar.state()!=prefix)return 5;
                     const int prepared=tglPrepareOwnedVpLeasedSurfaceState(parameters,state,output,
                         avs,ief,sfd,prefix->packet,tail,filters.rgbAdaptive,filters.eightTapChroma,
-                        compressionEnabled,compressionMode,query);
+                        compression.enabled,compression.mode,query);
                     if(prepared)return prepared;
+                    TglOwnedGen12TargetCompression after;
+                    if(!tglReadLeasedGen12TargetCompression(targetOwner,output,scalar.dataRead,after) ||
+                        after.enabled!=compression.enabled || after.mode!=compression.mode)return 5;
+                    preparedCompression_=compression;
                     NativeVpPacketContext context{&scalar,&parameters};
                     NativeVpPacketPublication scope(scalar.vp,context);
                     if(!scope.bound())return 5;
@@ -686,9 +693,8 @@ public:
     // pointers or scope addresses survive this call; graph/frame ownership
     // retains the allocations until send or qualified retirement.
     int prepare(TglOwnedVpSfcCallerStorage& vp,StateOwner& state,TglNativeVpLineResourceStorage& lines,
-        const TglOwnedVpEntrySet& catalogue,TglOwnedSfcCommandParameters& parameters,
-        bool compressionEnabled,TglOwnedSfcCompressionMode mode) noexcept {
-        const int status=run(vp,state,lines,catalogue,parameters,compressionEnabled,mode,
+        const TglOwnedVpEntrySet& catalogue,TglOwnedSfcCommandParameters& parameters) noexcept {
+        const int status=run(vp,state,lines,catalogue,parameters,
             [&](TglOwnedSfcCommandParameters& commands) noexcept -> int {
                 preparedState_=&state;preparedVp_=&vp;preparedLines_=&lines;preparedCommands_=&commands;
                 preparedData_=state.data();layout_=layout(scalar.target);
@@ -707,6 +713,9 @@ public:
             !preparedState_->hasParametersLease() ||
             static_cast<const StateOwner&>(*preparedState_).data()!=preparedData_ ||
             !preparedLines_->lines().boundToVp(*preparedVp_) || preparedCommands_->filtersInUse)return 5;
+        TglOwnedGen12TargetCompression currentCompression;
+        if(!tglReadLeasedGen12TargetCompression(targetOwner,scalar.target,scalar.dataRead,currentCompression) ||
+            currentCompression.enabled!=preparedCompression_.enabled || currentCompression.mode!=preparedCompression_.mode)return 5;
         sendAttempted_=true;
         return preparedState_->withPublishedVpParameters(*preparedVp_,[&](const uint8_t* data) noexcept -> int {
             if(data!=preparedData_)return 5;
@@ -769,7 +778,7 @@ int NativeVpIefCscProducer::prepare(void* actual,const TglOwnedVpFramePreparatio
 template int NativeVpNv12PacketScope::run<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
     TglOwnedVpSfcCallerStorage&,TglOwnedSfcStateParameters<NativeVpNv12PacketScope::CpuBackend>&,
     TglNativeVpLineResourceStorage&,const TglOwnedVpEntrySet&,TglOwnedSfcCommandParameters&,
-    bool,TglOwnedSfcCompressionMode,int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
+    int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
 template int NativeVpNv12PacketScope::withPreparedInputs<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
     int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
 struct NativeVpCommandEmission {
@@ -823,8 +832,7 @@ struct NativeVpPreparedCallbacks {
     NativeVpAvsProducer& avs;NativeVpIefCscProducer& filters;NativeVpCommandEmission& emission;
     TglOwnedVpSfcCallerStorage& vp;TglNativeVpLineResourceStorage& lines;const TglOwnedVpEntrySet& catalogue;
     TglOwnedSfcCommandParameters& commands;
-    void* renderData;bool compressionEnabled;
-    TglOwnedSfcCompressionMode compressionMode;
+    void* renderData;
     int error=0;
     TglOwnedVpFramePreparation capturedFrame{};
     bool frameCaptured=false;
@@ -843,7 +851,7 @@ struct NativeVpPreparedCallbacks {
         int result=scalar.prepare(actual,frame,capturedGeometry);
         if(result)return fail(result);
         result=packet.prepare(vp,owner,lines,
-            catalogue,commands,compressionEnabled,compressionMode);
+            catalogue,commands);
         if(!result) {capturedFrame=frame;frameCaptured=true;}
         return fail(result);
     }
@@ -917,8 +925,6 @@ public:
         const TglOwnedVpEntrySet& catalogue;
         TglOwnedVpSfcCallerStorage& vp;TglNativeVpLineResourceStorage& lines;
         void* parent;void* renderData;uintptr_t performance;
-        bool compressionEnabled;
-        TglOwnedSfcCompressionMode compressionMode;
     };
 private:
     NativeVpScalarStateProducer scalar_;
@@ -937,8 +943,7 @@ public:
          emission_{scalar_,in.childOwner,scalar_.dataRead,in.targetOwner,in.binding,in.usage,
              in.catalogue,in.parent,nullptr,&avs_},
          callbacks_{scalar_,packet_,avs_,filters_,emission_,in.vp,in.lines,in.catalogue,
-             in.commands,in.renderData,
-             in.compressionEnabled,in.compressionMode} {}
+             in.commands,in.renderData} {}
     NativeVpProducerFrame(const NativeVpProducerFrame&)=delete;
     NativeVpProducerFrame& operator=(const NativeVpProducerFrame&)=delete;
     template<class Use> int run(Use use) noexcept {
@@ -963,8 +968,6 @@ public:
         const TglNativeCreatedVeboxRendererView& pinned;
         const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         TglNativeVpLineResourceStorage& lines;const TglOwnedVpEntrySet& catalogue;
-        bool compressionEnabled;
-        TglOwnedSfcCompressionMode compressionMode;
     };
 private:
     Inputs& in_;bool attempted_=false;
@@ -1001,8 +1004,7 @@ public:
             core.image,core.execution,in.interfaces.paramsE0,in.interfaces.paramsF0,core.vp.bytes.data()};
         NativeVpProducerFrame::Inputs inputs{seed,core.sourceOwner,core.targetOwner,core.childOwner,
             avsCache_,cscCache_,commands_,commands,usage,in.catalogue,core.vp,in.lines,
-            reinterpret_cast<void*>(core.child),reinterpret_cast<void*>(core.execution),performance,
-            in.compressionEnabled,in.compressionMode};
+            reinterpret_cast<void*>(core.child),reinterpret_cast<void*>(core.execution),performance};
         NativeVpProducerFrame producers(inputs);
         static_assert(noexcept(use(producers,original)) &&
             std::is_same_v<decltype(use(producers,original)),TglOwnedVeboxCommandTransactionResult>);

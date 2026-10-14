@@ -3544,6 +3544,40 @@ static void testLeasedGen12PlatformPolicy() {
     struct SfcFixture {
         static int extent(void* vp,void*,void*,void*) noexcept {++*static_cast<unsigned*>(vp);return 1;}
     };
+    {
+        TglOwnedSurfaceStorage target{};SurfaceOwner owner{&target};unsigned reads=0;
+        const auto base=reinterpret_cast<uintptr_t>(&target);
+        auto read=[&](uintptr_t p,void* out,size_t bytes) noexcept -> bool {
+            ++reads;
+            if(p<base || p-base>sizeof(target) || bytes>sizeof(target)-(p-base))return false;
+            std::memcpy(out,reinterpret_cast<const void*>(p),bytes);return true;
+        };
+        for(uint32_t mode:{0u,1u,2u,3u,4u,99u})for(uint8_t flag:{uint8_t(0),uint8_t(1),uint8_t(0xc0),uint8_t(0xc1)}) {
+            target.tail[0xa]=flag;std::memcpy(target.tail.data()+0xc,&mode,4);
+            TglOwnedGen12TargetCompression result{true,TglOwnedSfcCompressionMode::Render};
+            const bool accepted=tglReadLeasedGen12TargetCompression(owner,target,read,result);
+            if(mode==0 || mode==3 || mode==4)
+                assert(accepted && result.enabled==bool(flag&1) && uint32_t(result.mode)==mode);
+            else assert(!accepted && result.enabled && result.mode==TglOwnedSfcCompressionMode::Render);
+        }
+        TglOwnedGen12TargetCompression result{true,TglOwnedSfcCompressionMode::Render};
+        owner.allow=false;const auto before=reads;
+        assert(!tglReadLeasedGen12TargetCompression(owner,target,read,result) && reads==before);
+        owner.allow=true;
+        assert(!tglReadLeasedGen12TargetCompression(owner,target,
+            [](uintptr_t,void*,size_t) noexcept {return false;},result));
+        const uint32_t media=3;std::memcpy(target.tail.data()+0xc,&media,4);
+        unsigned modeReads=0;
+        auto changed=[&](uintptr_t p,void* out,size_t bytes) noexcept -> bool {
+            const bool ok=read(p,out,bytes);
+            if(p==base+0x29c && ++modeReads==1) {
+                const uint32_t render=4;std::memcpy(target.tail.data()+0xc,&render,4);
+            }
+            return ok;
+        };
+        assert(!tglReadLeasedGen12TargetCompression(owner,target,changed,result) && modeReads==2);
+        assert(result.enabled && result.mode==TglOwnedSfcCompressionMode::Render);
+    }
     for(unsigned variant=0;variant<41;++variant) {
         const unsigned scenario=variant<33?variant:(variant==34 || variant==39)?1:0;
         TglOwnedSurfaceStorage source{},target{};
