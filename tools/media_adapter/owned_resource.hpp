@@ -10432,6 +10432,23 @@ public:
         return ready_ ? reinterpret_cast<uintptr_t>(&layout_.entries) : 0;
     }
 };
+// Both complete typed tables and their factory publications share ONE native
+// consumer lifetime. Caller already holds both graph reservations and every
+// entry resolver scope; never let table references or borrowed VP links escape.
+template<class Children,class FirstGraph,class SecondGraph,class OwnedExecutable,class Use>
+int tglWithOwnedVpPairFactoryTables(Children& children,FirstGraph& first,void* a,const TglOwnedVpEntrySet& entriesA,
+    SecondGraph& second,void* b,const TglOwnedVpEntrySet& entriesB,OwnedExecutable executable,Use use) noexcept {
+    if(!a || !b || a==b)return 5;
+    TglOwnedVpFlatDispatchTable tableA,tableB;
+    if(!tableA.build(entriesA,executable) || !tableB.build(entriesB,executable))return 5;
+    return children.template withPairedVpFactories<true>(first,a,tableA,second,b,tableB,
+        [&](void* parentA,void* parentB) noexcept -> int {
+            static_assert(noexcept(use(parentA,parentB,std::as_const(tableA),std::as_const(tableB))) &&
+                std::is_same_v<decltype(use(parentA,parentB,std::as_const(tableA),std::as_const(tableB))),int>);
+            return use(parentA,parentB,std::as_const(tableA),std::as_const(tableB));
+        });
+}
+
 template<class Resolve>
 bool tglBindOwnedVpModeEntries(void* child,TglOwnedVpEntrySet& target) noexcept {
     static_assert(noexcept(Resolve{}(child)),"VP mode binding resolver ABI");

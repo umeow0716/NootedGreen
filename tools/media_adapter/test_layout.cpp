@@ -25250,12 +25250,16 @@ int main() {
                                                         platformPhases[0]=&qa;platformPhases[1]=&qb;
                                                         catalogues[0]=&ea;catalogues[1]=&eb;
                                                         assert(ea.hasAllEntries() && eb.hasAllEntries());
-                                                        TglOwnedVpFlatDispatchTable tableA,tableB;
                                                         auto executable=[](uintptr_t p,size_t n) noexcept {return p && n==1;};
-                                                        assert(tableA.build(ea,executable) && tableB.build(eb,executable));
+                                                        auto incomplete=ea;incomplete.setup=nullptr;
+                                                        auto denied=[](void*,void*,const auto&,const auto&) noexcept -> int {assert(false);return 0;};
+                                                        assert(tglWithOwnedVpPairFactoryTables(frame.children(),firstGraph,a,incomplete,
+                                                            secondGraph,b,eb,executable,denied)==5);
+                                                        assert(tglWithOwnedVpPairFactoryTables(frame.children(),firstGraph,a,ea,
+                                                            secondGraph,b,eb,[](uintptr_t,size_t) noexcept {return false;},denied)==5);
                                                         void* publishedParents[2]{};
-                                                        const int joined=frame.children().template withPairedVpFactories<true>(firstGraph,a,tableA,
-                                                            secondGraph,b,tableB,[&](void* parent0,void* parent1) noexcept -> int {
+                                                        const int joined=tglWithOwnedVpPairFactoryTables(frame.children(),firstGraph,a,ea,
+                                                            secondGraph,b,eb,executable,[&](void* parent0,void* parent1,const auto& tableA,const auto& tableB) noexcept -> int {
                                                         publishedParents[0]=parent0;publishedParents[1]=parent1;
                                                         commandParents[0]=parent0;commandParents[1]=parent1;
                                                         assert(firstGraph.withReservedFlatDispatch(a,tableA,[](void*) noexcept -> int {assert(false);return 0;})==5);
