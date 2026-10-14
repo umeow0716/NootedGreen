@@ -26599,6 +26599,12 @@ int main() {
                                                             assert(backing.withVpResources(0,[](auto&,auto&,auto&) noexcept {return 0;})==5);
                                                             assert(!receipt.consume(owner,1,child,vp,graph));
                                                             assert(!receipt.consume(owner,0,child,nullptr,graph));
+                                                            struct ForeignGraph {
+                                                                uint64_t epoch;void* storage;
+                                                                uint64_t generation() const noexcept {return epoch;}
+                                                                bool ownsStorage(void* actual) const noexcept {return actual==storage;}
+                                                            } foreign{graph.generation(),vp};
+                                                            assert(!receipt.consume(owner,0,child,vp,foreign));
                                                             assert(receipt.consume(owner,0,child,storage.bytes.data(),graph));
                                                             assert(!receipt.consume(owner,0,child,vp,graph));
                                                             return 0;

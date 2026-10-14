@@ -13383,16 +13383,18 @@ struct TglOwnedVeboxPersistentVpAdmissionReset {
 // that authority. Admission consumes it once without reborrowing resources.
 template<class ChildOwner> class TglOwnedVeboxPreparedVpReset {
     ChildOwner& owner_;size_t index_;void* child_;void* vp_;
+    const void* graph_;
     uint64_t childGeneration_,graphGeneration_;bool consumed_=false;
     TglOwnedVeboxPreparedVpReset(ChildOwner& owner,size_t index,void* child,void* vp,
-        uint64_t childGeneration,uint64_t graphGeneration) noexcept
-        :owner_(owner),index_(index),child_(child),vp_(vp),childGeneration_(childGeneration),
+        uint64_t childGeneration,uint64_t graphGeneration,const void* graph) noexcept
+        :owner_(owner),index_(index),child_(child),vp_(vp),graph_(graph),childGeneration_(childGeneration),
          graphGeneration_(graphGeneration) {}
 public:
     TglOwnedVeboxPreparedVpReset(const TglOwnedVeboxPreparedVpReset&)=delete;
     TglOwnedVeboxPreparedVpReset& operator=(const TglOwnedVeboxPreparedVpReset&)=delete;
     template<class Graph> bool consume(ChildOwner& owner,size_t index,void* child,void* vp,Graph& graph) noexcept {
-        if(consumed_ || &owner!=&owner_ || index!=index_ || child!=child_ || vp!=vp_ ||
+        if(consumed_ || static_cast<const void*>(&graph)!=graph_ ||
+            &owner!=&owner_ || index!=index_ || child!=child_ || vp!=vp_ ||
             owner.allocationGeneration()!=childGeneration_ ||
             !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
             graph.generation()!=graphGeneration_ || !graph.ownsStorage(vp))return false;
@@ -13410,13 +13412,13 @@ public:
         if(!generation || !vp)return 5;
         TglOwnedVeboxPersistentVpAdmissionReset<ChildOwner,Backing,Retire> reset{owner,backing,index,child,vp,retire};
         if(!reset() || owner.allocationGeneration()!=generation)return 5;
-        uint64_t graphGeneration=0;
+        uint64_t graphGeneration=0;const void* graphIdentity=nullptr;
         const int captured=backing.withVpResources(index,[&](auto& graph,auto& storage,auto&) noexcept -> int {
             if(storage.bytes.data()!=vp || !graph.ownsStorage(vp))return 5;
-            graphGeneration=graph.generation();return graphGeneration?0:5;
+            graphIdentity=&graph;graphGeneration=graph.generation();return graphGeneration?0:5;
         });
         if(captured)return captured;
-        TglOwnedVeboxPreparedVpReset receipt(owner,index,child,vp,generation,graphGeneration);
+        TglOwnedVeboxPreparedVpReset receipt(owner,index,child,vp,generation,graphGeneration,graphIdentity);
         return use(receipt);
     }
 };
