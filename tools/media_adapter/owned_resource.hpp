@@ -21906,6 +21906,23 @@ template<size_t Capacity=16> struct TglNativeCreatedContextBatch {
     static_assert(Capacity>0 && Capacity<=128,"owned adoption work budget, not native limit");
     std::array<uintptr_t,Capacity> contexts{};
     uint32_t count=0;bool valid=false;
+    bool wellFormed() const noexcept {
+        if(!valid || count>Capacity)return false;
+        for(size_t i=0;i<Capacity;++i) {
+            if(i>=count && contexts[i])return false;
+            if(i<count && contexts[i])for(size_t j=0;j<i;++j)
+                if(contexts[i]==contexts[j])return false;
+        }
+        return true;
+    }
+    template<size_t Other>
+    bool overlaps(const TglNativeCreatedContextBatch<Other>& other) const noexcept {
+        // Malformed lineage is never evidence of disjoint native ownership.
+        if(!wellFormed() || !other.wellFormed())return true;
+        for(size_t i=0;i<count;++i)if(contexts[i])
+            for(size_t j=0;j<other.count;++j)if(contexts[i]==other.contexts[j])return true;
+        return false;
+    }
     template<class Read> bool capture(uintptr_t input,Read read) noexcept {
         *this={};uintptr_t descriptor=0,outputs=0;uint32_t n=0;
         if(!input || input>UINTPTR_MAX-8 || !read(input,&descriptor,8) ||

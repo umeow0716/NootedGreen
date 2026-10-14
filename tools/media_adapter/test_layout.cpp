@@ -14278,6 +14278,16 @@ static void testRetainedVeboxFrames() {
             return true;
         };
         assert(batch.capture(0x1000,read) && batch.valid && batch.count==2 && batch.contexts==contexts);
+        assert(batch.wellFormed() && batch.overlaps(batch));
+        TglNativeCreatedContextBatch<3> separate;separate.valid=true;separate.count=2;
+        separate.contexts={0x6000,0,0};
+        assert(separate.wellFormed() && !batch.overlaps(separate) && !separate.overlaps(batch));
+        separate.contexts[0]=0x5000;assert(batch.overlaps(separate));
+        separate.contexts={0x6000,0,0x7000};assert(!separate.wellFormed() && batch.overlaps(separate));
+        separate.contexts={0x6000,0x6000,0};assert(!separate.wellFormed() && separate.overlaps(batch));
+        separate.contexts={};separate.count=4;assert(!separate.wellFormed() && batch.overlaps(separate));
+        separate.count=0;assert(separate.wellFormed() && !batch.overlaps(separate));
+        separate.valid=false;assert(!separate.wellFormed() && batch.overlaps(separate));
         contexts[1]=contexts[0];
         assert(!batch.capture(0x1000,read) && !batch.valid && !batch.count && !batch.contexts[0]);
         contexts[1]=0;assert(batch.capture(0x1000,read) && batch.contexts[1]==0);

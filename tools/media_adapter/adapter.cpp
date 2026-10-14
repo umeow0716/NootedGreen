@@ -91,7 +91,7 @@ struct NativeCodecBackend {
     }
     template<class Scope>
     static int adopt(Scope& scope,uintptr_t physical,const Batch& batch) noexcept {
-        if(!batch.valid || batch.count>16 || !scope.matches(scope.image(),physical,scope.generation()))return 5;
+        if(!batch.wellFormed() || !scope.matches(scope.image(),physical,scope.generation()))return 5;
         auto& storage=ledger();
         if(storage.gate.test_and_set(std::memory_order_acquire))return 5;
         struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{storage.gate};
@@ -104,9 +104,7 @@ struct NativeCodecBackend {
                 if(!record.adopted)return 5;
                 // Successful prior batches may coexist, but never alias an
                 // existing context or erase that batch's deletion obligations.
-                for(size_t i=0;i<batch.count;++i)if(batch.contexts[i])
-                    for(size_t j=0;j<record.batch.count;++j)
-                        if(batch.contexts[i]==record.batch.contexts[j])return 5;
+                if(batch.overlaps(record.batch))return 5;
             }
             if(!record.used && !selected)selected=&record;
         }
