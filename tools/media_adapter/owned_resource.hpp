@@ -19877,7 +19877,7 @@ template<class Owner,class Api,size_t Capacity=32> class TglOwnedFrontendSourceG
     using Lease=TglOwnedType1BorrowedSurfaceLease<Owner,Api>;
     struct Slot {Lease* lease=nullptr;std::array<uint8_t,24> links{};};
     Api api_;std::array<Slot,Capacity> slots_{};
-    size_t count_=0;bool attempted_=false,ready_=false,busy_=false;
+    size_t count_=0;bool attempted_=false,ready_=false,busy_=false,reconciling_=false;
     static std::array<uint8_t,24> links(const TglOwnedSurfaceStorage& shell) noexcept {
         std::array<uint8_t,24> out{};
         std::memcpy(out.data(),shell.prefix.data()+0xb4,8);
@@ -19936,10 +19936,11 @@ public:
     // Explicit native mode0 reconnect only: qualify the COMPLETE expected
     // C0 mutation before entering, then commit link stamps atomically. Counts,
     // C8, resource identity and retained membership must remain unchanged.
-    template<class Use> int withForwardLinkReconciliation(
-        const std::array<TglNativeForwardLinkChange,18>& changes,size_t count,Use use) noexcept {
+private:
+    template<class Use> int reconcileForwardLinks(
+        const std::array<TglNativeForwardLinkChange,18>& changes,size_t count,Use use,bool deferred) noexcept {
         static_assert(noexcept(use()) && std::is_same_v<decltype(use()),int>);
-        if(busy_ || !valid() || count>changes.size())return 5;
+        if(busy_ || reconciling_ || !valid() || count>changes.size())return 5;
         std::array<std::array<uint8_t,24>,Capacity> expected{};
         for(size_t i=0;i<count_;++i)expected[i]=slots_[i].links;
         for(size_t i=0;i<count;++i) {
@@ -19954,14 +19955,29 @@ public:
             if(found==Capacity || !nextKnown)return 5;
             std::memcpy(expected[found].data()+8,&changes[i].next,8);
         }
-        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        reconciling_=true;if(!deferred)busy_=true;
+        struct Reset {bool& busy;bool& pending;~Reset(){busy=false;pending=false;}} reset{busy_,reconciling_};
         const int status=use();
+        if(deferred && busy_)return status?status:5;
         for(size_t i=0;i<count_;++i) {
             const auto* shell=slots_[i].lease->storage();
             if(!shell || !slots_[i].lease->hasSurfaceLease(*shell) || links(*shell)!=expected[i])return status?status:5;
         }
         for(size_t i=0;i<count_;++i)slots_[i].links=expected[i];
         return status;
+    }
+public:
+    template<class Use> int withForwardLinkReconciliation(
+        const std::array<TglNativeForwardLinkChange,18>& changes,size_t count,Use use) noexcept {
+        return reconcileForwardLinks(changes,count,use,false);
+    }
+    // Native outer131520 must lend the SAME graph to each synchronous +50
+    // callback BEFORE its final mode0 reconnect. Reserve expected link stamps
+    // without holding the per-pass borrow lock; commit only the exact plan.
+    // No nested reconnect, membership acquisition or new ownership is granted.
+    template<class Use> int withDeferredForwardLinkReconciliation(
+        const std::array<TglNativeForwardLinkChange,18>& changes,size_t count,Use use) noexcept {
+        return reconcileForwardLinks(changes,count,use,true);
     }
     const TglOwnedSurfaceStorage* storage() const noexcept {
         return valid()?slots_[0].lease->storage():nullptr;

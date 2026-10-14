@@ -18207,6 +18207,27 @@ int main() {
                     assert(graph.withForwardLinkReconciliation(changes,1,[]() noexcept -> int {assert(false);return 0;})==5);
                     changes[0]={&root,o};changes[1]=changes[0];
                     assert(graph.withForwardLinkReconciliation(changes,2,[]() noexcept -> int {assert(false);return 0;})==5);
+                    changes[0]={&root,p};
+                    unsigned passes=0;
+                    assert(graph.withDeferredForwardLinkReconciliation(changes,1,[&]() noexcept -> int {
+                        assert(graph.withSelectedOriginalOwners(root,older,[&](auto& a,auto& b) noexcept -> int {
+                            assert(&a==&ro && &b==&oo);++passes;return 0;
+                        })==0);
+                        assert(graph.withDeferredForwardLinkReconciliation(changes,1,
+                            []() noexcept -> int {assert(false);return 0;})==5);
+                        assert(graph.withForwardLinkReconciliation(changes,1,
+                            []() noexcept -> int {assert(false);return 0;})==5);
+                        std::memcpy(root.prefix.data()+0xc0,&p,8);
+                        return 31;
+                    })==31 && passes==1 && graph.valid() && refs==heldRefs);
+                    changes[0]={&root,o};
+                    assert(graph.withDeferredForwardLinkReconciliation(changes,1,[&]() noexcept -> int {
+                        std::memcpy(root.prefix.data()+0xc0,&o,8);return 0;
+                    })==0 && graph.valid());
+                    changes[0]={&root,p};
+                    assert(graph.withDeferredForwardLinkReconciliation(changes,1,
+                        []() noexcept -> int {return 0;})==5 && graph.valid()); // expected reconnect missing
+                    changes[0]={&root,o};
                     assert(graph.withForwardLinkReconciliation(changes,1,[&]() noexcept -> int {
                         const uintptr_t zero=0;std::memcpy(root.prefix.data()+0xc8,&zero,8);return 0;
                     })==5 && !graph.valid());
