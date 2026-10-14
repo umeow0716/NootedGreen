@@ -14509,11 +14509,14 @@ static void testRetainedVeboxFrames() {
             }
             assert(codecs.prepareRemoval(base,physical,ticket.generation,removed,[&](const auto& selected,uint32_t n) noexcept -> int {
                 assert(n==1 && selected[0]==owner);return owner->prepareRemoval(scope)?0:5;
-            })==0 && vptr==base+0x75d018);
+            })==0 && vptr==reinterpret_cast<uintptr_t>(owner->frameTable().addressPoint()));
+            assert(owner->frameTable().publication()==TglOwnedContextFrameVtable::Publication::RemovalPrepared);
+            assert(owner->frameTable().requiresRetention());
             assert(!owner->confirmNativeRemoval([](auto...) noexcept {return false;}));
             assert(!owner->nativeRemovalConfirmed());
             assert(codecs.reconcileSuccessfulRemoval(base,physical,ticket.generation,removed)==5);
             assert(physicals.destroy(ticket,base,physical,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
+            vptr=base+0x75d018; // Native destructor restores vptr itself, not preparation.
             nativeRemoved=true; // CPU fixture for coordinator's successful native removal.
             assert(codecs.reconcileSuccessfulRemoval(base,physical,ticket.generation,removed,[&](auto& selected) noexcept -> int {
                 auto proof=[&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c) noexcept {
@@ -14558,7 +14561,7 @@ static void testRetainedVeboxFrames() {
                 delete ledger[0];ledger[0]=nullptr;
                 assert(partials.destroy(failed,base,physical,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
             }
-            assert(vptrWrites==2);vptrWrites=0; // Separate original-vtable test phase below.
+            assert(vptrWrites==1);vptrWrites=0; // Preparation must never write native vptr.
         }
         assert(!privateTable.publish(read,writeVptr,[](uintptr_t,size_t) noexcept {return false;}) && !vptrWrites);
         assert(privateTable.publish(read,writeVptr,admitVptr) && vptrWrites==1 && privateTable.requiresRetention());
@@ -14615,6 +14618,26 @@ static void testRetainedVeboxFrames() {
             assert(!pending);return 0; // CPU-only unsubmitted frame disposal
         })==0);
         assert(dispatch()==31 && invoked==2);
+        {
+            TglOwnedContextFrameVtable removing;
+            const auto previous=vptr;vptr=binding.vtable;
+            assert(removing.build(base,context,hook,read,qualify,executable,ownedExecutable));
+            assert(removing.publish(read,writeVptr,admitVptr));
+            const auto installed=vptr;const auto writes=vptrWrites;
+            assert(!removing.prepareNativeRemoval(read,[](uintptr_t,size_t) noexcept {return false;}));
+            assert(removing.publication()==TglOwnedContextFrameVtable::Publication::Published);
+            assert(removing.prepareNativeRemoval(read,admitVptr));
+            assert(removing.prepareNativeRemoval(read,admitVptr));
+            assert(vptr==installed && vptrWrites==writes && removing.requiresRetention());
+            assert(removing.dispatchItem(items,context,0x55000,0x66000,
+                [](uintptr_t,void*,size_t) noexcept -> bool {assert(false);return false;},native)==5 && invoked==2);
+            assert(!removing.detach(read,writeVptr,admitVptr) && vptrWrites==writes);
+            // Explicit CPU fixture proof: destructor has completed; metadata
+            // acknowledgement must not read or write the no-longer-live context.
+            assert(removing.acknowledgeNativeDestruction() && !removing.requiresRetention());
+            assert(removing.acknowledgeNativeDestruction());
+            vptr=previous;vptrWrites=writes-1;
+        }
         TglNativeFrameOutputReceipt receipt;
         uintptr_t publishedEvent=0x77000;uint32_t publishedIndex=7;
         unsigned outputReads=0,receiptCalls=0;int receiptResult=0;

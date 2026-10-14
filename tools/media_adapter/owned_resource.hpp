@@ -21945,7 +21945,7 @@ class TglOwnedContextFrameVtable {
     std::array<uintptr_t,TglNativeContextFrameBinding::callbackCount+2> table_{};
     uintptr_t context_=0,nativeFrame_=0,originalVptr_=0;bool attempted_=false,ready_=false;
 public:
-    enum class Publication { Unpublished,Published,Detached,Ambiguous };
+    enum class Publication { Unpublished,Published,RemovalPrepared,NativeDestroyed,Detached,Ambiguous };
 private:
     Publication publication_=Publication::Unpublished;
 public:
@@ -21968,7 +21968,7 @@ public:
     uintptr_t nativeFrame() const noexcept {return ready_?nativeFrame_:0;}
     Publication publication() const noexcept {return publication_;}
     bool requiresRetention() const noexcept {
-        return publication_==Publication::Published || publication_==Publication::Ambiguous;
+        return publication_==Publication::Published || publication_==Publication::RemovalPrepared || publication_==Publication::Ambiguous;
     }
     // Admit must prove matching physical/context generation, exclusive scope,
     // no retained frames, writable context and already-pinned stable table.
@@ -22006,6 +22006,22 @@ public:
         if(!read(context_,&current,sizeof(current)) || current!=reinterpret_cast<uintptr_t>(addressPoint()) ||
             !write(context_,originalVptr_) || !read(context_,&current,sizeof(current)) || current!=originalVptr_) return false;
         publication_=Publication::Detached;return true;
+    }
+    // Preserve original destructor callbacks in the installed clone; native
+    // deletion resets its own vptr. Survivors must not regain native frame entry.
+    template<class Read,class Admit>
+    bool prepareNativeRemoval(Read read,Admit admit) noexcept {
+        if(publication_==Publication::RemovalPrepared)return true;
+        if(publication_==Publication::Published && !canDetach(read,admit))return false;
+        if(publication_!=Publication::Published && publication_!=Publication::Unpublished &&
+            publication_!=Publication::Detached)return false;
+        publication_=Publication::RemovalPrepared;return true;
+    }
+    // Owner authenticates successful native deletion first; no freed-object read.
+    bool acknowledgeNativeDestruction() noexcept {
+        if(publication_!=Publication::RemovalPrepared && publication_!=Publication::NativeDestroyed &&
+            publication_!=Publication::Unpublished && publication_!=Publication::Detached)return false;
+        publication_=Publication::NativeDestroyed;return true;
     }
     // Caller holds the enclosing physical generation scope and native context
     // lifetime. The pool is that SAME generation's pool, not a standalone one.
@@ -22132,7 +22148,7 @@ public:
     bool publishFrame(const ExclusiveLease& lease,uintptr_t hook,ScopeAdmit scope,OwnedExecutable ownedExecutable) noexcept {
         if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;
         Unlock unlock{state_->busy};
-        if(state_->removed || !state_->retainedIdentity() ||
+        if(state_->removed || state_->table.publication()==TglOwnedContextFrameVtable::Publication::RemovalPrepared || !state_->retainedIdentity() ||
             !scope(state_->image,state_->physical,state_->generation,state_->context) || !state_->nativeParentMatches())return false;
         return state_->table.build(state_->image,state_->context,hook,state_->read,state_->qualify,state_->executable,ownedExecutable) &&
             state_->table.publish(state_->read,state_->write,state_->admit);
@@ -22144,10 +22160,7 @@ public:
         Unlock unlock{state_->busy};
         if(state_->removed || !state_->retainedIdentity() ||
             !scope(state_->image,state_->physical,state_->generation,state_->context) || !state_->nativeParentMatches())return false;
-        using P=TglOwnedContextFrameVtable::Publication;
-        const auto publication=state_->table.publication();
-        if(publication==P::Unpublished || publication==P::Detached)return true;
-        return publication==P::Published && state_->table.detach(state_->read,state_->write,state_->admit);
+        return state_->table.prepareNativeRemoval(state_->read,state_->admit);
     }
     // ONLY successful-native-removal reconcile callback may supply this proof.
     // Identity is metadata: do not dereference the already deleted context.
@@ -22157,8 +22170,11 @@ public:
         // Batch reconciliation can fail on a later owner. Confirmation must be
         // idempotent for explicit retry, but still reauthenticate the SAME
         // successful-removal proof; removed_ alone never authorizes release.
-        if(!state_->retainedIdentity() || state_->table.requiresRetention() ||
+        using P=TglOwnedContextFrameVtable::Publication;
+        const auto publication=state_->table.publication();
+        if(publication==P::Published || publication==P::Ambiguous || !state_->retainedIdentity() ||
             !removed(state_->image,state_->physical,state_->generation,state_->context))return false;
+        if(!state_->table.acknowledgeNativeDestruction())return false;
         state_->removed=true;return true;
     }
 };
