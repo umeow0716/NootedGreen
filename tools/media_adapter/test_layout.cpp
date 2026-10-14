@@ -17971,6 +17971,38 @@ int main() {
                 assert(graph.withSelectedOriginalOwners(shell,root,[](auto&,auto&) noexcept -> int {
                     assert(false);return 0;
                 })==5);
+                {
+                    struct Backend {
+                        size_t live=0;
+                        uintptr_t allocate(size_t bytes) noexcept {
+                            auto* p=std::malloc(bytes);if(p)++live;return reinterpret_cast<uintptr_t>(p);
+                        }
+                        void release(uintptr_t p) noexcept {--live;std::free(reinterpret_cast<void*>(p));}
+                    } backend;
+                    std::array<uint8_t,0x139> params{};std::array<uint8_t,0x60> packet{};
+                    std::array<TglOwnedSurfaceStorage*,25> roots{};
+                    roots[0]=&root;roots[1]=&older;roots[2]=&previous;
+                    for(size_t i=0;i<3;++i) {
+                        const auto address=reinterpret_cast<uintptr_t>(roots[i]);
+                        std::memcpy(params.data()+8+i*8,&address,8);
+                    }
+                    const uint32_t source=1,target=2;
+                    std::memcpy(packet.data()+0xc,&source,4);std::memcpy(packet.data()+0x30,&target,4);
+                    auto live=[&](size_t i,const auto* surface) noexcept {
+                        return i<3 && surface==roots[i] && resolve(reinterpret_cast<uintptr_t>(surface))->hasSurfaceLease(*surface);
+                    };
+                    TglOwnedVeboxFrameRetention retention;int calls=0;
+                    auto render=[&](auto&,auto&,auto& a,auto& b) noexcept {
+                        ++calls;assert(a.originalSurfaceBinding()==&older && b.originalSurfaceBinding()==&previous);
+                        TglOwnedVeboxCommandTransactionResult result;result.status=31;result.nativeEntered=true;
+                        return result;
+                    };
+                    const auto result=tglRunRetainedGraphPerPassTransaction(backend,graph,params,packet,roots,retention,live,render);
+                    assert(result.entered && result.copiedBack && result.native.status==31 && retention());
+                    assert(calls==1 && !backend.live);
+                    const auto denied=tglRunRetainedGraphPerPassTransaction(backend,graph,params,packet,roots,retention,live,render);
+                    assert(!denied.entered && calls==1 && !backend.live);
+                }
                 assert(graph.withOriginalOwners({&root,&previous,&previous},[&](const OriginalOwners& owners) noexcept -> int {
                     assert(owners[0]==&ro && owners[1]==&po && owners[2]==&po);return 0;
                 })==0);

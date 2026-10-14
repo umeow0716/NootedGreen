@@ -14253,6 +14253,33 @@ TglNativePerPassCommandResult tglRunNativePerPassCommandTransaction(Backend& bac
     return result;
 }
 
+// The retained graph supplies the selected original owners before temporary
+// copies exist. Preserve acquisition evidence before leaving that graph scope.
+template<class Backend,size_t P,size_t Q,class Graph,class Retention,class Lease,class Use>
+TglNativePerPassCommandResult tglRunRetainedGraphPerPassTransaction(Backend& backend,Graph& graph,
+    std::array<uint8_t,P>& parameters,std::array<uint8_t,Q>& pass,
+    const std::array<TglOwnedSurfaceStorage*,25>& originals,Retention& retention,
+    Lease live,Use use) noexcept {
+    TglNativePerPassCommandResult result;
+    static_assert(noexcept(retention()) && noexcept(retention.observe(result.native)));
+    if constexpr(P<0x130 || Q<0x34)return result;
+    else {
+        if(retention())return result;
+        uint32_t source=0,target=0;
+        std::memcpy(&source,pass.data()+0xc,4);std::memcpy(&target,pass.data()+0x30,4);
+        if(source>=17 || target>=17 || !originals[source] || !originals[target] ||
+            !live(source,originals[source]) || !live(target,originals[target]))return result;
+        const int status=graph.withSelectedOriginalOwners(*originals[source],*originals[target],
+            [&](auto& input,auto& output) noexcept -> int {
+                result=tglRunNativePerPassCommandTransaction(backend,parameters,pass,originals,input,output,live,use);
+                retention.observe(result.native);
+                return result.native.status;
+            });
+        if(!result.native.status && status)result.native.status=status;
+        return result;
+    }
+}
+
 // Whole native Render under the original surface and private child/image
 // leases. Existing callback/producer scopes must enclose this call. Never
 // treat native status0 as completion; a qualified retirement must clear the
