@@ -19142,6 +19142,20 @@ int main() {
                     auto buildLifetime=[&](uintptr_t a,uintptr_t b) {
                         return lifetime.build(image,a,b,readLifetime,qualify,execLifetime,ownedLifetime);
                     };
+                    {
+                        TglOwnedVphalLifetimeTable preparedFrame;
+                        auto ownedFrame=[&](uintptr_t p,size_t n) noexcept {
+                            return ownedLifetime(p,n) || (n==1 && p==0xf200);
+                        };
+                        assert(!preparedFrame.build(image,0xf000,0xf100,readLifetime,qualify,execLifetime,ownedFrame,0xf000));
+                        assert(!preparedFrame.build(image,0xf000,0xf100,readLifetime,qualify,execLifetime,ownedFrame,0xf300));
+                        assert(!preparedFrame.addressPoint());
+                        assert(preparedFrame.build(image,0xf000,0xf100,readLifetime,qualify,execLifetime,ownedFrame,0xf200));
+                        const auto* frameSlots=reinterpret_cast<const uintptr_t*>(preparedFrame.addressPoint());
+                        assert(frameSlots[0]==0xf000 && frameSlots[1]==0xf100 && frameSlots[2]==0xf200 &&
+                            frameSlots[3]==image+0x1e6610 && preparedFrame.nativeFrame()==image+0x133cb0);
+                        assert(!preparedFrame.build(image,0xf000,0xf100,readLifetime,qualify,execLifetime,ownedFrame,0xf200));
+                    }
                     assert(!lifetime.addressPoint() && !buildLifetime(0,0xf100));
                     assert(!buildLifetime(0xf000,0xf000));
                     for(size_t i=0;i<original.size();++i) {

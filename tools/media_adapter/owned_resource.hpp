@@ -2170,19 +2170,22 @@ public:
     TglOwnedVphalLifetimeTable& operator=(const TglOwnedVphalLifetimeTable&)=delete;
     template<class Read,class Qualify,class Executable,class OwnedAdmit>
     bool build(uintptr_t image,uintptr_t destroy,uintptr_t deletingDestroy,
-        Read read,Qualify qualify,Executable executable,OwnedAdmit ownedAdmit) noexcept {
+        Read read,Qualify qualify,Executable executable,OwnedAdmit ownedAdmit,uintptr_t frame=0) noexcept {
         if(source_ || !image || image>UINTPTR_MAX-0x75bb78 || !qualify(image) ||
             !destroy || !deletingDestroy || destroy==deletingDestroy ||
             !ownedAdmit(destroy,1) || !ownedAdmit(deletingDestroy,1)) return false;
         std::array<uintptr_t,6> original{};
         if(!read(image+0x75bb48,original.data(),sizeof(original)) || original[0]!=0 ||
             original[1]!=image+0x75bb78) return false;
+        if(frame && (frame==destroy || frame==deletingDestroy || !ownedAdmit(frame,1)))return false;
         constexpr std::array<uintptr_t,4> offsets{0x1c8e80,0x1c8ea0,0x133cb0,0x1e6610};
         for(size_t i=0;i<offsets.size();++i) {
             if(original[i+2]!=image+offsets[i] || !executable(original[i+2],1) ||
                 destroy==original[i+2] || deletingDestroy==original[i+2]) return false;
+            if(frame && frame==original[i+2])return false;
         }
         entries_=original;entries_[2]=destroy;entries_[3]=deletingDestroy;
+        if(frame)entries_[4]=frame;
         source_=image+0x75bb58;return true;
     }
     uintptr_t addressPoint() const noexcept {
@@ -2191,6 +2194,7 @@ public:
     uintptr_t source() const noexcept {return source_;}
     uintptr_t nativeDestroy() const noexcept {return source_?source_-0x75bb58+0x1c8e80:0;}
     uintptr_t nativeDeletingDestroy() const noexcept {return source_?source_-0x75bb58+0x1c8ea0:0;}
+    uintptr_t nativeFrame() const noexcept {return source_?source_-0x75bb58+0x133cb0:0;}
     uintptr_t object() const noexcept {return object_;}
     Publication publication() const noexcept {return publication_;}
     bool requiresRetention() const noexcept {
@@ -25061,7 +25065,8 @@ public:
     }
     template<class ImageRead,class Qualify,class Executable,class OwnedExecutable,class CreatorAdmit>
     bool publishLifetime(uintptr_t destroy,uintptr_t deletingDestroy,ImageRead imageRead,
-        Qualify qualify,Executable executable,OwnedExecutable ownedExecutable,CreatorAdmit creatorAdmit) noexcept {
+        Qualify qualify,Executable executable,OwnedExecutable ownedExecutable,CreatorAdmit creatorAdmit,
+        uintptr_t frame=0) noexcept {
         if(!state_ || !state_->storage || !state_->boundRenderer() || !state_->boundPhysicalOs() ||
             !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
             state_->destruction.phase()!=TglOwnedVphalDestructionState::Phase::Idle) return false;
@@ -25069,7 +25074,7 @@ public:
         if(!created.resolve(state_->image,state_->object,state_->read,creatorAdmit,qualify,executable) ||
             created.renderer!=state_->renderer) return false;
         return state_->table.build(state_->image,destroy,deletingDestroy,imageRead,qualify,
-            executable,ownedExecutable) && state_->table.publish(state_->object,
+            executable,ownedExecutable,frame) && state_->table.publish(state_->object,
                 state_->read,state_->write,state_->tableAdmit);
     }
     bool requestDestruction(Kind kind) noexcept {
