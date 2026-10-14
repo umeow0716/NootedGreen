@@ -1275,23 +1275,26 @@ struct NativeAdmissionHistorySetup {
     }
 };
 using NativeDenoiseParameters=TglTrackedCpuOwner<TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>>;
-struct NativeSfcDenoiseRequest {
-    NativeContextSurfaceOwner& owner;const NativeDenoiseParameters& parameters;
+template<class SurfaceOwner> struct NativeSfcDenoiseRequestFor {
+    SurfaceOwner& owner;const NativeDenoiseParameters& parameters;
     bool operator()(const TglOwnedSurfaceStorage& source,uint8_t& requested) const noexcept {
         return owner.readLeasedDenoiseRequest(source,parameters,requested,&readMemory);
     }
 };
-struct NativeSfcAdmissionFlags {
+using NativeSfcDenoiseRequest=NativeSfcDenoiseRequestFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeSfcAdmissionFlagsFor {
     static bool publish(TglLeasedAdmissionExecution& report,const TglOwnedSurfaceStorage& source,
-        const NativeSfcDenoiseRequest& request) noexcept {
+        const NativeSfcDenoiseRequestFor<SurfaceOwner>& request) noexcept {
         return tglPublishOwnedVeboxSfcAdmissionFlags(report,source,request);
     }
 };
-using NativeAdmissionFeatureStage=TglOwnedVeboxFeatureAdmissionStage<NativeContextSurfaceOwner,
-    NativeContextSurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,NativeDenoiseParameters,
+using NativeSfcAdmissionFlags=NativeSfcAdmissionFlagsFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> using NativeAdmissionFeatureStageFor=TglOwnedVeboxFeatureAdmissionStage<SurfaceOwner,
+    SurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,NativeDenoiseParameters,
     decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory)>;
-struct NativeAdmissionFeaturePreparation {
-    template<class Use> static int run(NativeAdmissionFeatureStage& stage,Use use) noexcept {
+using NativeAdmissionFeatureStage=NativeAdmissionFeatureStageFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeAdmissionFeaturePreparationFor {
+    template<class Use> static int run(NativeAdmissionFeatureStageFor<SurfaceOwner>& stage,Use use) noexcept {
         static_assert(noexcept(use(stage)) && std::is_same_v<decltype(use(stage)),int>);
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         if(!stage.child || !stage.sourceOwner.hasSurfaceLease(stage.source) ||
@@ -1311,23 +1314,32 @@ struct NativeAdmissionFeaturePreparation {
     // lease. Native170 consumes source90 and may retain target in report60;
     // caller encloses ALL synchronous consumers in the existing DN/feature
     // scopes and reconciles/detaches before surface owners unlock.
-    static bool apply(NativeAdmissionFeatureStage& stage,TglLeasedAdmissionExecution& report) noexcept {
+    static bool apply(NativeAdmissionFeatureStageFor<SurfaceOwner>& stage,TglLeasedAdmissionExecution& report) noexcept {
         if(stage.read!=&readMemory || stage.executable!=&executableMemory ||
             !stage.binding.image || stage.qualify.image!=stage.binding.image ||
             !tglHasNativeDenoiseAdmissionGrant(stage.sourceOwner,stage.source,stage.parameters))return false;
         return stage(report);
     }
 };
+using NativeAdmissionFeaturePreparation=NativeAdmissionFeaturePreparationFor<NativeContextSurfaceOwner>;
+template struct NativeSfcDenoiseRequestFor<NativeTemporarySurfaceOwner>;
+template struct NativeSfcAdmissionFlagsFor<NativeTemporarySurfaceOwner>;
+template struct NativeAdmissionFeaturePreparationFor<NativeTemporarySurfaceOwner>;
+template int NativeAdmissionFeaturePreparationFor<NativeTemporarySurfaceOwner>::run<
+    int(*)(NativeAdmissionFeatureStageFor<NativeTemporarySurfaceOwner>&) noexcept>(
+    NativeAdmissionFeatureStageFor<NativeTemporarySurfaceOwner>&,
+    int(*)(NativeAdmissionFeatureStageFor<NativeTemporarySurfaceOwner>&) noexcept) noexcept;
 template int NativeAdmissionFeaturePreparation::run<int(*)(NativeAdmissionFeatureStage&) noexcept>(
     NativeAdmissionFeatureStage&,int(*)(NativeAdmissionFeatureStage&) noexcept) noexcept;
-struct NativeAllocationParameterKind {
-    NativeContextSurfaceOwner& owner;const TglOwnedSurfaceStorage& source;
+template<class SurfaceOwner> struct NativeAllocationParameterKindFor {
+    SurfaceOwner& owner;const TglOwnedSurfaceStorage& source;
     bool operator()(uintptr_t parameter,uint32_t& output) const noexcept {
         return owner.readLeasedDiParameterKind(source,parameter,output,&readMemory);
     }
 };
-struct NativeAllocationRectangle {
-    NativeContextSurfaceOwner& input;NativeContextSurfaceOwner& output;
+using NativeAllocationParameterKind=NativeAllocationParameterKindFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeAllocationRectangleFor {
+    SurfaceOwner& input;SurfaceOwner& output;
     NativeRendererChildOwner& child;NativeExecutionOwner& execution;
     int operator()(void* actual,uintptr_t report,const TglOwnedSurfaceStorage& source,
         const TglOwnedFfdiTailViews&,const TglOwnedFfdnTailViews&) const noexcept {
@@ -1337,12 +1349,15 @@ struct NativeAllocationRectangle {
         });
     }
 };
+using NativeAllocationRectangle=NativeAllocationRectangleFor<NativeContextSurfaceOwner>;
+template struct NativeAllocationParameterKindFor<NativeTemporarySurfaceOwner>;
+template struct NativeAllocationRectangleFor<NativeTemporarySurfaceOwner>;
 struct NativeModeRetirementAuthority {
     void* scope=nullptr;int(*admit)(void*) noexcept=nullptr;
     int operator()() const noexcept {return scope && admit?admit(scope):5;}
 };
 using NativeRendererBacking=std::remove_reference_t<decltype(std::declval<NativeRendererCpu&>().backing())>;
-struct NativeSfcPreparation {
+template<class SurfaceOwner> struct NativeSfcPreparationFor {
     using CpuBackend=TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>;
     using State=int(*)(void*,const TglOwnedVpFramePreparation&,const TglOwnedVpRegionInput&,
         TglOwnedSfcStateParameters<CpuBackend>&,void*,void*,void*) noexcept;
@@ -1350,7 +1365,7 @@ struct NativeSfcPreparation {
     using Ief=void(*)(void*,const TglOwnedVpFramePreparation&,uint8_t*) noexcept;
     using Emit=int(*)(void*,void*,void*,const TglOwnedVpEntrySet&) noexcept;
     NativeRendererBacking& backing;NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
-    NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+    SurfaceOwner& sourceOwner;SurfaceOwner& targetOwner;
     const TglOwnedVpEntrySet& base;const TglOwnedVpModeState& original;
     size_t index;void* child;uintptr_t mhw;void* renderData;
     State state;Avs avs;Ief ief;Emit emit;
@@ -1404,12 +1419,16 @@ struct NativeSfcPreparation {
         });
     }
 };
+using NativeSfcPreparation=NativeSfcPreparationFor<NativeContextSurfaceOwner>;
+template int NativeSfcPreparationFor<NativeTemporarySurfaceOwner>::run<NativeFrameDataRead,int(*)(void*) noexcept>(
+    void*,uintptr_t,uintptr_t,const TglOwnedSurfaceStorage&,const TglOwnedSurfaceStorage&,
+    uintptr_t,NativeFrameDataRead,int(*)(void*) noexcept) noexcept;
 template int NativeSfcPreparation::run<NativeFrameDataRead,int(*)(void*) noexcept>(
     void*,uintptr_t,uintptr_t,const TglOwnedSurfaceStorage&,const TglOwnedSurfaceStorage&,
     uintptr_t,NativeFrameDataRead,int(*)(void*) noexcept) noexcept;
-struct NativeVpPreparationDomain {};
-struct NativeVpPreparationScope {
-    using Publication=TglOwnedScopedContext<NativeVpPreparedCallbacks,NativeVpPreparationDomain>;
+template<class SurfaceOwner> struct NativeVpPreparationDomainFor {};
+template<class SurfaceOwner> struct NativeVpPreparationScopeFor {
+    using Publication=TglOwnedScopedContext<NativeVpPreparedCallbacksFor<SurfaceOwner>,NativeVpPreparationDomainFor<SurfaceOwner>>;
     static int state(void* vp,const TglOwnedVpFramePreparation& frame,const TglOwnedVpRegionInput& geometry,
         NativeVpNv12PacketScope::StateOwner& owner,void* data,void* source,void* target) noexcept {
         auto* callbacks=Publication::get(vp);
@@ -1428,8 +1447,9 @@ struct NativeVpPreparationScope {
             entries.platformSend!=callbacks->catalogue.platformSend)return 5;
         return callbacks->emit(vp,callbacks->capturedFrame,data,command);
     }
-    using Use=int(*)(void*,NativeSfcPreparation&) noexcept;
-    static int run(NativeVpPreparedCallbacks& callbacks,NativeSfcPreparation& preparation,void* context,Use use) noexcept {
+    using Use=int(*)(void*,NativeSfcPreparationFor<SurfaceOwner>&) noexcept;
+    static int run(NativeVpPreparedCallbacksFor<SurfaceOwner>& callbacks,NativeSfcPreparationFor<SurfaceOwner>& preparation,
+        void* context,Use use) noexcept {
         if(!context || !use || !callbacks.sameOwners() || callbacks.error || callbacks.scalar.attempted ||
             preparation.renderData!=callbacks.renderData || &preparation.base!=&callbacks.catalogue ||
             &preparation.childOwner!=&callbacks.emission.childOwner || preparation.child!=callbacks.emission.parent ||
@@ -1445,31 +1465,41 @@ struct NativeVpPreparationScope {
         return result?result:callbacks.error;
     }
 };
-template<class Read> struct NativeSfcPrepareCall {
-    NativeSfcPreparation& preparation;Read& read;
+using NativeVpPreparationDomain=NativeVpPreparationDomainFor<NativeContextSurfaceOwner>;
+using NativeVpPreparationScope=NativeVpPreparationScopeFor<NativeContextSurfaceOwner>;
+template struct NativeVpPreparationScopeFor<NativeTemporarySurfaceOwner>;
+template<class SurfaceOwner,class Read> struct NativeSfcPrepareCallFor {
+    NativeSfcPreparationFor<SurfaceOwner>& preparation;Read& read;
     template<class Complete> int operator()(void* vp,uintptr_t e0,uintptr_t f0,
         const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,
         uintptr_t execution,Complete complete) noexcept {
         return preparation.run(vp,e0,f0,source,target,execution,read,complete);
     }
 };
-struct NativeSfcAdmission {
+template<class Read> using NativeSfcPrepareCall=NativeSfcPrepareCallFor<NativeContextSurfaceOwner,Read>;
+template<class SurfaceOwner> struct NativeSfcAdmissionFor {
     template<class Read,class Finish>
-    static bool run(NativeSfcPreparation& preparation,Read& read,const NativeSfcDenoiseRequest& dn,
+    static bool run(NativeSfcPreparationFor<SurfaceOwner>& preparation,Read& read,const NativeSfcDenoiseRequestFor<SurfaceOwner>& dn,
         void* vp,uintptr_t execution,const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,
         TglLeasedAdmissionExecution& report,const TglVeboxAdmissionStagesInput& input,Finish finish) noexcept {
         if constexpr(std::is_pointer_v<Finish>)if(!finish)return false;
         // DN authority must name this exact original source owner; it must
         // remain inside the enclosing tracked native-release-slot borrow.
         if(&dn.owner!=&preparation.sourceOwner)return false;
-        using Prepare=NativeSfcPrepareCall<Read>;
+        using Prepare=NativeSfcPrepareCallFor<SurfaceOwner,Read>;
         TglOwnedVeboxScopedSfcAdmissionStage<NativeRendererChildOwner,NativeExecutionOwner,
-            NativeContextSurfaceOwner,NativeContextSurfaceOwner,NativeSfcDenoiseRequest,Prepare>
+            SurfaceOwner,SurfaceOwner,NativeSfcDenoiseRequestFor<SurfaceOwner>,Prepare>
             stage(preparation.childOwner,preparation.executionOwner,preparation.sourceOwner,
                 preparation.targetOwner,preparation.child,vp,execution,source,target,dn,{preparation,read});
         return stage(report,input,finish);
     }
 };
+using NativeSfcAdmission=NativeSfcAdmissionFor<NativeContextSurfaceOwner>;
+template bool NativeSfcAdmissionFor<NativeTemporarySurfaceOwner>::run<NativeFrameDataRead,bool(*)() noexcept>(
+    NativeSfcPreparationFor<NativeTemporarySurfaceOwner>&,NativeFrameDataRead&,
+    const NativeSfcDenoiseRequestFor<NativeTemporarySurfaceOwner>&,void*,uintptr_t,
+    const TglOwnedSurfaceStorage&,const TglOwnedSurfaceStorage&,TglLeasedAdmissionExecution&,
+    const TglVeboxAdmissionStagesInput&,bool(*)() noexcept) noexcept;
 template bool NativeSfcAdmission::run<NativeFrameDataRead,bool(*)() noexcept>(
     NativeSfcPreparation&,NativeFrameDataRead&,const NativeSfcDenoiseRequest&,void*,uintptr_t,
     const TglOwnedSurfaceStorage&,const TglOwnedSurfaceStorage&,TglLeasedAdmissionExecution&,
