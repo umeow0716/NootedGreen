@@ -15304,9 +15304,33 @@ static void testRetainedVeboxFrames() {
                 using RootOwner=TglNativeContextRootSurfaceOwner<decltype(owners)::ContextLease>;
                 auto writable=[&](uintptr_t p,size_t size) noexcept {return p==address && size==sizeof(original);};
                 RootOwner sidecar(owners.pin(image,0x8000,success.ticket.generation,0x20000),roots,address,writable);
+                struct DnBackend {
+                    unsigned releases=0;
+                    uintptr_t allocate(size_t bytes) {return reinterpret_cast<uintptr_t>(std::malloc(bytes));}
+                    void release(uintptr_t value) noexcept {++releases;std::free(reinterpret_cast<void*>(value));}
+                } dnBackend;
+                TglTrackedCpuOwner<DnBackend> dn(dnBackend);assert(dn.allocate(32));
+                assert(!sidecar.withNativeDenoiseParameters(original,dn,[]() noexcept {assert(false);}));
                 {
                     typename RootOwner::SurfaceOwnerLease shell(sidecar);
                     assert(shell.storage()==&original && shell.metadataStorage()==&original && sidecar.hasSurfaceLease(original));
+                    const uintptr_t dnAddress=dn.get();
+                    assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {
+                        uintptr_t actual=0;std::memcpy(&actual,original.prefix.data()+0x90,8);
+                        assert(actual==dnAddress && dn.hasNativeReleaseSlot(original.prefix.data()+0x90));
+                        assert(!sidecar.canDestroy());
+                        assert(!sidecar.withNativeDenoiseParameters(original,dn,[]() noexcept {assert(false);}));
+                    }) && dn.get()==dnAddress && dnBackend.releases==0);
+                    uintptr_t populated=1;std::memcpy(original.prefix.data()+0x90,&populated,8);
+                    assert(!sidecar.withNativeDenoiseParameters(original,dn,[]() noexcept {assert(false);}));
+                    populated=0;std::memcpy(original.prefix.data()+0x90,&populated,8);
+                    assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {
+                        dnBackend.release(dnAddress);
+                        std::memcpy(original.prefix.data()+0x90,&populated,8);
+                    }) && !dn.get() && !dn.size() && dnBackend.releases==1);
+                    assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {
+                        assert(dn.hasNativeReleaseSlot(original.prefix.data()+0x90));
+                    })); // Native admits absent DN without inventing allocation.
                     assert(sidecar.surfaceBinding()==&original);
                     assert(sidecar.withMutableSurface([&](auto& surface) noexcept -> int {
                         assert(&surface==&original && sidecar.hasSurfaceLease(surface) && !sidecar.canDestroy());
@@ -15385,6 +15409,16 @@ static void testRetainedVeboxFrames() {
                 assert(!sidecar.hasSurfaceLease(original));
                 assert(!sidecar.surfaceBinding() && !sidecar.withSurface([](const auto&) noexcept {assert(false);}));
                 assert(sidecar.canDestroy());
+                RootOwner dnFault(owners.pin(image,0x8000,success.ticket.generation,0x20000),roots,address,writable);
+                {
+                    typename RootOwner::SurfaceOwnerLease held(dnFault);
+                    assert(!dnFault.withNativeDenoiseParameters(original,dn,[&]() noexcept {
+                        const uintptr_t foreign=1;std::memcpy(original.prefix.data()+0x90,&foreign,8);
+                    }));
+                    uintptr_t detached=1;std::memcpy(&detached,original.prefix.data()+0x90,8);assert(!detached);
+                    assert(!dnFault.withNativeDenoiseParameters(original,dn,[]() noexcept {assert(false);}));
+                }
+                assert(!dnFault.canDestroy()); // An ambiguous native write is sticky.
                 assert(sidecar.withMutableSurface([](auto&) noexcept -> int {assert(false);return 0;})==5);
                 assert(owners.reconcileSuccessfulRemoval(image,0x8000,success.ticket.generation,removed)==5 && !destroyed);
                 RootOwner readOnly(owners.pin(image,0x8000,success.ticket.generation,0x20000),roots,address,

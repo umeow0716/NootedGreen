@@ -18088,6 +18088,7 @@ template<class ContextLease> class TglNativeContextRootSurfaceOwner {
     ContextLease context_;
     TglOwnedSurfaceStorage* shell_=nullptr;
     bool borrowed_=false,conversionBorrowed_=false,conversionFault_=false,diBorrowed_=false,diFault_=false,surfaceBusy_=false;
+    bool denoiseBorrowed_=false,denoiseFault_=false;
 public:
     template<class Writable>
     TglNativeContextRootSurfaceOwner(ContextLease&& lease,const TglNativeContextInputRoots& roots,
@@ -18108,12 +18109,30 @@ public:
     TglNativeContextRootSurfaceOwner(const TglNativeContextRootSurfaceOwner&)=delete;
     TglNativeContextRootSurfaceOwner& operator=(const TglNativeContextRootSurfaceOwner&)=delete;
     bool ready() const noexcept {return context_.get() && shell_;}
-    bool canDestroy() const noexcept {return !borrowed_ && !surfaceBusy_ && !conversionBorrowed_ && !diBorrowed_;}
+    bool canDestroy() const noexcept {return !borrowed_ && !surfaceBusy_ && !conversionBorrowed_ && !diBorrowed_ &&
+        !denoiseBorrowed_ && !denoiseFault_;}
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& shell) const noexcept {
         return context_.get() && borrowed_ && shell_==&shell;
     }
     const TglOwnedSurfaceStorage* surfaceBinding() const noexcept {
         return context_.get() && borrowed_?shell_:nullptr;
+    }
+    // Publish tracked owned DN only in the already-leased ORIGINAL source90
+    // slot. Paired native consumption is reconciled by Parameters; never adopt
+    // an existing slot or copy a descriptor. Ambiguous native mutation retains
+    // this context sidecar instead of certifying safe destruction.
+    template<class Parameters,class Use>
+    bool withNativeDenoiseParameters(const TglOwnedSurfaceStorage& expected,
+        Parameters& parameters,Use use) noexcept {
+        static_assert(noexcept(use()) && std::is_same_v<decltype(use()),void>);
+        if(denoiseBorrowed_ || denoiseFault_ || !hasSurfaceLease(expected))return false;
+        denoiseBorrowed_=true;
+        struct Reset {bool& busy;~Reset(){busy=false;}} reset{denoiseBorrowed_};
+        bool entered=false;
+        const bool reconciled=parameters.withNativeReleaseSlot(shell_->prefix.data()+0x90,
+            [&]() noexcept {entered=true;use();});
+        if(entered && (!reconciled || !hasSurfaceLease(expected)))denoiseFault_=true;
+        return reconciled && !denoiseFault_;
     }
     // Borrow the already-retained original shell, never acquire a second
     // SurfaceOwnerLease or copy a descriptor into a temporary owner.

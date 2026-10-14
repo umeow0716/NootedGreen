@@ -335,6 +335,40 @@ using NativeFrontendAccess=TglPinnedVphalStorageAccess<NativeDataAdmission,Nativ
 using NativeFrontendEnvironment=TglNativeFrontendCpuEnvironment<decltype(&readMemory),NativeTglImageAdmission,
     decltype(&executableMemory)>;
 using NativeContextSurfaceOwner=typename TglNativeContextSurfaceOwners<NativeCodecBackend::Registry>::Owner;
+using NativeDenoiseParameters=TglTrackedCpuOwner<TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>>;
+using NativeAdmissionFeatureStage=TglOwnedVeboxFeatureAdmissionStage<NativeContextSurfaceOwner,
+    NativeContextSurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,NativeDenoiseParameters,
+    decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory)>;
+struct NativeAdmissionFeaturePreparation {
+    template<class Use> static int run(NativeAdmissionFeatureStage& stage,Use use) noexcept {
+        static_assert(noexcept(use(stage)) && std::is_same_v<decltype(use(stage)),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        if(!stage.child || !stage.sourceOwner.hasSurfaceLease(stage.source) ||
+            !stage.targetOwner.hasSurfaceLease(stage.target) ||
+            !stage.childOwner.hasPrivateFeaturePreparationLease(
+                reinterpret_cast<uintptr_t>(stage.child),stage.binding.image) ||
+            !stage.executionOwner.hasExecutionLease(stage.execution))return 5;
+        int status=5;
+        const bool reconciled=stage.sourceOwner.withNativeDenoiseParameters(stage.source,stage.parameters,
+            [&]() noexcept {
+                status=stage.executionOwner.withLeasedFeatureReport(stage.execution,&stage.target,
+                    [&]() noexcept -> int {return use(stage);});
+            });
+        return status?status:(reconciled?0:5);
+    }
+    // Use the report already borrowed by admission, not another execution
+    // lease. Native170 consumes source90 and may retain target in report60;
+    // caller encloses ALL synchronous consumers in the existing DN/feature
+    // scopes and reconciles/detaches before surface owners unlock.
+    static bool apply(NativeAdmissionFeatureStage& stage,TglLeasedAdmissionExecution& report) noexcept {
+        if(stage.read!=&readMemory || stage.executable!=&executableMemory ||
+            !stage.binding.image || stage.qualify.image!=stage.binding.image ||
+            !stage.parameters.hasNativeReleaseSlot(stage.source.prefix.data()+0x90))return false;
+        return stage(report);
+    }
+};
+template int NativeAdmissionFeaturePreparation::run<int(*)(NativeAdmissionFeatureStage&) noexcept>(
+    NativeAdmissionFeatureStage&,int(*)(NativeAdmissionFeatureStage&) noexcept) noexcept;
 struct NativeAllocationParameterKind {
     NativeContextSurfaceOwner& owner;const TglOwnedSurfaceStorage& source;
     bool operator()(uintptr_t parameter,uint32_t& output) const noexcept {
