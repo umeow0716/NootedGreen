@@ -7177,6 +7177,37 @@ bool tglAcquireLeasedGen12PipeFeatures(bool& rejectLut,bool& hdr,
         targetFeatures.hdr==TglOwnedFeaturePresence::Present;
     rejectLut=candidate;hdr=candidateHdr;return true;
 }
+// Acquire only the predicate's actual dependencies. HDR is consulted later
+// (only for an available SFC), not before an already-valid direct exit.
+template<class SourceOwner,class TargetOwner>
+bool tglAcquireLeasedGen12LutRejection(bool& rejectLut,
+    SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,const TglOwnedGen12SurfaceFeatures& features,
+    TargetOwner& targetOwner,const TglOwnedSurfaceStorage& target,TglVeboxPipeAcquisition& frame) noexcept {
+    static_assert(noexcept(sourceOwner.hasSurfaceLease(source)) && noexcept(targetOwner.hasSurfaceLease(target)));
+    if(!frame.healthy())return false;
+    if(features.surface!=&source || features.frame!=&frame ||
+        !sourceOwner.hasSurfaceLease(source) || !targetOwner.hasSurfaceLease(target) ||
+        (features.lut!=TglOwnedFeaturePresence::Absent && features.lut!=TglOwnedFeaturePresence::Present)) {
+        frame.fail();return false;
+    }
+    uint32_t format=0;std::memcpy(&format,target.prefix.data()+0x130,4);
+    rejectLut=tglRejectGen12LutOutput(features.lut==TglOwnedFeaturePresence::Present,format);return true;
+}
+template<class SourceOwner,class TargetOwner>
+bool tglAcquireLeasedGen12HdrPresence(bool& hdr,
+    SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,const TglOwnedGen12SurfaceFeatures& a,
+    TargetOwner& targetOwner,const TglOwnedSurfaceStorage& target,const TglOwnedGen12SurfaceFeatures& b,
+    TglVeboxPipeAcquisition& frame) noexcept {
+    static_assert(noexcept(sourceOwner.hasSurfaceLease(source)) && noexcept(targetOwner.hasSurfaceLease(target)));
+    if(!frame.healthy())return false;
+    auto known=[](TglOwnedFeaturePresence p) noexcept {
+        return p==TglOwnedFeaturePresence::Absent || p==TglOwnedFeaturePresence::Present;
+    };
+    if(a.surface!=&source || b.surface!=&target || a.frame!=&frame || b.frame!=&frame ||
+        !sourceOwner.hasSurfaceLease(source) || !targetOwner.hasSurfaceLease(target) ||
+        !known(a.hdr) || !known(b.hdr)) {frame.fail();return false;}
+    hdr=a.hdr==TglOwnedFeaturePresence::Present || b.hdr==TglOwnedFeaturePresence::Present;return true;
+}
 // Concrete non-SFC portion of the Gen12 platform policy. Use through
 // tglSelectOwnedVpOutputPipe: that scope supplies the real VP extent callback.
 // An unscoped SFC dispatch fails explicitly instead of manufacturing pipe0.
@@ -7194,12 +7225,18 @@ class TglLeasedGen12VeboxOutputPolicy {
     TglVeboxPipeAcquisition& frame_;
     Query& query_;FastFill& fastFill_;
     TglVeboxPipeReadGate<Read> gate_;
-    bool featuresReady_=false,lutRejected_=false,hdrPresent_=false;
-    bool features() noexcept {
+    bool lutReady_=false,hdrReady_=false,lutRejected_=false,hdrPresent_=false;
+    bool lutFeature() noexcept {
         if(!healthy()) return false;
-        if(!featuresReady_) featuresReady_=tglAcquireLeasedGen12PipeFeatures(lutRejected_,hdrPresent_,
-            sourceOwner_,source_,sourceFeatures_,targetOwner_,target_,targetFeatures_,frame_);
-        return featuresReady_;
+        if(!lutReady_)lutReady_=tglAcquireLeasedGen12LutRejection(lutRejected_,
+            sourceOwner_,source_,sourceFeatures_,targetOwner_,target_,frame_);
+        return lutReady_;
+    }
+    bool hdrFeatures() noexcept {
+        if(!healthy())return false;
+        if(!hdrReady_)hdrReady_=tglAcquireLeasedGen12HdrPresence(hdrPresent_,sourceOwner_,source_,sourceFeatures_,
+            targetOwner_,target_,targetFeatures_,frame_);
+        return hdrReady_;
     }
     bool query(bool& needed) noexcept {
         static_assert(noexcept(query_(uintptr_t{},uintptr_t{},needed)) &&
@@ -7255,7 +7292,7 @@ public:
         bool rejected=false;
         return healthy() && tglRejectLeasedGen12DiOutput(rejected,source_,di_,frame_,gate_) && rejected;
     }
-    bool rejectLut() noexcept {return features() && lutRejected_;}
+    bool rejectLut() noexcept {return lutFeature() && lutRejected_;}
     bool direct() noexcept {
         uint32_t enabled=0;
         auto directRead=[&](uintptr_t address,void* output,size_t bytes) noexcept {
@@ -7278,7 +7315,7 @@ public:
         if(actual && (!vp_ || actual!=vp_)) {frame_.fail();return false;}
         return actual!=0;
     }
-    bool hdr() noexcept {return features() && hdrPresent_;}
+    bool hdr() noexcept {return hdrFeatures() && hdrPresent_;}
     bool admitVpOutputInvocation(void* vpChild,void* source,void* target,void* parameters,
         bool sfcCall) noexcept {
         if(!healthy()) return false;

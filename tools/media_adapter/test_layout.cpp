@@ -3544,7 +3544,8 @@ static void testLeasedGen12PlatformPolicy() {
     struct SfcFixture {
         static int extent(void* vp,void*,void*,void*) noexcept {++*static_cast<unsigned*>(vp);return 1;}
     };
-    for(unsigned scenario=0;scenario<33;++scenario) {
+    for(unsigned variant=0;variant<35;++variant) {
+        const unsigned scenario=variant<33?variant:variant==33?0:1;
         TglOwnedSurfaceStorage source{},target{};
         std::array<uint8_t,0x1bc0> child{};
         std::array<uint8_t,0x139> parameters{};
@@ -3582,6 +3583,7 @@ static void testLeasedGen12PlatformPolicy() {
         TglOwnedGen12SurfaceFeatures a{&source,&frame,scenario==3?Presence::Present:Presence::Absent,
             scenario==2?Presence::Present:Presence::Absent};
         TglOwnedGen12SurfaceFeatures b{&target,&frame,Presence::Unknown,Presence::Absent};
+        if(variant>=33)a.hdr=b.hdr=Presence::Unknown;
         if(scenario==4) a.lut=Presence::Unknown;
         auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
             if(scenario==12 && p==childAddress+0x1b9c) return false;
@@ -3696,11 +3698,12 @@ static void testLeasedGen12PlatformPolicy() {
             std::memcpy(&publishedParams,report.data()+0xd28,4);
             assert(mode==output && publishedParams==0x1357);
         }
-        if(scenario==0 || scenario==1 || scenario==2 || scenario==3 || scenario==10 || scenario==13 || scenario==17) {
+        if(variant==34)assert(!ok && output==0xdeadbeef && comp==0xa4 && !frame.healthy());
+        else if(scenario==0 || scenario==1 || scenario==2 || scenario==3 || scenario==10 || scenario==13 || scenario==17) {
             const uint32_t expected=scenario==0 || scenario==10 || scenario==17?2:scenario==1?1:0;
             assert(ok && output==expected && comp==(expected?0:1) && frame.healthy());
         } else assert(!ok && output==0xdeadbeef && comp==0xa4 && !frame.healthy());
-        assert(sfcCalls==(scenario==1?1u:0u) && fills==(scenario==10 || (scenario>=16 && scenario<=28)?1u:0u));
+        assert(sfcCalls==(scenario==1 && variant!=34?1u:0u) && fills==(scenario==10 || (scenario>=16 && scenario<=28)?1u:0u));
         if(scenario==10 || scenario>=16) {
             float bottom=0;std::memcpy(&bottom,target.prefix.data()+0x4c,4);
             assert(bottom==1120 && target.prefix[0x85]==(scenario==10 || scenario==17?1:0));
