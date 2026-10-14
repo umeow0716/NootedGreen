@@ -18964,6 +18964,94 @@ public:
         return result; // Neither native0 nor a stable slot authorizes retirement.
     }
 };
+struct TglNativeVeboxPostWritebackInvoker {
+    int operator()(uintptr_t entry,uintptr_t child) const noexcept {
+        return reinterpret_cast<int(*)(void*)>(entry)(reinterpret_cast<void*>(child));
+    }
+};
+struct TglNativeVeboxMarkSubmittedInvoker {
+    uint32_t operator()(uintptr_t entry,uintptr_t interface) const noexcept {
+        return reinterpret_cast<uint32_t(*)(void*)>(entry)(reinterpret_cast<void*>(interface));
+    }
+};
+// Exact12a230 tail,without native's retry loop. Caller holds the private
+// child/OS/MHW/image leases through capture,post calls,submit and finish.
+class TglNativeVeboxSendTailBinding {
+    struct Snapshot {
+        uintptr_t table=0,os=0,mhw=0;std::array<uintptr_t,2> post{};uint8_t flags=0;
+        bool same(const Snapshot& b) const noexcept {
+            return table==b.table && os==b.os && mhw==b.mhw && post==b.post && flags==b.flags;
+        }
+    } snapshot_;
+    uintptr_t image_=0,child_=0;
+    TglVeboxHardwareBinding hardware_{};
+    bool attempted_=false,ready_=false,postAttempted_=false,postReady_=false,finishAttempted_=false;
+    template<class F> static bool available(const F& fn) noexcept {
+        if constexpr(std::is_pointer_v<F>)return fn!=nullptr;
+        else return true;
+    }
+    template<class Read> static bool load(uintptr_t child,Read read,Snapshot& value) noexcept {
+        if(!child || (child&7) || child>UINTPTR_MAX-0x1bc0 ||
+            !read(child,&value.table,8) || !value.table || value.table>UINTPTR_MAX-0x160 ||
+            !read(child+0x10,&value.os,8) || !value.os ||
+            !read(child+0x60,&value.mhw,8) || !value.mhw ||
+            !read(child+0x1ba8,&value.flags,1) ||
+            !read(value.table+0x150,value.post.data(),16))return false;
+        value.flags&=1;return true;
+    }
+    template<class Read> bool live(Read read) const noexcept {
+        Snapshot current;
+        return ready_ && load(child_,read,current) && snapshot_.same(current);
+    }
+public:
+    TglNativeVeboxSendTailBinding()=default;
+    TglNativeVeboxSendTailBinding(const TglNativeVeboxSendTailBinding&)=delete;
+    TglNativeVeboxSendTailBinding& operator=(const TglNativeVeboxSendTailBinding&)=delete;
+    template<class Read,class Qualify,class Executable>
+    bool capture(uintptr_t image,uintptr_t child,const TglVeboxHardwareBinding& hardware,
+        Read read,Qualify qualify,Executable executable) noexcept {
+        if(attempted_ || postAttempted_ || finishAttempted_)return false;attempted_=true;
+        Snapshot first,second;
+        if(!available(read) || !available(qualify) || !available(executable) ||
+            !image || image>UINTPTR_MAX-0x12a730 || !qualify(image) ||
+            !load(child,read,first) || !load(child,read,second) || !first.same(second) ||
+            first.os!=hardware.os || first.mhw!=hardware.interface ||
+            first.post!=std::array<uintptr_t,2>{image+0x12a730,image+0x8f380} ||
+            !executable(first.post[0],1) || !executable(first.post[1],1))return false;
+        snapshot_=first;hardware_=hardware;image_=image;child_=child;ready_=true;return true;
+    }
+    template<class Read> bool flags(Read read,uint32_t& output) const noexcept {
+        if(!available(read) || !live(read))return false;output=snapshot_.flags;return true;
+    }
+    template<class Read,class Admit,class Invoke=TglNativeVeboxPostWritebackInvoker>
+    int postWriteback(Read read,Admit admit,Invoke invoke={}) noexcept {
+        if(postAttempted_ || finishAttempted_)return 5;postAttempted_=true;
+        if(!available(read) || !available(admit) || !available(invoke) ||
+            !live(read) || !admit(child_,snapshot_.os,snapshot_.mhw))return 5;
+        for(auto entry:snapshot_.post) {
+            const int status=invoke(entry,child_);
+            if(status)return status;
+            if(!live(read) || !admit(child_,snapshot_.os,snapshot_.mhw))return 5;
+        }
+        postReady_=true;return 0;
+    }
+    template<class Read,class Admit,class Qualify,class Executable,class Invoke=TglNativeVeboxMarkSubmittedInvoker>
+    int finish(const TglNativeOsCommandSubmitBinding::Observation& submitted,
+        Read read,Admit admit,Qualify qualify,Executable executable,Invoke invoke={}) noexcept {
+        if(finishAttempted_)return 5;finishAttempted_=true;
+        if(!available(read) || !available(admit) || !available(qualify) || !available(executable) || !available(invoke) ||
+            !postReady_ || !submitted.submit.called || submitted.os!=snapshot_.os)return 5;
+        if(submitted.submit.nativeStatus)return submitted.submit.nativeStatus;
+        if(!submitted.submit.stable || !submitted.observed ||
+            ((submitted.flagsBefore|submitted.flagsAfter)&0x60000000U) ||
+            !live(read) || !admit(child_,snapshot_.os,snapshot_.mhw))return 5;
+        if(!snapshot_.flags) {
+            const auto status=hardware_.markSubmitted(image_,read,qualify,executable,invoke);
+            if(status)return static_cast<int>(status);
+        }
+        return live(read) && admit(child_,snapshot_.os,snapshot_.mhw)?0:5;
+    }
+};
 class TglNativeVideoBufferFlushBinding {
     uintptr_t entry_=0;
 public:

@@ -2633,6 +2633,33 @@ struct NativeFrameHistoryRetirement {
 // enclosing Send duties. Not an extra flush after whole native Render.
 struct NativeVeboxSendSubmissionStage {
     using Admit=bool(*)(const NativeBorrowedFrontend&,uintptr_t,uintptr_t,uintptr_t) noexcept;
+    using AdmitChild=bool(*)(uintptr_t,uintptr_t,uintptr_t) noexcept;
+    static int runTail(NativeContextRendererFrame& frame,TglOwnedVeboxProducerPass& pass,
+        TglNativeVeboxSendTailBinding& tail,const TglNativeOsCommandSubmitBinding& binding,
+        TglOwnedVeboxBuilderScratch& scratch,TglOwnedVeboxCommandTransactionResult& command,
+        TglOwnedVeboxFrameRetention& retention,uintptr_t image,Admit admit,AdmitChild admitChild) noexcept {
+        int prior=command.status;
+        if(!prior && (!command.acquired || !command.writtenBack || command.builderStatus))
+            prior=command.builderStatus?command.builderStatus:5;
+        if(!prior && (!admit || !admitChild ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(admitChild),1)))prior=5;
+        const int status=pass.withSubmission(prior,[&]() noexcept -> int {
+            uint32_t flags=0;
+            if(!tail.flags(&readMemory,flags))return 5;
+            const int post=tail.postWriteback(&readMemory,admitChild);
+            if(post)return post;
+            const auto observed=frame.observeNativeOsSubmit(binding,scratch.command.data(),flags,&readMemory,admit);
+            command.nativeEntered=command.nativeEntered || observed.submit.called;
+            const int native=observed.submit.status();
+            if(native)return native;
+            if(!observed.observed || frame.invalidated())return 5;
+            return tail.finish(observed,&readMemory,admitChild,NativeTglImageAdmission{image},&executableMemory);
+        });
+        if(!command.status && status)command.status=status;
+        retention.observe(command);
+        return status;
+    }
     static int setup(const TglNativeVeboxSetupBinding& binding,uintptr_t child,
         TglOwnedVeboxBuilderScratch& scratch,int32_t& remaining,uintptr_t image,
         TglOwnedVeboxProducerPass& pass) noexcept {

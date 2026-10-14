@@ -4488,6 +4488,55 @@ static void testVeboxHardwareBinding() {
         markRx=false;assert(mark()==5 && marks==2);markRx=true;
         markAnchor[0]^=1;assert(mark()==5 && marks==2);markAnchor[0]^=1;
         ++heap;assert(mark()==5 && marks==2);--heap;
+        for(unsigned mode=0;mode<10;++mode) {
+            alignas(8) std::array<uint8_t,0x1bc0> child{};
+            std::array<uintptr_t,TglOwnedVeboxVtable::count> table{};
+            const auto object=reinterpret_cast<uintptr_t>(child.data());
+            const auto vptr=reinterpret_cast<uintptr_t>(table.data());
+            std::memcpy(child.data(),&vptr,8);std::memcpy(child.data()+0x10,&os,8);
+            std::memcpy(child.data()+0x60,&mhw,8);child[0x1ba8]=mode==1?1:0;
+            table[0x150/8]=image+0x12a730;table[0x158/8]=image+0x8f380;
+            auto tailRead=[&](uintptr_t p,void* out,size_t n) {
+                if(p>=object && p-object<=child.size() && n<=child.size()-(p-object)) {
+                    std::memcpy(out,child.data()+p-object,n);return true;
+                }
+                if(p>=vptr && p-vptr<=sizeof(table) && n<=sizeof(table)-(p-vptr)) {
+                    std::memcpy(out,reinterpret_cast<const uint8_t*>(table.data())+p-vptr,n);return true;
+                }
+                return markRead(p,out,n);
+            };
+            auto admit=[&](uintptr_t c,uintptr_t o,uintptr_t m) noexcept {
+                return c==object && o==os && m==mhw;
+            };
+            auto tailExecutable=[](uintptr_t,size_t) noexcept {return true;};
+            TglNativeVeboxSendTailBinding tail;
+            assert(tail.capture(image,object,b,tailRead,qualify,tailExecutable));
+            assert(!tail.capture(image,object,b,tailRead,qualify,tailExecutable));
+            uint32_t flag=99;assert(tail.flags(tailRead,flag) && flag==(mode==1?1U:0U));
+            unsigned posts=0,tailMarks=0;
+            auto post=[&](uintptr_t p,uintptr_t c) noexcept -> int {
+                assert(c==object && p==(posts?image+0x8f380:image+0x12a730));++posts;
+                if(mode==4)child[0x1ba8]^=1;
+                return mode==3?31:0;
+            };
+            const int postStatus=tail.postWriteback(tailRead,admit,post);
+            assert(postStatus==(mode==3?31:mode==4?5:0));
+            assert(posts==((mode==3 || mode==4)?1U:2U));
+            TglNativeOsCommandSubmitBinding::Observation observed;
+            observed.os=os;observed.submit={mode==2?31:0,true,mode!=8};observed.observed=mode!=9;
+            if(mode==5)observed.flagsAfter=0x40000000;
+            if(mode==6){const auto wrong=mhw+8;std::memcpy(child.data()+0x60,&wrong,8);}
+            auto marked=[&](uintptr_t p,uintptr_t c) noexcept -> uint32_t {
+                assert(p==image+0xff190 && c==mhw);++tailMarks;return mode==7?31:0;
+            };
+            const int status=tail.finish(observed,tailRead,admit,qualify,tailExecutable,marked);
+            const int expected=mode==2 || mode==7?31:
+                (mode==3 || mode==4 || mode==5 || mode==6 || mode==8 || mode==9)?5:0;
+            assert(status==expected && tailMarks==((mode==0 || mode==7)?1U:0U));
+            assert(tail.finish(observed,tailRead,admit,qualify,tailExecutable,marked)==5);
+            assert(tailMarks==((mode==0 || mode==7)?1U:0U));
+            assert(tail.postWriteback(tailRead,admit,post)==5);
+        }
     }
     uint32_t instanceBytes = 4096, current = 3;
     {
