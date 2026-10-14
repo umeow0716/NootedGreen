@@ -6,6 +6,7 @@
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <mach-o/loader.h>
 #include <cstdio>
 #include <map>
 #include <memory>
@@ -23,10 +24,11 @@ constexpr uint8_t expectedHash[32] = {
     0xcf,0x1c,0xb7,0x4a,0x1f,0xb3,0x60,0x69,0xbb,0x1b,0x35,0x62,0xb3,0x75,0x01,0x29};
 using Create = int (*)(void **, const void *, AvdMetadata *);
 using Destroy = int (*)(void *);
-struct Library { void *handle = nullptr; Create create = nullptr; Destroy destroy = nullptr; };
+struct Library { void *handle = nullptr; Create create = nullptr; Destroy destroy = nullptr; uintptr_t resourceShared=0; };
 Library library;
 std::once_flag loadOnce;
 std::mutex registryLock;
+bool readMemory(uintptr_t address, void *output, size_t length) noexcept;
 struct Entry {
     // Factory table lifetime only, not the native physical context lifetime.
     // Exact TGL table slots: [0] factory data, [1] 0x135d9 physical init
@@ -38,6 +40,11 @@ struct Entry {
     // physical context before returning failure (0x13cc3..0x13cef).
     AvdDescriptorBridge bridge;
     TglNativePhysicalCallbackBinding physical;
+    TglNativeResourceCfTypeBinding resourceClass;
+    bool expectedFrontendTypes(TglNativeFrontendCfTypes& output) const noexcept {
+        return tglReadNativeFrontendCfTypes(resourceClass,readMemory,
+            []() noexcept -> uintptr_t {return TglDarwinTypedCfReferenceApi{}.surfaceType();},output);
+    }
     std::array<uintptr_t, 17> callbacks{};
     void *native = nullptr;
 };
@@ -68,6 +75,34 @@ bool executableMemory(uintptr_t address,size_t length) noexcept {
     }
     return false;
 }
+uintptr_t qualifiedIoAcceleratorFramework(uintptr_t address) noexcept {
+    Dl_info info{};
+    constexpr uint8_t uuid[16]={0x19,0x8a,0x77,0x6a,0xfe,0x03,0x35,0xee,0x8e,0x53,0x7b,0x9f,0x14,0xca,0xab,0xaa};
+    if(!address || !dladdr(reinterpret_cast<void*>(address),&info) || !info.dli_fbase || !info.dli_fname ||
+       std::strcmp(info.dli_fname,"/System/Library/PrivateFrameworks/IOAccelerator.framework/Versions/A/IOAccelerator"))return 0;
+    const uintptr_t base=reinterpret_cast<uintptr_t>(info.dli_fbase);
+    mach_header_64 header{};
+    if(!readMemory(base,&header,sizeof(header)) || header.magic!=MH_MAGIC_64 || header.filetype!=MH_DYLIB ||
+       header.cputype!=CPU_TYPE_X86_64 || !header.ncmds || header.ncmds>256 ||
+       header.sizeofcmds>65536 || header.ncmds>header.sizeofcmds/8 ||
+       base>UINTPTR_MAX-sizeof(header)-header.sizeofcmds)return 0;
+    size_t offset=0;bool found=false;
+    for(uint32_t i=0;i<header.ncmds;++i) {
+        load_command command{};
+        if(header.sizeofcmds-offset<sizeof(command) ||
+           !readMemory(base+sizeof(header)+offset,&command,sizeof(command)) ||
+           command.cmdsize<sizeof(command) || (command.cmdsize&7) || command.cmdsize>header.sizeofcmds-offset)return 0;
+        if(command.cmd==LC_UUID) {
+            uuid_command identity{};
+            if(found || command.cmdsize!=sizeof(identity) ||
+               !readMemory(base+sizeof(header)+offset,&identity,sizeof(identity)) ||
+               std::memcmp(identity.uuid,uuid,sizeof(uuid)))return 0;
+            found=true;
+        }
+        offset+=command.cmdsize;
+    }
+    return found && offset==header.sizeofcmds?base:0;
+}
 bool pinnedFile() {
     FILE *file = std::fopen(nativePath, "rb");
     if (!file) return false;
@@ -94,6 +129,7 @@ void load() {
     if (!library.handle) return;
     library.create = reinterpret_cast<Create>(dlsym(library.handle, "AVD_CreateAVDAccelerator"));
     library.destroy = reinterpret_cast<Destroy>(dlsym(library.handle, "AVD_DestroyAVDAccelerator"));
+    library.resourceShared=reinterpret_cast<uintptr_t>(dlsym(library.handle,"IOAccelResourceGetClientShared"));
     // Keep the native image loaded for all forwarded callback lifetimes.
 }
 }
@@ -181,7 +217,7 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
     void *table = nullptr;
     try {
         std::call_once(loadOnce, load);
-        if (!library.create || !library.destroy) return 10;
+        if (!library.create || !library.destroy || !library.resourceShared) return 10;
         AvdMetadata native{};
         int result = library.create(&table, input, &native);
         if (result) { if (table) library.destroy(table); return result; }
@@ -203,6 +239,16 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
         if(!entry->physical.resolve(image,readMemory,
             [image](uintptr_t candidate) noexcept {return candidate==image;},executableMemory) ||
             !entry->physical.matchesFactoryTable(entry->callbacks)) {
+            library.destroy(table);
+            return 10;
+        }
+        const uintptr_t framework=qualifiedIoAcceleratorFramework(library.resourceShared);
+        const auto frameworkImage=[framework](uintptr_t address) noexcept {
+            Dl_info info{};
+            return framework && dladdr(reinterpret_cast<void*>(address),&info) &&
+                reinterpret_cast<uintptr_t>(info.dli_fbase)==framework;
+        };
+        if(!framework || !entry->resourceClass.resolve(library.resourceShared,readMemory,frameworkImage,executableMemory)) {
             library.destroy(table);
             return 10;
         }

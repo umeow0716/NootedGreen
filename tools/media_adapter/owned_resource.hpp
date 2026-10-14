@@ -6468,6 +6468,68 @@ struct TglNativeResourceBinding {
     }
 };
 
+// Exact sealed Tahoe IOAccelerator UUID198a776a... native resource CF class.
+// Derive the type-ID global from its own GetClientShared/dispatch-once code;
+// do not learn an "expected" type by trusting the input object's CFGetTypeID.
+class TglNativeResourceCfTypeBinding {
+    static_assert(sizeof(uintptr_t)==8,"exact Tahoe x86_64 resource CF ABI");
+    uintptr_t globals_=0;
+public:
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t shared,Read read,Qualify qualify,Executable executable) noexcept {
+        static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})));
+        globals_=0;
+        if(shared<0xb5 || shared>UINTPTR_MAX-0x348f729d || !qualify(shared))return false;
+        const uintptr_t setup=shared+0x5739,invoke=shared-0xb5;
+        const auto matches=[&](uintptr_t p,const auto& expected) noexcept {
+            auto actual=expected;
+            return executable(p,actual.size()) && read(p,actual.data(),actual.size()) && actual==expected;
+        };
+        constexpr std::array<uint8_t,8> once{0x48,0x83,0x3d,0x68,0x72,0x8f,0x34,0xff};
+        constexpr std::array<uint8_t,7> type{0x4c,0x3b,0x3d,0x67,0x72,0x8f,0x34};
+        constexpr std::array<uint8_t,5> call{0xe8,0xd9,0x56,0,0};
+        constexpr std::array<uint8_t,7> blockLea{0x48,0x8d,0x35,0x8a,0x64,0xd3,0x31};
+        constexpr std::array<uint8_t,25> registration{
+            0x55,0x48,0x89,0xe5,0x48,0x8d,0x3d,0x9f,0xbc,0xd3,0x31,0xe8,0x84,0x5a,0,0,
+            0x48,0x89,0x05,0x33,0x73,0x8f,0x34,0x5d,0xc3};
+        if(!qualify(setup) || !qualify(invoke) || !matches(shared+0x1d,once) ||
+           !matches(shared+0x27,type) || !matches(shared+0x5b,call) ||
+           !matches(setup+11,blockLea) || !matches(invoke,registration))return false;
+        const uintptr_t block=setup+18+0x31d3648a;
+        const uintptr_t record=invoke+11+0x31d3bc9f;
+        uintptr_t actualInvoke=0,name=0,finalizer=0;uint64_t version=1;
+        std::array<uint8_t,16> className{};
+        constexpr std::array<uint8_t,16> expectedName{'I','O','A','c','c','e','l','R','e','s','o','u','r','c','e',0};
+        if(!read(block+16,&actualInvoke,8) || actualInvoke!=invoke ||
+           !read(record,&version,8) || version || !read(record+8,&name,8) ||
+           name!=shared+0x600a || name>UINTPTR_MAX-className.size() ||
+           !read(record+0x20,&finalizer,8) || finalizer!=invoke+0x957 ||
+           !read(name,className.data(),className.size()) || className!=expectedName)return false;
+        // The once writer invoke+17+348f7333 and shared comparison+2e+
+        // 348f7267 resolve the SAME type ID, eight bytes after the once token.
+        globals_=shared+0x348f728d;return true;
+    }
+    template<class Read> bool readType(uintptr_t& output,Read read) const noexcept {
+        static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})));
+        std::array<uint64_t,2> first{},second{};
+        if(!globals_ || !read(globals_,first.data(),16) || !read(globals_,second.data(),16) ||
+           first!=second || first[0]!=UINT64_MAX || !first[1] || first[1]==UINT64_MAX)return false;
+        output=uintptr_t(first[1]);return true;
+    }
+};
+struct TglNativeFrontendCfTypes {uintptr_t resource=0,surface=0;};
+template<class Read,class SurfaceType>
+bool tglReadNativeFrontendCfTypes(const TglNativeResourceCfTypeBinding& binding,Read read,
+    SurfaceType surfaceType,TglNativeFrontendCfTypes& output) noexcept {
+    static_assert(noexcept(surfaceType()) && std::is_same_v<decltype(surfaceType()),uintptr_t>);
+    uintptr_t resource=0,after=0;
+    if(!binding.readType(resource,read))return false;
+    const uintptr_t surface=surfaceType();
+    if(!surface || surface==UINTPTR_MAX || surface==resource ||
+       !binding.readType(after,read) || after!=resource)return false;
+    output={resource,surface};return true;
+}
+
 struct TglNativeSharedConnectionResult {
     int nativeStatus=5;
     bool called=false,stable=false;
@@ -18233,6 +18295,7 @@ inline bool tglReadLockedDarwinNv12Layout(IOSurfaceRef surface,
         {IOSurfaceGetHeightOfPlane(surface,0),IOSurfaceGetHeightOfPlane(surface,1)});
 }
 struct TglDarwinTypedCfReferenceApi {
+    uintptr_t surfaceType() const noexcept {return IOSurfaceGetTypeID();}
     uintptr_t type(uintptr_t handle) const noexcept {
         return CFGetTypeID(reinterpret_cast<CFTypeRef>(handle));
     }

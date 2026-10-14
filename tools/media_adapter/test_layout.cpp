@@ -10524,6 +10524,86 @@ static void testNativeResourceBoundary() {
 
 static void testResourceBinding() {
     {
+        constexpr uintptr_t shared=0x1000,setup=shared+0x5739,invoke=shared-0xb5;
+        constexpr uintptr_t block=setup+18+0x31d3648a,record=invoke+11+0x31d3bc9f,globals=shared+0x348f728d;
+        std::array<uint8_t,8> once{0x48,0x83,0x3d,0x68,0x72,0x8f,0x34,0xff};
+        std::array<uint8_t,7> type{0x4c,0x3b,0x3d,0x67,0x72,0x8f,0x34},lea{0x48,0x8d,0x35,0x8a,0x64,0xd3,0x31};
+        std::array<uint8_t,5> call{0xe8,0xd9,0x56,0,0};
+        std::array<uint8_t,25> registration{0x55,0x48,0x89,0xe5,0x48,0x8d,0x3d,0x9f,0xbc,0xd3,0x31,
+            0xe8,0x84,0x5a,0,0,0x48,0x89,0x05,0x33,0x73,0x8f,0x34,0x5d,0xc3};
+        std::array<uint8_t,16> nameBytes{'I','O','A','c','c','e','l','R','e','s','o','u','r','c','e',0};
+        uintptr_t actualInvoke=invoke,name=shared+0x600a,finalizer=invoke+0x957;uint64_t version=0;
+        std::array<uint64_t,2> globalData{UINT64_MAX,0x1234};
+        bool readable=true,identity=true,rx=true,unstable=false;unsigned globalReads=0;
+        auto read=[&](uintptr_t p,void* out,size_t bytes) noexcept {
+            if(!readable)return false;
+            const void* data=nullptr;
+            if(p==shared+0x1d && bytes==once.size())data=once.data();
+            if(p==shared+0x27 && bytes==type.size())data=type.data();
+            if(p==shared+0x5b && bytes==call.size())data=call.data();
+            if(p==setup+11 && bytes==lea.size())data=lea.data();
+            if(p==invoke && bytes==registration.size())data=registration.data();
+            if(p==block+16 && bytes==8)data=&actualInvoke;
+            if(p==record && bytes==8)data=&version;
+            if(p==record+8 && bytes==8)data=&name;
+            if(p==record+0x20 && bytes==8)data=&finalizer;
+            if(p==shared+0x600a && bytes==nameBytes.size())data=nameBytes.data();
+            if(p==globals && bytes==16) {
+                auto snapshot=globalData;++globalReads;
+                if(unstable && globalReads==2)++snapshot[1];
+                std::memcpy(out,snapshot.data(),16);return true;
+            }
+            if(!data)return false;std::memcpy(out,data,bytes);return true;
+        };
+        auto qualify=[&](uintptr_t p) noexcept {return identity && (p==shared || p==setup || p==invoke);};
+        auto executable=[&](uintptr_t,size_t) noexcept {return rx;};
+        TglNativeResourceCfTypeBinding binding;
+        auto resolve=[&]() {return binding.resolve(shared,read,qualify,executable);};
+        uintptr_t output=0xfeed;
+        assert(!binding.readType(output,read) && output==0xfeed);
+        assert(resolve() && !globalReads && binding.readType(output,read) && output==0x1234);
+        for(unsigned mode=0;mode<3;++mode) {
+            globalData={UINT64_MAX,0x1234};output=0xfeed;
+            if(mode==0)globalData[0]=0;
+            if(mode==1)globalData[1]=0;
+            if(mode==2)globalData[1]=UINT64_MAX;
+            assert(!binding.readType(output,read) && output==0xfeed);
+        }
+        globalData={UINT64_MAX,0x1234};output=0xfeed;globalReads=0;unstable=true;
+        assert(!binding.readType(output,read) && output==0xfeed);unstable=false;
+        for(unsigned mode=0;mode<5;++mode) {
+            globalData={UINT64_MAX,0x1234};unsigned calls=0;
+            TglNativeFrontendCfTypes types{77,88};
+            auto surfaceType=[&]() noexcept -> uintptr_t {
+                ++calls;
+                if(mode==1)return 0;
+                if(mode==2)return UINTPTR_MAX;
+                if(mode==3)return 0x1234;
+                if(mode==4)++globalData[1];
+                return 0x4321;
+            };
+            assert(tglReadNativeFrontendCfTypes(binding,read,surfaceType,types)==(mode==0) && calls==1);
+            assert(types.resource==(mode==0?0x1234U:77U) && types.surface==(mode==0?0x4321U:88U));
+        }
+        globalData={0,0x1234};unsigned calls=0;TglNativeFrontendCfTypes types{77,88};
+        assert(!tglReadNativeFrontendCfTypes(binding,read,[&]() noexcept -> uintptr_t {++calls;return 0x4321;},types));
+        assert(!calls && types.resource==77 && types.surface==88);
+        globalData={UINT64_MAX,0x1234};
+        auto mutate=[&](auto& code) {
+            for(auto& byte:code) {byte^=1;assert(!resolve());byte^=1;assert(resolve());}
+        };
+        mutate(once);mutate(type);mutate(call);mutate(lea);mutate(registration);mutate(nameBytes);
+        ++actualInvoke;assert(!resolve());--actualInvoke;
+        ++finalizer;assert(!resolve());--finalizer;
+        ++version;assert(!resolve());--version;
+        ++name;assert(!resolve());--name;
+        identity=false;assert(!resolve());identity=true;
+        rx=false;assert(!resolve());rx=true;
+        readable=false;assert(!resolve());readable=true;
+        assert(!binding.resolve(UINTPTR_MAX,read,qualify,executable));
+        assert(!binding.readType(output,read) && output==0xfeed);
+    }
+    {
         std::array<uint8_t,48> mapped; mapped.fill(0xa5);
         const auto original=mapped;
         for(size_t capacity=0;capacity<40;++capacity) {
