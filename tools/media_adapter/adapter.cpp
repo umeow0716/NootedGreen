@@ -360,6 +360,28 @@ using NativeSurfaceFrameBacking=TglNativeVeboxSurfaceFrameStorage<TglDarwinStmmS
 using NativeVpLines=std::remove_reference_t<decltype(std::declval<TglNativeVpLineResourceStorage&>().resources())>;
 using NativeModeReleaseContext=TglOwnedVeboxModeReleaseContext<NativeSurfaceFrameBacking,
     NativeVpLines,NativeModeRetirementAuthority>;
+using NativeModeReleaseScope=TglOwnedVeboxScopedContext<NativeModeReleaseContext>;
+struct NativeModeCallbackScope {
+    template<class Use> static int run(NativeSurfaceFrameBacking& backing,NativeVpLines& lines,
+        NativeSfcReleaseSelection& selection,NativeModeRetirementAuthority& authority,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<NativeModeReleaseContext&>())) &&
+            std::is_same_v<decltype(use(std::declval<NativeModeReleaseContext&>())),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        const uintptr_t child=reinterpret_cast<uintptr_t>(selection.child);
+        const uint64_t generation=selection.owner.allocationGeneration();
+        if(!authority.scope || !authority.admit || !generation || !child ||
+            !selection.owner.hasPrivateChildLease(child) || backing.auxiliary().retention()())return 5;
+        NativeModeReleaseContext mode(selection.child,backing,lines,selection,authority);
+        NativeModeReleaseScope scope(selection.child,mode);
+        if(!scope.bound())return 5;
+        // Consumer inspects mode.status() after any attempted unwind; refusal
+        // requires retaining its frame. This scope never certifies completion.
+        const int status=use(mode);
+        if(!selection.owner.hasPrivateChildLease(child) || selection.owner.allocationGeneration()!=generation)
+            return status?status:5;
+        return status;
+    }
+};
 // The context and its frame-local authority must enclose the native callback.
 // Preserve native allocation failure; caller also inspects mode.status() and
 // retains the frame on any refused/partial cleanup. No synchronous-success default.
@@ -677,6 +699,9 @@ template class TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPol
 template struct TglOwnedVeboxSfcModeQuery<true,NativeRendererChildOwner,NativeVpModeResolve>;
 template struct TglOwnedVeboxSfcModeQuery<false,NativeRendererChildOwner,NativeVpModeResolve>;
 template class TglOwnedVeboxModeReleaseContext<NativeSurfaceFrameBacking,NativeVpLines,NativeModeRetirementAuthority>;
+template int NativeModeCallbackScope::run<int(*)(NativeModeReleaseContext&) noexcept>(
+    NativeSurfaceFrameBacking&,NativeVpLines&,NativeSfcReleaseSelection&,NativeModeRetirementAuthority&,
+    int(*)(NativeModeReleaseContext&) noexcept) noexcept;
 template struct TglOwnedVeboxAllocationFramePlanner<TglDarwinStmmSurfaceApi,
     NativeContextSurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,decltype(&readMemory),
     NativeAllocationSfcFormat,NativeAllocationSfcColor,NativeAllocationParameterKind,

@@ -11294,6 +11294,20 @@ static void testResourceBinding() {
                 auto denied=[&]() noexcept {++retirementCalls;return 31;};
                 const auto retainedGroup=extra.allocations;
                 const auto initialLineLive=lineBackend.live;
+                {
+                    bool selected=true;unsigned selections=0,admissions=0;
+                    auto select=[&](bool& output) noexcept {++selections;output=selected;return true;};
+                    auto change=[&]() noexcept {++admissions;selected=false;return 0;};
+                    using Dynamic=TglOwnedVeboxModeReleaseContext<decltype(transaction),decltype(lines),decltype(change)>;
+                    Dynamic context(&child,transaction,lines,select,change);
+                    assert(!selections && !admissions);
+                    context.freeResources();assert(context.status()==5 && selections==2 && admissions==1);
+                    assert(api.references==3 && lineBackend.live==initialLineLive);
+                    auto invalid=[&](bool&) noexcept {++selections;return false;};
+                    Dynamic refused(&child,transaction,lines,invalid,change);
+                    refused.freeResources();assert(refused.status()==5 && selections==3 && admissions==1);
+                    assert(api.references==3 && lineBackend.live==initialLineLive);
+                }
                 using DeniedContext=TglOwnedVeboxModeReleaseContext<decltype(transaction),decltype(lines),decltype(denied)>;
                 DeniedContext deniedContext(&child,transaction,lines,true,denied);
                 using DeniedScope=TglOwnedVeboxScopedContext<DeniedContext>;
@@ -11352,7 +11366,10 @@ static void testResourceBinding() {
                     return 0;
                 };
                 using AllowedContext=TglOwnedVeboxModeReleaseContext<decltype(transaction),decltype(lines),decltype(allowed)>;
-                AllowedContext allowedContext(&child,transaction,lines,true,allowed);
+                bool selectSfc=false;unsigned selectionCalls=0;
+                auto selectAtCleanup=[&](bool& output) noexcept {++selectionCalls;output=selectSfc;return true;};
+                AllowedContext allowedContext(&child,transaction,lines,selectAtCleanup,allowed);
+                assert(!selectionCalls);selectSfc=true;
                 using AllowedScope=TglOwnedVeboxScopedContext<AllowedContext>;
                 using AllowedCallbacks=TglOwnedVeboxModeReleaseCallbacks<AllowedScope>;
                 std::array<uintptr_t,20> cleanupHooks{};
@@ -11362,6 +11379,7 @@ static void testResourceBinding() {
                     AllowedScope scope(&child,allowedContext);assert(scope.bound());
                     AllowedCallbacks::freeResources(&child);
                     assert(allowedContext.status()==0);
+                    assert(selectionCalls==2);
                     AllowedCallbacks::freeResources(&child);assert(allowedContext.status()==5);
                 }
                 assert(retirementCalls==2 && api.references==1 && !statistics.layout().bytes);

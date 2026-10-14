@@ -26116,11 +26116,24 @@ template<class Transaction,class Lines,class Retire> class TglOwnedVeboxModeRele
     Lines& lines_;
     Retire& retire_;
     bool releaseSfc_,attempted_=false,reentered_=false;
+    void* selection_=nullptr;
+    bool(*select_)(void*,bool&) noexcept=nullptr;
     int status_=5;
 public:
     TglOwnedVeboxModeReleaseContext(void* child,Transaction& transaction,Lines& lines,
         bool releaseSfc,Retire& retire) noexcept
         :child_(child),transaction_(transaction),lines_(lines),retire_(retire),releaseSfc_(releaseSfc){}
+    // Selector and its live child/VP leases enclose this context. Defer reads
+    // until the native cleanup callback, not before VP80 publication.
+    template<class Select,std::enable_if_t<!std::is_same_v<std::decay_t<Select>,bool>,int> =0>
+    TglOwnedVeboxModeReleaseContext(void* child,Transaction& transaction,Lines& lines,
+        Select& select,Retire& retire) noexcept
+        :child_(child),transaction_(transaction),lines_(lines),retire_(retire),releaseSfc_(false),
+         selection_(&select),select_([](void* value,bool& output) noexcept {
+             static_assert(noexcept((*static_cast<Select*>(value))(output)) &&
+                 std::is_same_v<decltype((*static_cast<Select*>(value))(output)),bool>);
+             return (*static_cast<Select*>(value))(output);
+         }) {}
     TglOwnedVeboxModeReleaseContext(const TglOwnedVeboxModeReleaseContext&)=delete;
     TglOwnedVeboxModeReleaseContext& operator=(const TglOwnedVeboxModeReleaseContext&)=delete;
     bool owns(void* child) const noexcept {return child && child==child_;}
@@ -26129,9 +26142,14 @@ public:
                       "mode retirement evidence must report status without throwing");
         if(attempted_) {reentered_=true;status_=5;return;}
         attempted_=true;
-        status_=transaction_.releaseModeResources(lines_,releaseSfc_,[&]() noexcept {
+        bool releaseSfc=releaseSfc_;
+        if((select_ && !select_(selection_,releaseSfc)) || reentered_) {status_=5;return;}
+        status_=transaction_.releaseModeResources(lines_,releaseSfc,[&]() noexcept {
             const int admission=retire_();
-            return reentered_ ? 5 : admission;
+            if(reentered_ || admission)return reentered_?5:admission;
+            bool after=releaseSfc;
+            if(select_ && (!select_(selection_,after) || after!=releaseSfc))return 5;
+            return reentered_?5:0;
         });
         if(reentered_) status_=5;
     }
