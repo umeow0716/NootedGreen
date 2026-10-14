@@ -15589,12 +15589,12 @@ static void testRetainedVeboxFrames() {
                     Storage stale(owners,image,0x8000,success.ticket.generation+1,renderRoots,address,historyAddress,
                         readGraph,admitGraph,admitGraph,construct);
                     assert(!stale.surfacesReady() && constructed==1);
-                    for(unsigned mode=0;mode<10;++mode) {
+                    for(unsigned mode=0;mode<12;++mode) {
                         Storage flushed(owners,image,0x8000,success.ticket.generation,renderRoots,address,historyAddress,
                             readGraph,admitGraph,admitGraph,construct);
                         constexpr uintptr_t flushContext=0x77000;
                         uintptr_t nativeContext=0x78000;uint32_t flags=0;bool reportReadable=true;unsigned flushes=0;
-                        if(mode==8)flags=0x40000000;
+                        if(mode==8 || mode==10 || mode==11)flags=0x40000000;
                         if(mode==9)flags=0x20000000;
                         const std::array<uint8_t,21> code{
                             0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0x48,0x89,0xfb,0x48,0x8b,0x47,0x20,
@@ -15618,10 +15618,10 @@ static void testRetainedVeboxFrames() {
                             assert(entry==image+0xa9dc && context==flushContext && kind==2);++flushes;
                             if(mode==1 || mode==6)flags=0x40000000;
                             if(mode==2)flags=0x20000000;
-                            if(mode==8 || mode==9)flags=0; // native overwrites old loss report
-                            if(mode==3)reportReadable=false;
+                            if(mode>=8)flags=0; // native overwrites old loss report
+                            if(mode==3 || mode==10)reportReadable=false;
                             if(mode==7)assert(!flushed.observeNativeFlush(flush,flushContext,reportRead,admitFlush,noInvoke).called);
-                            return mode==4?31:0;
+                            return mode==4 || mode==11?31:0;
                         };
                         const int result=flushed.withFrame([&](auto&) noexcept -> int {
                             assert(!flushed.observeNativeFlush(flush,flushContext,reportRead,
@@ -15634,9 +15634,9 @@ static void testRetainedVeboxFrames() {
                             }
                             return int(observation.nativeStatus);
                         });
-                        const bool invalid=mode==1 || mode==2 || mode==3 || mode==4 || mode==5 || mode==6 || mode==8 || mode==9;
-                        if(mode==8 || mode==9)assert(flushed.lossFlags()==(mode==8?0x40000000u:0x20000000u));
-                        assert(result==(mode==4?31:invalid?5:0));
+                        const bool invalid=mode==1 || mode==2 || mode==3 || mode==4 || mode==5 || mode==6 || mode>=8;
+                        if(mode>=8)assert(flushed.lossFlags()==(mode==9?0x20000000u:0x40000000u));
+                        assert(result==((mode==4 || mode==11)?31:invalid?5:0));
                         assert(flushed.invalidated()==invalid && !flushed.canDestroy() && !flushed.clear());
                         if(invalid) {
                             assert(flushed.withFrame([](auto&) noexcept -> int {assert(false);return 0;})==5);
