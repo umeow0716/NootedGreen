@@ -3662,6 +3662,37 @@ struct NativeRetainedTemporaryExecution {
         return context.sequence.finish(nativeStatus);
     }
 };
+struct NativeRetainedContextFrameDispatch {
+    using Lease=typename NativeCodecBackend::Registry::ContextLease;
+    struct Call {
+        NativeCodecOwner& owner;Lease& lease;NativePhysicalFrameScope& physical;
+        NativeContextRendererFrame& frame;uintptr_t context,input,output;
+        TglNativeFrameOutputReceipt& receipt;bool invoked=false;
+        static int invoke(void* raw,int(*hook)(void*,void*,void*) noexcept) noexcept {
+            auto& self=*static_cast<Call*>(raw);
+            if(self.invoked || hook!=&NativeRetainedTemporaryExecution::temporaryPass)return 5;
+            return self.owner.dispatchScopedFrameWithReceipt(self.lease,self.physical,self.input,self.output,
+                [&](uintptr_t entry,uintptr_t context,uintptr_t input,uintptr_t output,auto&) noexcept -> int {
+                    if(self.invoked || context!=self.context || input!=self.input || output!=self.output ||
+                        !self.frame.beginNativeFrame())return 5;
+                    self.invoked=true;
+                    return TglNativeContextFrameInvoker{}(entry,context,input,output);
+                },self.receipt);
+        }
+    };
+    static TglOwnedVeboxCommandTransactionResult run(Lease& lease,NativePhysicalFrameScope& physical,
+        NativeContextRendererFrame& frame,uintptr_t renderer,uintptr_t input,uintptr_t output,
+        void* producerContext,NativeRetainedTemporaryExecution::PassProducer produce,
+        TglNativeFrameOutputReceipt& receipt) noexcept {
+        auto* owner=lease.get();
+        if(!owner || !input || !output || receipt.valid || frame.invalidated() || !frame.surfacesReady())return {};
+        Call call{*owner,lease,physical,frame,owner->context(),input,output,receipt};
+        auto result=NativeRetainedTemporaryExecution::withNativePasses(frame,renderer,producerContext,produce,&call,&Call::invoke);
+        result.nativeEntered=result.nativeEntered || call.invoked;
+        if((!call.invoked || !receipt.valid) && !result.status)result.status=5;
+        return result; // Receipt is lineage only; nativeFrameEntered retains the frame on all exits.
+    }
+};
 // Callback table entries carry no Entry/closure argument. Route the immutable
 // qualified native image and actual physical generation, never "current Entry".
 // Prepared backend only; factory callback publication remains disabled.

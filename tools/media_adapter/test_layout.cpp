@@ -16289,6 +16289,8 @@ static void testRetainedVeboxFrames() {
                             return false;
                         };
                         TglNativeOsCommandSubmitBinding submit;
+                        assert(submitted.beginNativeFrame() && !submitted.beginNativeFrame() &&
+                            submitted.requiresRetention() && !submitted.clear());
                         assert(submit.resolve(os,image,submitRead,[&](uintptr_t p) noexcept {return p==image;},
                             [](uintptr_t,size_t) noexcept {return true;}));
                         int command=0;

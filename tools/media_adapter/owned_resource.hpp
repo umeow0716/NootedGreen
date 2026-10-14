@@ -27914,6 +27914,7 @@ class TglNativeContextRendererFrameStorage {
     Renderer* renderer_=nullptr;
     bool busy_=false,retirementStarted_=false,retirementFailed_=false,retired_=false;
     bool flushBusy_=false,flushEntered_=false,flushUncertain_=false;
+    bool nativeFrameEntered_=false;
     uint32_t lossFlags_=0;
     int renderPassFailure_=0;
     uintptr_t flushContext_=0,flushNativeContext_=0;
@@ -27959,7 +27960,11 @@ public:
     }
     bool invalidated() const noexcept {return flushUncertain_ || lossFlags_;}
     bool requiresRetention() const noexcept {
-        return flushEntered_ || (renderer_ && renderer_->requiresRetention());
+        return nativeFrameEntered_ || flushEntered_ || (renderer_ && renderer_->requiresRetention());
+    }
+    bool beginNativeFrame() noexcept {
+        if(nativeFrameEntered_ || busy_ || retirementStarted_ || invalidated() || !surfacesReady())return false;
+        nativeFrameEntered_=true;return true;
     }
     uint32_t lossFlags() const noexcept {return lossFlags_;}
     bool flushUncertain() const noexcept {return flushUncertain_;}
