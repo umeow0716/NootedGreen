@@ -16698,6 +16698,24 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        const uintptr_t image=0x100000;
+        TglNativePhysicalCallbackBinding physical{image,image+0x135d9,image+0x13c8c};
+        TglTrackedCpuBinding cpu{image,image+0x437e0,image+0x436d0};
+        const uintptr_t entry=image+0x13e43;
+        assert(physical.matchesCreatorInputs(cpu,entry));
+        for(auto field:{&cpu.image,&cpu.allocate,&cpu.release}) {
+            const auto saved=*field;*field=saved+1;
+            assert(!physical.matchesCreatorInputs(cpu,entry));*field=saved;
+        }
+        for(auto field:{&physical.image,&physical.initialize,&physical.destroy}) {
+            const auto saved=*field;*field=saved+1;
+            assert(!physical.matchesCreatorInputs(cpu,entry));*field=saved;
+        }
+        assert(!physical.matchesCreatorInputs(cpu,entry+1));
+        physical.image=0;assert(!physical.matchesCreatorInputs(cpu,entry));
+        physical.image=UINTPTR_MAX-1;assert(!physical.matchesCreatorInputs(cpu,entry));
+    }
+    {
         TglOwnedSurfaceStorage source{},target{},previous{},copy{};
         struct Owner {
             const TglOwnedSurfaceStorage* bound;bool live=true;

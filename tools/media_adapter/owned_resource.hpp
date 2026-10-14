@@ -23684,6 +23684,13 @@ bool tglDispatchOwnedVphalDestruction(TglOwnedVphalLifetimeTable& table,
 
 struct TglNativePhysicalCallbackBinding {
     uintptr_t image=0,initialize=0,destroy=0;
+    // Field identity only, not executable-image authentication. Caller retains
+    // qualified image bindings and revalidates its actual physical scope.
+    bool matchesCreatorInputs(const TglTrackedCpuBinding& cpu,uintptr_t entry) const noexcept {
+        return image && image<=UINTPTR_MAX-0x437e0 && cpu.image==image &&
+            initialize==image+0x135d9 && destroy==image+0x13c8c && entry==image+0x13e43 &&
+            cpu.allocate==image+0x437e0 && cpu.release==image+0x436d0;
+    }
     bool matchesFactoryTable(const std::array<uintptr_t,17>& table) const noexcept {
         return image && image<=UINTPTR_MAX-0x13e43 && initialize && destroy &&
             table[1]==initialize && table[2]==destroy && table[3]==image+0x13e43;

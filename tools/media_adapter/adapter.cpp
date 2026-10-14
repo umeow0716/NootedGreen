@@ -3012,6 +3012,11 @@ struct NativeCreatorScopedInvocation {
     static BatchResult createAndAdopt(const Entry& factory,uintptr_t entry,
         uintptr_t physical,const void* input,Admit& admit) noexcept {
         BatchResult result;
+        TglNativePhysicalCallbackBinding selected;
+        if(!factory.physical.matchesCreatorInputs(factory.nativeCpu,entry) ||
+            !NativePhysicalBackend::binding(selected) || selected.image!=factory.physical.image ||
+            selected.initialize!=factory.physical.initialize || selected.destroy!=factory.physical.destroy)
+            return result;
         result.status=NativePhysicalBackend::createContexts(physical,input,
             [&](uintptr_t image,uintptr_t actual,const void* request,Scope& scope) noexcept -> int {
                 if(actual!=physical || request!=input || scope.image()!=image)return 5;
@@ -3027,6 +3032,8 @@ struct NativeCreatorScopedInvocation {
         const void* input,Scope& scope,Admit& admit) noexcept {
         const uintptr_t image=scope.image();
         const uint64_t generation=scope.generation();
+        if(image!=factory.physical.image || !factory.physical.matchesCreatorInputs(factory.nativeCpu,entry))
+            return {};
         // Borrow the mutation capability from the SAME batch adoption scope;
         // never synthesize a second physical owner or let authority escape.
         auto handoff=[&](void* creator) noexcept -> int {
