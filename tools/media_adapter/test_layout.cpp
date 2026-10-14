@@ -16888,6 +16888,28 @@ static void testActualNv12LayoutSnapshot() {
     assert(uvRow==32);
 }
 int main() {
+    for(unsigned publish=0;publish<2;++publish)for(unsigned rotate=0;rotate<2;++rotate)
+        for(int status:{0,31}) {
+            std::array<uint8_t,0x139> parameters{};std::array<uint8_t,0x60> pass{};
+            const uintptr_t initial=0x1110,next=0x2220;const uint32_t index=16,ping=UINT32_MAX;
+            pass[8]=static_cast<uint8_t>(0xfe|publish);pass[0x20]=static_cast<uint8_t>(0xfe|rotate);
+            std::memcpy(pass.data()+0xc,&index,4);std::memcpy(pass.data()+0x10,&initial,8);
+            std::memcpy(pass.data()+0x18,&next,8);std::memcpy(pass.data()+0x40,&ping,4);
+            const auto originalParams=parameters;const auto originalPass=pass;
+            assert(tglApplyNativePerPassSuccessHandoff(parameters,pass,status));
+            if(status)assert(parameters==originalParams && pass==originalPass);
+            else {
+                uintptr_t root=0,published=0;uint32_t observedPing=0;
+                std::memcpy(&root,pass.data()+0x10,8);std::memcpy(&observedPing,pass.data()+0x40,4);
+                std::memcpy(&published,parameters.data()+8+index*8,8);
+                assert(root==(rotate?next:initial) && observedPing==(rotate?0:ping));
+                assert(published==(publish?root:0));
+            }
+            const uint32_t invalid=17;std::memcpy(pass.data()+0xc,&invalid,4);pass[8]=1;
+            const auto savedParams=parameters;const auto savedPass=pass;
+            assert(!tglApplyNativePerPassSuccessHandoff(parameters,pass,0));
+            assert(parameters==savedParams && pass==savedPass);
+        }
     {
         std::array<uint8_t,0x139> source,destination;
         source.fill(0xfe);destination.fill(0xa5);

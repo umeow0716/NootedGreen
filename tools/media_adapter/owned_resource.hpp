@@ -13639,6 +13639,29 @@ bool tglCopyNativePerPassParameterFields(std::array<uint8_t,DestinationBytes>& d
     }
 }
 
+// Exact131d10 AFTER the sample134==2 branch called12d280. Failure has no
+// handoff; success may move root18->10 and toggle40, then publish root10
+// into selected source array. This moves CPU pointers only, not ownership.
+// Caller must retain every referenced shell and reconcile changed topology.
+template<size_t P,size_t Q> bool tglApplyNativePerPassSuccessHandoff(
+    std::array<uint8_t,P>& parameters,std::array<uint8_t,Q>& pass,int nativeStatus) noexcept {
+    if constexpr(P<0x90 || Q<0x44)return false;
+    else {
+        if(nativeStatus)return true;
+        const bool publish=(pass[8]&1)!=0,rotate=(pass[0x20]&1)!=0;
+        uint32_t index=0;std::memcpy(&index,pass.data()+0xc,4);
+        if(publish && index>=17)return false;
+        if(rotate) {
+            uintptr_t next=0;uint32_t ping=0;
+            std::memcpy(&next,pass.data()+0x18,8);
+            std::memcpy(&ping,pass.data()+0x40,4);ping=(ping+1)&1;
+            std::memcpy(pass.data()+0x10,&next,8);std::memcpy(pass.data()+0x40,&ping,4);
+        }
+        if(publish)std::memcpy(parameters.data()+8+size_t{index}*8,pass.data()+0x10,8);
+        return true;
+    }
+}
+
 // Compose the proven temporary conversion with an existing-topology lower
 // pass. NOT an exported callback: topology-changing copies still need the
 // original root owner's allocation/replacement authority before activation.
