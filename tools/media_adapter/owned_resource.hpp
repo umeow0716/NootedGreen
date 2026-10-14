@@ -22133,6 +22133,10 @@ bool tglDispatchOwnedVphalDestruction(TglOwnedVphalLifetimeTable& table,
 
 struct TglNativePhysicalCallbackBinding {
     uintptr_t image=0,initialize=0,destroy=0;
+    bool matchesFactoryTable(const std::array<uintptr_t,17>& table) const noexcept {
+        return image && image<=UINTPTR_MAX-0x13e43 && initialize && destroy &&
+            table[1]==initialize && table[2]==destroy && table[3]==image+0x13e43;
+    }
     template<class Read,class Qualify,class Executable>
     bool resolve(uintptr_t base,Read read,Qualify qualify,Executable executable) noexcept {
         *this={};

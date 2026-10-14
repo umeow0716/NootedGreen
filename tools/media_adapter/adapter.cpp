@@ -1,6 +1,7 @@
 #include "descriptor_bridge.hpp"
 #include "tgl_capability_adapter.hpp"
 #include "native_return_observer.hpp"
+#include "owned_resource.hpp"
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
@@ -36,16 +37,36 @@ struct Entry {
     // Do not attach frame owners here: destroy can partially tear down the
     // physical context before returning failure (0x13cc3..0x13cef).
     AvdDescriptorBridge bridge;
+    TglNativePhysicalCallbackBinding physical;
     std::array<uintptr_t, 17> callbacks{};
     void *native = nullptr;
 };
 std::map<void *, std::unique_ptr<Entry>> registry;
 std::atomic<uintptr_t> nativeCreateContexts{0};
-bool readMemory(uintptr_t address, void *output, size_t length) {
+bool readMemory(uintptr_t address, void *output, size_t length) noexcept {
     mach_vm_size_t copied = 0;
     return address && mach_vm_read_overwrite(mach_task_self(), address, length,
         reinterpret_cast<mach_vm_address_t>(output), &copied) == KERN_SUCCESS
         && copied == length;
+}
+// Read native leaf protections, not a shared-region parent's coarse policy.
+// This performs no vm_protect, text writes or policy changes.
+bool executableMemory(uintptr_t address,size_t length) noexcept {
+    if(!address || !length || address>UINTPTR_MAX-length)return false;
+    natural_t depth=0;
+    for(unsigned attempt=0;attempt<16;++attempt) {
+        mach_vm_address_t region=address;mach_vm_size_t span=0;
+        vm_region_submap_info_data_64_t info{};
+        mach_msg_type_number_t count=VM_REGION_SUBMAP_INFO_COUNT_64;
+        if(mach_vm_region_recurse(mach_task_self(),&region,&span,&depth,
+            reinterpret_cast<vm_region_recurse_info_t>(&info),&count)!=KERN_SUCCESS ||
+            count!=VM_REGION_SUBMAP_INFO_COUNT_64 || region>address ||
+            address-region>span || length>span-(address-region))return false;
+        if(info.is_submap){if(depth>=16)return false;++depth;continue;}
+        return (info.protection&(VM_PROT_READ|VM_PROT_EXECUTE))==(VM_PROT_READ|VM_PROT_EXECUTE) &&
+            !(info.protection&VM_PROT_WRITE);
+    }
+    return false;
 }
 bool pinnedFile() {
     FILE *file = std::fopen(nativePath, "rb");
@@ -175,6 +196,13 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
         if (!dladdr(reinterpret_cast<void *>(callback), &callbackInfo) || !callbackInfo.dli_fbase ||
             !callbackInfo.dli_fname || std::strcmp(callbackInfo.dli_fname, nativePath) ||
             callback != reinterpret_cast<uintptr_t>(callbackInfo.dli_fbase) + 0x13e43) {
+            library.destroy(table);
+            return 10;
+        }
+        const uintptr_t image=reinterpret_cast<uintptr_t>(callbackInfo.dli_fbase);
+        if(!entry->physical.resolve(image,readMemory,
+            [image](uintptr_t candidate) noexcept {return candidate==image;},executableMemory) ||
+            !entry->physical.matchesFactoryTable(entry->callbacks)) {
             library.destroy(table);
             return 10;
         }

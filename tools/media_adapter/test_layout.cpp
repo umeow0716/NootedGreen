@@ -14767,6 +14767,18 @@ static void testRetainedVeboxFrames() {
                 ((address==image+0x132510 || address==image+0x131fa0) && size==1);
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
+        {
+            std::array<uintptr_t,17> table{};
+            table[1]=image+0x135d9;table[2]=image+0x13c8c;table[3]=image+0x13e43;
+            const auto saved=table;
+            assert(binding.matchesFactoryTable(table) && table==saved);
+            for(unsigned slot:{1U,2U,3U}) {
+                ++table[slot];assert(!binding.matchesFactoryTable(table));--table[slot];
+            }
+            assert(!TglNativePhysicalCallbackBinding{}.matchesFactoryTable(table));
+            auto wrapped=binding;wrapped.image=UINTPTR_MAX;
+            assert(!wrapped.matchesFactoryTable(table));
+        }
         struct Invoke {
             void** original;uintptr_t produced=0x8000;int status=0;
             unsigned initialized=0,destroyed=0;
