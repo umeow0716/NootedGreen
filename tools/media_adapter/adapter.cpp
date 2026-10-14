@@ -1773,6 +1773,28 @@ struct NativeCompleteFrameConsumer {
                 return NativeVeboxPacketProducerScope::run(frame,self.parameters,self.csc,self.render);
             });
     }
+    static TglOwnedVeboxCommandTransactionResult consume(void* context,NativeRendererCpuAssembly& cpu,
+        const TglNativeCreatedVeboxRendererView& pinned,
+        NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
+        NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,NativeDenoiseParameters& dn,
+        NativeRendererChildLifetime& first,NativeRendererChildLifetime& second) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        if(!context)return result;
+        auto& self=*static_cast<NativeCompleteFrameConsumer*>(context);
+        auto& admission=self.render.render.admission;
+        using Life=TglOwnedVeboxScopedContext<NativeRendererChildLifetime>;
+        auto* current=Life::get(admission.reset.child);
+        if(&self.assembly!=&cpu || &self.parameters!=&dn ||
+            &admission.feature.sourceOwner!=&source || &admission.feature.targetOwner!=&target ||
+            self.view.renderer.image!=pinned.image || self.view.parent!=pinned.creator ||
+            self.view.renderer.renderer!=pinned.renderer ||
+            current!=(admission.reset.index==0?&first:admission.reset.index==1?&second:nullptr) ||
+            !current)return result;
+        const auto completed=self.run();
+        result=completed.native; // retain acquisition/native-entry evidence on failure
+        result.status=completed.status;
+        return result;
+    }
 };
 struct NativeRendererCompleteHooks {
     using LifetimeResolve=TglOwnedVeboxScopedLifetimeResolve<NativeRendererChildLifetime>;
@@ -1831,6 +1853,11 @@ struct NativeRetainedFrontendRuntime {
         const TglNativeCreatedVeboxRendererView&,
         NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
         NativeDenoiseParameters&,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept;
+    static TglOwnedVeboxCommandTransactionResult runComplete(NativeContextRendererFrame& frame,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,NativeCompleteFrameConsumer& consumer) noexcept {
+        return run(frame,roles,sourceIndex,targetIndex,temporal,&consumer,&NativeCompleteFrameConsumer::consume);
+    }
     static TglOwnedVeboxCommandTransactionResult run(NativeContextRendererFrame& frame,
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* scope,Use use) noexcept {
