@@ -389,18 +389,23 @@ using NativeFrontendAccess=TglPinnedVphalStorageAccess<NativeDataAdmission,Nativ
 using NativeFrontendEnvironment=TglNativeFrontendCpuEnvironment<decltype(&readMemory),NativeTglImageAdmission,
     decltype(&executableMemory)>;
 using NativeContextSurfaceOwner=typename TglNativeContextSurfaceOwners<NativeCodecBackend::Registry>::Owner;
-using NativeVpStateHealth=TglLeasedVpStateFrameHealth<NativeRendererChildOwner,NativeExecutionOwner,
-    NativeContextSurfaceOwner,NativeContextSurfaceOwner>;
+template<class SurfaceOwner> using NativeVpStateHealthFor=
+    TglLeasedVpStateFrameHealth<NativeRendererChildOwner,NativeExecutionOwner,SurfaceOwner,SurfaceOwner>;
+using NativeVpStateHealth=NativeVpStateHealthFor<NativeContextSurfaceOwner>;
 // Core ranges derive from actual typed owners, never a VM-readable-address
 // grant. Other metadata/interfaces need their own explicit retained grants.
-struct NativeCoreFrameDataScope {
+template<class SurfaceOwner> struct NativeCoreFrameDataScopeFor {
     NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
-    NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+    SurfaceOwner& sourceOwner;SurfaceOwner& targetOwner;
     const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
     TglOwnedVpSfcCallerStorage& vp;
     uintptr_t image,child,execution;uint64_t generation;
     NativePreparedVpReset* preparedReset=nullptr;
     NativeFrameDataRead capability() noexcept {return {this,&resolve};}
+    NativeVpStateHealthFor<SurfaceOwner> vpHealth(uintptr_t os) noexcept {
+        return {childOwner,executionOwner,sourceOwner,targetOwner,reinterpret_cast<void*>(child),
+            execution,image,os,source,target};
+    }
     bool live() const noexcept {
         return generation && childOwner.allocationGeneration()==generation &&
             childOwner.hasPrivateChildImageLease(child,image) &&
@@ -411,7 +416,7 @@ struct NativeCoreFrameDataScope {
         return start && bytes && address>=start && address-start<=extent && bytes<=extent-(address-start);
     }
     static bool resolve(void* context,uintptr_t address,void* output,size_t bytes) noexcept {
-        auto* self=static_cast<NativeCoreFrameDataScope*>(context);
+        auto* self=static_cast<NativeCoreFrameDataScopeFor*>(context);
         if(!self || !output || !bytes || !self->live())return false;
         if(self->childOwner.readLeasedStorage(self->child,self->generation,address,output,bytes))return self->live();
         if(contains(reinterpret_cast<uintptr_t>(self->vp.bytes.data()),self->vp.bytes.size(),address,bytes)) {
@@ -428,6 +433,13 @@ struct NativeCoreFrameDataScope {
         return admitted && readMemory(address,output,bytes) && self->live();
     }
 };
+using NativeCoreFrameDataScope=NativeCoreFrameDataScopeFor<NativeContextSurfaceOwner>;
+using NativeTemporarySurfaceOwner=typename TglNativePerPassCpuShells<
+    TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>>::template DerivedSurfaceLease<NativeContextSurfaceOwner>;
+// Compile the SAME bounded resolver/health against concrete derived owners.
+// Only synchronous producer views use these types; retained frontend owners
+// remain the original registry/context-pinned owners.
+template struct NativeCoreFrameDataScopeFor<NativeTemporarySurfaceOwner>;
 struct NativeVpScalarStateProducer {
     NativeVpStateHealth& health;NativeFrameDataRead& dataRead;
     const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
@@ -998,8 +1010,7 @@ public:
         if(attempted_ || !core.live() || in.pinned.image!=core.image ||
             (in.pinned.originalChildren[0]!=core.child && in.pinned.originalChildren[1]!=core.child))return result;
         attempted_=true;
-        NativeVpStateHealth health(core.childOwner,core.executionOwner,core.sourceOwner,core.targetOwner,
-            reinterpret_cast<void*>(core.child),core.execution,core.image,in.interfaces.os,core.source,core.target);
+        auto health=core.vpHealth(in.interfaces.os);
         if(!health.qualifiesImage(core.image) || !health.qualifiesVp(reinterpret_cast<uintptr_t>(core.vp.bytes.data())))return result;
         TglFillCscBinding fill;TglNativeVpCompressionBinding compression;
         TglSfcMhwBinding commands;TglNativeSfcOutputUsageBinding usage;
