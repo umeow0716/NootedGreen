@@ -2360,6 +2360,32 @@ struct NativeRetainedFrontendRuntime {
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* scope,UseGraph use) noexcept {
         return run(frame,roles,sourceIndex,targetIndex,temporal,scope,use);
     }
+    struct VpRequest {
+        size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
+        uintptr_t parameters,pass;const TglOwnedVpEntrySet& catalogue;
+        void* context;NativeLeasedVpFrameInputScope::Use use;
+    };
+    static TglOwnedVeboxCommandTransactionResult runVpInputs(NativeContextRendererFrame& frame,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,VpRequest& request) noexcept {
+        if(request.childIndex>1 || !request.context || !request.use ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(request.use),1))return {};
+        return run(frame,roles,sourceIndex,targetIndex,temporal,&request,
+            +[](void* context,NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& pinned,
+                NativeContextSurfaceOwner& source,NativeContextSurfaceOwner& target,
+                NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,NativeDenoiseParameters&,
+                NativeRendererChildLifetime& first,NativeRendererChildLifetime& second) noexcept {
+                auto& request=*static_cast<VpRequest*>(context);
+                const auto child=pinned.originalChildren[request.childIndex];
+                auto* lifetime=TglOwnedVeboxScopedContext<NativeRendererChildLifetime>::get(
+                    reinterpret_cast<void*>(child));
+                if(!lifetime || lifetime!=(request.childIndex?&second:&first))
+                    return TglOwnedVeboxCommandTransactionResult{};
+                NativeLeasedFrameInputScope::Inputs inputs{cpu,request.childIndex,source,target,pinned,
+                    request.interfaces,request.parameters,request.pass};
+                return NativeLeasedVpFrameInputScope::run(inputs,request.catalogue,request.context,request.use);
+            });
+    }
     static TglOwnedVeboxCommandTransactionResult runPrepared(NativeContextRendererFrame& frame,
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,NativeModeFrameExecution::Inputs& inputs) noexcept {
