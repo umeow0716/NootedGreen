@@ -17944,6 +17944,9 @@ struct TglVeboxCompletionWriteSnapshot {
 // leased heap. Native129ca0 already emits the command: NEVER emit it twice.
 // A matching packet proves intended destination/value, not GPU execution or
 // completion. In particular, value zero is legal and is not a ready fence.
+// Exact129ca0 calls10fae0 AFTER MI+48; when its1a4 bit0 is set, that tail
+// invokes10f3e0/10f460/10f500 to append further native recording commands.
+// Reached VEBOX tag is therefore not an end-of-whole-submission drain proof.
 template<class Read>
 bool tglReadVeboxCompletionWrite(const TglOwnedVeboxBuilderScratch& scratch,
     const TglVeboxHardwareBinding& binding,Read read,TglVeboxCompletionWriteSnapshot& out) {
