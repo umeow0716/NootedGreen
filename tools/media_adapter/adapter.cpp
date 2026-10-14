@@ -1883,6 +1883,37 @@ struct NativeCompleteFrameConsumer {
         return result;
     }
 };
+// Construct the real per-frame execution objects inside the caller's original
+// surface/data/mode leases. Every reference below survives through native
+// Render; nothing is published as a dangling callback or copied to a fixture.
+struct NativeFrameExecutionAssembly {
+    struct Inputs {
+        NativeRendererCpuAssembly& assembly;const TglNativeVphalMhwView& view;
+        NativeVpProducerFrame& vp;NativeAdmissionStages& admission;
+        NativeAllocationPlanner& planner;NativeModeReleaseContext& mode;
+        const TglVeboxRenderBinding& binding;void* argument;
+        const std::array<uint32_t,11>& controls;TglOwnedVeboxPacketLeases leases;
+        NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
+        bool disableTemporalDenoise;
+    };
+    static NativeAdmissionStages::Result run(Inputs& in) noexcept {
+        NativeAdmissionStages::Result result;
+        if(!in.admission.read.scope || !in.admission.read.resolve ||
+            &in.planner.childOwner!=&in.admission.reset.childOwner ||
+            &in.parameters!=&in.admission.feature.parameters)return result;
+        const int status=in.vp.run([&](NativeVpPreparedCallbacks& callbacks) noexcept -> int {
+            NativePreparedAdmissionRender prepared{callbacks,in.admission,in.binding,in.argument};
+            NativeAllocatedAdmissionRender allocated{prepared,in.planner,in.mode};
+            NativeRetainedDiIecpCapture capture{in.planner,in.admission.read,in.controls,&in.parameters};
+            NativeCompleteFrameConsumer consumer{in.assembly,in.view,capture,in.leases,in.parameters,
+                in.csc,allocated,in.disableTemporalDenoise};
+            result=consumer.run();
+            return result.status;
+        });
+        if(status){result.status=status;result.admitted=false;}
+        return result;
+    }
+};
 struct NativeRendererCompleteHooks {
     using LifetimeResolve=TglOwnedVeboxScopedLifetimeResolve<NativeRendererChildLifetime>;
     static int install(NativeRendererCpuAssembly& assembly,const TglNativeVphalMhwView& view) noexcept {
