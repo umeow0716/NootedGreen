@@ -1644,7 +1644,6 @@ public:
         NativeSourceGraph& sourceGraph;NativeDenoiseParameters& parameters;
         const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
         const TglVeboxFeatureBinding& featureBinding;
-        NativeOutputPipeSelector& select;NativeFrameDataRead& read;
         NativeAdmissionParams& params;NativeAdmissionPass& pass;
         const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         const TglOwnedVpEntrySet& catalogue;const TglOwnedVpModeState& mode;
@@ -1659,7 +1658,7 @@ private:
     NativeAdmissionStages stages_;
     bool attempted_=false;
 public:
-    explicit NativeAdmissionFrameAssembly(const Inputs& in) noexcept
+    NativeAdmissionFrameAssembly(const Inputs& in,NativeOutputPipeSelector& select,NativeFrameDataRead& read) noexcept
         :reset_{in.childOwner,in.executionOwner,in.backing,in.retirement,in.index,in.child,in.execution,in.vp},
          history_{{in.childOwner,in.executionOwner,in.sourceGraph,in.child,in.execution,in.source,
              NativeDataAdmission{},NativeDataAdmission{}}},
@@ -1669,7 +1668,7 @@ public:
          sfc_{in.backing,in.childOwner,in.executionOwner,in.sourceOwner,in.targetOwner,
              in.catalogue,in.mode,in.index,in.child,in.mhw,in.renderData,nullptr,nullptr,nullptr,nullptr},
          dn_{in.sourceOwner,in.parameters},
-         stages_{reset_,in.select,history_,feature_,sfc_,dn_,in.params,in.pass,in.interfaces,in.read} {}
+         stages_{reset_,select,history_,feature_,sfc_,dn_,in.params,in.pass,in.interfaces,read} {}
     NativeAdmissionFrameAssembly(const NativeAdmissionFrameAssembly&)=delete;
     NativeAdmissionFrameAssembly& operator=(const NativeAdmissionFrameAssembly&)=delete;
     template<class Use> int run(Use use) noexcept {
@@ -2146,6 +2145,35 @@ struct NativeModeFrameExecution {
                     in.disableTemporalDenoise};
                 return NativeFrameExecutionAssembly::run(execution);
             });
+            return result.status;
+        });
+        if(status){result.status=status;result.admitted=false;}
+        return result;
+    }
+};
+struct NativePolicyFrameExecution {
+    struct Inputs {
+        NativeRendererCpuAssembly& assembly;const TglNativeVphalMhwView& view;
+        NativeVpProducerFrame& vp;NativeOutputPipeFrameScope& policy;NativeFrameDataRead& read;
+        const NativeAdmissionFrameAssembly::Inputs& admission;NativeModeAllocationPlan& allocation;
+        const TglVeboxRenderBinding& binding;void* argument;
+        const std::array<uint32_t,11>& controls;TglOwnedVeboxPacketLeases leases;
+        NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;bool disableTemporalDenoise;
+    };
+    static NativeAdmissionStages::Result run(Inputs& in) noexcept {
+        NativeAdmissionStages::Result result;
+        const auto& a=in.admission;auto& p=in.policy;
+        if(&p.read!=&in.read || &p.health.childOwner!=&a.childOwner ||
+            &p.health.executionOwner!=&a.executionOwner || &p.health.sourceOwner!=&a.sourceOwner ||
+            &p.health.targetOwner!=&a.targetOwner || p.health.child!=reinterpret_cast<uintptr_t>(a.child) ||
+            p.health.execution!=a.execution || &p.health.source!=&a.source || &p.health.target!=&a.target ||
+            !a.params.data() || !a.pass.data() || p.parameters!=reinterpret_cast<uintptr_t>(a.params.data()) ||
+            &p.compositionNeeded!=a.pass.data()+8 || p.vp.bytes.data()!=a.vp || &in.parameters!=&a.parameters)return result;
+        const int status=p.run([&](NativeOutputPipeSelector& selector) noexcept -> int {
+            NativeAdmissionFrameAssembly admission(a,selector,in.read);
+            NativeModeFrameExecution::Inputs mode{in.assembly,in.view,in.vp,admission,in.allocation,
+                in.binding,in.argument,in.controls,in.leases,in.parameters,in.csc,in.disableTemporalDenoise};
+            result=NativeModeFrameExecution::run(mode);
             return result.status;
         });
         if(status){result.status=status;result.admitted=false;}
