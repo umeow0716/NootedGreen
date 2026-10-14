@@ -385,6 +385,46 @@ struct NativeVpScalarStateProducer {
             health.qualifiesVp(reinterpret_cast<uintptr_t>(vp))?&produced:nullptr;
     }
 };
+struct NativeVpAvsProducer {
+    using Owner=TglOwnedSfcAvsParameters<TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>>;
+    NativeVpScalarStateProducer& scalar;NativeFrameDataRead& dataRead;
+    TglOwnedSfcAvsTables& cache;TglOwnedSfcCommandParameters& parameters;
+    uintptr_t performance;
+    uint32_t phaseSourceSiting=0;
+    bool attempted=false,ready=false;
+    template<class Use> int run(void* actual,const TglOwnedVpFramePreparation& frame,
+        Owner& owner,Use use) noexcept {
+        static_assert(noexcept(use(parameters)) && std::is_same_v<decltype(use(parameters)),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        const auto* prefix=scalar.state();
+        if(attempted || !prefix || actual!=scalar.vp || &dataRead!=&scalar.dataRead ||
+            parameters.filtersInUse)return 5;
+        TglOwnedSfcAvsConfiguration config;
+        if(!tglReadOwnedVpAvsConfiguration(frame,*prefix,performance,dataRead,config))return 5;
+        TglNativeSineBinding sine;
+        // Native math admission precedes even a cache hit. No host-libm
+        // substitution and no widening of the closed frame-data reader.
+        if(!sine.resolve(scalar.image,&readMemory,
+            [&](uintptr_t image) noexcept {return scalar.health.qualifiesImage(image) &&
+                scalar.health.qualifiesVp(reinterpret_cast<uintptr_t>(actual));},&executableMemory))return 5;
+        attempted=true;phaseSourceSiting=config.phaseSourceSiting;
+        const int status=tglWithOwnedSfcAvsCommands(parameters,owner,cache,config.format,
+            config.scaleX,config.scaleY,config.siting,config.forceFilter,config.symmetric,
+            config.sharpening,config.window,
+            [&](float value) noexcept {return sine.evaluate(value);},
+            [&](TglOwnedSfcCommandParameters& commands) noexcept -> int {
+                if(scalar.state()!=prefix)return 5;
+                ready=true;
+                const int result=use(commands); // coefficient/AVS lease still active
+                if(scalar.state()!=prefix) {ready=false;return result?result:5;}
+                return result;
+            },&phaseSourceSiting);
+        return status;
+    }
+};
+template int NativeVpAvsProducer::run<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
+    void*,const TglOwnedVpFramePreparation&,NativeVpAvsProducer::Owner&,
+    int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
 struct NativeNv12OutputQuery {
     struct State {bool attempted=false;TglOwnedNv12LayoutRead result{};};
     NativeContextSurfaceOwner& owner;const TglOwnedSurfaceStorage& expected;State& state;
