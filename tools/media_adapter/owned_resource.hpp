@@ -22446,6 +22446,7 @@ template<class Owner,size_t Capacity=16> class TglOwnedContextOwnerRegistry {
     }
 public:
     // Registry must outlive every lease (production registry is process-lived).
+    using OwnerType=Owner;
     // The concrete owner retains its native context and image obligations;
     // this lease prevents reconciliation from destroying that owner.
     class ContextLease {
@@ -22701,6 +22702,33 @@ public:
             });
     }
 };
+// Called only from successful native creation's scoped adoption callback.
+// The caller owns a persistent failure ledger: do not discard nonnull candidate
+// pointers after refusal, and do not free native contexts or fake removal proof.
+template<size_t N,class Scope,class Registry,class Read,class Write,class Admit,class Qualify,class Executable>
+int tglAdoptNativeCodecContextBatch(Scope& scope,uintptr_t physical,const TglNativeCreatedContextBatch<N>& batch,
+    Registry& registry,std::array<typename Registry::OwnerType*,N>& candidates,
+    Read read,Write write,Admit admit,Qualify qualify,Executable executable) noexcept {
+    using Owner=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,Read,Write,Admit,Qualify,Executable>;
+    static_assert(std::is_same_v<typename Registry::OwnerType,Owner> &&
+        noexcept(scope.retainPhysicalDependency()) &&
+        std::is_same_v<decltype(scope.retainPhysicalDependency()),TglOwnedPhysicalDependencyLease>);
+    if(!batch.valid || batch.count>N || !scope.matches(scope.image(),physical,scope.generation()))return 5;
+    for(size_t i=0;i<N;++i) {
+        if(candidates[i] || (i>=batch.count && batch.contexts[i]))return 5;
+        if(i<batch.count && batch.contexts[i])for(size_t j=0;j<i;++j)
+            if(batch.contexts[j]==batch.contexts[i])return 5;
+    }
+    for(size_t i=0;i<batch.count;++i)if(batch.contexts[i]) {
+        auto dependency=scope.retainPhysicalDependency();
+        if(!dependency.matches(scope.image(),physical,scope.generation()))return 5;
+        candidates[i]=Owner::create(scope.image(),physical,scope.generation(),batch.contexts[i],
+            dependency,read,write,admit,qualify,executable);
+        if(!candidates[i])return 5;
+    }
+    return registry.adoptBatch(scope.image(),physical,scope.generation(),batch,candidates)?0:5;
+}
+
 // Process-lived ABI router. Policy/owners must retain the original physical
 // and image obligations; this coordinator grants no GPU completion authority.
 // A single gate serializes journal admission with new owner/frame admission.

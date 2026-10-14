@@ -14469,19 +14469,23 @@ static void testRetainedVeboxFrames() {
             auto dependency=physicals.pinDependency(ticket,base,physical);assert(dependency.live());
             assert(!Codec::create(base,physical,ticket.generation+1,context,dependency,ownerRead,writeVptr,ownerAdmit,qualify,executable));
             assert(dependency.live());
-            auto* owner=Codec::create(base,physical,ticket.generation,context,dependency,ownerRead,writeVptr,ownerAdmit,qualify,executable);
-            assert(owner && !dependency.live());
+            dependency.reset();
             TglOwnedContextOwnerRegistry<Codec,1> codecs;
             TglNativeCreatedContextBatch<2> created;created.valid=true;created.count=2;created.contexts[0]=context;
-            std::array<Codec*,2> candidates{owner,nullptr};
+            std::array<Codec*,2> candidates{};
+            assert(physicals.withDependencyAdoption(ticket,base,physical,[&](auto& adoption) noexcept -> int {
+                return tglAdoptNativeCodecContextBatch(adoption,physical,created,codecs,candidates,
+                    ownerRead,writeVptr,ownerAdmit,qualify,executable);
+            })==0 && !candidates[0] && !candidates[1]);
+            Codec* owner=nullptr;
+            {auto pin=codecs.pin(base,physical,ticket.generation,context);owner=pin.get();assert(owner);}
+            candidates[0]=owner;
             auto wrong=created;wrong.contexts[0]+=8;
             assert(!codecs.adoptBatch(base,physical,ticket.generation,wrong,candidates) && candidates[0]==owner);
             auto duplicate=created;duplicate.contexts[1]=context;
             candidates[1]=owner;
             assert(!codecs.adoptBatch(base,physical,ticket.generation,duplicate,candidates) && candidates[0]==owner && candidates[1]==owner);
             candidates[1]=nullptr;
-            assert(codecs.adoptBatch(base,physical,ticket.generation,created,candidates) && !candidates[0] && !candidates[1]);
-            candidates[0]=owner;
             assert(!codecs.adoptBatch(base,physical,ticket.generation,created,candidates) && candidates[0]==owner);
             candidates[0]=nullptr; // Negative alias probe above never owned the registered object.
             auto scope=[&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c) noexcept {
@@ -14522,6 +14526,38 @@ static void testRetainedVeboxFrames() {
                 return 0;
             })==0);
             assert(physicals.destroy(ticket,base,physical,[](uintptr_t) noexcept -> int {return 0;})==0);
+            {
+                // Separate CPU-only creation epoch with partial native output
+                // qualification failure. Keep first candidate, publish neither.
+                nativeRemoved=false;
+                constexpr uintptr_t secondContext=context+0x10000;
+                auto partialRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                    if(address==secondContext+0x128 && bytes==8) {
+                        const uintptr_t wrong=physical+8;std::memcpy(out,&wrong,8);return true;
+                    }
+                    return ownerRead(address,out,bytes);
+                };
+                auto partialAdmit=[&](uintptr_t p,size_t bytes) noexcept {
+                    return (p==secondContext && (bytes==8 || bytes==0x12f8)) || ownerAdmit(p,bytes);
+                };
+                using Partial=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,decltype(partialRead),
+                    decltype(writeVptr),decltype(partialAdmit),decltype(qualify),decltype(executable)>;
+                static Physical partials;const auto failed=partials.reserve(base);assert(partials.publish(failed,base,physical));
+                TglOwnedContextOwnerRegistry<Partial,2> empty;
+                TglNativeCreatedContextBatch<2> outputs;outputs.valid=true;outputs.count=2;outputs.contexts={context,secondContext};
+                std::array<Partial*,2> ledger{};
+                assert(partials.withDependencyAdoption(failed,base,physical,[&](auto& adoption) noexcept -> int {
+                    return tglAdoptNativeCodecContextBatch(adoption,physical,outputs,empty,ledger,
+                        partialRead,writeVptr,partialAdmit,qualify,executable);
+                })==5 && ledger[0] && !ledger[1]);
+                assert(!empty.pin(base,physical,failed.generation,context).get() && !partials.lookup(base,physical).generation);
+                nativeRemoved=true; // Explicit CPU-only removal proof for fixture cleanup.
+                assert(ledger[0]->confirmNativeRemoval([&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c) noexcept {
+                    return nativeRemoved && i==base && p==physical && g==failed.generation && c==context;
+                }));
+                delete ledger[0];ledger[0]=nullptr;
+                assert(partials.destroy(failed,base,physical,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
+            }
             assert(vptrWrites==2);vptrWrites=0; // Separate original-vtable test phase below.
         }
         assert(!privateTable.publish(read,writeVptr,[](uintptr_t,size_t) noexcept {return false;}) && !vptrWrites);
