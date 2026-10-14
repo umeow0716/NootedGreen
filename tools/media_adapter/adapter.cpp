@@ -858,6 +858,29 @@ struct NativeTwoPassCscHealth {
 using NativeTwoPassCscQuery=TglLeasedNativeTwoPassCscQuery<NativeRendererChildOwner,
     decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory),
     TglNativeTwoPassCscInvoke,NativeTwoPassCscHealth>;
+struct NativeVeboxCscProducer {
+    NativeTwoPassCscHealth& health;const TglCscCoefficientsBinding& binding;
+    bool busy=false;
+    bool operator()(TglCscCoefficients& output,uint32_t from,uint32_t to,uint32_t format) noexcept {
+        const auto source=reinterpret_cast<uintptr_t>(&health.source);
+        const auto target=reinterpret_cast<uintptr_t>(&health.target);
+        if(busy || binding.image!=health.image || !health(source,target))return false;
+        uint32_t expectedFrom=0,expectedTo=0,expectedFormat=0;
+        std::memcpy(&expectedFrom,health.source.prefix.data(),4);
+        std::memcpy(&expectedTo,health.target.prefix.data(),4);
+        std::memcpy(&expectedFormat,health.source.prefix.data()+0x130,4);
+        if(from!=expectedFrom || to!=expectedTo || format!=expectedFormat)return false;
+        busy=true;struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy};
+        auto qualify=[&](uintptr_t image) noexcept {return image==health.image && health(source,target);};
+        TglNativeCscInvoker invoke;TglCscCoefficients candidate;
+        const bool produced=tglPrepareOwnedVeboxCsc(binding,candidate,from,to,format,&readMemory,qualify,
+            &executableMemory,[&](uintptr_t entry,uint32_t a,uint32_t b,float* m,float* i,float* o) noexcept {
+                invoke.coefficients(entry,a,b,m,i,o);
+            },[&](uintptr_t entry,uint32_t a,uint32_t b,float* m) noexcept {return invoke.matrix(entry,a,b,m);});
+        if(!produced || !health(source,target))return false;
+        output=candidate;return true;
+    }
+};
 struct NativeTargetDecompression {
     void* scope=nullptr;
     int(*invoke)(void*,NativeContextSurfaceOwner&,const TglOwnedSurfaceStorage&) noexcept=nullptr;
