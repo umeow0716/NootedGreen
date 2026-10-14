@@ -3102,6 +3102,48 @@ struct NativeTemporaryLowerContinuation {
             });
     }
 };
+struct NativeRetainedTemporaryTransaction {
+    using Backend=TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>;
+    using Target=TglOwnedType1BorrowedSurfaceLease<NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi>;
+    Backend& backend;NativeRendererCpuAssembly& assembly;
+    const TglNativeCreatedVeboxRendererView& pinned;NativeSourceGraph& graph;const Target& finalTarget;
+    NativeContextSurfaceOwner* secondary;NativeContextSurfaceOwner* previous;NativeDenoiseParameters& denoise;
+    size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
+    const TglOwnedVpEntrySet& catalogue;NativeModeRetirementAuthority& retirement;
+    const TglNativeVphalMhwView& view;TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
+    NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;void* argument;
+    bool attempted=false;
+    TglNativePerPassCommandResult run(std::array<uint8_t,0x139>& parameters,std::array<uint8_t,0x60>& pass,
+        const TglNativeOuterSurfaceRoles& roles) noexcept {
+        if(attempted || childIndex>1 || !backend.bound() || backend.image()!=pinned.image ||
+            !assembly.readyForFrontend() || !graph.valid() || !finalTarget.storage())return {};
+        attempted=true;
+        std::array<TglOwnedSurfaceStorage*,25> originals{};
+        for(size_t i=0;i<25;++i)originals[i]=reinterpret_cast<TglOwnedSurfaceStorage*>(
+            i<17?roles.sources[i]:roles.targets[i-17]);
+        auto held=[&](size_t index,const TglOwnedSurfaceStorage* surface) noexcept {
+            if(index>=25 || !surface || !graph.valid() || !finalTarget.storage())return false;
+            const auto address=reinterpret_cast<uintptr_t>(surface);
+            return graph.hasRetainedSurfaceAddress(address) || surface==finalTarget.storage();
+        };
+        return tglRunRetainedGraphPerPassTransaction(backend,graph,parameters,pass,originals,
+            assembly.backing().retention(),held,
+            [&](auto& params,auto& packet,auto& source,auto& target) noexcept {
+                const auto* input=source.surfaceBinding();const auto* output=target.surfaceBinding();
+                if(!input || !output)return TglOwnedVeboxCommandTransactionResult{};
+                NativeHistorySavePreparation prepare{assembly,pinned,graph};
+                return tglRunNativeConditionalPerPass(params,packet,source,*input,target,*output,
+                    [&](auto& owner,const auto& surface) noexcept {return prepare(owner,surface);},
+                    [&]() noexcept {
+                        NativeTemporaryLowerContinuation lower{assembly,pinned,graph,source,target,secondary,previous,
+                            denoise,childIndex,interfaces,reinterpret_cast<uintptr_t>(params.data()),
+                            reinterpret_cast<uintptr_t>(packet.data()),catalogue,retirement,view,acquisition,
+                            decompressionStatus,decompression,argument};
+                        return lower.run();
+                    });
+            });
+    }
+};
 // Callback table entries carry no Entry/closure argument. Route the immutable
 // qualified native image and actual physical generation, never "current Entry".
 // Prepared backend only; factory callback publication remains disabled.

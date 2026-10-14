@@ -1595,7 +1595,9 @@ struct TglTrackedCpuBinding {
 // Invoker ABI: uintptr_t allocate(entry,size_t), void release(entry,pointer).
 // Caller retains the loaded image lease until backend and all owners are gone.
 struct TglNativeTrackedCpuInvoker {
-    uintptr_t allocate(uintptr_t entry, size_t bytes) const {
+    // Exact437e0 is malloc ->43830(memset) -> counter; NULL failure,
+    // no C++ allocation/exception path. Preserve that C ABI contract.
+    uintptr_t allocate(uintptr_t entry, size_t bytes) const noexcept {
         if (!entry || !bytes) return 0;
         using Allocate = void* (*)(size_t);
         return reinterpret_cast<uintptr_t>(reinterpret_cast<Allocate>(entry)(bytes));
@@ -1616,9 +1618,9 @@ public:
                          Executable executable, Invoker invoker) : invoke(std::move(invoker)) {
         binding.resolve(image,read,qualify,executable);
     }
-    bool bound() const { return binding.image != 0; }
+    bool bound() const noexcept { return binding.image != 0; }
     uintptr_t image() const noexcept { return binding.image; }
-    uintptr_t allocate(size_t bytes) {
+    uintptr_t allocate(size_t bytes) noexcept(noexcept(invoke.allocate(binding.allocate,bytes))) {
         return bound() && bytes ? invoke.allocate(binding.allocate,bytes) : 0;
     }
     void release(uintptr_t pointer) noexcept {
