@@ -16717,6 +16717,35 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        struct Backend {
+            size_t calls=0,live=0,fail=SIZE_MAX;
+            uintptr_t allocate(size_t n) noexcept {
+                assert(n==0x308);if(calls++==fail)return 0;
+                void* p=std::malloc(n);if(p)++live;return reinterpret_cast<uintptr_t>(p);
+            }
+            void release(uintptr_t p) noexcept {assert(p && live);--live;std::free(reinterpret_cast<void*>(p));}
+        };
+        TglOwnedSurfaceStorage source{};source.prefix[0]=0x79;source.tail[0x17]=0x63;
+        std::array<const TglOwnedSurfaceStorage*,25> originals{};
+        originals[0]=&source;originals[24]=&source;
+        for(size_t fail=0;fail<4;++fail) {
+            Backend b;b.fail=fail;TglNativePerPassCpuShells<Backend> shells(b);
+            assert(!shells.prepare(originals) && !shells.get(0) && b.live==0);
+        }
+        Backend b;
+        {
+            TglNativePerPassCpuShells<Backend> shells(b);
+            assert(shells.prepare(originals) && b.live==4);
+            assert(shells.get(0) && !shells.get(1) && shells.get(24) && shells.get(25) && shells.get(26));
+            assert(!shells.get(27) && !shells.prepare(originals));
+            assert(std::memcmp(reinterpret_cast<void*>(shells.get(0)),&source,0x2a8)==0);
+            assert(shells.get(0)!=shells.get(24));
+            shells.reset();shells.reset();assert(b.live==0);
+            assert(shells.prepare(originals));
+        }
+        assert(b.live==0);
+    }
+    {
         std::array<uint8_t,0x60> source,destination;
         source.fill(0xff);destination.fill(0xa5);
         assert(tglCopyNativePerPassScalars(destination,source));

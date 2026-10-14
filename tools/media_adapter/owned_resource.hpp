@@ -7178,6 +7178,45 @@ struct alignas(8) TglOwnedSurfaceStorage {
 static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
 static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+// Temporary CPU ownership for exact 1b20d0 / 1b2400 / 1b2870 / 1337b0.
+// Source array contains 17 sources followed by 8 targets. Caller must keep
+// original surface leases throughout prepare/use/copyback; these copies do
+// NOT retain resource tokens or authorize GPU backing retirement.
+template<class Backend> class TglNativePerPassCpuShells {
+    Backend& backend_;
+    std::array<uintptr_t,27> shells_{};
+    bool prepared_=false;
+public:
+    explicit TglNativePerPassCpuShells(Backend& backend) noexcept:backend_(backend) {}
+    TglNativePerPassCpuShells(const TglNativePerPassCpuShells&)=delete;
+    TglNativePerPassCpuShells& operator=(const TglNativePerPassCpuShells&)=delete;
+    ~TglNativePerPassCpuShells() { reset(); }
+    bool prepare(const std::array<const TglOwnedSurfaceStorage*,25>& originals) noexcept {
+        static_assert(noexcept(backend_.allocate(size_t{0x308})) &&
+            noexcept(backend_.release(uintptr_t{})));
+        if(prepared_)return false;
+        std::array<uintptr_t,27> candidate{};
+        for(size_t i=0;i<candidate.size();++i) {
+            if(i<25 && !originals[i])continue;
+            candidate[i]=backend_.allocate(0x308);
+            if(!candidate[i]) {
+                for(size_t j=i;j;--j)if(candidate[j-1])backend_.release(candidate[j-1]);
+                return false;
+            }
+            // Native copies only the proven base extent; do not invent
+            // initialization/semantics for the extra allocation bytes.
+            if(i<25)std::memcpy(reinterpret_cast<void*>(candidate[i]),originals[i],0x2a8);
+        }
+        shells_=candidate;prepared_=true;return true;
+    }
+    uintptr_t get(size_t index) const noexcept {
+        return prepared_ && index<shells_.size()?shells_[index]:0;
+    }
+    void reset() noexcept {
+        const auto old=shells_;shells_.fill(0);prepared_=false;
+        for(size_t i=old.size();i;--i)if(old[i-1])backend_.release(old[i-1]);
+    }
+};
 // Gen12 DDI extensions are owned sidecars, NOT extra bytes in the native
 // 0x2a8 shell or aliases for source+a8's legacy CSC/conversion parameters.
 // Unknown is intentionally distinct from an explicitly absent feature. The
