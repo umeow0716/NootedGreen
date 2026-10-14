@@ -217,6 +217,11 @@ public:
     static uintptr_t callbackAddress() noexcept {return reinterpret_cast<uintptr_t>(&create);}
 };
 struct TglOwnedVpFactoryContextDomain {};
+struct TglOwnedVphalRetirementDomain {};
+struct TglOwnedVphalRetirementContext {
+    void* scope=nullptr;
+    int(*admit)(void*,void*,uint64_t,size_t) noexcept=nullptr;
+};
 struct TglOwnedVpFactoryContext {
     void* child=nullptr;
     bool called=false,valid=true;
@@ -22479,6 +22484,31 @@ public:
         if(!state_ || lease.get()!=this || !lease.exclusive()) return 5;
         return withStorageScope(false,admit,qualify,executable,use);
     }
+    // Enclose teardown, including storage deletion. TLS is keyed by storage
+    // identity only: scope destruction never dereferences deleted storage.
+    template<class ExclusiveLease,class PhysicalScope,class Proof,class Use>
+    int withRetirementAuthority(const ExclusiveLease& lease,PhysicalScope& physical,Proof proof,Use use) noexcept {
+        static_assert(noexcept(proof(static_cast<void*>(nullptr),uint64_t{},size_t{})) &&
+            std::is_same_v<decltype(proof(static_cast<void*>(nullptr),uint64_t{},size_t{})),int> &&
+            noexcept(use()) && std::is_same_v<decltype(use()),int>);
+        if(!state_ || lease.get()!=this || !lease.exclusive() || state_->storageBusy || !state_->storage ||
+            !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
+            !physical.matches(state_->image,state_->physical,state_->generation) ||
+            !state_->boundRenderer() || !state_->boundPhysicalOs())return 5;
+        struct Payload {const ExclusiveLease& lease;PhysicalScope& physical;Proof& proof;
+            TglOwnedVphalRendererOwner* owner;uintptr_t image,physicalAddress;uint64_t generation;};
+        Payload payload{lease,physical,proof,this,state_->image,state_->physical,state_->generation};
+        TglOwnedVphalRetirementContext context{&payload,[](void* value,void* child,uint64_t generation,size_t index) noexcept -> int {
+            auto& p=*static_cast<Payload*>(value);
+            auto valid=[&]() noexcept {return p.lease.get()==p.owner && p.lease.exclusive() &&
+                p.physical.matches(p.image,p.physicalAddress,p.generation);};
+            if(!valid())return 5;
+            const int status=p.proof(child,generation,index);
+            return status?status:(valid()?0:5);
+        }};
+        TglOwnedScopedContext<TglOwnedVphalRetirementContext,TglOwnedVphalRetirementDomain> scope(state_->storage,context);
+        return scope.bound()?use():5;
+    }
     // Ordinary parent pin outlives this synchronous scope and any retained frame.
     // CPU ownership stays in State. Serializing access is NOT GPU completion:
     // consumer must authenticate its frame and reject/retire pending backing.
@@ -22496,6 +22526,7 @@ private:
         static_assert(noexcept(use(std::declval<Storage&>(),std::declval<const TglNativeCreatedVeboxRendererView&>())) &&
             std::is_same_v<decltype(use(std::declval<Storage&>(),
                 std::declval<const TglNativeCreatedVeboxRendererView&>())),int>);
+        if(TglOwnedScopedContext<TglOwnedVphalRetirementContext,TglOwnedVphalRetirementDomain>::get(state_->storage))return 5;
         bool expected=false;
         if(!state_->storageBusy.compare_exchange_strong(expected,true,std::memory_order_acquire)) return 5;
         struct Reset {std::atomic<bool>& busy;~Reset(){busy.store(false,std::memory_order_release);}} reset{state_->storageBusy};

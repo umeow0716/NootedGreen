@@ -17362,6 +17362,7 @@ int main() {
                         assert(!Owner::create(image,0x90000,ticket.generation+1,creatorAddress,r,
                             dependency,ownedStorage,ownerRead,ownerWrite,admitObject,0,ownedNative));
                         assert(dependency.live() && ownedStorage);
+                        auto* storageIdentity=ownedStorage;
                         auto* owner=Owner::create(image,0x90000,ticket.generation,creatorAddress,r,
                             dependency,ownedStorage,ownerRead,ownerWrite,admitObject,0,ownedNative);
                         assert(owner && !ownedStorage && !dependency.live());
@@ -17407,6 +17408,24 @@ int main() {
                         {
                             auto initialization=OwnerRouter::pinForInitialization(creatorAddress);
                             assert(initialization.get()==owner && initialization.exclusive());
+                            using RetirementLookup=TglOwnedScopedContext<TglOwnedVphalRetirementContext,TglOwnedVphalRetirementDomain>;
+                            assert(!RetirementLookup::get(storageIdentity));
+                            unsigned retirementProofs=0;
+                            auto proof=[&](void* child,uint64_t generation,size_t index) noexcept -> int {
+                                ++retirementProofs;assert(child==reinterpret_cast<void*>(0xabc0) && generation==7 && index==1);return 31;
+                            };
+                            assert(physicalOwners.withDependencyAdoption(ticket,image,0x90000,[&](auto& physicalScope) noexcept -> int {
+                                assert(owner->withRetirementAuthority(initialization,physicalScope,proof,[&]() noexcept -> int {
+                                    auto* active=RetirementLookup::get(storageIdentity);assert(active && active->scope && active->admit);
+                                    assert(owner->withCreatorStorage(initialization,creatorAdmit,qualify,ownerExecutable,
+                                        [](auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                    assert(owner->withRetirementAuthority(initialization,physicalScope,proof,
+                                        []() noexcept -> int {assert(false);return 0;})==5);
+                                    return active->admit(active->scope,reinterpret_cast<void*>(0xabc0),7,1);
+                                })==31);
+                                return 0; // Fixture checks error internally; real mutation error quarantines physical epoch.
+                            })==0 && retirementProofs==1);
+                            assert(!RetirementLookup::get(storageIdentity));
                             unsigned admissionCalls=0;
                             auto reentrantQualify=[&](uintptr_t address) noexcept {
                                 ++admissionCalls;
