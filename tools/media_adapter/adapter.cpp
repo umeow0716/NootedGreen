@@ -515,6 +515,92 @@ struct NativeModeRetirementAuthority {
     int operator()() const noexcept {return scope && admit?admit(scope):5;}
 };
 using NativeRendererBacking=std::remove_reference_t<decltype(std::declval<NativeRendererCpu&>().backing())>;
+struct NativeSfcPreparation {
+    using CpuBackend=TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>;
+    using State=int(*)(void*,const TglOwnedVpFramePreparation&,const TglOwnedVpRegionInput&,
+        TglOwnedSfcStateParameters<CpuBackend>&,void*,void*,void*) noexcept;
+    using Avs=int(*)(void*,const TglOwnedVpFramePreparation&,TglOwnedSfcAvsParameters<CpuBackend>&) noexcept;
+    using Ief=void(*)(void*,const TglOwnedVpFramePreparation&) noexcept;
+    using Emit=int(*)(void*,void*,void*,const TglOwnedVpEntrySet&) noexcept;
+    NativeRendererBacking& backing;NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
+    NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+    const TglOwnedVpEntrySet& base;const TglOwnedVpModeState& original;
+    size_t index;void* child;uintptr_t mhw;void* renderData;
+    State state;Avs avs;Ief ief;Emit emit;
+    template<class Read,class Complete>
+    int run(void* expectedVp,uintptr_t e0,uintptr_t f0,const TglOwnedSurfaceStorage& source,
+        const TglOwnedSurfaceStorage& target,uintptr_t execution,Read read,Complete complete) noexcept {
+        static_assert(noexcept(complete(expectedVp)) && std::is_same_v<decltype(complete(expectedVp)),int>);
+        if constexpr(std::is_pointer_v<Read>)if(!read)return 5;
+        if constexpr(std::is_pointer_v<Complete>)if(!complete)return 5;
+        const auto address=reinterpret_cast<uintptr_t>(child);
+        const uint64_t generation=childOwner.allocationGeneration();
+        auto live=[&]() noexcept {
+            uintptr_t linkedVp=0;
+            return index<2 && expectedVp && child && address<=UINTPTR_MAX-0x90 && mhw && renderData && generation &&
+                state && avs && ief && emit &&
+                childOwner.allocationGeneration()==generation && childOwner.hasPrivateChildLease(address) &&
+                childOwner.hasPrivateSfcRenderDataLease(address,execution) &&
+                read(address+0x80,&linkedVp,8) && linkedVp==reinterpret_cast<uintptr_t>(expectedVp) &&
+                executionOwner.hasExecutionLease(execution) && sourceOwner.hasSurfaceLease(source) &&
+                targetOwner.hasSurfaceLease(target);
+        };
+        if(backing.retention()() || !live() ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(state),1) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(avs),1) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(ief),1) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(emit),1))return 5;
+        TglVeboxAdmissionStagesInput input;input.leasedParamsE0=e0;input.leasedParamsF0=f0;
+        return backing.withVpResources(index,[&](auto& graph,auto& storage,auto&) noexcept -> int {
+            if(!live() || storage.bytes.data()!=expectedVp || !graph.ownsStorage(expectedVp))return 5;
+            // This acquires/prepares the frame exactly once. Do not invoke
+            // entries.prepare again, or send before admission continuation.
+            return graph.withSfcAdmissionCallbackAssembly(expectedVp,input,
+                reinterpret_cast<uintptr_t>(&source),reinterpret_cast<uintptr_t>(&target),execution,mhw,
+                base,original,renderData,read,state,avs,ief,emit,
+                [&](void* actual,const TglOwnedVpEntrySet& entries) noexcept -> int {
+                    if(actual!=expectedVp || !entries.initialize || !entries.prepare || backing.retention()() || !live())return 5;
+                    const int status=complete(actual);
+                    // The continuation may acquire/submit work. Its retention
+                    // is expected and must survive scope unwind, not be called
+                    // a completion certificate or converted to a false error.
+                    return status?status:(live() && graph.ownsStorage(actual)?0:5);
+                });
+        });
+    }
+};
+template int NativeSfcPreparation::run<decltype(&readMemory),int(*)(void*) noexcept>(
+    void*,uintptr_t,uintptr_t,const TglOwnedSurfaceStorage&,const TglOwnedSurfaceStorage&,
+    uintptr_t,decltype(&readMemory),int(*)(void*) noexcept) noexcept;
+template<class Read> struct NativeSfcPrepareCall {
+    NativeSfcPreparation& preparation;Read& read;
+    template<class Complete> int operator()(void* vp,uintptr_t e0,uintptr_t f0,
+        const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,
+        uintptr_t execution,Complete complete) noexcept {
+        return preparation.run(vp,e0,f0,source,target,execution,read,complete);
+    }
+};
+struct NativeSfcAdmission {
+    template<class Read,class Finish>
+    static bool run(NativeSfcPreparation& preparation,Read& read,const NativeSfcDenoiseRequest& dn,
+        void* vp,uintptr_t execution,const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,
+        TglLeasedAdmissionExecution& report,const TglVeboxAdmissionStagesInput& input,Finish finish) noexcept {
+        if constexpr(std::is_pointer_v<Finish>)if(!finish)return false;
+        // DN authority must name this exact original source owner; it must
+        // remain inside the enclosing tracked native-release-slot borrow.
+        if(&dn.owner!=&preparation.sourceOwner)return false;
+        using Prepare=NativeSfcPrepareCall<Read>;
+        TglOwnedVeboxScopedSfcAdmissionStage<NativeRendererChildOwner,NativeExecutionOwner,
+            NativeContextSurfaceOwner,NativeContextSurfaceOwner,NativeSfcDenoiseRequest,Prepare>
+            stage(preparation.childOwner,preparation.executionOwner,preparation.sourceOwner,
+                preparation.targetOwner,preparation.child,vp,execution,source,target,dn,{preparation,read});
+        return stage(report,input,finish);
+    }
+};
+template bool NativeSfcAdmission::run<decltype(&readMemory),bool(*)() noexcept>(
+    NativeSfcPreparation&,decltype(&readMemory)&,const NativeSfcDenoiseRequest&,void*,uintptr_t,
+    const TglOwnedSurfaceStorage&,const TglOwnedSurfaceStorage&,TglLeasedAdmissionExecution&,
+    const TglVeboxAdmissionStagesInput&,bool(*)() noexcept) noexcept;
 struct NativeAdmissionReset {
     NativeRendererChildOwner& childOwner;
     NativeExecutionOwner& executionOwner;
