@@ -15657,6 +15657,22 @@ static void testRetainedVeboxFrames() {
                         assert(rotated.entered && rotated.copiedBack && !rotated.nativeStatus && !backend.live);
                         assert(original.prefix[0x86]==2);original.prefix[0x86]=0;
                         uintptr_t preserved=0;std::memcpy(&preserved,parameters.data()+8,8);assert(preserved==address);
+                        for(int failure:std::array<int,3>{0,31,5}) {
+                            const auto transaction=tglRunNativePerPassCommandTransaction(backend,
+                                parameters,pass,roots,sidecar,sidecar,held,
+                                [&](auto& params,auto&,auto&,auto&) noexcept {
+                                    if(failure==5) {uintptr_t foreign=1;std::memcpy(params.data()+0x10,&foreign,8);}
+                                    TglOwnedVeboxCommandTransactionResult native;
+                                    native.status=failure==31?31:0;native.builderStatus=17;
+                                    native.acquired=true;native.writtenBack=true;native.nativeEntered=true;
+                                    return native;
+                                });
+                            assert(transaction.entered && transaction.copiedBack==(failure!=5));
+                            assert(transaction.native.status==failure && transaction.native.builderStatus==17);
+                            assert(transaction.native.acquired && transaction.native.writtenBack &&
+                                transaction.native.nativeEntered && transaction.native.requiresRetention());
+                            assert(!backend.live);
+                        }
                     }
                     const uintptr_t dnAddress=dn.get();
                     assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {

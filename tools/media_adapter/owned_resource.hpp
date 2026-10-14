@@ -14227,6 +14227,32 @@ struct TglOwnedVeboxCommandTransactionResult {
     bool requiresRetention() const noexcept {return acquired || writtenBack || nativeEntered;}
 };
 
+struct TglNativePerPassCommandResult {
+    TglOwnedVeboxCommandTransactionResult native{};
+    bool entered=false,copiedBack=false;
+};
+// The native pass ABI returns int, but the enclosing retained frame needs the
+// entire transaction even on failed copyback or post-callback lease loss.
+template<class Backend,size_t P,size_t Q,class Owner,class Lease,class Use>
+TglNativePerPassCommandResult tglRunNativePerPassCommandTransaction(Backend& backend,
+    std::array<uint8_t,P>& parameters,std::array<uint8_t,Q>& pass,
+    const std::array<TglOwnedSurfaceStorage*,25>& originals,Owner& source,Owner& target,
+    Lease live,Use use) noexcept {
+    TglNativePerPassCommandResult result;
+    TglNativePerPassTemporaryScope<Backend> temporary(backend);
+    const auto scoped=temporary.runWithDerivedRoots(parameters,pass,originals,source,target,live,
+        [&](auto& params,auto& packet,auto& input,auto& output) noexcept -> int {
+            static_assert(noexcept(use(params,packet,input,output)) &&
+                std::is_same_v<decltype(use(params,packet,input,output)),TglOwnedVeboxCommandTransactionResult>);
+            result.native=use(params,packet,input,output);
+            return result.native.status;
+        });
+    result.entered=scoped.entered;result.copiedBack=scoped.copiedBack;
+    if(!result.native.status && (scoped.nativeStatus || !scoped.entered || !scoped.copiedBack))
+        result.native.status=scoped.nativeStatus?scoped.nativeStatus:5;
+    return result;
+}
+
 // Whole native Render under the original surface and private child/image
 // leases. Existing callback/producer scopes must enclose this call. Never
 // treat native status0 as completion; a qualified retirement must clear the
