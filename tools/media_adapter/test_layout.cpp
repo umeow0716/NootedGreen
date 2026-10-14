@@ -15734,6 +15734,12 @@ static void testRetainedVeboxFrames() {
                         std::array<const TglOwnedSurfaceStorage*,25> inputs{};inputs[0]=&original;
                         assert(temporary.prepare(inputs));
                         assert(temporary.withDerivedSurfaceLease(0,sidecar,[&](auto& derived) noexcept {
+                            bool read=false;
+                            assert(derived.withSurface([&](const auto& copy) noexcept {
+                                read=true;assert(&copy!=&original && derived.hasSurfaceLease(copy));
+                                assert(!derived.withSurface([](const auto&) noexcept {assert(false);}));
+                                assert(derived.withMutableSurface([](auto&) noexcept {assert(false);return 0;})==5);
+                            }) && read);
                             return derived.withMutableSurface([&](auto& copy) noexcept {
                                 assert(derived.withNativeDenoiseParameters(copy,dn,[&]() noexcept {
                                     assert(!dn.hasNativeReleaseSlot(copy.prefix.data()+0x90));

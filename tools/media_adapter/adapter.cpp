@@ -2556,16 +2556,21 @@ template<class SurfaceOwner> struct NativePolicyFrameExecutionFor {
 };
 using NativePolicyFrameExecution=NativePolicyFrameExecutionFor<NativeContextSurfaceOwner>;
 template struct NativePolicyFrameExecutionFor<NativeTemporarySurfaceOwner>;
-struct NativeRendererCompleteHooks {
+// Select the permanent callback domain at child construction, not by swapping
+// tables during a frame. Execution must use that SAME SurfaceOwner domain.
+template<class SurfaceOwner> struct NativeRendererCompleteHooksFor {
     using LifetimeResolve=TglOwnedVeboxScopedLifetimeResolve<NativeRendererChildLifetime>;
     static int install(NativeRendererCpuAssembly& assembly,const TglNativeVphalMhwView& view) noexcept {
         return assembly.withChildLifetimeScopes([&](void*,void*,auto&,auto&) noexcept -> int {
-            return tglInstallOwnedRendererCompleteTablesFromCreator<LifetimeResolve,NativeAdmissionResolve,
-                NativeAllocationResolve,NativeVeboxProducerResolve,NativeModeReleaseScope,TglOwnedFormatReader>(
+            return tglInstallOwnedRendererCompleteTablesFromCreator<LifetimeResolve,NativeAdmissionResolveFor<SurfaceOwner>,
+                NativeAllocationResolveFor<SurfaceOwner>,NativeVeboxProducerResolveFor<SurfaceOwner>,NativeModeReleaseScope,TglOwnedFormatReader>(
                     assembly.cpu(),view,&readMemory,NativeTglImageAdmission{view.renderer.image},&executableMemory);
         });
     }
 };
+using NativeRendererCompleteHooks=NativeRendererCompleteHooksFor<NativeContextSurfaceOwner>;
+using NativeTemporaryRendererCompleteHooks=NativeRendererCompleteHooksFor<NativeTemporarySurfaceOwner>;
+template struct NativeRendererCompleteHooksFor<NativeTemporarySurfaceOwner>;
 // Frame surfaces retain their original codec contexts; CPU children remain
 // in the permanent VPHAL owner and are entered only through its pinned access.
 using NativeBorrowedFrontend=TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePin,
