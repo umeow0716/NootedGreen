@@ -2150,6 +2150,22 @@ struct NativeCreatorScopedInvocation {
     using Scope=typename NativePhysicalRegistry::DependencyAdoptionScope;
     using AdmitFn=bool(*)(void*) noexcept;
     using HandoffFn=int(*)(void*) noexcept;
+    template<class Admit>
+    static Result runComplete(const Entry& factory,uintptr_t entry,uintptr_t physical,
+        const void* input,Scope& scope,Admit& admit) noexcept {
+        const uintptr_t image=scope.image();
+        const uint64_t generation=scope.generation();
+        // Borrow the mutation capability from the SAME batch adoption scope;
+        // never synthesize a second physical owner or let authority escape.
+        auto handoff=[&](void* creator) noexcept -> int {
+            if(!scope.matches(image,physical,generation))return 5;
+            return scope.withMutationAuthority([&](TglOwnedPhysicalMutationAuthority& authority) noexcept -> int {
+                return NativeCreatorPreparation::complete(authority,factory,image,physical,generation,
+                    reinterpret_cast<uintptr_t>(creator));
+            });
+        };
+        return run(entry,physical,input,scope,admit,handoff);
+    }
     template<class Admit,class Handoff>
     static Result run(uintptr_t entry,uintptr_t physical,const void* input,Scope& physicalScope,
         Admit& admit,Handoff& handoff) noexcept {
@@ -2205,6 +2221,9 @@ template NativeCreatorScopedInvocation::Result NativeCreatorScopedInvocation::ru
     NativeCreatorScopedInvocation::AdmitFn,NativeCreatorScopedInvocation::HandoffFn>(
     uintptr_t,uintptr_t,const void*,NativeCreatorScopedInvocation::Scope&,
     NativeCreatorScopedInvocation::AdmitFn&,NativeCreatorScopedInvocation::HandoffFn&) noexcept;
+template NativeCreatorScopedInvocation::Result NativeCreatorScopedInvocation::runComplete<
+    NativeCreatorScopedInvocation::AdmitFn>(const Entry&,uintptr_t,uintptr_t,const void*,
+    NativeCreatorScopedInvocation::Scope&,NativeCreatorScopedInvocation::AdmitFn&) noexcept;
 std::atomic<uintptr_t> nativeCreateContexts{0};
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept {
     mach_vm_size_t copied = 0;
