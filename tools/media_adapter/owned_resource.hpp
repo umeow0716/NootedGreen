@@ -23783,6 +23783,22 @@ public:
         }
         return 0;
     }
+    // Enclose BOTH resource owners and graph reservations before constructing
+    // callable flat tables or entering children.withPairedVpFactories<true>.
+    // Caller supplies live producer scopes; nothing returned here is a vtable.
+    template<class Use> int withVpPairReservation(Use use) noexcept {
+        if(backing_.retention()() || !backing_.vpBound(0) || !backing_.vpBound(1))return 5;
+        return backing_.withVpResources(0,[&](auto& first,auto& firstStorage,auto& firstLines) noexcept -> int {
+            return backing_.withVpResources(1,[&](auto& second,auto& secondStorage,auto& secondLines) noexcept -> int {
+                return first.withPairedProducerReservation(second,[&](void* a,void* b) noexcept -> int {
+                    if(a!=firstStorage.bytes.data() || b!=secondStorage.bytes.data())return 5;
+                    static_assert(noexcept(use(first,firstStorage,firstLines,second,secondStorage,secondLines)) &&
+                        std::is_same_v<decltype(use(first,firstStorage,firstLines,second,secondStorage,secondLines)),int>);
+                    return use(first,firstStorage,firstLines,second,secondStorage,secondLines);
+                });
+            });
+        });
+    }
     template<class Read,class Qualify,class Executable>
     int initializeVpFromCreator(size_t index,const TglNativeVphalMhwView& view,
         Read read,Qualify qualify,Executable executable) {

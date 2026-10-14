@@ -23765,6 +23765,21 @@ int main() {
                                             });
                                         assert(status==(failure<0?0:31) && preparations==unsigned(failure==0?1:2));
                                         assert(pair->backing().vpBound(0)==(failure!=0) && pair->backing().vpBound(1)==(failure<0));
+                                        unsigned reserved=0;std::array<uintptr_t,2> objects{};
+                                        auto usePair=[&](auto& first,auto& a,auto& firstLines,auto& second,auto& b,auto& secondLines) noexcept -> int {
+                                            ++reserved;
+                                            assert(&first!=&second && &a!=&b && &firstLines!=&secondLines);
+                                            const std::array<uintptr_t,2> current{reinterpret_cast<uintptr_t>(a.bytes.data()),
+                                                reinterpret_cast<uintptr_t>(b.bytes.data())};
+                                            if(reserved==1)objects=current;else assert(objects==current);
+                                            assert(pair->withVpPairReservation([](auto&...) noexcept -> int {assert(false);return 0;})==5);
+                                            assert(first.withPairedProducerReservation(second,[](void*,void*) noexcept -> int {assert(false);return 0;})==5);
+                                            assert(pair->backing().reinitializeVpPass(0,[]() noexcept -> int {assert(false);return 0;})==5);
+                                            return 31;
+                                        };
+                                        assert(pair->withVpPairReservation(usePair)==(failure<0?31:5));
+                                        if(failure<0)assert(pair->withVpPairReservation(usePair)==31 && reserved==2);
+                                        else assert(!reserved);
                                         if(failure!=0)assert(pair->initializeVpPairFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw,
                                             [](size_t,auto&) noexcept -> int {assert(false);return 0;})==5);
                                     }
