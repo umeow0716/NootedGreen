@@ -192,6 +192,15 @@ public:
     auto& cpu() noexcept {return cpu_;}
     auto& backing() noexcept {return cpu_.backing();}
     auto& children() noexcept {return cpu_.children();}
+    bool readyForFrontend() noexcept {
+        if(!basesReady_ || !cleanupBound_ || backing().retention()() ||
+            !backing().vpBound(0) || !backing().vpBound(1))return false;
+        // Do not retain a frame pin before both private tables are admitted:
+        // that pin would prevent the exclusive creator installation stage.
+        return children().first().owner().withPrivateChild([&](void*) noexcept -> int {
+            return children().second().owner().withPrivateChild([](void*) noexcept -> int {return 0;});
+        })==0;
+    }
     int initializeNativeBases(const TglNativeVphalMhwView& view,const TglOwnedVphalLifetimeTable& lifetime) noexcept {
         if(basesAttempted_ || view.renderer.image!=image_ || lifetime.object()!=view.parent ||
             lifetime.publication()!=TglOwnedVphalLifetimeTable::Publication::Published)return 5;
@@ -351,6 +360,37 @@ struct Entry {
     bool expectedFrontendTypes(TglNativeFrontendCfTypes& output) const noexcept {
         return tglReadNativeFrontendCfTypes(resourceClass,readMemory,
             []() noexcept -> uintptr_t {return TglDarwinTypedCfReferenceApi{}.surfaceType();},output);
+    }
+    template<class PhysicalScope,class Resolve,class Admit>
+    NativeBorrowedFrontend* createBorrowedFrontend(PhysicalScope& physical,uintptr_t address,
+        uint64_t generation,uintptr_t creator,uintptr_t source,Resolve resolve,
+        NativeContextSurfaceOwner& target,Admit admit) const noexcept {
+        if constexpr(std::is_pointer_v<Resolve>)if(!resolve)return nullptr;
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return nullptr;
+        const uintptr_t image=nativeCpu.image;
+        if(!image || !physical.matches(image,address,generation))return nullptr;
+        NativeBorrowedFrontend* result=nullptr;
+        const int status=tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
+            auto environment=frontendCpuEnvironment();
+            auto types=[&](TglNativeFrontendCfTypes& output) noexcept {
+                return physical.matches(image,address,generation) && expectedFrontendTypes(output);
+            };
+            auto pin=[&]() noexcept {return NativeVphalRouter::pinFrame(image,address,generation,creator);};
+            auto qualified=[&](NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view,
+                const TglOwnedSurfaceStorage* src,const TglOwnedSurfaceStorage* dst) noexcept -> bool {
+                static_assert(noexcept(admit(cpu,view,src,dst)) &&
+                    std::is_same_v<decltype(admit(cpu,view,src,dst)),bool>);
+                return physical.matches(image,address,generation) && view.image==image && view.creator==creator &&
+                    cpu.readyForFrontend() && src && dst && admit(cpu,view,src,dst) &&
+                    physical.matches(image,address,generation);
+            };
+            NativeFrontendAccess access(NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory);
+            auto construct=tglMakeNativeBorrowedFrontendConstructor<NativeBorrowedFrontend>(
+                TglDarwinTypedCfReferenceApi{},environment,types,pin,access,qualified);
+            result=construct(source,resolve,target);
+            return result?0:5;
+        });
+        return status?nullptr:result;
     }
     std::array<uintptr_t, 17> callbacks{};
     void *native = nullptr;
@@ -543,6 +583,12 @@ template class TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePi
     NativeContextSurfaceOwner,NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi,
     NativeFrontendEnvironment,NativeFrontendAccess>;
 template class TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,NativeBorrowedFrontend>;
+using NativeFrontendResolve=NativeContextSurfaceOwner*(*)(uintptr_t) noexcept;
+using NativeFrontendAdmit=bool(*)(NativeRendererCpuAssembly&,const TglNativeCreatedVeboxRendererView&,
+    const TglOwnedSurfaceStorage*,const TglOwnedSurfaceStorage*) noexcept;
+template NativeBorrowedFrontend* Entry::createBorrowedFrontend<TglOwnedPhysicalMutationAuthority,
+    NativeFrontendResolve,NativeFrontendAdmit>(TglOwnedPhysicalMutationAuthority&,uintptr_t,uint64_t,
+    uintptr_t,uintptr_t,NativeFrontendResolve,NativeContextSurfaceOwner&,NativeFrontendAdmit) const noexcept;
 template int NativeRendererCpuAssembly::withChildLifetimeScopes<
     int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept>(
     int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept) noexcept;
