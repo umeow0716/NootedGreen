@@ -140,6 +140,21 @@ struct NativeCodecBackend {
 using NativeRemovalProof=bool(*)(uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 template int NativeCodecBackend::reconcile<NativeRemovalProof>(uintptr_t,uintptr_t,uint64_t,
     const TglNativeRemovedContextBatch<16>&,NativeRemovalProof) noexcept;
+struct NativeRendererRetirementAuthority {
+    void* scope=nullptr;
+    int(*admit)(void*,void*,uint64_t,size_t) noexcept=nullptr;
+    int operator()(void* child,uint64_t generation,size_t index) const noexcept {
+        // Enclosing creator supplies an authenticated exclusive lifetime scope,
+        // including no pending work and restored descriptor borrows. No default
+        // success, native-return inference, or Entry lifetime capture.
+        return scope && admit?admit(scope,child,generation,index):5;
+    }
+};
+using NativeRendererBacking=TglNativeVeboxVpFrameBacking<TglDarwinStmmSurfaceApi>;
+using NativeRendererCleanupContext=TglOwnedVeboxVpCleanupContext<NativeRendererBacking,NativeRendererRetirementAuthority>;
+using NativeRendererCleanup=TglOwnedVeboxVpCleanupCallback<NativeRendererCleanupContext>;
+using NativeRendererCpu=TglNativeVeboxRendererCpuStorage<TglDarwinStmmSurfaceApi,NativeRendererCleanup>;
+static_assert(sizeof(NativeRendererCpu)>0 && !std::is_copy_constructible_v<NativeRendererCpu>);
 struct Entry {
     using CodecOwner=NativeCodecOwner;
     // Factory table lifetime only, not the native physical context lifetime.
@@ -271,6 +286,11 @@ void load() {
     // Keep the native image loaded for all forwarded callback lifetimes.
 }
 }
+
+// Expand the real Darwin/native backend composition, not the fixture Api and
+// tracked allocator types. This compiles cleanup, but enables no callbacks.
+template class TglOwnedVeboxVpCleanupContext<NativeRendererBacking,NativeRendererRetirementAuthority>;
+template class TglNativeVeboxRendererCpuStorage<TglDarwinStmmSurfaceApi,NativeRendererCleanup>;
 
 extern "C" __attribute__((visibility("default")))
 int NGRN_ObservedCreateContexts(void *context, const void *input) {
