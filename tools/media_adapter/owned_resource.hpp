@@ -5434,6 +5434,11 @@ public:
     TglNativeVeboxCpuChildStorage& operator=(const TglNativeVeboxCpuChildStorage&)=delete;
     bool bound() const noexcept {return cpu_.bound();}
     auto& owner() noexcept {return owner_;}
+    // Use the SAME qualified tracked allocator family as this base allocation.
+    // install transfers all eight shell frees to native12de30; no GPU tokens.
+    bool allocateCpuShells() {
+        return bound() && owner_.allocateCpuShells(cpu_);
+    }
     template<class Read,class Construct=TglNativeVeboxConstructorInvoker>
     TglOwnedBaseConstruction initialize(const TglVeboxLifetimeBinding& binding,
         const TglSfcLifetimeBinding& lifetime,const TglSfcMhwBinding& sfc,
@@ -23708,6 +23713,18 @@ public:
     TglNativeVeboxRendererCpuStorage& operator=(const TglNativeVeboxRendererCpuStorage&)=delete;
     auto& backing() noexcept {return backing_;}
     auto& children() noexcept {return children_;}
+    // Creator initialization only, before private-table/renderer publication.
+    // A second-child failure leaves the first child's installed shells owned
+    // by that SAME native base; retain both children for qualified teardown.
+    template<class Read,class Qualify,class Executable>
+    int allocateCpuShellsFromCreator(const TglNativeVphalMhwView& view,
+        Read read,Qualify qualify,Executable executable) {
+        TglVeboxHardwareBinding hardware;
+        if(backing_.retention()() || !children_.first().owner().constructedBase() ||
+            !children_.second().owner().constructedBase() ||
+            !creatorEnvironment(view,read,qualify,executable,hardware))return 5;
+        return children_.first().allocateCpuShells() && children_.second().allocateCpuShells()?0:5;
+    }
     // Enclosing exclusive VPHAL owner retains parent60 until THIS storage
     // (including VP resources) is destroyed, before native135020 can free it.
     // Authenticate the native shared SFC, never substitute either child's

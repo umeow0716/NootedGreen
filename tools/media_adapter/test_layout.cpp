@@ -22828,13 +22828,26 @@ int main() {
             struct Cpu {
                 alignas(8) std::array<uint8_t,0x1bc0> bytes{};
                 std::array<unsigned,16>& events;size_t& count;bool fail=false,live=false;
+                std::array<uintptr_t,8> shells{};
+                size_t shellFailAt=SIZE_MAX,shellCalls=0;
                 uintptr_t allocate(size_t size) {
+                    if(size==0x2a8) {
+                        if(shellCalls++==shellFailAt)return 0;
+                        for(auto& shell:shells) if(!shell) {
+                            shell=reinterpret_cast<uintptr_t>(std::calloc(1,size));return shell;
+                        }
+                        return 0;
+                    }
                     assert(!live && size==bytes.size());
                     if(fail) return 0;
                     live=true;return reinterpret_cast<uintptr_t>(bytes.data());
                 }
                 void release(uintptr_t address) noexcept {
+                    for(auto& shell:shells) if(shell && shell==address) {
+                        std::free(reinterpret_cast<void*>(shell));shell=0;return;
+                    }
                     assert(live && address==reinterpret_cast<uintptr_t>(bytes.data()));
+                    for(auto shell:shells)assert(!shell);
                     events.at(count++)=3;live=false;
                 }
             } cpu{{},events,eventCount};
@@ -23476,8 +23489,16 @@ int main() {
                                 if(handoffActive)assert(refs==handoffRefs && !parentDeaths);
                                 assert(object==pairCpu[0].bytes.data() || object==pairCpu[1].bytes.data());++sourceFreeCleanups;
                             };
-                            auto sourceFreeDestroy=[&](uintptr_t entry,void*) noexcept {
+                            auto sourceFreeDestroy=[&](uintptr_t entry,void* object) noexcept {
                                 assert(entry==base+0x12de30);++sourceFreeDestroys;
+                                auto& owner=pairCpu[object==pairCpu[0].bytes.data()?0:1];
+                                assert(object==owner.bytes.data());
+                                constexpr size_t offsets[8]={0x1b0,0x1b8,0xba8,0xbb0,0x680,0x688,0x690,0x698};
+                                for(size_t i=0;i<8;++i) if(owner.shells[i]) {
+                                    uintptr_t pointer=0;std::memcpy(&pointer,owner.bytes.data()+offsets[i],8);
+                                    assert(pointer==owner.shells[i]);owner.release(pointer);
+                                    pointer=0;std::memcpy(owner.bytes.data()+offsets[i],&pointer,8);
+                                }
                             };
                             using SourceFree=TglNativeVeboxRendererCpuStorage<UnusedFrameApi,decltype(sourceFreeCleanup),
                                 NativeCpu,TrackedSfc,decltype(sourceFreeDestroy)>;
@@ -23491,6 +23512,7 @@ int main() {
                                 std::array<decltype(sourceFreeDestroy),2>{sourceFreeDestroy,sourceFreeDestroy}));
                             auto& storage=*storageOwner;
                             const auto* creatorView=preparedMhw.view();assert(creatorView);
+                            assert(storage.allocateCpuShellsFromCreator(*creatorView,allocatorRead,qualifyMhw,executableMhw)==5);
                             auto foreign=*creatorView;foreign.os+=8;
                             const uintptr_t parentSfcAddress=reinterpret_cast<uintptr_t>(parentSfc.data());
                             putNative(parentSfc,0,base+0x759420);putNative(parentSfc,8,base+0x3eae0);
@@ -23771,6 +23793,15 @@ int main() {
                                 constructSourceFree,sourceFreeQuery)==0);
                             {
                                 const auto originalRefs=refs;
+                                pairCpu[0].shellFailAt=pairCpu[0].shellCalls+3;
+                                assert(storage.allocateCpuShellsFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw)==5);
+                                for(auto& owner:pairCpu)for(auto shell:owner.shells)assert(!shell);
+                                pairCpu[0].shellFailAt=SIZE_MAX;
+                                assert(storage.allocateCpuShellsFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw)==0);
+                                for(auto& owner:pairCpu)for(auto shell:owner.shells)assert(shell);
+                                const auto firstShells=pairCpu[0].shells,secondShells=pairCpu[1].shells;
+                                assert(storage.allocateCpuShellsFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw)==5 &&
+                                    pairCpu[0].shells==firstShells && pairCpu[1].shells==secondShells);
                                 TestFrontendOriginalOwner originalSource{source},originalTarget{target},originalHistory{history};
                                 auto originalResolve=[&](uintptr_t p) noexcept -> TestFrontendOriginalOwner* {
                                     if(p==reinterpret_cast<uintptr_t>(&source))return &originalSource;
