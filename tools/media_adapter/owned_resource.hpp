@@ -4197,6 +4197,12 @@ struct TglVeboxHardwareBinding {
     // dc8 and event-machine termination without updating9dc in its body;
     // unchanged restart count or a sampled IOService-active bit is therefore
     // not established reset/termination exclusion. Do not infer equivalence.
+    // Exact family relocation3d445 now resolves _OSIncrementAtomic on dc8.
+    // Complete44-byte enableAccelerator42160/disableAccelerator4218c bodies
+    // only toggle c78.bit1 and start/stop the progress timer; neither clears
+    // dc8. This excludes those TWO reset candidates,not all initialization/
+    // device-state writers or context-loss paths. Raw observation ABI remains
+    // diagnostic until the remaining coverage/lifetime proof is complete.
     // Context loss has separate destructive reporting: exact family ae6e
     // affectedByHardwareReset(bool,reason) conditionally sets63b|20,644 and
     // increments63c, but aeb7 ALWAYS sets63b|40 and clears68c. aecc returns
