@@ -430,6 +430,51 @@ struct NativeFrontendRuntimeScope {
         });
     }
 };
+// Callback table entries carry no Entry/closure argument. Route the immutable
+// qualified native image and actual physical generation, never "current Entry".
+// Prepared backend only; factory callback publication remains disabled.
+struct NativePhysicalBackend {
+    inline static std::atomic<uintptr_t> image_{0};
+    static NativePhysicalRegistry& registry() noexcept {return NativePhysicalRegistry::processLifetime();}
+    static bool binding(TglNativePhysicalCallbackBinding& output) noexcept {
+        const uintptr_t image=image_.load(std::memory_order_acquire);
+        return image && output.resolve(image,&readMemory,NativeTglImageAdmission{image},&executableMemory);
+    }
+    static bool bind(const TglNativePhysicalCallbackBinding& candidate) noexcept {
+        TglNativePhysicalCallbackBinding checked;
+        if(!candidate.image || !checked.resolve(candidate.image,&readMemory,
+            NativeTglImageAdmission{candidate.image},&executableMemory) ||
+            checked.initialize!=candidate.initialize || checked.destroy!=candidate.destroy)return false;
+        uintptr_t expected=0;
+        return image_.compare_exchange_strong(expected,candidate.image,std::memory_order_acq_rel) ||
+            expected==candidate.image;
+    }
+    static NativePhysicalCallbacks::InitResult initialize(void** output,const void* input) noexcept {
+        TglNativePhysicalCallbackBinding native;
+        if(!output || !input || !binding(native))return {};
+        NativePhysicalCallbacks callbacks(registry(),native,&readMemory,NativeTglImageAdmission{native.image},&executableMemory);
+        return callbacks.initialize(output,input);
+    }
+    static int destroy(uintptr_t physical) noexcept {
+        TglNativePhysicalCallbackBinding native;
+        if(!physical || !binding(native))return 5;
+        NativePhysicalCallbacks callbacks(registry(),native,&readMemory,NativeTglImageAdmission{native.image},&executableMemory);
+        return callbacks.destroy(physical);
+    }
+    template<class Use> static int withScope(uintptr_t physical,Use use) noexcept {
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        TglNativePhysicalCallbackBinding native;
+        if(!physical || !binding(native))return 5;
+        const auto ticket=registry().lookup(native.image,physical);
+        if(!ticket.generation)return 5;
+        NativePhysicalCallbacks callbacks(registry(),native,&readMemory,NativeTglImageAdmission{native.image},&executableMemory);
+        return callbacks.withFrameScope(ticket,physical,[&](NativePhysicalFrameScope& scope) noexcept -> int {
+            static_assert(noexcept(use(scope,ticket.generation)) &&
+                std::is_same_v<decltype(use(scope,ticket.generation)),int>);
+            return use(scope,ticket.generation);
+        });
+    }
+};
 struct Entry {
     using CodecOwner=NativeCodecOwner;
     // Factory table lifetime only, not the native physical context lifetime.
@@ -724,6 +769,8 @@ template class TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry
 template class TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;
 template class TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,
     decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory)>;
+template int NativePhysicalBackend::withScope<int(*)(NativePhysicalFrameScope&,uint64_t) noexcept>(
+    uintptr_t,int(*)(NativePhysicalFrameScope&,uint64_t) noexcept) noexcept;
 using NativeFrontendResolve=NativeContextSurfaceOwner*(*)(uintptr_t) noexcept;
 using NativeFrontendConsumer=TglOwnedVeboxCommandTransactionResult(*)(NativeRendererCpuAssembly&,
     NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
