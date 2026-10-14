@@ -14301,12 +14301,18 @@ struct TglOwnedVeboxCommandTransactionResult {
     // Whole native Render can enter command work before exposing either flag.
     // This is conservative retention, NOT evidence of acquisition/submission.
     bool nativeEntered=false;
-    bool requiresRetention() const noexcept {return acquired || writtenBack || nativeEntered;}
+    // Renderer928 can hold original history even when lower Render never
+    // enters. This is a CPU-reference lifetime, NOT GPU submission evidence.
+    bool nativeHistoryPublished=false;
+    bool requiresRetention() const noexcept {return acquired || writtenBack || nativeEntered || nativeHistoryPublished;}
 };
 
 struct TglNativePerPassCommandResult {
     TglOwnedVeboxCommandTransactionResult native{};
     bool entered=false,copiedBack=false;
+};
+struct TglNativeHistoryPreparationResult {
+    bool admitted=false,published=false;
 };
 // Exact TGL131d10: source134==2 gates the ENTIRE lower call. Native1300f0
 // saves target C0 history before lower execution; its void ABI is wrapped by
@@ -14320,7 +14326,7 @@ TglOwnedVeboxCommandTransactionResult tglRunNativeConditionalPerPass(
     if constexpr(P<0x130 || Q<0x40)return result;
     else {
         static_assert(noexcept(prepare(targetOwner,target)) &&
-            std::is_same_v<decltype(prepare(targetOwner,target)),bool>);
+            std::is_same_v<decltype(prepare(targetOwner,target)),TglNativeHistoryPreparationResult>);
         static_assert(noexcept(render()) && std::is_same_v<decltype(render()),TglOwnedVeboxCommandTransactionResult>);
         uintptr_t input=0,output=0;
         std::memcpy(&input,pass.data()+0x10,8);std::memcpy(&output,pass.data()+0x38,8);
@@ -14331,8 +14337,11 @@ TglOwnedVeboxCommandTransactionResult tglRunNativeConditionalPerPass(
         if(!live())return result;
         uint32_t kind=0;std::memcpy(&kind,source.prefix.data()+0x134,4);
         if(kind!=2) {result.status=0;return result;} // native branch skip, NOT Render success
-        if(!prepare(targetOwner,target) || !live())return result;
+        const auto prepared=prepare(targetOwner,target);
+        result.nativeHistoryPublished=prepared.published;
+        if(!prepared.admitted || !live())return result;
         result=render();
+        result.nativeHistoryPublished=result.nativeHistoryPublished || prepared.published;
         if(!result.status && (!live() || !tglApplyNativePerPassSuccessHandoff(parameters,pass,0)))result.status=5;
         return result;
     }
