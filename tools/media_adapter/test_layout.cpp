@@ -28527,6 +28527,12 @@ int main() {
                 result=0;
                 assert(initialize()==TglOwnedBaseConstruction::ConstructedSuccess && nativeCalls==2);
                 assert(owned.constructedBase()==cpu.bytes.data());
+                uintptr_t borrowedVp=0x123400;
+                std::memcpy(cpu.bytes.data()+0x80,&borrowedVp,8);
+                assert(!owned.destroyInPlace() && cleanups==1 && destroys==1 && cpu.releases==1);
+                assert(owned.ownsLifecycleAllocation(cpu.bytes.data(),owned.allocationGeneration()));
+                borrowedVp=0; // CPU fixture of completed factory-scope restoration, not forced runtime detach.
+                std::memcpy(cpu.bytes.data()+0x80,&borrowedVp,8);
                 cleanupAllowed=false;
                 assert(!owned.destroyInPlace() && !owned.constructedBase());
                 assert(owned.ownsLifecycleAllocation(cpu.bytes.data(),owned.allocationGeneration()));

@@ -5390,6 +5390,16 @@ public:
 private:
     bool teardown(bool releaseAllocation) noexcept {
         if(busy_ || publishedRenderer_) return false;
+        if constexpr(std::is_same_v<decltype(cleanup_(nullptr)),bool>) {
+            if(constructed_) {
+                // Owned VP factory scopes admit only a NULL prior child80 and
+                // restore it before their graph leases end. Never let native
+                //12e190 account/delete a still-borrowed owned VP allocation.
+                uintptr_t vp=0;
+                std::memcpy(&vp,reinterpret_cast<const uint8_t*>(storage_.get())+0x80,8);
+                if(vp) {ready_=false;return false;}
+            }
+        }
         busy_=true;
         ready_=false;
         if(constructed_) {
