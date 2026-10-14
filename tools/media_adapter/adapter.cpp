@@ -2424,6 +2424,29 @@ struct NativeRetainedFrontendRuntime {
         void* context;Use use;
     };
     using AdmissionInputUse=int(*)(void*,const NativeAdmissionFrameAssembly::Inputs&) noexcept;
+    using PolicyInputUse=int(*)(void*,NativeOutputPipeFrameScope&) noexcept;
+    static int withPolicyInputs(NativeCoreFrameDataScope& core,NativeAdmissionParams& params,
+        NativeAdmissionPass& pass,NativeFrameDataRead& read,const TglVeboxAdmissionBorrowedInterfaces& interfaces,
+        const TglOwnedGen12SurfaceFeatures& sourceFeatures,const TglOwnedGen12SurfaceFeatures& targetFeatures,
+        TglVeboxPipeAcquisition& acquisition,uint32_t& compressionFormat,int& decompressionStatus,
+        NativeTargetDecompression& decompression,void* context,PolicyInputUse use) noexcept {
+        if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
+            !core.live() || !params.data() || !pass.data() || !acquisition.healthy() ||
+            sourceFeatures.surface!=&core.source || targetFeatures.surface!=&core.target ||
+            sourceFeatures.frame!=&acquisition || targetFeatures.frame!=&acquisition)return 5;
+        uintptr_t source=0,target=0,di=0,fill=0;
+        const auto parameters=reinterpret_cast<uintptr_t>(params.data());
+        if(!read(parameters+8,&source,8) || source!=reinterpret_cast<uintptr_t>(&core.source) ||
+            !read(parameters+0x98,&target,8) || target!=reinterpret_cast<uintptr_t>(&core.target) ||
+            !read(source+0x88,&di,8) || !read(parameters+0xe0,&fill,8) ||
+            fill!=interfaces.paramsE0 || !core.live())return 5;
+        NativeTwoPassCscHealth health{core.childOwner,core.executionOwner,core.sourceOwner,core.targetOwner,
+            core.source,core.target,core.image,core.child,core.execution,core.generation};
+        NativeOutputPipeFrameScope policy{health,read,core.vp,parameters,di,fill,sourceFeatures,targetFeatures,
+            pass.data()[8],acquisition,compressionFormat,decompressionStatus,decompression};
+        const int status=use(context,policy);
+        return status?status:(core.live() && acquisition.healthy()?0:5);
+    }
     static int withAdmissionInputs(VpFrontend& frontend,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
         NativeAdmissionParams& params,NativeAdmissionPass& pass,NativeFrameDataRead& read,
         const TglOwnedVpEntrySet& catalogue,const TglOwnedVpModeState& mode,
