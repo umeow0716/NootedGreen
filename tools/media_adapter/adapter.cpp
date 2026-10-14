@@ -1358,6 +1358,29 @@ struct NativeAllocationCallbackScope {
 template int NativeAllocationCallbackScope::run<int(*)(NativeAllocationContext&) noexcept>(
     NativeAllocationPlanner&,NativeModeReleaseContext&,TglOwnedVeboxFrameRetention&,
     int(*)(NativeAllocationContext&) noexcept) noexcept;
+struct NativeAllocatedAdmissionRender {
+    NativePreparedAdmissionRender& render;NativeAllocationPlanner& planner;NativeModeReleaseContext& mode;
+    bool attempted=false;
+    NativeAdmissionStages::Result run() noexcept {
+        NativeAdmissionStages::Result result;
+        auto& admission=render.admission;
+        if(attempted || planner.child!=admission.reset.child ||
+            &planner.childOwner!=&admission.reset.childOwner ||
+            &planner.executionOwner!=&admission.reset.executionOwner || planner.execution!=admission.reset.execution ||
+            &planner.input!=&admission.feature.sourceOwner || planner.target!=&admission.feature.targetOwner ||
+            &planner.source!=&admission.feature.source || &planner.unwind.mode!=&mode ||
+            NativeModeReleaseScope::get(planner.child)!=&mode || !mode.owns(planner.child))return result;
+        attempted=true;
+        const int status=NativeAllocationCallbackScope::run(planner,mode,admission.reset.backing.retention(),
+            [&](NativeAllocationContext& allocation) noexcept -> int {
+                if(!allocation.owns(planner.child))return 5;
+                result=render.run();
+                return result.status;
+            });
+        if(status) {result.status=status;result.admitted=false;}
+        return result;
+    }
+};
 // Frame surfaces retain their original codec contexts; CPU children remain
 // in the permanent VPHAL owner and are entered only through its pinned access.
 using NativeBorrowedFrontend=TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePin,
