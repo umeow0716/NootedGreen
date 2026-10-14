@@ -8751,25 +8751,33 @@ static void testNativeResourceBoundary() {
                                         reportBackend.bytes[0xb]=1;
                                         unsigned finished=0;
                                         TglOwnedFfdnHistorySnapshot backedHistory;
-                                        auto runHistory=[&]() noexcept -> int {
+                                        auto runHistory=[&](auto* historyOwner,TglOwnedFfdnHistorySnapshot* recorder,
+                                            const TglOwnedSurfaceStorage* retainedHistory) noexcept -> int {
                                             int result=5;
                                             assert(linkedInput.withSurface([&](const auto& current) noexcept {
                                                 result=tglRunCapturedFfdnFrameTail(descriptorPair,std::array{&targetA,&targetB},targetA,
-                                                    linkedInput,&previous,historyShell,childOwner,reportOwner,
+                                                    linkedInput,historyOwner,historyShell,childOwner,reportOwner,
                                                     actualChild,report,current,{true,1},read,
                                                     [](void*,uintptr_t,const auto&,const auto&) noexcept -> int {assert(false);return 5;},
                                                     [](void*,uintptr_t,const auto&,const auto&) noexcept -> int {return 0;},
                                                     [&](void*,uintptr_t,const auto&,const auto& views) noexcept -> int {
                                                         ++finished;assert(views.history && views.previous);
-                                                        assert(std::memcmp(views.history,views.previous,sizeof(*views.history))==0);
+                                                        assert(std::memcmp(views.history,retainedHistory?retainedHistory:views.previous,
+                                                            sizeof(*views.history))==0);
                                                         assert(previous.hasSurfaceLease(*views.previous));
                                                         assert(targetA.hasSurfaceLease(*views.outputs[0]) && targetB.hasSurfaceLease(*views.outputs[1]));
                                                         assert(reportBackend.bytes[8]==1);return -59;
-                                                    },TglOwnedFfdnHistoryRecorder{&backedHistory});
+                                                    },TglOwnedFfdnHistoryRecorder{recorder});
                                             }));
                                             return result;
                                         };
-                                        assert(runHistory()==-59 && finished==1);
+                                        assert(runHistory(&previous,&backedHistory,nullptr)==-59 && finished==1);
+                                        TglOwnedSurfaceStorage retainedHistory;
+                                        assert(historyShell.withDescriptor([&](const auto& value) noexcept {retainedHistory=value;}));
+                                        assert(previous.withSurface([&](const auto& priorView) noexcept {
+                                            TglHeldOwnedSurfaceRole heldPrevious(previous,priorView);
+                                            assert(runHistory(&heldPrevious,nullptr,&retainedHistory)==-59 && finished==2);
+                                        }));
                                         const auto beforeBackedBorrow=backingBackend.allocations;
                                         assert(linkedInput.withSurface([&](const auto& current) noexcept {
                                             assert(previous.withSurface([&](const auto& priorView) noexcept {
@@ -8852,10 +8860,10 @@ static void testNativeResourceBoundary() {
                                             assert(std::memcmp(&view,&savedShell,sizeof(view))==0);
                                         }));
                                         std::memcpy(child.data()+0x1b8,&inputAddress,8);
-                                        assert(runHistory()==5 && finished==1);
+                                        assert(runHistory(&previous,&backedHistory,nullptr)==5 && finished==2);
                                         std::memcpy(child.data()+0x1b8,&shellAddress,8);
                                         std::memcpy(linkedStorage.prefix.data()+0xc8,&inputAddress,8);
-                                        assert(runHistory()==5 && finished==1);
+                                        assert(runHistory(&previous,&backedHistory,nullptr)==5 && finished==2);
                                         const uintptr_t noPrevious=0;
                                         std::memcpy(linkedStorage.prefix.data()+0xc8,&noPrevious,8);
                                         std::memcpy(child.data()+0x1b8,&inputAddress,8); // not consumed without previous
