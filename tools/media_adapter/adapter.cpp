@@ -3582,23 +3582,17 @@ struct NativeRetainedTemporaryExecution {
         bool entered=false;int callbackError=0;TglOwnedVeboxCommandTransactionResult result{};
     };
     using CallbackScope=TglOwnedScopedContext<CallbackContext,CallbackDomain>;
-    // Exact1b1ed0 ABI: renderer, ORIGINAL outer parameters, ORIGINAL pass.
-    // Native ignores the+50 status in131520; caller must retain the full result
-    // below rather than treating native outer success as pass completion.
-    static int temporaryPass(void* renderer,void* parameters,void* pass) noexcept {
-        auto* context=CallbackScope::get(renderer);
-        if(!context)return temporaryPassMulti(renderer,parameters,pass);
-        auto reject=[&]() noexcept -> int {if(!context->callbackError)context->callbackError=5;return 5;};
-        if(context->entered || context->renderer!=reinterpret_cast<uintptr_t>(renderer))return reject();
-        context->entered=true;
-        auto& request=context->request;
-        if(request.view.renderer.renderer!=context->renderer || request.attempted || request.consumed)return reject();
+    static TglOwnedVeboxCommandTransactionResult runCapturedPass(NativeContextRendererFrame& frame,
+        Request& request,uintptr_t renderer,void* parameters,void* pass) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        if(!renderer || request.view.renderer.renderer!=renderer || request.attempted || request.consumed ||
+            frame.invalidated() || !frame.surfacesReady())return result;
         const bool ownedParameters=parameters==request.parameters.data(),ownedPass=pass==request.pass.data();
-        if(ownedParameters!=ownedPass)return reject();
+        if(ownedParameters!=ownedPass)return result;
         TglNativePerPassCallerBuffers caller;
         if(!ownedParameters) {
             if(!caller.capture(reinterpret_cast<uintptr_t>(parameters),reinterpret_cast<uintptr_t>(pass),
-                &readMemory,&writableDataMemory))return reject();
+                &readMemory,&writableDataMemory))return result;
             TglNativeOuterSurfaceRoles captured;
             auto readOwned=[&](uintptr_t at,void* bytes,size_t count) noexcept {
                 const auto start=reinterpret_cast<uintptr_t>(caller.parameters().data());
@@ -3610,10 +3604,10 @@ struct NativeRetainedTemporaryExecution {
             if(!captured.capture(reinterpret_cast<uintptr_t>(caller.parameters().data()),readOwned) ||
                 captured.sourceCount!=request.roles.sourceCount || captured.targetCount!=request.roles.targetCount ||
                 captured.sources!=request.roles.sources || captured.targets!=request.roles.targets ||
-                source!=request.sourceIndex || target!=request.targetIndex)return reject();
+                source!=request.sourceIndex || target!=request.targetIndex)return result;
             request.parameters=caller.parameters();request.pass=caller.pass();
         }
-        context->result=runRetained(context->frame,request);
+        result=runRetained(frame,request);
         if(!ownedParameters && request.consumed) {
             caller.parameters()=request.parameters;caller.pass()=request.pass;
             auto write=[](uintptr_t at,const void* bytes,size_t count) noexcept {
@@ -3622,9 +3616,22 @@ struct NativeRetainedTemporaryExecution {
                         static_cast<mach_msg_type_number_t>(count))==KERN_SUCCESS;
             };
             if(!caller.copyBack(&readMemory,write,&writableDataMemory)) {
-                (void)reject();if(!context->result.status)context->result.status=5;
+                if(!result.status)result.status=5;
             }
         }
+        return result;
+    }
+    // Exact1b1ed0 ABI. Both dispatch modes use the SAME capture/transaction/
+    // copyback implementation; repeat errors survive native131520 ignoring50.
+    static int temporaryPass(void* renderer,void* parameters,void* pass) noexcept {
+        auto* context=CallbackScope::get(renderer);
+        if(!context)return temporaryPassMulti(renderer,parameters,pass);
+        if(context->entered || context->renderer!=reinterpret_cast<uintptr_t>(renderer)) {
+            if(!context->callbackError)context->callbackError=5;
+            return 5;
+        }
+        context->entered=true;
+        context->result=runCapturedPass(context->frame,context->request,context->renderer,parameters,pass);
         return context->result.status;
     }
     using ScopedNativeCall=int(*)(void*,int(*)(void*,void*,void*) noexcept) noexcept;
@@ -3645,6 +3652,41 @@ struct NativeRetainedTemporaryExecution {
         if(!result.status && nativeStatus)result.status=nativeStatus;
         return result;
     }
+    struct PassProvider {
+        NativeContextRendererFrame& frame;NativeRetainedTemporaryTransaction::Backend& backend;
+        size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
+        const TglOwnedVpEntrySet& catalogue;NativeModeRetirementAuthority& retirement;
+        TglNativeVphalMhwView view;TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
+        NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;void* argument;
+        std::array<const TglOwnedSurfaceStorage*,2> temporal;
+        bool busy=false;int failure=0;
+        static TglOwnedVeboxCommandTransactionResult produce(void* raw,NativeContextRendererFrame& active,
+            uintptr_t renderer,void* parameters,void* pass) noexcept {
+            TglOwnedVeboxCommandTransactionResult result;
+            if(!raw)return result;
+            auto& self=*static_cast<PassProvider*>(raw);
+            auto reject=[&]() noexcept {if(!self.failure)self.failure=5;result.status=self.failure;return result;};
+            if(self.busy || self.failure || &self.frame!=&active || self.childIndex>1 ||
+                renderer!=self.view.renderer.renderer || !parameters || !pass ||
+                active.invalidated() || !active.surfacesReady())return reject();
+            self.busy=true;struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{self.busy};
+            TglNativeOuterSurfaceRoles roles;uint32_t source=0,target=0;
+            const auto input=reinterpret_cast<uintptr_t>(parameters),packet=reinterpret_cast<uintptr_t>(pass);
+            if(input>UINTPTR_MAX-0x139 || packet>UINTPTR_MAX-0x40 ||
+                !writableDataMemory(input,0x130) || !writableDataMemory(packet,0x40) ||
+                !roles.capture(input,&readMemory) || !readMemory(packet+0xc,&source,4) ||
+                !readMemory(packet+0x30,&target,4) || source>=roles.sourceCount || target>=roles.targetCount)return reject();
+            std::array<uint8_t,0x139> ownedParameters{};std::array<uint8_t,0x60> ownedPass{};
+            Request request{self.backend,ownedParameters,ownedPass,roles,source,target,self.childIndex,self.temporal,
+                self.interfaces,self.catalogue,self.retirement,self.view,self.acquisition,self.decompressionStatus,
+                self.decompression,self.argument};
+            request.ownedSend=true;
+            result=runCapturedPass(active,request,renderer,parameters,pass);
+            if(!self.failure && result.status)self.failure=result.status;
+            if(self.failure)result.status=self.failure;
+            return result;
+        }
+    };
     // Each producer must construct a fresh qualified Request from THIS pass
     // and preserve its completion/retention obligations. This router never
     // clears backing retention or assumes that the previous pass completed.
