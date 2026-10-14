@@ -7352,6 +7352,15 @@ public:
             const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
             return withConversionMetadata<true>(expected,read,use);
         }
+        // Read-only callbacks borrow this temporary shell, never the original
+        // retained root. Keep the same generation/reentry guard as mutation.
+        template<class Use> bool withSurface(Use use) noexcept {
+            static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())));
+            if(busy_ || !live())return false;
+            busy_=true;struct Reset {bool& value;~Reset(){value=false;}} reset{busy_};
+            use(*reinterpret_cast<const TglOwnedSurfaceStorage*>(temporary_.shells_[index_]));
+            return live();
+        }
         template<class Use> int withMutableSurface(Use use) noexcept {
             static_assert(noexcept(use(std::declval<TglOwnedSurfaceStorage&>())));
             if(busy_ || !live())return 5;

@@ -2096,21 +2096,24 @@ struct NativeAllocationUnwind {
         if(mode.owns(child))mode.freeResources();
     }
 };
-using NativeAllocationPlanner=TglOwnedVeboxAllocationFramePlanner<TglDarwinStmmSurfaceApi,
-    NativeContextSurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,decltype(&readMemory),
-    NativeAllocationSfcFormat,NativeAllocationSfcColor,NativeAllocationParameterKind,
-    TglOwnedFfdiCompressionFormatQuery,NativeAllocationRectangle,NativeDataAdmission,NativeAllocationUnwind>;
-using NativeAllocationContext=TglOwnedVeboxRenderAllocationContext<NativeRendererChildOwner,
-    NativeAllocationPlanner>;
-using NativeAllocationResolve=TglOwnedVeboxScopedContext<NativeAllocationContext>;
-struct NativeAllocationCallbackScope {
+template<class SurfaceOwner> using NativeAllocationPlannerFor=TglOwnedVeboxAllocationFramePlanner<TglDarwinStmmSurfaceApi,
+    SurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,decltype(&readMemory),
+    NativeAllocationSfcFormat,NativeAllocationSfcColor,NativeAllocationParameterKindFor<SurfaceOwner>,
+    TglOwnedFfdiCompressionFormatQuery,NativeAllocationRectangleFor<SurfaceOwner>,NativeDataAdmission,NativeAllocationUnwind>;
+using NativeAllocationPlanner=NativeAllocationPlannerFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> using NativeAllocationContextFor=TglOwnedVeboxRenderAllocationContext<NativeRendererChildOwner,
+    NativeAllocationPlannerFor<SurfaceOwner>>;
+using NativeAllocationContext=NativeAllocationContextFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> using NativeAllocationResolveFor=TglOwnedVeboxScopedContext<NativeAllocationContextFor<SurfaceOwner>>;
+using NativeAllocationResolve=NativeAllocationResolveFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeAllocationCallbackScopeFor {
     static int allocate(void* child) noexcept {
-        return TglOwnedVeboxAllocationCallbacks<NativeAllocationResolve>::allocate(child);
+        return TglOwnedVeboxAllocationCallbacks<NativeAllocationResolveFor<SurfaceOwner>>::allocate(child);
     }
-    template<class Use> static int run(NativeAllocationPlanner& planner,NativeModeReleaseContext& mode,
+    template<class Use> static int run(NativeAllocationPlannerFor<SurfaceOwner>& planner,NativeModeReleaseContext& mode,
         TglOwnedVeboxFrameRetention& renderRetention,Use use) noexcept {
-        static_assert(noexcept(use(std::declval<NativeAllocationContext&>())) &&
-            std::is_same_v<decltype(use(std::declval<NativeAllocationContext&>())),int>);
+        static_assert(noexcept(use(std::declval<NativeAllocationContextFor<SurfaceOwner>&>())) &&
+            std::is_same_v<decltype(use(std::declval<NativeAllocationContextFor<SurfaceOwner>&>())),int>);
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         void* child=planner.child;
         const auto address=reinterpret_cast<uintptr_t>(child);
@@ -2121,13 +2124,19 @@ struct NativeAllocationCallbackScope {
         if(keep())return 5;
         // The captured planner owns its allocation unwind. Do not execute
         // another cleanup from the callback wrapper or infer GPU retirement.
-        NativeAllocationContext allocation(planner.childOwner,planner,child,{},keep);
-        NativeAllocationResolve scope(child,allocation);
+        NativeAllocationContextFor<SurfaceOwner> allocation(planner.childOwner,planner,child,{},keep);
+        NativeAllocationResolveFor<SurfaceOwner> scope(child,allocation);
         if(!scope.bound() || !allocation.owns(child))return 5;
         const int status=use(allocation);
         return status?status:(allocation.owns(child) && NativeModeReleaseScope::get(child)==&mode?0:5);
     }
 };
+using NativeAllocationCallbackScope=NativeAllocationCallbackScopeFor<NativeContextSurfaceOwner>;
+template struct NativeAllocationCallbackScopeFor<NativeTemporarySurfaceOwner>;
+template int NativeAllocationCallbackScopeFor<NativeTemporarySurfaceOwner>::run<
+    int(*)(NativeAllocationContextFor<NativeTemporarySurfaceOwner>&) noexcept>(
+    NativeAllocationPlannerFor<NativeTemporarySurfaceOwner>&,NativeModeReleaseContext&,
+    TglOwnedVeboxFrameRetention&,int(*)(NativeAllocationContextFor<NativeTemporarySurfaceOwner>&) noexcept) noexcept;
 template int NativeAllocationCallbackScope::run<int(*)(NativeAllocationContext&) noexcept>(
     NativeAllocationPlanner&,NativeModeReleaseContext&,TglOwnedVeboxFrameRetention&,
     int(*)(NativeAllocationContext&) noexcept) noexcept;
