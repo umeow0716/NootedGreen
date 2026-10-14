@@ -23784,6 +23784,42 @@ int main() {
                                 auto* cpuAddress=storageOwner.get();
                                 auto* child0=storage.children().first().owner().constructedBase();
                                 auto* child1=storage.children().second().owner().constructedBase();
+                                {
+                                    unsigned mode=0,reads=0;
+                                    auto types=[&](TglNativeFrontendCfTypes& out) noexcept {
+                                        ++reads;if(mode==0)return false;
+                                        out={11,mode==1?uintptr_t{11}:mode==2 && reads==2?uintptr_t{13}:uintptr_t{12}};
+                                        return true;
+                                    };
+                                    auto pin=[&]() noexcept {
+                                        if(mode==3)return decltype(parent){};
+                                        return parents.pin(base,0x8000,1,parentAddress);
+                                    };
+                                    auto access=[&](const auto& held,auto use) noexcept -> int {
+                                        assert(held.get() && held.get()->context()==parentAddress);
+                                        return use(storage,0);
+                                    };
+                                    auto admit=[&](auto& cpu,const auto&,const auto* src,const auto* dst) noexcept {
+                                        return mode!=4 && &cpu==cpuAddress && src==&source && dst==&target;
+                                    };
+                                    using Borrowed=TglNativeVeboxBorrowedFrontendFrameStorage<decltype(parent),
+                                        TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf,FrameDnBackend,decltype(access)>;
+                                    auto constructor=tglMakeNativeBorrowedFrontendConstructor<Borrowed>(
+                                        Cf{refs},frameDn,types,pin,access,admit);
+                                    for(mode=0;mode<6;++mode) {
+                                        reads=0;
+                                        std::unique_ptr<Borrowed> frontend(constructor(reinterpret_cast<uintptr_t>(&source),originalResolve,originalTarget));
+                                        assert(bool(frontend)==(mode==5) && storageOwner.get()==cpuAddress);
+                                        if(frontend) {
+                                            assert(frontend->surfacesReady() && !frontend->requiresRetention());
+                                            assert(frontend->withCpuFrontend([&](auto& cpu,auto&...) noexcept {
+                                                assert(&cpu==cpuAddress);return TglOwnedVeboxCommandTransactionResult{31,0,false,false,false};
+                                            }).status==31);
+                                        }
+                                        frontend.reset();
+                                        assert(refs==originalRefs && !originalSource.borrowed && !originalTarget.borrowed && !originalHistory.borrowed);
+                                    }
+                                }
                                 // CPU-only retention matrix: real constructed child pair,
                                 // isolated latch (no resources/submission, no GPU certificate).
                                 for(unsigned outcome=0;outcome<4;++outcome) {

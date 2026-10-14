@@ -23806,6 +23806,7 @@ class TglNativeVeboxBorrowedFrontendFrameStorage {
     bool busy_=false,retained_=false,ready_=false;
     uint64_t generation0_=0,generation1_=0;
 public:
+    using ParentLeaseType=ParentLease;
     using SourceOwnerType=SourceOwner;
     using TargetOwnerType=TargetOwner;
     template<class Resolve>
@@ -23865,6 +23866,49 @@ public:
         return result;
     }
 };
+
+// Lend one stable constructor through the context-sidecar construction lambda.
+// It publishes only a fully admitted borrowed frontend and never moves CPU ownership.
+template<class Frontend,class CfApi,class DnBackend,class Types,class Pin,class Access,class Admit>
+class TglNativeBorrowedFrontendConstructor {
+    CfApi cf_;DnBackend& parameters_;Types types_;Pin pin_;Access access_;Admit admit_;
+    bool busy_=false;
+    static bool valid(const TglNativeFrontendCfTypes& t) noexcept {
+        return t.resource && t.surface && t.resource!=UINTPTR_MAX && t.surface!=UINTPTR_MAX && t.resource!=t.surface;
+    }
+public:
+    TglNativeBorrowedFrontendConstructor(CfApi cf,DnBackend& parameters,Types types,Pin pin,Access access,Admit admit) noexcept
+        :cf_(std::move(cf)),parameters_(parameters),types_(std::move(types)),pin_(std::move(pin)),
+         access_(std::move(access)),admit_(std::move(admit)) {
+        static_assert(std::is_nothrow_move_constructible_v<CfApi> && std::is_nothrow_move_constructible_v<Types> &&
+            std::is_nothrow_move_constructible_v<Pin> && std::is_nothrow_move_constructible_v<Access> &&
+            std::is_nothrow_move_constructible_v<Admit> && std::is_nothrow_copy_constructible_v<CfApi> &&
+            std::is_nothrow_copy_constructible_v<Access> && std::is_nothrow_copy_constructible_v<Admit>);
+    }
+    TglNativeBorrowedFrontendConstructor(const TglNativeBorrowedFrontendConstructor&)=delete;
+    TglNativeBorrowedFrontendConstructor& operator=(const TglNativeBorrowedFrontendConstructor&)=delete;
+    template<class Resolve> Frontend* operator()(uintptr_t source,Resolve resolve,
+        typename Frontend::TargetOwnerType& target) noexcept {
+        static_assert(noexcept(types_(std::declval<TglNativeFrontendCfTypes&>())) &&
+            std::is_same_v<decltype(types_(std::declval<TglNativeFrontendCfTypes&>())),bool> &&
+            noexcept(pin_()) && std::is_same_v<decltype(pin_()),typename Frontend::ParentLeaseType>);
+        if(busy_)return nullptr;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        TglNativeFrontendCfTypes before,after;
+        if(!types_(before) || !valid(before))return nullptr;
+        auto parent=pin_();if(!parent.get())return nullptr;
+        std::unique_ptr<Frontend> frame(new(std::nothrow) Frontend(std::move(parent),source,resolve,target,
+            cf_,before.resource,before.surface,parameters_,access_));
+        if(!frame || !types_(after) || !valid(after) || before.resource!=after.resource ||
+            before.surface!=after.surface || !frame->bindCpu(admit_))return nullptr;
+        return frame.release();
+    }
+};
+template<class Frontend,class CfApi,class DnBackend,class Types,class Pin,class Access,class Admit>
+auto tglMakeNativeBorrowedFrontendConstructor(CfApi cf,DnBackend& parameters,Types types,Pin pin,Access access,Admit admit) noexcept {
+    return TglNativeBorrowedFrontendConstructor<Frontend,CfApi,DnBackend,Types,Pin,Access,Admit>(
+        std::move(cf),parameters,std::move(types),std::move(pin),std::move(access),std::move(admit));
+}
 
 template<class CpuStorage,class ParentLease,class SourceOwner,class TargetOwner,class CfApi,class DnBackend>
 class TglNativeVeboxAdoptedFrontendFrameStorage {
