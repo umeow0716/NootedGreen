@@ -21995,6 +21995,55 @@ public:
     bool destroyed() const noexcept {return destroyed_;}
     bool deleted() const noexcept {return deleted_;}
 };
+// Embedded VP storage has no independent native allocation to delete. Its
+// deleting entry retires the graph, then asks the real parent owner to detach
+// its association. A failed detach is reported and may be retried without
+// repeating resource retirement; never feed this address to native delete.
+template<class Graph,class Backing,class Retire,class Detach>
+class TglOwnedEmbeddedVpLifetimeContext {
+    Graph& graph_;Backing& backing_;Retire& retire_;Detach& detach_;
+    void* child_;uint64_t generation_;size_t index_;
+    bool busy_=false,reentered_=false,destroyed_=false,deleted_=false;
+    uint64_t attempts_=0;int status_=5;
+public:
+    TglOwnedEmbeddedVpLifetimeContext(void* child,Graph& graph,Backing& backing,
+        size_t index,Retire& retire,Detach& detach) noexcept
+        :graph_(graph),backing_(backing),retire_(retire),detach_(detach),
+         child_(child),generation_(graph.generation()),index_(index) {}
+    TglOwnedEmbeddedVpLifetimeContext(const TglOwnedEmbeddedVpLifetimeContext&)=delete;
+    TglOwnedEmbeddedVpLifetimeContext& operator=(const TglOwnedEmbeddedVpLifetimeContext&)=delete;
+    bool owns(void* child) const noexcept {
+        return child && child==child_ && !deleted_ && graph_.generation()==generation_ &&
+            (destroyed_ || graph_.ownsStorage(child));
+    }
+    void destroy(bool deleting) noexcept {
+        static_assert(noexcept(retire_()) && std::is_same_v<decltype(retire_()),int>);
+        static_assert(noexcept(detach_(child_)) && std::is_same_v<decltype(detach_(child_)),int>);
+        if(attempts_==UINT64_MAX){status_=5;return;}
+        ++attempts_;
+        if(busy_){reentered_=true;status_=5;return;}
+        if(!owns(child_) || (destroyed_ && !deleting)){status_=5;return;}
+        busy_=true;reentered_=false;
+        struct Unlock {bool& active;~Unlock(){active=false;}} unlock{busy_};
+        if(!destroyed_) {
+            status_=backing_.retireVpStorage(index_,child_,[&]() noexcept -> int {
+                const int result=retire_();return reentered_?5:result;
+            });
+            if(status_)return;
+            destroyed_=true;generation_=graph_.generation();
+        }
+        if(deleting) {
+            status_=detach_(child_);
+            if(status_)return;
+            deleted_=true;
+        }
+        status_=reentered_?5:0;
+    }
+    int status() const noexcept {return status_;}
+    uint64_t attempts() const noexcept {return attempts_;}
+    bool destroyed() const noexcept {return destroyed_;}
+    bool deleted() const noexcept {return deleted_;}
+};
 template<class Resolve> struct TglOwnedVpLifetimeCallbacks {
     static void destroy(void* child) noexcept {
         static_assert(noexcept(Resolve{}(child)),"owned VP lifecycle resolver ABI");
@@ -26539,6 +26588,9 @@ public:
     }
     template<class Retire> int retireVpResources(size_t index,Retire retire) noexcept {
         auto* vp=selectVp(index);return vp?vp->retireResources(retire):5;
+    }
+    template<class Retire> int retireVpStorage(size_t index,void* expectedVp,Retire retire) noexcept {
+        auto* vp=selectVp(index);return vp?vp->retireEmbeddedStorage(expectedVp,retire):5;
     }
     template<class Use> int withVpResources(Use use) noexcept {return vp_.withResources(use);}
     template<class Read,class Retire,class Use>

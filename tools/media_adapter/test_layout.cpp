@@ -22236,26 +22236,50 @@ int main() {
                 assert(releaseCount==2 && releaseOrder[0]==1 && releaseOrder[1]==2);
                 releaseCount=0;releaseOrder.fill(0);
                 {
-                    TglOwnedVeboxFrameRetention retention;
-                    TglNativeVpBackingStorage<NativeCpu> embedded(0x100000,allocatorRead,
+                    TglNativeVeboxVpFrameBacking<UnusedStmmApi,NativeCpu> embedded(0x100000,allocatorRead,
                         [](uintptr_t) noexcept {return true;},
-                        [](uintptr_t,size_t) noexcept {return true;},retention,nativeCpu);
-                    assert(embedded.initialize(binding,resources,4096,resources.context,
+                        [](uintptr_t,size_t) noexcept {return true;},resources,4096,
+                        TglNativeBufferFillBinding{},nativeCpu);
+                    assert(embedded.initializeVp(binding,resources.context,
                         0x8000,0x3000,noRead,1,0)==0);
                     void* child=nullptr;unsigned retireCalls=0;
+                    using Graph=std::remove_reference_t<decltype(graph)>;
+                    Graph* actualGraph=nullptr;
                     auto retire=[&]() noexcept -> int {++retireCalls;return 0;};
-                    assert(embedded.withResources([&](auto&,auto& vp,auto& lines) noexcept -> int {
+                    assert(embedded.withVpResources([&](auto& ownerGraph,auto& vp,auto& lines) noexcept -> int {
+                        actualGraph=&ownerGraph;
                         child=vp.bytes.data();
                         assert(lines.resources().ensure(1080,4096)==0);
-                        assert(embedded.retireEmbeddedStorage(child,retire)==5 && !retireCalls);
+                        assert(embedded.retireVpStorage(0,child,retire)==5 && !retireCalls);
                         return 0;
                     })==0 && child && backing.live==3);
-                    assert(embedded.retireEmbeddedStorage(nullptr,retire)==5 && !retireCalls);
-                    assert(embedded.retireEmbeddedStorage(child,[]() noexcept -> int {return 31;})==31);
-                    assert(embedded.bound() && backing.live==3 && stateCpu.live && avsCpu.live);
-                    assert(embedded.retireEmbeddedStorage(child,retire)==0 && retireCalls==1);
-                    assert(!embedded.bound() && !backing.live && !stateCpu.live && !avsCpu.live);
-                    assert(embedded.retireEmbeddedStorage(child,retire)==5 && retireCalls==1);
+                    assert(embedded.retireVpStorage(0,nullptr,retire)==5 && !retireCalls);
+                    assert(embedded.retireVpStorage(2,child,retire)==5 && !retireCalls);
+                    assert(embedded.retireVpStorage(0,child,[]() noexcept -> int {return 31;})==31);
+                    assert(embedded.vpBound(0) && backing.live==3 && stateCpu.live && avsCpu.live);
+                    unsigned detaches=0;int detachStatus=31;
+                    auto detach=[&](void* p) noexcept -> int {
+                        assert(p==child && !embedded.vpBound(0) && !backing.live);
+                        ++detaches;return detachStatus;
+                    };
+                    TglOwnedEmbeddedVpLifetimeContext lifetime(child,*actualGraph,embedded,0,retire,detach);
+                    assert(tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,{},
+                        [&](void* p,const auto& entries) noexcept -> int {
+                            assert(entries.destroy && entries.deletingDestroy);
+                            entries.destroy(p);return 0;
+                        })==0 && lifetime.destroyed() && !lifetime.deleted() && !detaches);
+                    assert(!embedded.vpBound(0) && !backing.live && !stateCpu.live && !avsCpu.live);
+                    assert(tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,{},
+                        [&](void* p,const auto& entries) noexcept -> int {
+                            entries.deletingDestroy(p);return 0;
+                        })==31 && !lifetime.deleted() && detaches==1 && retireCalls==1);
+                    detachStatus=0;
+                    assert(tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,{},
+                        [&](void* p,const auto& entries) noexcept -> int {
+                            entries.deletingDestroy(p);return 0;
+                        })==0 && lifetime.deleted() && detaches==2 && retireCalls==1);
+                    assert(!lifetime.owns(child));
+                    assert(embedded.retireVpStorage(0,child,retire)==5 && retireCalls==1);
                     assert(releaseCount==2 && releaseOrder[0]==1 && releaseOrder[1]==2);
                 }
                 releaseCount=0;releaseOrder.fill(0);
