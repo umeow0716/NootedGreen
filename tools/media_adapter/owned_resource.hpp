@@ -5338,6 +5338,13 @@ public:
     bool hasPrivateChildLease(uintptr_t expected) const noexcept {
         return ready_ && tableInstalled_ && busy_ && storage_.get()==expected;
     }
+    bool readLeasedStorage(uintptr_t expected,uint64_t generation,uintptr_t address,
+        void* output,size_t bytes) const noexcept {
+        if(!output || !bytes || !generation || generation!=allocationGeneration_ ||
+            !hasPrivateChildLease(expected) || address<expected ||
+            address-expected>storage_.size() || bytes>storage_.size()-(address-expected))return false;
+        std::memcpy(output,reinterpret_cast<const void*>(address),bytes);return true;
+    }
     bool hasPrivateChildImageLease(uintptr_t expected,uintptr_t image) const noexcept {
         return image && image_==image && hasPrivateChildLease(expected);
     }

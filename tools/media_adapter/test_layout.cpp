@@ -27585,6 +27585,18 @@ int main() {
                 assert(owner.installPrivateVtableWithQueries<DeniedFormatRead>(
                     unbound,tableRead,qualify,executable));
                 assert(owner.matchesPrivateVtableHooks(hooks));
+                uintptr_t copiedTable=0;
+                const auto childAddress=reinterpret_cast<uintptr_t>(owner.constructedBase());
+                const auto readGeneration=owner.allocationGeneration();
+                assert(!owner.readLeasedStorage(childAddress,readGeneration,childAddress,&copiedTable,8));
+                assert(owner.withPrivateChild([&](void*) noexcept -> int {
+                    assert(owner.readLeasedStorage(childAddress,readGeneration,childAddress,&copiedTable,8) && copiedTable);
+                    assert(!owner.readLeasedStorage(childAddress,readGeneration+1,childAddress,&copiedTable,8));
+                    assert(!owner.readLeasedStorage(childAddress,readGeneration,childAddress+0x1bc0,&copiedTable,1));
+                    assert(!owner.readLeasedStorage(childAddress,readGeneration,childAddress+0x1bbf,&copiedTable,2));
+                    assert(!owner.readLeasedStorage(childAddress,readGeneration,UINTPTR_MAX,&copiedTable,8));
+                    return 0;
+                })==0);
                 auto wrongHooks=hooks;wrongHooks[5]^=1;
                 assert(!owner.matchesPrivateVtableHooks(wrongHooks));
                 {

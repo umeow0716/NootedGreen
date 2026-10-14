@@ -357,6 +357,35 @@ using NativeFrontendEnvironment=TglNativeFrontendCpuEnvironment<decltype(&readMe
 using NativeContextSurfaceOwner=typename TglNativeContextSurfaceOwners<NativeCodecBackend::Registry>::Owner;
 using NativeVpStateHealth=TglLeasedVpStateFrameHealth<NativeRendererChildOwner,NativeExecutionOwner,
     NativeContextSurfaceOwner,NativeContextSurfaceOwner>;
+// Core ranges derive from actual typed owners, never a VM-readable-address
+// grant. Other metadata/interfaces need their own explicit retained grants.
+struct NativeCoreFrameDataScope {
+    NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
+    NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+    const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
+    uintptr_t image,child,execution;uint64_t generation;
+    NativeFrameDataRead capability() noexcept {return {this,&resolve};}
+    bool live() const noexcept {
+        return generation && childOwner.allocationGeneration()==generation &&
+            childOwner.hasPrivateChildImageLease(child,image) &&
+            childOwner.hasPrivateSfcRenderDataLease(child,execution) && executionOwner.hasExecutionLease(execution) &&
+            sourceOwner.hasSurfaceLease(source) && targetOwner.hasSurfaceLease(target);
+    }
+    static bool contains(uintptr_t start,size_t extent,uintptr_t address,size_t bytes) noexcept {
+        return start && bytes && address>=start && address-start<=extent && bytes<=extent-(address-start);
+    }
+    static bool resolve(void* context,uintptr_t address,void* output,size_t bytes) noexcept {
+        auto* self=static_cast<NativeCoreFrameDataScope*>(context);
+        if(!self || !output || !bytes || !self->live())return false;
+        if(self->childOwner.readLeasedStorage(self->child,self->generation,address,output,bytes))return self->live();
+        // Exact native report constructor allocates d48 bytes; its linked
+        // report identity and NativeExecutionOwner lease are checked above.
+        const bool admitted=contains(self->execution,0xd48,address,bytes) ||
+            contains(reinterpret_cast<uintptr_t>(&self->source),sizeof(self->source),address,bytes) ||
+            contains(reinterpret_cast<uintptr_t>(&self->target),sizeof(self->target),address,bytes);
+        return admitted && readMemory(address,output,bytes) && self->live();
+    }
+};
 struct NativeVpScalarStateProducer {
     NativeVpStateHealth& health;NativeFrameDataRead& dataRead;
     const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
