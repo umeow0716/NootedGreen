@@ -2580,6 +2580,15 @@ template struct NativeRendererCompleteHooksFor<NativeTemporarySurfaceOwner>;
 using NativeBorrowedFrontend=TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePin,
     NativeContextSurfaceOwner,NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi,
     NativeFrontendEnvironment,NativeFrontendAccess>;
+using NativeRetainedInspectionUse=int(*)(const NativeRendererCpuAssembly&,
+    const TglNativeCreatedVeboxRendererView&,const NativeSourceGraph&,
+    const TglOwnedType1BorrowedSurfaceLease<NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi>&,bool) noexcept;
+struct NativeRetainedInspectionEntry {
+    static int run(NativeBorrowedFrontend& frontend,NativeRetainedInspectionUse use) noexcept {
+        if(!use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1))return 5;
+        return frontend.withRetainedInspection(use);
+    }
+};
 using NativeContextRendererFrame=TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,
     NativeBorrowedFrontend>;
 using NativePhysicalRegistry=TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;

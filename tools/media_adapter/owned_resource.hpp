@@ -26220,7 +26220,7 @@ class TglNativeVeboxBorrowedFrontendFrameStorage {
     TglOwnedType1BorrowedSurfaceLease<TargetOwner,CfApi> target_;
     TglTrackedCpuOwner<DnBackend> parameters_;
     Access access_;
-    bool busy_=false,retained_=false,ready_=false;
+    bool busy_=false,retained_=false,ready_=false,historyPublished_=false;
     uint64_t generation0_=0,generation1_=0;
 public:
     using ParentLeaseType=ParentLease;
@@ -26259,6 +26259,30 @@ public:
     }
     bool surfacesReady() const noexcept {return ready_ && parent_.get() && source_.storage() && target_.storage();}
     bool requiresRetention() const noexcept {return retained_;}
+    // Inspection is permitted for pending frames, but only const CPU/graph/
+    // target views escape into this synchronous callback. No new Render,
+    // retention clear or retirement certificate is manufactured here.
+    template<class Use> int withRetainedInspection(Use use) noexcept {
+        if(busy_ || !surfacesReady())return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        bool entered=false,repeated=false;auto* held=parent_.get();
+        auto valid=[&](auto& cpu) noexcept {
+            return parent_.get()==held && held && source_.storage() && target_.storage() &&
+                cpu.children().first().owner().constructedBase() && cpu.children().second().owner().constructedBase() &&
+                cpu.children().first().owner().allocationGeneration()==generation0_ &&
+                cpu.children().second().owner().allocationGeneration()==generation1_;
+        };
+        const int status=access_(parent_,[&](auto& cpu,const auto& view) noexcept -> int {
+            if(entered) {repeated=true;return 5;}
+            if(!valid(cpu))return 5;
+            entered=true;
+            static_assert(noexcept(use(std::as_const(cpu),view,std::as_const(source_),std::as_const(target_),historyPublished_)) &&
+                std::is_same_v<decltype(use(std::as_const(cpu),view,std::as_const(source_),std::as_const(target_),historyPublished_)),int>);
+            const int result=use(std::as_const(cpu),view,std::as_const(source_),std::as_const(target_),historyPublished_);
+            return result?result:valid(cpu)?0:5;
+        });
+        return status?status:(entered && !repeated)?0:5;
+    }
     template<class Use> TglOwnedVeboxCommandTransactionResult withCpuFrontend(Use use) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
         if(busy_ || retained_ || !surfacesReady())return result;
@@ -26282,6 +26306,7 @@ public:
             if(result.writtenBack && !result.acquired && !result.status)result.status=5;
             cpu.backing().retention().observe(result);
             retained_=cpu.backing().retention()();
+            historyPublished_=historyPublished_ || result.nativeHistoryPublished;
             return result.status;
         });
         if(!entered)result.status=status?status:5;
@@ -26316,6 +26341,9 @@ public:
     TglNativeVeboxBorrowedFrontendWithCpuAllocator& operator=(const TglNativeVeboxBorrowedFrontendWithCpuAllocator&)=delete;
     template<class Admit> bool bindCpu(Admit admit) noexcept {
         return parameters_.bound() && frontend_.bindCpu(admit);
+    }
+    template<class Use> int withRetainedInspection(Use use) noexcept {
+        return frontend_.withRetainedInspection(use);
     }
     bool surfacesReady() const noexcept {return frontend_.surfacesReady();}
     bool requiresRetention() const noexcept {return frontend_.requiresRetention();}

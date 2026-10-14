@@ -25939,7 +25939,7 @@ int main() {
                                 }
                                 // CPU-only retention matrix: real constructed child pair,
                                 // isolated latch (no resources/submission, no GPU certificate).
-                                for(unsigned outcome=0;outcome<4;++outcome) {
+                                for(unsigned outcome=0;outcome<5;++outcome) {
                                     struct LatchBacking {
                                         TglOwnedVeboxFrameRetention keep;
                                         auto& retention() noexcept {return keep;}
@@ -25950,9 +25950,12 @@ int main() {
                                         auto& children() noexcept {return pair;}
                                         auto& backing() noexcept {return frame;}
                                     } cpu{storage.children(),{}};
-                                    unsigned accessCalls=0;
+                                    unsigned accessCalls=0,inspectionMode=0;
                                     auto access=[&](const auto&,auto use) noexcept -> int {
-                                        ++accessCalls;return use(cpu,0);
+                                        ++accessCalls;
+                                        if(inspectionMode==1)return 0;
+                                        if(inspectionMode==2) {(void)use(cpu,0);(void)use(cpu,0);return 0;}
+                                        return use(cpu,0);
                                     };
                                     auto pin=parents.pin(base,0x8000,1,parentAddress);
                                     using Borrowed=TglNativeVeboxBorrowedFrontendFrameStorage<decltype(pin),
@@ -25970,6 +25973,7 @@ int main() {
                                     const auto result=frontend.withCpuFrontend([&](auto&...) noexcept {
                                         if(outcome==0)return TglOwnedVeboxCommandTransactionResult{31,0,true,false,false};
                                         if(outcome==1)return TglOwnedVeboxCommandTransactionResult{0,0,false,true,false};
+                                        if(outcome==4)return TglOwnedVeboxCommandTransactionResult{31,0,false,false,false,true};
                                         return TglOwnedVeboxCommandTransactionResult{31,0,false,false,true};
                                     });
                                     assert(result.status==(outcome==1?5:31) && frontend.requiresRetention() && cpu.backing().retention()());
@@ -25977,6 +25981,25 @@ int main() {
                                     assert(frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
                                         assert(false);return {};
                                     }).status==5 && accessCalls==2);
+                                    assert(frontend.withRetainedInspection([&](const auto& inspected,const auto&,
+                                        const auto& graph,const auto& destination,bool history) noexcept -> int {
+                                        assert(&inspected==&cpu && graph.storage()==&source && destination.storage()==&target);
+                                        assert(history==(outcome==4));
+                                        assert(frontend.withRetainedInspection([](const auto&...) noexcept -> int {
+                                            assert(false);return 0;
+                                        })==5);
+                                        assert(frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                            assert(false);return {};
+                                        }).status==5);
+                                        return 31;
+                                    })==31 && accessCalls==3 && frontend.requiresRetention());
+                                    unsigned inspections=0;
+                                    auto inspection=[&](const auto&...) noexcept -> int {++inspections;return 0;};
+                                    inspectionMode=1;
+                                    assert(frontend.withRetainedInspection(inspection)==5 && !inspections);
+                                    inspectionMode=2;
+                                    assert(frontend.withRetainedInspection(inspection)==5 && inspections==1);
+                                    assert(frontend.requiresRetention() && accessCalls==5);
                                     assert(storageOwner.get()==cpuAddress && !storage.backing().retention()());
                                 }
                                 assert(refs==originalRefs && !originalSource.borrowed && !originalTarget.borrowed && !originalHistory.borrowed);
