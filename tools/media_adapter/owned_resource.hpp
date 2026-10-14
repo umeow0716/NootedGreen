@@ -20729,6 +20729,25 @@ int tglWithOwnedVpSurfaceCommands(TglOwnedSfcCommandParameters& parameters,
 // VP90 orders geometry -> VP58 allocation -> resource binding -> final state.
 // Only the two proven allocation dimensions are temporarily published; restore
 // the packet before final validation/binding. Allocation failure is not send.
+template<class CpuBackend,class Allocate>
+int tglAllocateOwnedVpPacketLines(TglOwnedVpSfcCallerStorage& vp,
+    TglOwnedSfcStateParameters<CpuBackend>& state,const std::array<uint8_t,0xb8>& prefix,
+    Allocate allocate) noexcept {
+    static_assert(noexcept(allocate(vp.bytes.data())) &&
+        std::is_same_v<decltype(allocate(vp.bytes.data())),int>);
+    if constexpr(std::is_pointer_v<Allocate>)if(!allocate)return 5;
+    auto* packet=state.data();if(!packet)return 5;
+    uint32_t input=0,scaled=0;
+    std::memcpy(&input,prefix.data()+0x30,4);std::memcpy(&scaled,prefix.data()+0x4c,4);
+    TglOwnedSfcLineBufferSizes sizes;
+    if(!tglOwnedSfcLineBufferSizes(sizes,input,scaled))return 5;
+    TglOwnedSfcStateParametersPacket saved{};std::memcpy(saved.data(),packet,saved.size());
+    std::memcpy(packet+0x30,&input,4);std::memcpy(packet+0x4c,&scaled,4);
+    const int status=state.withVpParameterPublication(vp,[&](const uint8_t*) noexcept {
+        return allocate(vp.bytes.data());
+    });
+    std::memcpy(packet,saved.data(),saved.size());return status;
+}
 template<class CpuBackend,class ResourceBackend,class SfdBackend,class Allocate,class Query,class Generate>
 int tglWithAllocatedOwnedVpSurfaceCommands(TglOwnedVpSfcCallerStorage& vp,
     TglOwnedSfcCommandParameters& parameters,TglOwnedSfcStateParameters<CpuBackend>& state,
@@ -20744,12 +20763,7 @@ int tglWithAllocatedOwnedVpSurfaceCommands(TglOwnedVpSfcCallerStorage& vp,
     std::memcpy(&input,prefix.data()+0x30,4);std::memcpy(&scaled,prefix.data()+0x4c,4);
     TglOwnedSfcLineBufferSizes sizes;
     if(!tglOwnedSfcLineBufferSizes(sizes,input,scaled) || (sizes.sfd && !sfd)) return 5;
-    TglOwnedSfcStateParametersPacket saved{};std::memcpy(saved.data(),packet,saved.size());
-    std::memcpy(packet+0x30,&input,4);std::memcpy(packet+0x4c,&scaled,4);
-    const int status=state.withVpParameterPublication(vp,[&](const uint8_t*) noexcept {
-        return allocate(vp.bytes.data());
-    });
-    std::memcpy(packet,saved.data(),saved.size());
+    const int status=tglAllocateOwnedVpPacketLines(vp,state,prefix,allocate);
     if(status) return status;
     return tglWithOwnedVpSurfaceCommands(parameters,state,lines,output,prefix,tail,
         rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode,query,generate,sfd);

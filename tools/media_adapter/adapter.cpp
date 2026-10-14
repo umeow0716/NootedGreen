@@ -385,6 +385,69 @@ struct NativeVpScalarStateProducer {
             health.qualifiesVp(reinterpret_cast<uintptr_t>(vp))?&produced:nullptr;
     }
 };
+struct NativeNv12OutputQuery {
+    struct State {bool attempted=false;TglOwnedNv12LayoutRead result{};};
+    NativeContextSurfaceOwner& owner;const TglOwnedSurfaceStorage& expected;State& state;
+    int operator()(TglOwnedSurfaceStorage& original) const noexcept {
+        if(state.attempted || &original!=&expected || owner.surfaceBinding()!=&expected ||
+            !owner.hasSurfaceLease(original))return 5;
+        state.attempted=true;
+        TglDarwinNv12LayoutApi api;
+        using Quarantine=TglOwnedStmmProcessQuarantine<IOSurfaceRef>;
+        typename Quarantine::Reservation reservation(Quarantine::processLifetime());
+        state.result=tglPrepareLeasedOwnedNv12Metadata(owner,original,api,reservation);
+        if(state.result.ready())return 0;
+        return state.result.lockStatus?state.result.lockStatus:
+            state.result.unlockStatus?state.result.unlockStatus:5;
+    }
+};
+struct NativeVpNv12PacketScope {
+    using CpuBackend=TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>;
+    NativeVpScalarStateProducer& scalar;NativeContextSurfaceOwner& targetOwner;
+    NativeNv12OutputQuery query;
+    bool attempted=false;
+    template<class Use> int run(TglOwnedVpSfcCallerStorage& vp,TglOwnedSfcStateParameters<CpuBackend>& state,
+        TglNativeVpLineResourceStorage& lines,const TglOwnedVpEntrySet& catalogue,
+        TglOwnedSfcCommandParameters& parameters,bool rgbAdaptive,bool eightTapChroma,
+        bool compressionEnabled,TglOwnedSfcCompressionMode compressionMode,Use use) noexcept {
+        static_assert(noexcept(use(parameters)) && std::is_same_v<decltype(use(parameters)),int>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        const auto* prefix=scalar.state();
+        auto* packet=state.data();
+        if(attempted || query.state.attempted || !prefix || !packet || scalar.vp!=vp.bytes.data() || !catalogue.allocate ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(catalogue.allocate),1) ||
+            !lines.lines().boundToVp(vp) || &query.owner!=&targetOwner || &query.expected!=&scalar.target ||
+            !targetOwner.hasSurfaceLease(scalar.target) || parameters.filtersInUse)return 5;
+        TglOwnedSfcGen12Tail tail;
+        if(!tglPrepareOwnedVeboxSfcGen12Tail(prefix->packet,tail))return 5;
+        attempted=true;
+        uint32_t input=0,scaled=0;
+        std::memcpy(&input,prefix->packet.data()+0x30,4);std::memcpy(&scaled,prefix->packet.data()+0x4c,4);
+        const int allocation=tglAllocateOwnedVpPacketLines(vp,state,prefix->packet,[&](void* actual) noexcept -> int {
+            return catalogue.allocate(actual); // actual scoped owned VP58, once
+        });
+        if(allocation)return allocation;
+        if(scalar.state()!=prefix)return 5;
+        return lines.resources().withCommandResources(input,scaled,
+            [&](const auto& avs,const auto& ief,const auto* sfd) noexcept -> int {
+                return targetOwner.withMutableSurface([&](TglOwnedSurfaceStorage& output) noexcept -> int {
+                    if(&output!=&scalar.target || scalar.state()!=prefix)return 5;
+                    const int prepared=tglPrepareOwnedVpLeasedSurfaceState(parameters,state,output,
+                        avs,ief,sfd,prefix->packet,tail,rgbAdaptive,eightTapChroma,
+                        compressionEnabled,compressionMode,query);
+                    if(prepared)return prepared;
+                    // Keep resource/target scopes through AVS/IEF and send.
+                    // State parameter lease is NOT held during their updates.
+                    const int status=use(parameters);
+                    return status?status:(scalar.state()==prefix && targetOwner.hasSurfaceLease(output)?0:5);
+                });
+            });
+    }
+};
+template int NativeVpNv12PacketScope::run<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
+    TglOwnedVpSfcCallerStorage&,TglOwnedSfcStateParameters<NativeVpNv12PacketScope::CpuBackend>&,
+    TglNativeVpLineResourceStorage&,const TglOwnedVpEntrySet&,TglOwnedSfcCommandParameters&,
+    bool,bool,bool,TglOwnedSfcCompressionMode,int(*)(TglOwnedSfcCommandParameters&) noexcept) noexcept;
 struct NativeTwoPassCscHealth {
     NativeRendererChildOwner& childOwner;NativeExecutionOwner& executionOwner;
     NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
