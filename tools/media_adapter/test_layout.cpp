@@ -17222,6 +17222,11 @@ int main() {
         s.live=false;assert(!valid());s.live=true;
         input.referenceValid=true;assert(!valid());
         input.previous=&previous;assert(valid());
+        TglHeldOwnedSurfaceRole originalHistory(p,previous);
+        assert(tglValidateOriginalDiIecpLeases(input,s,source,&t,&originalHistory));
+        p.live=false;assert(!tglValidateOriginalDiIecpLeases(input,s,source,&t,&originalHistory));p.live=true;
+        input.previous=&copy;assert(!tglValidateOriginalDiIecpLeases(input,s,source,&t,&originalHistory));
+        input.previous=&previous;
         p.live=false;assert(!valid());p.live=true;
         input.previous=&copy;assert(!valid());input.previous=&previous;
         input.referenceValid=false;assert(!valid());input.previous=nullptr;

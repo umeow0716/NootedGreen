@@ -17940,11 +17940,12 @@ struct TglDiIecpInputs {
     std::array<const TglOwnedSurfaceStorage*,2> ffdn{}, stmm{};
     std::array<uint32_t,11> controls{};
 };
-// Only original roots: auxiliary FFDI/FFDN/STMM/statistics remain protected
-// by their enclosing prepared-allocation view. Do not adopt a copied shell.
-template<class Owner>
+// Each role needs its exact owner grant: a qualified temporary current root
+// may coexist with ORIGINAL temporal history. Auxiliary views remain held by
+// the enclosing allocation scope; equal descriptors do not grant ownership.
+template<class Owner,class TargetOwner,class PreviousOwner>
 bool tglValidateOriginalDiIecpLeases(const TglDiIecpInputs& input,Owner& sourceOwner,
-    const TglOwnedSurfaceStorage& source,Owner* targetOwner,Owner* previousOwner) noexcept {
+    const TglOwnedSurfaceStorage& source,TargetOwner* targetOwner,PreviousOwner* previousOwner) noexcept {
     static_assert(noexcept(sourceOwner.hasSurfaceLease(source)));
     if(input.current!=&source || !sourceOwner.hasSurfaceLease(source)) return false;
     if(input.target && (!targetOwner || !targetOwner->hasSurfaceLease(*input.target))) return false;
