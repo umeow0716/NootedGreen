@@ -15780,6 +15780,44 @@ static void testRetainedVeboxFrames() {
                         return useMetadata(p,read);
                     })==-94);
                     assert(metadataReads==2);
+                    {
+                        struct TemporaryBackend {
+                            size_t live=0;
+                            uintptr_t allocate(size_t n) noexcept {
+                                void* p=std::malloc(n);if(p)++live;return reinterpret_cast<uintptr_t>(p);
+                            }
+                            void release(uintptr_t p) noexcept {--live;std::free(reinterpret_cast<void*>(p));}
+                        } backend;
+                        TglNativePerPassCpuShells<TemporaryBackend> temporary(backend);
+                        std::array<const TglOwnedSurfaceStorage*,25> roots{};roots[0]=&original;
+                        assert(temporary.prepare(roots));
+                        auto read=[&](uintptr_t at,void* out,size_t n) noexcept {
+                            if(at<metadata || at-metadata>=conversion.size() ||
+                                n>conversion.size()-(at-metadata))return false;
+                            std::memcpy(out,conversion.data()+at-metadata,n);return true;
+                        };
+                        assert(temporary.withDerivedSurfaceLease(0,sidecar,[&](auto& derived) noexcept {
+                            return derived.withMutableSurface([&](auto& copy) noexcept {
+                                assert(!sidecar.hasSurfaceLease(copy) && derived.hasSurfaceLease(copy));
+                                assert(derived.withLeasedConversionMetadata(copy,read,
+                                    [&](uintptr_t p,auto bounded) noexcept -> int {
+                                        TglOwnedFeaturePresence presence=TglOwnedFeaturePresence::Unknown;
+                                        assert(tglReadLeasedConversion3dLutPresence(derived,copy,p,bounded,presence));
+                                        assert(presence==TglOwnedFeaturePresence::Present);return 31;
+                                    })==31);
+                                assert(derived.withLeasedConversionMetadata(copy,read,
+                                    [&](uintptr_t p,auto bounded) noexcept -> int {
+                                        const uintptr_t changed=p+8;std::memcpy(copy.prefix.data()+0xa8,&changed,8);
+                                        uint32_t value=0;assert(!bounded(p+0x64,&value,4));
+                                        std::memcpy(copy.prefix.data()+0xa8,&p,8);return 0;
+                                    })==5);
+                                assert(derived.withLeasedConversionMetadata(copy,read,
+                                    [](uintptr_t,auto) noexcept -> int {assert(false);return 0;})==5);
+                                return 31;
+                            });
+                        })==31);
+                        temporary.reset();assert(backend.live==0);
+                    }
                     assert(sidecar.withLeasedConversionMetadata(original,readMetadata,[&](uintptr_t p,auto read) noexcept -> int {
                         const uintptr_t foreign=p+8;
                         std::memcpy(original.prefix.data()+0xa8,&foreign,8);

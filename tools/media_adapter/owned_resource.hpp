@@ -7196,7 +7196,7 @@ public:
     template<class Owner> class DerivedSurfaceLease {
         friend class TglNativePerPassCpuShells;
         TglNativePerPassCpuShells& temporary_;Owner& original_;
-        size_t index_;uint64_t generation_;bool busy_=false;
+        size_t index_;uint64_t generation_;bool busy_=false,conversionFault_=false;
         DerivedSurfaceLease(TglNativePerPassCpuShells& temporary,Owner& original,size_t index) noexcept
             :temporary_(temporary),original_(original),index_(index),generation_(temporary.generation_) {}
     public:
@@ -7209,6 +7209,29 @@ public:
         }
         bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
             return live() && temporary_.shells_[index_]==reinterpret_cast<uintptr_t>(&surface);
+        }
+        // Borrow the original conversion allocation, never infer ownership
+        // from the copied a8 pointer. Both shells must still name that SAME
+        // allocation throughout the original owner's bounded metadata grant.
+        template<class Read,class Use> int withLeasedConversionMetadata(
+            const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
+            if(conversionFault_ || !hasSurfaceLease(expected))return 5;
+            uintptr_t metadata=0;std::memcpy(&metadata,expected.prefix.data()+0xa8,8);
+            auto valid=[&]() noexcept {
+                if(!hasSurfaceLease(expected))return false;
+                uintptr_t current=0;std::memcpy(&current,expected.prefix.data()+0xa8,8);
+                if(current!=metadata)conversionFault_=true;
+                return !conversionFault_;
+            };
+            const int status=original_.withLeasedConversionMetadata(*temporary_.originals_[index_],read,
+                [&](uintptr_t originalMetadata,auto bounded) noexcept -> int {
+                    if(originalMetadata!=metadata || !valid())return 5;
+                    auto checked=[&](uintptr_t address,void* output,size_t bytes) noexcept {
+                        return valid() && bounded(address,output,bytes) && valid();
+                    };
+                    const int result=use(metadata,checked);return valid()?result:5;
+                });
+            return valid()?status:5;
         }
         template<class Use> int withMutableSurface(Use use) noexcept {
             static_assert(noexcept(use(std::declval<TglOwnedSurfaceStorage&>())));
