@@ -7612,6 +7612,19 @@ inline void tglCopyOwnedFfdiSecondaryMetadata(TglOwnedSurfaceStorage& target,
 // ICL1f7a50..1f7af2 allocation data policy. +a8 selects source metadata;
 // otherwise child1ba9 and tile==1 gate +90(format). This is not a derived
 // object's ABI, permission to enable MMC, or proof of compressed backing.
+// Exact ICL derived table794210+90 ->1f7500..1f7563 is an enum-only
+// predicate. Keep this FFDi metadata policy separate from VP/SFC1dd120's
+// narrower 19/10/e list and from native resource compression admission.
+constexpr bool tglOwnedFfdiCompressionFormat(uint32_t format) noexcept {
+    switch(format) {
+        case 0x19:case 0x0d:case 0x0e:case 0x10:case 0x0f:case 0x11:
+        case 0x15:case 0x14:case 0x03:case 0x05:case 0x53:case 0x13:return true;
+        default:return false;
+    }
+}
+struct TglOwnedFfdiCompressionFormatQuery {
+    bool operator()(uint32_t format) const noexcept {return tglOwnedFfdiCompressionFormat(format);}
+};
 template<class Supports>
 TglOwnedFfdiCompressionSelection tglSelectOwnedFfdiCompression(bool followSource,
     bool source299,bool source29a,bool child1ba9,uint32_t format,uint32_t tile,

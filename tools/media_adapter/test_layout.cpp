@@ -2638,6 +2638,14 @@ static void testTrackedCpuOwner() {
             assert(selected.mode==(source?(e?1u:0u):4u));
         }
         for(unsigned mask=0;mask<32;++mask) for(uint32_t tile:{0u,1u,2u,UINT32_MAX}) {
+            for(uint32_t format=0;format<256;++format) {
+                constexpr std::array<uint32_t,12> nativeFormats{0x19,0x0d,0x0e,0x10,0x0f,0x11,
+                    0x15,0x14,0x03,0x05,0x53,0x13};
+                bool expected=false;for(auto native:nativeFormats)expected=expected || native==format;
+                assert(TglOwnedFfdiCompressionFormatQuery{}(format)==expected);
+            }
+            assert(!tglOwnedFfdiCompressionFormat(UINT32_MAX));
+            assert(tglOwnedFfdiCompressionFormat(0x53) && !tglOwnedVpCompressionFormat(0x53));
             const bool follow=mask&1,compressed=mask&2,mode=mask&4,enabled=mask&8,supported=mask&16;
             unsigned queries=0;
             const auto selected=tglSelectOwnedFfdiCompression(follow,compressed,mode,enabled,0x19,tile,
