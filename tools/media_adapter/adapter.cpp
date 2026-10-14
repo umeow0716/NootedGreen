@@ -1090,10 +1090,21 @@ struct NativeOutputPipeFrameScope {
         NativeFastFillTransaction fastFill{health.targetOwner,acquisition,compressionFormat,
             decompressionStatus,decompression};
         return NativeOutputCscQueryScope::run(health,[&](NativeTwoPassCscQuery& query) noexcept -> int {
+            struct LutSource {
+                NativeTwoPassCscHealth& health;TglVeboxPipeAcquisition& acquisition;
+                static bool produce(void* context,TglOwnedGen12SurfaceFeatures& output) noexcept {
+                    auto& self=*static_cast<LutSource*>(context);
+                    return tglAcquireLeasedConversionLutFeatures(self.health.sourceOwner,self.health.source,
+                        self.acquisition,&readMemory,output);
+                }
+            } lut{health,acquisition};
             NativeOutputPipePolicy policy(read,health.childOwner,health.image,health.child,parameters,
                 reinterpret_cast<uintptr_t>(vp.bytes.data()),di,colorFill,
                 health.sourceOwner,health.source,sourceFeatures,health.targetOwner,health.target,targetFeatures,
                 compositionNeeded,acquisition,query,fastFill);
+            if(sourceFeatures.lut==TglOwnedFeaturePresence::Unknown &&
+                (!ownedExecutableMemory(reinterpret_cast<uintptr_t>(&LutSource::produce),1) ||
+                    !policy.bindLutProducer(&lut,&LutSource::produce)))return 5;
             NativeOutputPipeSelector selector(vp,read,policy,const_cast<TglOwnedSurfaceStorage*>(&health.source),
                 const_cast<TglOwnedSurfaceStorage*>(&health.target),reinterpret_cast<void*>(parameters));
             if(!acquisition.healthy())return 5;

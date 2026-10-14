@@ -3544,8 +3544,8 @@ static void testLeasedGen12PlatformPolicy() {
     struct SfcFixture {
         static int extent(void* vp,void*,void*,void*) noexcept {++*static_cast<unsigned*>(vp);return 1;}
     };
-    for(unsigned variant=0;variant<35;++variant) {
-        const unsigned scenario=variant<33?variant:variant==33?0:1;
+    for(unsigned variant=0;variant<41;++variant) {
+        const unsigned scenario=variant<33?variant:(variant==34 || variant==39)?1:0;
         TglOwnedSurfaceStorage source{},target{};
         std::array<uint8_t,0x1bc0> child{};
         std::array<uint8_t,0x139> parameters{};
@@ -3564,6 +3564,7 @@ static void testLeasedGen12PlatformPolicy() {
         std::memcpy(child.data()+0x80,&actualVp,8);std::memcpy(child.data()+0x1b9c,&direct,4);
         std::memcpy(parameters.data(),&one,4);std::memcpy(parameters.data()+8,&sourceAddress,8);
         std::memcpy(parameters.data()+0x90,&one,4);std::memcpy(parameters.data()+0x98,&actualTarget,8);
+        if(variant==40) {const uint32_t multiple=2;std::memcpy(parameters.data()+0x90,&multiple,4);}
         std::memcpy(parameters.data()+0xe0,&actualFill,8);
         if(scenario==15) {
             const uintptr_t invalidAlpha=UINTPTR_MAX-2;
@@ -3584,6 +3585,7 @@ static void testLeasedGen12PlatformPolicy() {
             scenario==2?Presence::Present:Presence::Absent};
         TglOwnedGen12SurfaceFeatures b{&target,&frame,Presence::Unknown,Presence::Absent};
         if(variant>=33)a.hdr=b.hdr=Presence::Unknown;
+        if(variant>=35)a.lut=Presence::Unknown;
         if(scenario==4) a.lut=Presence::Unknown;
         auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
             if(scenario==12 && p==childAddress+0x1b9c) return false;
@@ -3638,6 +3640,22 @@ static void testLeasedGen12PlatformPolicy() {
         uint8_t comp=0xa4;uint32_t output=0xdeadbeef;
         TglLeasedGen12VeboxOutputPolicy policy(read,childOwner,childOwner.image,childAddress,paramsAddress,
             vpAddress,0,scenario==10 || scenario>=16?colorFill:0,sourceOwner,source,a,targetOwner,target,b,comp,frame,query,fill);
+        struct LutSource {
+            const TglOwnedSurfaceStorage* source;const TglOwnedSurfaceStorage* target;
+            TglVeboxPipeAcquisition* frame;unsigned variant,calls=0;
+            static bool produce(void* context,TglOwnedGen12SurfaceFeatures& out) noexcept {
+                auto& self=*static_cast<LutSource*>(context);++self.calls;
+                if(self.variant==36)return false;
+                out={self.variant==37?self.target:self.source,self.frame,
+                    self.variant==38?Presence::Unknown:Presence::Absent,Presence::Present};
+                return true;
+            }
+        } lut{&source,&target,&frame,variant};
+        if(variant>=35) {
+            assert(!policy.bindLutProducer(nullptr,&LutSource::produce));
+            assert(policy.bindLutProducer(&lut,&LutSource::produce));
+            assert(!policy.bindLutProducer(&lut,&LutSource::produce));
+        }
         assert(policy.matchesFrame(read,childOwner.image,childAddress,paramsAddress,vpAddress,source,target));
         auto otherRead=read;
         assert(!policy.matchesFrame(otherRead,childOwner.image,childAddress,paramsAddress,vpAddress,source,target));
@@ -3698,12 +3716,14 @@ static void testLeasedGen12PlatformPolicy() {
             std::memcpy(&publishedParams,report.data()+0xd28,4);
             assert(mode==output && publishedParams==0x1357);
         }
-        if(variant==34)assert(!ok && output==0xdeadbeef && comp==0xa4 && !frame.healthy());
+        if(variant==40)assert(ok && output==0 && comp==1 && frame.healthy());
+        else if(variant==34 || variant>=36)assert(!ok && output==0xdeadbeef && comp==0xa4 && !frame.healthy());
         else if(scenario==0 || scenario==1 || scenario==2 || scenario==3 || scenario==10 || scenario==13 || scenario==17) {
             const uint32_t expected=scenario==0 || scenario==10 || scenario==17?2:scenario==1?1:0;
             assert(ok && output==expected && comp==(expected?0:1) && frame.healthy());
         } else assert(!ok && output==0xdeadbeef && comp==0xa4 && !frame.healthy());
-        assert(sfcCalls==(scenario==1 && variant!=34?1u:0u) && fills==(scenario==10 || (scenario>=16 && scenario<=28)?1u:0u));
+        assert(lut.calls==(variant>=35 && variant!=40?1u:0u));
+        assert(sfcCalls==(scenario==1 && variant<33?1u:0u) && fills==(scenario==10 || (scenario>=16 && scenario<=28)?1u:0u));
         if(scenario==10 || scenario>=16) {
             float bottom=0;std::memcpy(&bottom,target.prefix.data()+0x4c,4);
             assert(bottom==1120 && target.prefix[0x85]==(scenario==10 || scenario==17?1:0));

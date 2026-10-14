@@ -7221,13 +7221,28 @@ class TglLeasedGen12VeboxOutputPolicy {
     uintptr_t image_,child_,parameters_,vp_,di_,colorFill_;
     const TglOwnedSurfaceStorage& source_;const TglOwnedSurfaceStorage& target_;
     const uint8_t& compNeeded_;
-    const TglOwnedGen12SurfaceFeatures sourceFeatures_,targetFeatures_;
+    TglOwnedGen12SurfaceFeatures sourceFeatures_;
+    const TglOwnedGen12SurfaceFeatures targetFeatures_;
+    void* lutScope_=nullptr;
+    bool(*lutProduce_)(void*,TglOwnedGen12SurfaceFeatures&) noexcept=nullptr;
+    bool lutAttempted_=false;
     TglVeboxPipeAcquisition& frame_;
     Query& query_;FastFill& fastFill_;
     TglVeboxPipeReadGate<Read> gate_;
     bool lutReady_=false,hdrReady_=false,lutRejected_=false,hdrPresent_=false;
     bool lutFeature() noexcept {
         if(!healthy()) return false;
+        if(sourceFeatures_.lut==TglOwnedFeaturePresence::Unknown && lutProduce_) {
+            if(lutAttempted_) {frame_.fail();return false;}
+            lutAttempted_=true;
+            TglOwnedGen12SurfaceFeatures produced;
+            if(!lutProduce_(lutScope_,produced) || !healthy() || produced.surface!=&source_ ||
+                produced.frame!=&frame_ ||
+                (produced.lut!=TglOwnedFeaturePresence::Absent && produced.lut!=TglOwnedFeaturePresence::Present)) {
+                frame_.fail();return false;
+            }
+            sourceFeatures_.lut=produced.lut; // LUT producer never supplies HDR evidence
+        }
         if(!lutReady_)lutReady_=tglAcquireLeasedGen12LutRejection(lutRejected_,
             sourceOwner_,source_,sourceFeatures_,targetOwner_,target_,frame_);
         return lutReady_;
@@ -7248,6 +7263,11 @@ class TglLeasedGen12VeboxOutputPolicy {
         return healthy();
     }
 public:
+    bool bindLutProducer(void* scope,bool(*produce)(void*,TglOwnedGen12SurfaceFeatures&) noexcept) noexcept {
+        if(!scope || !produce || lutScope_ || lutProduce_ || lutReady_ || lutAttempted_ ||
+            sourceFeatures_.lut!=TglOwnedFeaturePresence::Unknown || !healthy())return false;
+        lutScope_=scope;lutProduce_=produce;return true;
+    }
     TglLeasedGen12VeboxOutputPolicy(Read& read,ChildOwner& childOwner,uintptr_t image,uintptr_t child,
         uintptr_t parameters,uintptr_t vp,uintptr_t leasedDi,uintptr_t leasedColorFill,
         SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,
