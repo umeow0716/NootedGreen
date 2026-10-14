@@ -27,7 +27,24 @@ using Destroy = int (*)(void *);
 struct Library { void *handle = nullptr; Create create = nullptr; Destroy destroy = nullptr; uintptr_t resourceShared=0; };
 Library library;
 std::once_flag loadOnce;
+std::once_flag ownedImageOnce;
+void* ownedImageHandle=nullptr; // Deliberately retained until process exit.
 std::mutex registryLock;
+// call_once may throw system_error; factory's existing catch must handle it.
+bool retainOwnedHookImage() {
+    std::call_once(ownedImageOnce,[]() noexcept {
+        Dl_info image{};
+        const auto hook=reinterpret_cast<void*>(&NGRN_ObservedCreateContexts);
+        if(!dladdr(hook,&image) || !image.dli_fbase || !image.dli_fname)return;
+        // Pin only the already-loaded image. Do not load an alternate bundle,
+        // change signing policy or depend on factory-table lifetime.
+        void* handle=dlopen(image.dli_fname,RTLD_NOW|RTLD_LOCAL|RTLD_NOLOAD);
+        if(!handle)return;
+        if(dlsym(handle,"NGRN_ObservedCreateContexts")!=hook) {dlclose(handle);return;}
+        ownedImageHandle=handle;
+    });
+    return ownedImageHandle!=nullptr;
+}
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept;
 bool executableMemory(uintptr_t address,size_t length) noexcept;
 bool writableDataMemory(uintptr_t address,size_t length) noexcept;
@@ -273,6 +290,7 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
     *metadata = {};
     void *table = nullptr;
     try {
+        if(!retainOwnedHookImage())return 10; // Before native factory side effects.
         std::call_once(loadOnce, load);
         if (!library.create || !library.destroy || !library.resourceShared) return 10;
         AvdMetadata native{};
