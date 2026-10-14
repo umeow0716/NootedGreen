@@ -17480,12 +17480,20 @@ int main() {
                         // SAME router reservation used by destruction/retirement.
                         // A producer error is not converted into creator success.
                         unsigned creatorNativeCalls=0,creatorHandoffs=0;
+                        TglOwnedCreatorConstructionLease constructionLease;
                         auto creatorNative=[&](uintptr_t,void* object) noexcept -> int {
                             assert(reinterpret_cast<uintptr_t>(object)==creatorAddress);
                             ++creatorNativeCalls;return 0;
                         };
                         auto creatorHandoff=[&](void* object) noexcept -> int {
                             ++creatorHandoffs;
+                            assert(physicalOwners.withDependencyAdoption(ticket,image,0x90000,[&](auto& physicalScope) noexcept -> int {
+                                return TglOwnedCreatorConstructionLease::withCreatorHandoff(physicalScope,image,0x90000,
+                                    ticket.generation,reinterpret_cast<uintptr_t>(object),[&](auto&& lease) noexcept -> int {
+                                        assert(lease.get());constructionLease=std::move(lease);assert(!lease.get() && constructionLease.get());return 0;
+                                    });
+                            })==0);
+                            assert(!constructionLease.get());constructionLease={}; // Escaped temporary capability is invalid, never a permanent parent.
                             auto reservation=OwnerRouter::pinForInitialization(reinterpret_cast<uintptr_t>(object));
                             assert(reservation.get()==owner && reservation.exclusive());
                             return owner->withCreatorStorage(reservation,creatorAdmit,qualify,ownerExecutable,producer);
@@ -17509,6 +17517,10 @@ int main() {
                             assert(callback(reinterpret_cast<void*>(creatorAddress))==5);
                         }
                         assert(creatorNativeCalls==1 && creatorHandoffs==1 && producerCalls==2);
+                        assert(physicalOwners.withDependencyAdoption(ticket,image,0x90000,[&](auto& physicalScope) noexcept -> int {
+                            assert(TglOwnedCreatorConstructionLease::withCreatorHandoff(physicalScope,image,0x90000,ticket.generation,
+                                creatorAddress,[](auto&&) noexcept -> int {assert(false);return 0;})==5);return 0;
+                        })==0);
                         {
                             auto framePin=OwnerRouter::pinFrame(image,0x90000,ticket.generation,creatorAddress);
                             assert(framePin.get()==owner);

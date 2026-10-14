@@ -2232,6 +2232,8 @@ struct TglNativeCreatorCallInvoker {
         using Fn=int(*)(void*);return reinterpret_cast<Fn>(entry)(creator);
     }
 };
+struct TglOwnedCreatorHandoffDomain {};
+struct TglOwnedCreatorHandoffContext {uintptr_t image=0;};
 inline thread_local const void* tglOwnedCreatorCallScopeActive=nullptr;
 // Normal-stack dispatch only; signal handling may select table(), never call
 // dispatch itself. Scope/native image/parent resources must outlive the call.
@@ -2248,7 +2250,10 @@ template<class Native,class Handoff,class AdmitCreator> class TglOwnedCreatorCal
         self->consumed_=true;self->busy_=true;
         struct Exit {bool& busy;~Exit(){busy=false;}} exit{self->busy_};
         const int result=self->native_(self->table_.nativeCreate(),creator);
-        return result?result:self->handoff_(creator);
+        if(result)return result;
+        TglOwnedCreatorHandoffContext context{self->table_.source()-0x75bb58};
+        TglOwnedScopedContext<TglOwnedCreatorHandoffContext,TglOwnedCreatorHandoffDomain> handoff(creator,context);
+        return handoff.bound()?self->handoff_(creator):5;
     }
 public:
     TglOwnedCreatorCallScope(Native& native,Handoff& handoff,AdmitCreator& admit) noexcept
@@ -21929,6 +21934,55 @@ public:
 
 // Qualify the original context frame virtual before installing any owned
 // per-item wrapper. This resolves identity only; it never writes a vptr.
+// Temporary parent pin for the successful native-creator handoff ONLY. It
+// bridges environment construction before the permanent VPHAL owner exists;
+// escaping leases become unusable on scope exit but retain their physical pin
+// until released. It never owns/deletes native VPHAL/MHW objects.
+class TglOwnedCreatorConstructionLease {
+    struct State {
+        TglOwnedPhysicalDependencyLease pin;
+        const uintptr_t image,physical,creator;const uint64_t generation;
+        std::atomic<bool> active{true};
+        State(TglOwnedPhysicalDependencyLease&& p,uintptr_t i,uintptr_t ph,uint64_t g,uintptr_t c) noexcept
+            :pin(std::move(p)),image(i),physical(ph),creator(c),generation(g) {}
+        bool live() const noexcept {return active.load(std::memory_order_acquire) && pin.matches(image,physical,generation);}
+        template<class Read> bool matchesNativeParent(const TglNativeVphalMhwView& view,Read read) const noexcept {
+            if(!live() || view.parent!=creator || view.renderer.creator!=creator || view.renderer.image!=image ||
+                !view.os || view.os>UINTPTR_MAX-0x10 || physical>UINTPTR_MAX-0x58)return false;
+            uintptr_t wrapper=0,embedded=0;
+            return read(physical+0x50,&wrapper,8) && wrapper && wrapper<=UINTPTR_MAX-0x50 &&
+                read(view.os+8,&embedded,8) && embedded==wrapper+0x48 && live();
+        }
+    };
+    std::shared_ptr<State> state_;
+    explicit TglOwnedCreatorConstructionLease(std::shared_ptr<State> state) noexcept:state_(std::move(state)) {}
+public:
+    TglOwnedCreatorConstructionLease()=default;
+    TglOwnedCreatorConstructionLease(const TglOwnedCreatorConstructionLease&)=delete;
+    TglOwnedCreatorConstructionLease& operator=(const TglOwnedCreatorConstructionLease&)=delete;
+    TglOwnedCreatorConstructionLease(TglOwnedCreatorConstructionLease&&) noexcept=default;
+    TglOwnedCreatorConstructionLease& operator=(TglOwnedCreatorConstructionLease&&) noexcept=default;
+    const State* get() const noexcept {return state_ && state_->live()?state_.get():nullptr;}
+    template<class PhysicalScope,class Use>
+    static int withCreatorHandoff(PhysicalScope& physical,uintptr_t image,uintptr_t address,
+        uint64_t generation,uintptr_t creator,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<TglOwnedCreatorConstructionLease&&>())) &&
+            std::is_same_v<decltype(use(std::declval<TglOwnedCreatorConstructionLease&&>())),int>);
+        auto* handoff=TglOwnedScopedContext<TglOwnedCreatorHandoffContext,TglOwnedCreatorHandoffDomain>::get(
+            reinterpret_cast<void*>(creator));
+        if(!handoff || handoff->image!=image || !creator || (creator&7) ||
+            !physical.matches(image,address,generation))return 5;
+        auto pin=physical.retainPhysicalDependency();
+        if(!pin.matches(image,address,generation))return 5;
+        std::shared_ptr<State> state;
+        try {state=std::make_shared<State>(std::move(pin),image,address,generation,creator);}
+        catch(...) {return 5;}
+        struct Deactivate {State& state;~Deactivate(){state.active.store(false,std::memory_order_release);}} deactivate{*state};
+        TglOwnedCreatorConstructionLease lease(state);
+        const int status=use(std::move(lease));
+        return status?status:(physical.matches(image,address,generation)?0:5);
+    }
+};
 struct TglNativeContextFrameBinding {
     uintptr_t image=0,vtable=0,frame=0;
     static constexpr size_t callbackCount=13;

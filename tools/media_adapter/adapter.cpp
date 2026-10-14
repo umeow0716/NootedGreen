@@ -252,6 +252,20 @@ struct Entry {
         // returns value bindings only; caller must retain parent through use.
         return output.resolve(parent,&readMemory,NativeTglImageAdmission{nativeCpu.image},&executableMemory);
     }
+    using ConstructionParent=TglNativeBorrowedVphalMhwLease<TglOwnedCreatorConstructionLease>;
+    bool constructionResourceEnvironment(TglOwnedCreatorConstructionLease&& pin,uintptr_t creator,
+        ConstructionParent& parent,TglNativeVphalResourceEnvironment& output) const noexcept {
+        output={};
+        if(!nativeCpu.image || !pin.get() || !parent.acquire(std::move(pin),nativeCpu.image,creator,creator,
+            &readMemory,NativeDataAdmission{},NativeTglImageAdmission{nativeCpu.image},&executableMemory,
+            [](const auto& identity,const TglNativeVphalMhwView& view) noexcept {
+                return identity.matchesNativeParent(view,&readMemory);
+            }))return false;
+        // Consume/adopt the environment within the successful creator handoff.
+        // Permanent owner/lifetime publication precedes child initialization;
+        // native error unwind must not free OS/MHW behind retained children.
+        return rendererResourceEnvironment(parent,output);
+    }
     auto frontendCpuEnvironment() const noexcept {
         // Entirely value-owned: no Entry pointer/reference escapes into frames.
         return TglNativeFrontendCpuEnvironment<decltype(&readMemory),NativeTglImageAdmission,
