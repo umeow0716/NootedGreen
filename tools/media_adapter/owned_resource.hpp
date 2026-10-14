@@ -7196,7 +7196,7 @@ public:
     template<class Owner> class DerivedSurfaceLease {
         friend class TglNativePerPassCpuShells;
         TglNativePerPassCpuShells& temporary_;Owner& original_;
-        size_t index_;uint64_t generation_;bool busy_=false,conversionFault_=false;
+        size_t index_;uint64_t generation_;bool busy_=false,conversionFault_=false,diFault_=false;
         DerivedSurfaceLease(TglNativePerPassCpuShells& temporary,Owner& original,size_t index) noexcept
             :temporary_(temporary),original_(original),index_(index),generation_(temporary.generation_) {}
     public:
@@ -7209,6 +7209,32 @@ public:
         }
         bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
             return live() && temporary_.shells_[index_]==reinterpret_cast<uintptr_t>(&surface);
+        }
+        template<class Read> bool readLeasedDiParameterKind(const TglOwnedSurfaceStorage& expected,
+            uintptr_t parameter,uint32_t& output,Read read) noexcept {
+            if(diFault_ || !hasSurfaceLease(expected))return false;
+            uintptr_t captured=0;uint32_t sample=0;
+            std::memcpy(&captured,expected.prefix.data()+0x88,8);
+            std::memcpy(&sample,expected.prefix.data()+0x138,4);
+            auto valid=[&]() noexcept {
+                if(!hasSurfaceLease(expected))return false;
+                uintptr_t pointer=0;uint32_t kind=0;
+                std::memcpy(&pointer,expected.prefix.data()+0x88,8);
+                std::memcpy(&kind,expected.prefix.data()+0x138,4);
+                if(pointer!=captured || kind!=sample)diFault_=true;
+                const auto& original=*temporary_.originals_[index_];
+                std::memcpy(&pointer,original.prefix.data()+0x88,8);
+                std::memcpy(&kind,original.prefix.data()+0x138,4);
+                return !diFault_ && pointer==captured && kind==sample;
+            };
+            if(parameter!=captured || !valid())return false;
+            uint32_t candidate=0;
+            const bool copied=original_.readLeasedDiParameterKind(*temporary_.originals_[index_],parameter,candidate,
+                [&](uintptr_t at,void* out,size_t size) noexcept {
+                    return valid() && read(at,out,size) && valid();
+                });
+            if(!copied || !valid())return false;
+            output=candidate;return true;
         }
         // Borrow the original conversion allocation, never infer ownership
         // from the copied a8 pointer. Both shells must still name that SAME

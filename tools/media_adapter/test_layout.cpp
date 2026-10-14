@@ -15728,6 +15728,34 @@ static void testRetainedVeboxFrames() {
                         std::memcpy(out,di.data(),size);return true;
                     };
                     assert(sidecar.readLeasedDiParameterKind(original,diAddress,diKind,readDi) && diKind==2 && diReads==1);
+                    {
+                        struct Backend {
+                            uintptr_t allocate(size_t n) noexcept {return reinterpret_cast<uintptr_t>(std::malloc(n));}
+                            void release(uintptr_t p) noexcept {std::free(reinterpret_cast<void*>(p));}
+                        } backend;
+                        TglNativePerPassCpuShells<Backend> temporary(backend);
+                        std::array<const TglOwnedSurfaceStorage*,25> inputs{};inputs[0]=&original;
+                        assert(temporary.prepare(inputs));
+                        assert(temporary.withDerivedSurfaceLease(0,sidecar,[&](auto& derived) noexcept {
+                            return derived.withMutableSurface([&](auto& copy) noexcept {
+                                uint32_t result=99;unsigned reads=0;
+                                auto read=[&](uintptr_t at,void* out,size_t size) noexcept {
+                                    assert(at==diAddress && size==4);++reads;std::memcpy(out,di.data(),4);return true;
+                                };
+                                assert(derived.readLeasedDiParameterKind(copy,diAddress,result,read) && result==2 && reads==1);
+                                result=99;
+                                assert(!derived.readLeasedDiParameterKind(copy,diAddress+4,result,read) && result==99 && reads==1);
+                                assert(!derived.readLeasedDiParameterKind(copy,diAddress,result,
+                                    [&](uintptr_t at,void* out,size_t size) noexcept {
+                                        const bool ok=read(at,out,size);const uint32_t zero=0;
+                                        std::memcpy(copy.prefix.data()+0x138,&zero,4);return ok;
+                                    }) && result==99);
+                                std::memcpy(copy.prefix.data()+0x138,&diSample,4);
+                                assert(!derived.readLeasedDiParameterKind(copy,diAddress,result,read) && result==99 && reads==2);
+                                return 31;
+                            });
+                        })==31);
+                    }
                     diKind=123;
                     assert(!sidecar.readLeasedDiParameterKind(original,diAddress+4,diKind,readDi) && diKind==123 && diReads==1);
                     assert(!sidecar.readLeasedDiParameterKind(original,diAddress,diKind,
