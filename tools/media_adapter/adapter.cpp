@@ -388,6 +388,7 @@ struct NativeVpScalarStateProducer {
 struct NativeVpPacketDomain {};
 struct NativeVpPacketContext {NativeVpScalarStateProducer* scalar;TglOwnedSfcCommandParameters* parameters;};
 using NativeVpPacketPublication=TglOwnedScopedContext<NativeVpPacketContext,NativeVpPacketDomain>;
+struct NativeVpNv12PacketScope;
 struct NativeVpAvsProducer {
     using Owner=TglOwnedSfcAvsParameters<TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>>;
     NativeVpScalarStateProducer& scalar;NativeFrameDataRead& dataRead;
@@ -395,6 +396,8 @@ struct NativeVpAvsProducer {
     uintptr_t performance;
     uint32_t phaseSourceSiting=0;
     bool attempted=false,ready=false;
+    int prepare(void* actual,const TglOwnedVpFramePreparation& frame,Owner& owner,
+        NativeVpNv12PacketScope& packet) noexcept;
     template<class Use> int run(void* actual,const TglOwnedVpFramePreparation& frame,
         Owner& owner,Use use) noexcept {
         static_assert(noexcept(use(parameters)) && std::is_same_v<decltype(use(parameters)),int>);
@@ -563,6 +566,15 @@ private:
         return out;
     }
 public:
+    bool readyForSetup(const NativeVpScalarStateProducer& producer,
+        const TglOwnedSfcCommandParameters& commands) const noexcept {
+        return &producer==&scalar && preparedForSend_ && !sendAttempted_ &&
+            preparedState_ && preparedVp_ && preparedLines_ && preparedCommands_==&commands &&
+            scalar.state() && query.state.result.ready() &&
+            targetOwner.hasSurfaceLease(scalar.target) && layout(scalar.target)==layout_ &&
+            static_cast<const StateOwner&>(*preparedState_).data()==preparedData_ &&
+            preparedLines_->lines().boundToVp(*preparedVp_) && !commands.filtersInUse;
+    }
     // Setup materializes owned packet/resources only. No borrowed coefficient
     // pointers or scope addresses survive this call; graph/frame ownership
     // retains the allocations until send or qualified retirement.
@@ -614,6 +626,18 @@ public:
         });
     }
 };
+int NativeVpAvsProducer::prepare(void* actual,const TglOwnedVpFramePreparation& frame,
+    Owner& owner,NativeVpNv12PacketScope& packet) noexcept {
+    if(!packet.readyForSetup(scalar,parameters) || actual!=scalar.vp)return 5;
+    NativeVpPacketContext context{&scalar,&parameters};
+    NativeVpPacketPublication publication(actual,context);
+    if(!publication.bound())return 5;
+    const int result=run(actual,frame,owner,[&](TglOwnedSfcCommandParameters&) noexcept -> int {
+        return packet.readyForSetup(scalar,parameters)?0:5;
+    });
+    if(!packet.readyForSetup(scalar,parameters)) {ready=false;return result?result:5;}
+    return result;
+}
 template int NativeVpNv12PacketScope::run<int(*)(TglOwnedSfcCommandParameters&) noexcept>(
     TglOwnedVpSfcCallerStorage&,TglOwnedSfcStateParameters<NativeVpNv12PacketScope::CpuBackend>&,
     TglNativeVpLineResourceStorage&,const TglOwnedVpEntrySet&,TglOwnedSfcCommandParameters&,
