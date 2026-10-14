@@ -23861,6 +23861,69 @@ int main() {
                                 allowReportBinding=true;
                                 assert(storage.allocateHelpersFromCreator(*creatorView,helperRead,qualifyMhw,helperExecutable,helperCreate,report)==0 && creatorHelperCreates==2);
                                 assert(storage.allocateHelpersFromCreator(*creatorView,helperRead,qualifyMhw,helperExecutable,helperCreate,report)==5 && creatorHelperCreates==2);
+                                {
+                                    using ChildOwner=std::remove_reference_t<decltype(storage.children().first().owner())>;
+                                    using Life=TglOwnedVeboxLifetimeContext<ChildOwner>;
+                                    using LifeScope=TglOwnedVeboxScopedContext<Life>;
+                                    using LifeResolve=TglOwnedVeboxScopedLifetimeResolve<Life>;
+                                    // Deliberately UNBOUND execution domain: installation is not
+                                    // permission to execute placeholder frame producers.
+                                    struct Unbound {
+                                        TglOwnedVeboxProducerPass pass;
+                                        bool owns(void*) const noexcept {return false;}
+                                        bool admit(void*,void*) noexcept {assert(false);return false;}
+                                        int allocate() noexcept {assert(false);return 31;}
+                                        void freeResources() noexcept {assert(false);}
+                                        int csc(void*,void*) noexcept {assert(false);return 31;}
+                                        int setupKernel(int32_t) noexcept {assert(false);return 31;}
+                                        int dndi(void*,void*,void*) noexcept {assert(false);return 31;}
+                                        int surfaces(bool,void*) noexcept {assert(false);return 31;}
+                                        int state(bool,void*) noexcept {assert(false);return 31;}
+                                        int diIecp(bool,void*) noexcept {assert(false);return 31;}
+                                    };
+                                    using UnboundResolve=TglOwnedVeboxScopedContext<Unbound>;
+                                    struct FormatRead {bool operator()(uintptr_t,void*,size_t) const noexcept {return false;}};
+                                    std::array<uintptr_t,TglOwnedVeboxVtable::count> table{};
+                                    for(size_t i=0;i<table.size();++i)table[i]=base+0x2000+i*8;
+                                    for(auto offset:TglOwnedVeboxVtable::missing)table[offset/8]=0;
+                                    table[0]=base+0x12e240;table[1]=base+0x12e250;table[0x10/8]=base+0x126740;
+                                    table[0x40/8]=base+0x12e9c0;table[0x48/8]=base+0x12ea30;
+                                    table[0x170/8]=base+0x12aba0;table[0x180/8]=base+0x12b1d0;
+                                    table[0xe8/8]=base+0x1296e0;table[0x110/8]=base+0x1295b0;table[0xf0/8]=base+0x1284f0;
+                                    table[0x118/8]=base+0x12b5f0;table[0x120/8]=base+0x1296d0;table[0x148/8]=base+0x12a230;
+                                    table[0x20/8]=base+0x12c9d0;table[0x198/8]=base+0x12c010;
+                                    table[0x160/8]=base+0x12a740;table[0x168/8]=base+0x12ab10;
+                                    table[0x150/8]=base+0x12a730;table[0x158/8]=base+0x8f380;
+                                    table[0xd0/8]=table[0x1b8/8]=base+0x71e80;
+                                    auto tableRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                                        if(address==base+0x757c88 && bytes==16) {
+                                            const std::array<uintptr_t,2> metadata{0,base+0x757ed0};
+                                            std::memcpy(out,metadata.data(),bytes);return true;
+                                        }
+                                        if(address==base+0x757c98 && bytes==sizeof(table)) {
+                                            std::memcpy(out,table.data(),bytes);return true;
+                                        }
+                                        return helperRead(address,out,bytes);
+                                    };
+                                    auto install=[&]() noexcept {
+                                        return tglInstallOwnedRendererCompleteTablesFromCreator<LifeResolve,UnboundResolve,
+                                            UnboundResolve,UnboundResolve,UnboundResolve,FormatRead>(storage,*creatorView,
+                                                tableRead,qualifyMhw,[](uintptr_t,size_t) noexcept {return true;});
+                                    };
+                                    assert(install()==5); // No real child lifetime scope, no publication.
+                                    Life first(storage.children().first().owner()),second(storage.children().second().owner());
+                                    typename LifeScope::Pair pair(storage.children().first().owner().constructedBase(),first,
+                                        storage.children().second().owner().constructedBase(),second);
+                                    assert(pair.bound() && install()==0 && install()==5);
+                                    for(auto* child:{&storage.children().first().owner(),&storage.children().second().owner()}) {
+                                        std::array<uintptr_t,20> hooks{};
+                                        assert((tglBuildOwnedVeboxCompleteHooks<LifeResolve,UnboundResolve,UnboundResolve,
+                                            UnboundResolve,UnboundResolve,FormatRead>(child->constructedBase(),hooks)));
+                                        assert(child->matchesPrivateVtableHooks(hooks));
+                                        assert(reinterpret_cast<int(*)(void*,int32_t) noexcept>(hooks[5])(child->constructedBase(),3)==5);
+                                        assert(reinterpret_cast<void*(*)(void*) noexcept>(hooks[19])(child->constructedBase())==nullptr);
+                                    }
+                                }
                                 TestFrontendOriginalOwner originalSource{source},originalTarget{target},originalHistory{history};
                                 auto originalResolve=[&](uintptr_t p) noexcept -> TestFrontendOriginalOwner* {
                                     if(p==reinterpret_cast<uintptr_t>(&source))return &originalSource;

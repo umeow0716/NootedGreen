@@ -23746,6 +23746,15 @@ public:
         return children_.first().owner().allocateNativeHelper(read,executable,create,query) &&
             children_.second().owner().allocateNativeHelper(read,executable,create,query)?0:5;
     }
+    template<class Read,class Qualify,class Executable>
+    int installPrivateVtablesFromCreator(const TglNativeVphalMhwView& view,
+        const std::array<std::array<uintptr_t,20>,2>& hooks,Read read,Qualify qualify,Executable executable) noexcept {
+        TglVeboxHardwareBinding hardware;
+        if(backing_.retention()() || !children_.first().owner().constructedBase() ||
+            !children_.second().owner().constructedBase() ||
+            !creatorEnvironment(view,read,qualify,executable,hardware))return 5;
+        return children_.installPrivateVtables(hooks,read,qualify,executable)?0:5;
+    }
     // Enclosing exclusive VPHAL owner retains parent60 until THIS storage
     // (including VP resources) is destroyed, before native135020 can free it.
     // Authenticate the native shared SFC, never substitute either child's
@@ -25244,6 +25253,22 @@ bool tglBuildOwnedVeboxCompleteHooks(void* child,std::array<uintptr_t,20>& hooks
     candidate[19]=reinterpret_cast<uintptr_t>(&TglOwnedVpFactoryCallback<TglOwnedVpFactoryContext>::create);
     for(auto entry:candidate) if(!entry) return false;
     hooks=candidate;return true;
+}
+
+// Installation precedes the private-child lease used by native execution.
+// Creator-stage composition of BOTH complete typed catalogues before either
+// table is installed. Lifecycle scope must own each actual constructed child;
+// producer scopes remain execution-time duties, never status-zero stand-ins.
+template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
+    class ProducerResolve,class ModeResolve,class FormatRead,class Storage,class Read,class Qualify,class Executable>
+int tglInstallOwnedRendererCompleteTablesFromCreator(Storage& storage,const TglNativeVphalMhwView& view,
+    Read read,Qualify qualify,Executable executable) noexcept {
+    std::array<std::array<uintptr_t,20>,2> hooks{};
+    if(!tglBuildOwnedVeboxCompleteHooks<LifetimeResolve,AdmissionResolve,AllocationResolve,ProducerResolve,ModeResolve,FormatRead>(
+            storage.children().first().owner().constructedBase(),hooks[0]) ||
+       !tglBuildOwnedVeboxCompleteHooks<LifetimeResolve,AdmissionResolve,AllocationResolve,ProducerResolve,ModeResolve,FormatRead>(
+            storage.children().second().owner().constructedBase(),hooks[1]))return 5;
+    return storage.installPrivateVtablesFromCreator(view,hooks,read,qualify,executable);
 }
 
 // Installation precedes the private-child lease used by native execution.
