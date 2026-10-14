@@ -169,7 +169,7 @@ class NativeRendererCpuAssembly {
     NativeRendererRetirementAuthority authority_;
     NativeRendererCleanupContext firstCleanup_,secondCleanup_;
     NativeRendererCpu cpu_;
-    bool cleanupBound_=false,basesAttempted_=false;
+    bool cleanupBound_=false,basesAttempted_=false,basesReady_=false,vpAttempted_=false;
 public:
     NativeRendererCpuAssembly(uintptr_t image,
         const TglNativeVphalResourceEnvironment& environment)
@@ -199,7 +199,24 @@ public:
             if(initialized)return initialized;
             const int shells=cpu_.allocateCpuShellsFromCreator(view,&readMemory,qualify,&executableMemory);
             if(shells)return shells;
-            return cpu_.allocateHelpersFromCreator(view,&readMemory,qualify,&executableMemory);
+            const int helpers=cpu_.allocateHelpersFromCreator(view,&readMemory,qualify,&executableMemory);
+            basesReady_=helpers==0;return helpers;
+        } catch(...) {return 7;}
+    }
+    int initializeNativeVpPair(const TglNativeVphalMhwView& view,
+        const TglOwnedVphalLifetimeTable& lifetime) noexcept {
+        if(!basesReady_ || vpAttempted_ || view.renderer.image!=image_ ||
+            lifetime.object()!=view.parent ||
+            lifetime.publication()!=TglOwnedVphalLifetimeTable::Publication::Published)return 5;
+        vpAttempted_=true;
+        try {
+            // Graph.initialize executes and checks the scoped VP10 entry itself.
+            // No second pass initialization before the resource owner pins it.
+            const int status=cpu_.initializeVpPairFromCreator(view,&readMemory,
+                NativeTglImageAdmission{image_},&executableMemory,
+                [](size_t,auto&) noexcept -> int {return 0;});
+            if(status)return status; // retain successful first VP on partial failure
+            return bindCleanupContexts()?0:5;
         } catch(...) {return 7;}
     }
     bool bindCleanupContexts() noexcept {
@@ -302,7 +319,7 @@ struct NativeCreatorPreparation {
     struct Record {
         uintptr_t image=0,physical=0,creator=0,renderer=0;uint64_t generation=0;
         NativeRendererCpuAssembly* storage=nullptr;NativeVphalOwner* owner=nullptr;
-        bool used=false,adopted=false,lifetimePublished=false,basesReady=false;
+        bool used=false,adopted=false,lifetimePublished=false,childrenReady=false;
     };
     struct Ledger {std::atomic_flag gate=ATOMIC_FLAG_INIT;std::array<Record,64> records{};};
     static Ledger& ledger() noexcept {static Ledger value;return value;}
@@ -348,7 +365,7 @@ struct NativeCreatorPreparation {
             });
     }
     template<class PhysicalScope>
-    static int initializeBases(PhysicalScope& physical,uintptr_t image,uintptr_t address,
+    static int initializeChildren(PhysicalScope& physical,uintptr_t image,uintptr_t address,
         uint64_t generation,uintptr_t creator) noexcept {
         auto* handoff=TglOwnedScopedContext<TglOwnedCreatorHandoffContext,TglOwnedCreatorHandoffDomain>::get(reinterpret_cast<void*>(creator));
         if(!handoff || handoff->image!=image || !physical.matches(image,address,generation))return 5;
@@ -357,7 +374,7 @@ struct NativeCreatorPreparation {
         Record* record=nullptr;
         for(auto& candidate:state.records)if(candidate.used && candidate.image==image && candidate.physical==address &&
             candidate.generation==generation && candidate.creator==creator)record=&candidate;
-        if(!record || !record->adopted || !record->lifetimePublished || record->basesReady)return 5;
+        if(!record || !record->adopted || !record->lifetimePublished || record->childrenReady)return 5;
         return tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
             auto lease=NativeVphalRouter::pinForInitialization(creator);
             if(lease.get()!=record->owner || !lease.exclusive())return 5;
@@ -369,8 +386,10 @@ struct NativeCreatorPreparation {
                         [](const NativeVphalOwner& owner,const TglNativeVphalMhwView& view) noexcept {
                             return owner.context()==view.parent && owner.lifetime().object()==view.parent;
                         }) || !parent.view())return 5;
-                    const int status=assembly.initializeNativeBases(*parent.view(),record->owner->lifetime());
-                    record->basesReady=status==0;return status;
+                    const int bases=assembly.initializeNativeBases(*parent.view(),record->owner->lifetime());
+                    if(bases)return bases;
+                    const int status=assembly.initializeNativeVpPair(*parent.view(),record->owner->lifetime());
+                    record->childrenReady=status==0;return status;
                 });
         });
     }
@@ -482,7 +501,7 @@ template class TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhys
 template class TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
 template int NativeCreatorPreparation::prepareOwner<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
-template int NativeCreatorPreparation::initializeBases<TglOwnedPhysicalMutationAuthority>(
+template int NativeCreatorPreparation::initializeChildren<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 
 extern "C" __attribute__((visibility("default")))
