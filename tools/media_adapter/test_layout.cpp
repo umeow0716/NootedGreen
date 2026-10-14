@@ -14920,7 +14920,10 @@ static void testRetainedVeboxFrames() {
         assert(!deniedTable.build(base,context,hook+1,read,qualify,executable,ownedExecutable));
         assert(!deniedTable.addressPoint() && !deniedTable.nativeFrame());
         assert(!deniedTable.build(base,context,hook,read,qualify,executable,ownedExecutable));
-        struct ItemFrame {ItemFrame() noexcept=default;};
+        struct ItemFrame {
+            ItemFrame() noexcept=default;
+            explicit ItemFrame(const TglNativeContextInputRoots&) noexcept {}
+        };
         TglOwnedVeboxRetainedFrames<ItemFrame> items;
         unsigned invoked=0;
         auto native=[&](uintptr_t target,uintptr_t ctx,uintptr_t request,uintptr_t output) noexcept -> int {
@@ -15060,6 +15063,42 @@ static void testRetainedVeboxFrames() {
                     assert(receipt.valid && receipt.event==0x77000 && receipt.index==9);
                     return 0;
                 })==0 && calls==2);
+                TglOwnedVeboxRetainedFrames<ItemFrame>::Ticket rootTicket;
+                auto rootRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                    if(bytes==8 && (address==context+0x12e8 || (address>=0x88000 && address<0x880d8))) {
+                        const uintptr_t value=address==context+0x12e8?0x88000:0;
+                        std::memcpy(out,&value,8);return true;
+                    }
+                    return ownerRead(address,out,bytes);
+                };
+                auto rootAdmit=[&](uintptr_t p,size_t bytes) noexcept {
+                    return (p==0x88000 && bytes==0xd8) || ownerAdmit(p,bytes);
+                };
+                unsigned admittedCalls=0;
+                assert(physicals.withScope(ticket,base,physical,[&](auto& active) noexcept -> int {
+                    return active.withNativeRequestItem(context,[&](auto& same) noexcept -> int {
+                        rootTicket=same.createContextRootFrame(rootRead,rootAdmit);
+                        assert(rootTicket.generation);
+                        const auto result=same.runContextRootFrame([&](ItemFrame& frame) noexcept {
+                            TglNativeFrameOutputReceipt receipt;
+                            const int status=owner->dispatchAdmittedFrameWithReceipt(pin,same,frame,0x55000,0x66000,
+                                [&](uintptr_t target,uintptr_t c,uintptr_t input,uintptr_t output,auto&) noexcept -> int {
+                                    ++admittedCalls;
+                                    assert(target==entry && c==context && input==0x55000 && output==0x66000);
+                                    assert(same.withNativeRequestItem(context,[](auto&) noexcept -> int {assert(false);return 0;})==5);
+                                    return 0; // CPU-only native call fixture; no GPU submission.
+                                },receipt);
+                            assert(!status && receipt.valid && receipt.context==context && receipt.index==9);
+                            return TglOwnedVeboxCommandTransactionResult{status,0,false,false};
+                        });
+                        return result.status;
+                    });
+                })==0 && admittedCalls==1);
+                assert(physicals.withLive(ticket,base,physical,[&](auto& pool) noexcept -> int {
+                    return pool.retire(rootTicket,[](const ItemFrame&,bool pending,const auto&) noexcept -> int {
+                        assert(!pending);return 0; // Unsubmitted CPU fixture only.
+                    });
+                })==0);
                 assert(codecs.prepareRemoval(base,physical,ticket.generation,removed,
                     [](const auto&,uint32_t) noexcept -> int {assert(false);return 0;})==5);
                 assert(physicals.destroy(ticket,base,physical,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
