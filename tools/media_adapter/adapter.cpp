@@ -2918,18 +2918,19 @@ struct NativeOriginalFrameExecution {
             }};
         return Frontend::runVpInputs(frame,roles,sourceIndex,targetIndex,temporal,vpRequest);
     }
-    struct Inputs {
-        Frontend::VpFrontend& frontend;NativeCoreFrameDataScope& core;NativeVpGraph& graph;
+    template<class SurfaceOwner> struct InputsFor {
+        Frontend::VpFrontendFor<SurfaceOwner>& frontend;NativeCoreFrameDataScopeFor<SurfaceOwner>& core;NativeVpGraph& graph;
         TglNativeVpLineResourceStorage& lines;NativeAdmissionParams& params;NativeAdmissionPass& pass;
-        NativeFrameDataRead& read;NativeVpProducerFrame& vp;
+        NativeFrameDataRead& read;NativeVpProducerFrameFor<SurfaceOwner>& vp;
         const TglOwnedVpEntrySet& catalogue;const TglOwnedVpModeState& mode;
         const TglNativeVphalMhwView& view;
         const TglOwnedGen12SurfaceFeatures& sourceFeatures;const TglOwnedGen12SurfaceFeatures& targetFeatures;
         TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
-        NativeTargetDecompression& decompression;
+        NativeTargetDecompressionFor<SurfaceOwner>& decompression;
         void* argument;
     };
-    static TglOwnedVeboxCommandTransactionResult run(Inputs& in) noexcept {
+    using Inputs=InputsFor<NativeContextSurfaceOwner>;
+    template<class SurfaceOwner> static TglOwnedVeboxCommandTransactionResult run(InputsFor<SurfaceOwner>& in) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
         auto& core=in.core;const NativeTglImageAdmission qualify{core.image};
         TglVeboxRenderBinding render;TglCscCoefficientsBinding coefficients;bool alignDi64=false;
@@ -2940,12 +2941,12 @@ struct NativeOriginalFrameExecution {
             !in.view.hardware.readBoundaryAlignDi64(core.image,&readMemory,qualify,&executableMemory,
                 NativeDataAdmission{},alignDi64) ||
             !in.view.matchesCreated(in.frontend.pinned,&readMemory,NativeDataAdmission{},qualify))return result;
-        NativeTwoPassCscHealth health{core.childOwner,core.executionOwner,core.sourceOwner,core.targetOwner,
+        NativeTwoPassCscHealthFor<SurfaceOwner> health{core.childOwner,core.executionOwner,core.sourceOwner,core.targetOwner,
             core.source,core.target,core.image,core.child,core.execution,core.generation};
         struct State {
-            Inputs& input;const TglVeboxRenderBinding& render;NativeVeboxCscProducer csc;
+            InputsFor<SurfaceOwner>& input;const TglVeboxRenderBinding& render;NativeVeboxCscProducerFor<SurfaceOwner> csc;
             bool alignDi64;
-            NativeAdmissionStages::Result result;
+            typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
         } state{in,render,{health,coefficients},alignDi64,{}};
         const int status=Frontend::withPacketInputs(in.frontend,core,&state,
             +[](void* context,TglOwnedVeboxPacketLeases& leases) noexcept -> int {
@@ -2953,23 +2954,23 @@ struct NativeOriginalFrameExecution {
                 struct Packet {State& state;TglOwnedVeboxPacketLeases& leases;} packet{state,leases};
                 return Frontend::withAllocationInputs(in.frontend,in.core,in.graph,in.lines,
                     state.alignDi64,&packet,
-                    +[](void* context,NativeModeAllocationPlan& allocation) noexcept -> int {
+                    +[](void* context,NativeModeAllocationPlanFor<SurfaceOwner>& allocation) noexcept -> int {
                         auto& packet=*static_cast<Packet*>(context);auto& in=packet.state.input;
-                        struct Allocation {Packet& packet;NativeModeAllocationPlan& plan;} stage{packet,allocation};
+                        struct Allocation {Packet& packet;NativeModeAllocationPlanFor<SurfaceOwner>& plan;} stage{packet,allocation};
                         return Frontend::withPolicyInputs(in.core,in.params,in.pass,in.read,in.frontend.interfaces,
                             in.sourceFeatures,in.targetFeatures,in.acquisition,in.decompressionStatus,in.decompression,&stage,
-                            +[](void* context,NativeOutputPipeFrameScope& policy) noexcept -> int {
+                            +[](void* context,NativeOutputPipeFrameScopeFor<SurfaceOwner>& policy) noexcept -> int {
                                 auto& stage=*static_cast<Allocation*>(context);auto& in=stage.packet.state.input;
-                                struct Policy {Allocation& stage;NativeOutputPipeFrameScope& policy;} next{stage,policy};
+                                struct Policy {Allocation& stage;NativeOutputPipeFrameScopeFor<SurfaceOwner>& policy;} next{stage,policy};
                                 return Frontend::withAdmissionInputs(in.frontend,in.core,in.graph,in.params,in.pass,
                                     in.read,in.catalogue,in.mode,&next,
-                                    +[](void* context,const NativeAdmissionFrameAssembly::Inputs& admission) noexcept -> int {
+                                    +[](void* context,const typename NativeAdmissionFrameAssemblyFor<SurfaceOwner>::Inputs& admission) noexcept -> int {
                                         auto& next=*static_cast<Policy*>(context);auto& stage=next.stage;
                                         auto& state=stage.packet.state;auto& in=state.input;
-                                        NativePolicyFrameExecution::Inputs execution{in.frontend.assembly,in.view,in.vp,
+                                        typename NativePolicyFrameExecutionFor<SurfaceOwner>::Inputs execution{in.frontend.assembly,in.view,in.vp,
                                             next.policy,in.read,admission,stage.plan,state.render,in.argument,
                                             stage.packet.leases,in.frontend.denoise,state.csc};
-                                        state.result=NativePolicyFrameExecution::run(execution);
+                                        state.result=NativePolicyFrameExecutionFor<SurfaceOwner>::run(execution);
                                         return state.result.status;
                                     });
                             });
@@ -2980,6 +2981,8 @@ struct NativeOriginalFrameExecution {
         return result;
     }
 };
+template TglOwnedVeboxCommandTransactionResult NativeOriginalFrameExecution::run<NativeTemporarySurfaceOwner>(
+    InputsFor<NativeTemporarySurfaceOwner>&) noexcept;
 // Callback table entries carry no Entry/closure argument. Route the immutable
 // qualified native image and actual physical generation, never "current Entry".
 // Prepared backend only; factory callback publication remains disabled.
