@@ -18131,6 +18131,31 @@ int main() {
                     assert(false);return 0;
                 })==5);
                 {
+                    const auto heldRefs=refs;
+                    std::array<TglNativeForwardLinkChange,18> changes{};changes[0]={&root,p};
+                    assert(graph.withForwardLinkReconciliation(changes,1,[&]() noexcept -> int {
+                        std::memcpy(root.prefix.data()+0xc0,&p,8);
+                        assert(graph.withOriginalOwner(root,[](auto&) noexcept -> int {assert(false);return 0;})==5);
+                        return 31;
+                    })==31);
+                    assert(graph.valid() && graph.linkedStorage(root,0xc0)==&previous && refs==heldRefs);
+                    changes[0]={&root,o};
+                    assert(graph.withForwardLinkReconciliation(changes,1,[&]() noexcept -> int {
+                        std::memcpy(root.prefix.data()+0xc0,&o,8);return 0;
+                    })==0 && graph.valid());
+                    changes[0]={&root,1};
+                    assert(graph.withForwardLinkReconciliation(changes,1,[]() noexcept -> int {assert(false);return 0;})==5);
+                    changes[0]={&shell,o};
+                    assert(graph.withForwardLinkReconciliation(changes,1,[]() noexcept -> int {assert(false);return 0;})==5);
+                    changes[0]={&root,o};changes[1]=changes[0];
+                    assert(graph.withForwardLinkReconciliation(changes,2,[]() noexcept -> int {assert(false);return 0;})==5);
+                    assert(graph.withForwardLinkReconciliation(changes,1,[&]() noexcept -> int {
+                        const uintptr_t zero=0;std::memcpy(root.prefix.data()+0xc8,&zero,8);return 0;
+                    })==5 && !graph.valid());
+                    std::memcpy(root.prefix.data()+0xc8,&p,8); // fixture restoration; failed commit did not update stamps
+                    assert(graph.valid() && refs==heldRefs);
+                }
+                {
                     struct Backend {
                         size_t live=0;
                         uintptr_t allocate(size_t bytes) noexcept {

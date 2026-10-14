@@ -19752,6 +19752,10 @@ public:
         return owner_.withLeasedOptionalConversionMetadata(expected,read,use);
     }
 };
+struct TglNativeForwardLinkChange {
+    const TglOwnedSurfaceStorage* source=nullptr;
+    uintptr_t next=0;
+};
 // Exact1308a0 temporal registration graph. Capacity is an OWNED retention/work
 // budget, not a claimed native count limit. Resolve returns an existing stable
 // owner under the enclosing physical/generation registry lease; no raw shell
@@ -19817,6 +19821,36 @@ public:
                links(*shell)!=slots_[i].links) return false;
         }
         return true;
+    }
+    // Explicit native mode0 reconnect only: qualify the COMPLETE expected
+    // C0 mutation before entering, then commit link stamps atomically. Counts,
+    // C8, resource identity and retained membership must remain unchanged.
+    template<class Use> int withForwardLinkReconciliation(
+        const std::array<TglNativeForwardLinkChange,18>& changes,size_t count,Use use) noexcept {
+        static_assert(noexcept(use()) && std::is_same_v<decltype(use()),int>);
+        if(busy_ || !valid() || count>changes.size())return 5;
+        std::array<std::array<uint8_t,24>,Capacity> expected{};
+        for(size_t i=0;i<count_;++i)expected[i]=slots_[i].links;
+        for(size_t i=0;i<count;++i) {
+            if(!changes[i].source)return 5;
+            for(size_t j=0;j<i;++j)if(changes[j].source==changes[i].source)return 5;
+            size_t found=Capacity;bool nextKnown=!changes[i].next;
+            for(size_t j=0;j<count_;++j) {
+                const auto* shell=slots_[j].lease->storage();
+                if(shell==changes[i].source)found=j;
+                if(reinterpret_cast<uintptr_t>(shell)==changes[i].next)nextKnown=true;
+            }
+            if(found==Capacity || !nextKnown)return 5;
+            std::memcpy(expected[found].data()+8,&changes[i].next,8);
+        }
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        const int status=use();
+        for(size_t i=0;i<count_;++i) {
+            const auto* shell=slots_[i].lease->storage();
+            if(!shell || !slots_[i].lease->hasSurfaceLease(*shell) || links(*shell)!=expected[i])return status?status:5;
+        }
+        for(size_t i=0;i<count_;++i)slots_[i].links=expected[i];
+        return status;
     }
     const TglOwnedSurfaceStorage* storage() const noexcept {
         return valid()?slots_[0].lease->storage():nullptr;
