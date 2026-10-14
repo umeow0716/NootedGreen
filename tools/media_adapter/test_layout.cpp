@@ -15310,6 +15310,16 @@ static void testRetainedVeboxFrames() {
                     void release(uintptr_t value) noexcept {++releases;std::free(reinterpret_cast<void*>(value));}
                 } dnBackend;
                 TglTrackedCpuOwner<DnBackend> dn(dnBackend);assert(dn.allocate(32));
+                assert(dn.withBorrowedAddress([](uintptr_t p,size_t bytes) noexcept {
+                    std::memset(reinterpret_cast<void*>(p),0xd5,bytes);
+                }));
+                unsigned dnReads=0;
+                auto readDn=[&](uintptr_t p,void* out,size_t bytes) noexcept {
+                    ++dnReads;assert(p==dn.get() && bytes==1);
+                    std::memcpy(out,reinterpret_cast<void*>(p),bytes);return true;
+                };
+                uint8_t dnRequest=99;
+                assert(!sidecar.readLeasedDenoiseRequest(original,dn,dnRequest,readDn) && dnRequest==99 && !dnReads);
                 assert(!sidecar.withNativeDenoiseParameters(original,dn,[]() noexcept {assert(false);}));
                 {
                     typename RootOwner::SurfaceOwnerLease shell(sidecar);
@@ -15318,6 +15328,16 @@ static void testRetainedVeboxFrames() {
                     assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {
                         uintptr_t actual=0;std::memcpy(&actual,original.prefix.data()+0x90,8);
                         assert(actual==dnAddress && dn.hasNativeReleaseSlot(original.prefix.data()+0x90));
+                        assert(sidecar.readLeasedDenoiseRequest(original,dn,dnRequest,readDn) && dnRequest==0xd5 && dnReads==1);
+                        std::array<uint8_t,0xd30> report{};const uint32_t pipe=1,format=0x19;
+                        std::memcpy(report.data()+0xa0c,&pipe,4);
+                        uint32_t oldFormat=0;std::memcpy(&oldFormat,original.prefix.data()+0x130,4);
+                        std::memcpy(original.prefix.data()+0x130,&format,4);
+                        auto request=[&](const auto& source,uint8_t& value) noexcept {
+                            return sidecar.readLeasedDenoiseRequest(source,dn,value,readDn);
+                        };
+                        assert(tglPublishOwnedVeboxSfcAdmissionFlags(report,original,request) && report[0x11]==1);
+                        std::memcpy(original.prefix.data()+0x130,&oldFormat,4);
                         assert(!sidecar.canDestroy());
                         assert(!sidecar.withNativeDenoiseParameters(original,dn,[]() noexcept {assert(false);}));
                     }) && dn.get()==dnAddress && dnBackend.releases==0);
@@ -15330,6 +15350,8 @@ static void testRetainedVeboxFrames() {
                     }) && !dn.get() && !dn.size() && dnBackend.releases==1);
                     assert(sidecar.withNativeDenoiseParameters(original,dn,[&]() noexcept {
                         assert(dn.hasNativeReleaseSlot(original.prefix.data()+0x90));
+                        const auto before=dnReads;dnRequest=99;
+                        assert(sidecar.readLeasedDenoiseRequest(original,dn,dnRequest,readDn) && !dnRequest && dnReads==before);
                     })); // Native admits absent DN without inventing allocation.
                     assert(sidecar.surfaceBinding()==&original);
                     assert(sidecar.withMutableSurface([&](auto& surface) noexcept -> int {

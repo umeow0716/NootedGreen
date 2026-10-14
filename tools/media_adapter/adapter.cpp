@@ -372,12 +372,13 @@ struct NativeFastFillTransaction {
             entered=true;
             bool compressed=false;auto mode=TglOwnedSfcCompressionMode::Disabled;
             if(!policy.readTargetCompressionState(compressed,mode))return 5;
-            if(compressed && (!decompression.scope || !decompression.invoke ||
-                !ownedExecutableMemory(reinterpret_cast<uintptr_t>(decompression.invoke),1))) {
-                acquisition.fail();return 5; // Required producer is not wired yet.
-            }
             auto decompress=[&]() noexcept -> int {
-                if(!decompression.scope || !decompression.invoke || !targetOwner.hasSurfaceLease(target)) {
+                // Admission belongs at the actual conditional call: Media,
+                // non-8-aligned height, AFTER fast-fill/direct recheck. Render
+                // compression and aligned Media do not invoke this producer.
+                if(!decompression.scope || !decompression.invoke ||
+                    !ownedExecutableMemory(reinterpret_cast<uintptr_t>(decompression.invoke),1) ||
+                    !targetOwner.hasSurfaceLease(target)) {
                     acquisition.fail();return 5;
                 }
                 const int native=decompression.invoke(decompression.scope,targetOwner,target);
@@ -447,6 +448,18 @@ struct NativeAdmissionHistorySetup {
     }
 };
 using NativeDenoiseParameters=TglTrackedCpuOwner<TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>>;
+struct NativeSfcDenoiseRequest {
+    NativeContextSurfaceOwner& owner;const NativeDenoiseParameters& parameters;
+    bool operator()(const TglOwnedSurfaceStorage& source,uint8_t& requested) const noexcept {
+        return owner.readLeasedDenoiseRequest(source,parameters,requested,&readMemory);
+    }
+};
+struct NativeSfcAdmissionFlags {
+    static bool publish(TglLeasedAdmissionExecution& report,const TglOwnedSurfaceStorage& source,
+        const NativeSfcDenoiseRequest& request) noexcept {
+        return tglPublishOwnedVeboxSfcAdmissionFlags(report,source,request);
+    }
+};
 using NativeAdmissionFeatureStage=TglOwnedVeboxFeatureAdmissionStage<NativeContextSurfaceOwner,
     NativeContextSurfaceOwner,NativeRendererChildOwner,NativeExecutionOwner,NativeDenoiseParameters,
     decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory)>;

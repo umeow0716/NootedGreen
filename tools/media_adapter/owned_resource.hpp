@@ -12697,6 +12697,23 @@ bool tglPublishOwnedVeboxSfcAdmissionFlags(Execution& execution,
     const uint8_t requested=linked && tglVeboxDnFormatSupported(format)?dn[0]:0;
     tglPublishVeboxSfcAdmissionFlags(execution,requested,type);return true;
 }
+// Native TGL request producer authenticates its own slot/layout under the
+// retained frame. Do not force its tracked source90 into donor source70.
+template<class Execution,class Request>
+auto tglPublishOwnedVeboxSfcAdmissionFlags(Execution& execution,
+    const TglOwnedSurfaceStorage& source,Request& request) noexcept
+    -> decltype(request(source,std::declval<uint8_t&>()),bool{}) {
+    static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xa10);
+    static_assert(noexcept(request(source,std::declval<uint8_t&>())) &&
+        std::is_same_v<decltype(request(source,std::declval<uint8_t&>())),bool>);
+    uint32_t pipe=0,format=0,type=0;uint8_t requested=0;
+    std::memcpy(&pipe,execution.data()+0xa0c,4);
+    if(pipe!=1 || !request(source,requested))return false;
+    std::memcpy(&format,source.prefix.data()+0x130,4);
+    std::memcpy(&type,source.prefix.data(),4);
+    tglPublishVeboxSfcAdmissionFlags(execution,tglVeboxDnFormatSupported(format)?requested:0,type);
+    return true;
+}
 
 // donor1fbefd..1fbf21. The caller supplies the final admission after any
 // pipe1 work/flag publication. This does not skip that work or authorize SFC.
@@ -18135,6 +18152,23 @@ public:
             [&]() noexcept {entered=true;use();});
         if(entered && (!reconciled || !hasSurfaceLease(expected)))denoiseFault_=true;
         return reconciled && !denoiseFault_;
+    }
+    template<class Parameters,class Read>
+    bool readLeasedDenoiseRequest(const TglOwnedSurfaceStorage& expected,
+        const Parameters& parameters,uint8_t& output,Read read) noexcept {
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            std::is_same_v<decltype(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),bool>);
+        if(!denoiseBorrowed_ || denoiseFault_ || !hasSurfaceLease(expected) ||
+            !parameters.hasNativeReleaseSlot(expected.prefix.data()+0x90))return false;
+        uintptr_t pointer=0;std::memcpy(&pointer,expected.prefix.data()+0x90,8);
+        if(pointer && (pointer!=parameters.get() || !parameters.size()))return false;
+        uint8_t candidate=0;
+        const bool copied=!pointer || read(pointer,&candidate,1);
+        uintptr_t after=0;std::memcpy(&after,expected.prefix.data()+0x90,8);
+        if(after!=pointer || !hasSurfaceLease(expected) ||
+            !parameters.hasNativeReleaseSlot(expected.prefix.data()+0x90))denoiseFault_=true;
+        if(!copied || denoiseFault_)return false;
+        output=candidate;return true;
     }
     // Borrow the already-retained original shell, never acquire a second
     // SurfaceOwnerLease or copy a descriptor into a temporary owner.
