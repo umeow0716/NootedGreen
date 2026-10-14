@@ -1251,6 +1251,43 @@ struct NativeAdmissionStages {
 using NativeAdmissionRenderFn=TglOwnedVeboxCommandTransactionResult(*)() noexcept;
 template NativeAdmissionStages::Result NativeAdmissionStages::run<NativeAdmissionRenderFn>(
     NativeAdmissionRenderFn&) noexcept;
+// One scoped path from admission through actual VP producers to native Render.
+// Native Render's result is retained by admission before any callback/owner
+// scope unwinds. This entry does NOT certify completion or release the frame.
+struct NativePreparedAdmissionRender {
+    NativeVpPreparedCallbacks& callbacks;NativeAdmissionStages& admission;
+    const TglVeboxRenderBinding& binding;void* argument;
+    bool attempted=false;
+    NativeAdmissionStages::Result run() noexcept {
+        NativeAdmissionStages::Result result;
+        if(attempted || !callbacks.sameOwners() || !admission.compatible() ||
+            binding.image!=callbacks.scalar.image || !binding.entry ||
+            admission.reset.child!=callbacks.emission.parent || admission.reset.vp!=callbacks.scalar.vp ||
+            &admission.reset.childOwner!=&callbacks.emission.childOwner ||
+            &admission.feature.sourceOwner!=&callbacks.filters.sourceOwner ||
+            &admission.feature.targetOwner!=&callbacks.packet.targetOwner ||
+            &admission.feature.source!=&callbacks.scalar.source ||
+            &admission.feature.target!=&callbacks.scalar.target ||
+            &admission.read!=&callbacks.scalar.dataRead)return result;
+        attempted=true;
+        struct Call {NativePreparedAdmissionRender& self;NativeAdmissionStages::Result& result;};
+        Call call{*this,result};
+        const int status=NativeVpPreparationScope::run(callbacks,admission.sfc,&call,
+            [](void* context,NativeSfcPreparation& preparation) noexcept -> int {
+                auto& call=*static_cast<Call*>(context);auto& self=call.self;
+                if(&preparation!=&self.admission.sfc)return 5;
+                auto render=[&]() noexcept -> TglOwnedVeboxCommandTransactionResult {
+                    return tglRunLeasedVeboxSurfaceRender(self.binding,self.admission.reset.childOwner,
+                        self.admission.reset.child,self.argument,self.admission.feature.sourceOwner,
+                        self.admission.feature.source,self.admission.feature.targetOwner,self.admission.feature.target);
+                };
+                call.result=self.admission.run(render);
+                return call.result.status;
+            });
+        if(status) {result.status=status;result.admitted=false;}
+        return result;
+    }
+};
 using NativeSurfaceFrameBacking=TglNativeVeboxSurfaceFrameStorage<TglDarwinStmmSurfaceApi>;
 using NativeVpLines=std::remove_reference_t<decltype(std::declval<TglNativeVpLineResourceStorage&>().resources())>;
 using NativeModeReleaseContext=TglOwnedVeboxModeReleaseContext<NativeSurfaceFrameBacking,
