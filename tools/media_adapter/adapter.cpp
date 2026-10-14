@@ -2613,11 +2613,19 @@ using NativeContextRendererFrame=TglNativeContextRendererFrameStorage<NativeCode
     NativeBorrowedFrontend>;
 struct NativeFrameHistoryRetirement {
     using Admit=int(*)(const NativeBorrowedFrontend&,bool) noexcept;
+    using Quiescent=int(*)(const NativeBorrowedFrontend&,bool,uint32_t,bool) noexcept;
     using Prepare=int(*)(NativeBorrowedFrontend&) noexcept;
     static int run(NativeContextRendererFrame& frame,Admit gpu,Prepare prepare) noexcept {
         if(!gpu || !prepare || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(gpu),1) ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(prepare),1))return 5;
         return frame.prepareRetirement(gpu,[](NativeBorrowedFrontend& frontend) noexcept {
+            return NativeRendererHistoryInspection::run(frontend);
+        },prepare);
+    }
+    static int fault(NativeContextRendererFrame& frame,Quiescent quiescent,Prepare prepare) noexcept {
+        if(!quiescent || !prepare || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(quiescent),1) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(prepare),1))return 5;
+        return frame.prepareQuiescentRetirement(quiescent,[](NativeBorrowedFrontend& frontend) noexcept {
             return NativeRendererHistoryInspection::run(frontend);
         },prepare);
     }

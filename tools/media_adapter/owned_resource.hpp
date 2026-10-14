@@ -27413,6 +27413,25 @@ public:
         if(result){retirementFailed_=true;return result;}
         retired_=true;return 0;
     }
+    template<class Quiescent,class History,class Prepare>
+    int prepareQuiescentRetirement(Quiescent quiescent,History history,Prepare prepare) noexcept {
+        static_assert(noexcept(quiescent(std::declval<const Renderer&>(),bool{},uint32_t{},bool{})) &&
+            std::is_same_v<decltype(quiescent(std::declval<const Renderer&>(),bool{},uint32_t{},bool{})),int> &&
+            noexcept(history(std::declval<Renderer&>())) &&
+            std::is_same_v<decltype(history(std::declval<Renderer&>())),TglNativeHistoryCacheInspection> &&
+            noexcept(prepare(std::declval<Renderer&>())) &&
+            std::is_same_v<decltype(prepare(std::declval<Renderer&>())),int>);
+        if(busy_ || !renderer_ || retired_ || retirementFailed_ || !invalidated())return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        const int status=quiescent(std::as_const(*renderer_),requiresRetention(),lossFlags_,flushUncertain_);
+        if(status)return status;
+        const auto cache=history(*renderer_);
+        if(!cache.observed || cache.referencesFrame)return 5;
+        retirementStarted_=true;
+        const int result=prepare(*renderer_);
+        if(result){retirementFailed_=true;return result;}
+        retired_=true;return 0;
+    }
     bool clear() noexcept {
         if(!canDestroy()) return false;
         delete renderer_;renderer_=nullptr;delete sidecars_;sidecars_=nullptr;return true;

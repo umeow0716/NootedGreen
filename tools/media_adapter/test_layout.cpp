@@ -16231,7 +16231,8 @@ static void testRetainedVeboxFrames() {
                             if(mode==7)assert(!flushed.observeNativeFlush(flush,flushContext,reportRead,admitFlush,noInvoke).called);
                             return mode==4 || mode==11?31:0;
                         };
-                        const int result=flushed.withFrame([&](auto&) noexcept -> int {
+                        const int result=flushed.withFrame([&](auto& frame) noexcept -> int {
+                            frame.history=mode==1;
                             assert(!flushed.observeNativeFlush(flush,flushContext,reportRead,
                                 [](const auto&,uintptr_t) noexcept {return false;},noInvoke).called);
                             const auto observation=flushed.observeNativeFlush(flush,flushContext,reportRead,admitFlush,invoke);
@@ -16254,11 +16255,24 @@ static void testRetainedVeboxFrames() {
                                 assert(pending && loss==flushed.lossFlags() && uncertain==flushed.flushUncertain());
                                 return 31; // No quiescence certificate: preserve quarantine.
                             };
-                            assert(flushed.prepareQuiescentRetirement(certificate,[](auto&) noexcept -> int {assert(false);return 0;})==31);
+                            if(mode==1) {
+                                auto denied=[](auto&) noexcept -> int {assert(false);return 0;};
+                                assert(flushed.prepareQuiescentRetirement(certificate,denied)==5);
+                                assert(flushed.prepareQuiescentRetirement(certificate,
+                                    [](auto&) noexcept -> TglNativeHistoryCacheInspection {assert(false);return {};},denied)==31);
+                                auto quiescent=[](const auto&,bool pending,uint32_t loss,bool) noexcept -> int {
+                                    assert(pending && loss==0x40000000);return 0;
+                                };
+                                assert(flushed.prepareQuiescentRetirement(quiescent,
+                                    [](auto&) noexcept {return TglNativeHistoryCacheInspection{};},denied)==5);
+                                assert(flushed.prepareQuiescentRetirement(quiescent,
+                                    [](auto&) noexcept {return TglNativeHistoryCacheInspection{true,true};},denied)==5);
+                            } else assert(flushed.prepareQuiescentRetirement(certificate,[](auto&) noexcept -> int {assert(false);return 0;})==31);
                             assert(!flushed.clear());
                             assert(flushed.prepareQuiescentRetirement([](const auto&,bool pending,uint32_t,bool) noexcept -> int {
                                 assert(pending);return 0; // Explicit CPU-fixture quiescence, NOT a GPU fence.
-                            },[](auto&) noexcept -> int {return 0;})==0);
+                            },[](auto&) noexcept {return TglNativeHistoryCacheInspection{true,false};},
+                                [](auto&) noexcept -> int {return 0;})==0);
                             assert(flushed.invalidated()); // Retirement never erases historical loss.
                         } else {
                             assert(flushed.prepareRetirement([](const auto&,bool pending) noexcept -> int {
