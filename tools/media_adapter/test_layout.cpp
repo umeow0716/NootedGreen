@@ -15947,6 +15947,7 @@ static void testRetainedVeboxFrames() {
                         assert(temporary.withDerivedSurfaceLease(0,sidecar,[&](auto& derived) noexcept {
                             return derived.withMutableSurface([&](auto& copy) noexcept {
                                 assert(!sidecar.hasSurfaceLease(copy) && derived.hasSurfaceLease(copy));
+                                assert(derived.surfaceBinding()==&copy);
                                 assert(derived.withLeasedConversionMetadata(copy,read,
                                     [&](uintptr_t p,auto bounded) noexcept -> int {
                                         TglOwnedFeaturePresence presence=TglOwnedFeaturePresence::Unknown;

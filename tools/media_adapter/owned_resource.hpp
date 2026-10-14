@@ -7231,6 +7231,9 @@ public:
         bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
             return live() && temporary_.shells_[index_]==reinterpret_cast<uintptr_t>(&surface);
         }
+        const TglOwnedSurfaceStorage* surfaceBinding() const noexcept {
+            return live()?reinterpret_cast<const TglOwnedSurfaceStorage*>(temporary_.shells_[index_]):nullptr;
+        }
         template<class Parameters,class Use> bool withNativeDenoiseParameters(
             const TglOwnedSurfaceStorage& expected,Parameters& parameters,Use use) noexcept {
             if(dnFault_ || !hasSurfaceLease(expected) ||

@@ -1520,14 +1520,14 @@ template int NativeAdmissionPacketScope::run<int(*)(NativeAdmissionParams&,Nativ
     TglBorrowedVeboxByteView<12>&,TglBorrowedVeboxByteView<8>&) noexcept>(
     int(*)(NativeAdmissionParams&,NativeAdmissionPass&,TglBorrowedVeboxByteView<12>&,
         TglBorrowedVeboxByteView<8>&) noexcept) noexcept;
-struct NativeAdmissionFrameDataScope {
-    NativeCoreFrameDataScope& core;NativeAdmissionParams& params;NativeAdmissionPass& pass;
+template<class SurfaceOwner> struct NativeAdmissionFrameDataScopeFor {
+    NativeCoreFrameDataScopeFor<SurfaceOwner>& core;NativeAdmissionParams& params;NativeAdmissionPass& pass;
     const TglVeboxAdmissionBorrowedInterfaces& interfaces;
     NativeFrameDataRead capability() noexcept {return {this,&resolve};}
     static bool resolve(void* context,uintptr_t address,void* output,size_t bytes) noexcept {
-        auto* self=static_cast<NativeAdmissionFrameDataScope*>(context);
+        auto* self=static_cast<NativeAdmissionFrameDataScopeFor*>(context);
         if(!self || !output || !bytes || !self->core.live() || !self->params.data() || !self->pass.data())return false;
-        if(NativeCoreFrameDataScope::resolve(&self->core,address,output,bytes))return true;
+        if(NativeCoreFrameDataScopeFor<SurfaceOwner>::resolve(&self->core,address,output,bytes))return true;
         const auto p=reinterpret_cast<uintptr_t>(self->params.data());
         const auto q=reinterpret_cast<uintptr_t>(self->pass.data());
         bool admitted=NativeCoreFrameDataScope::contains(p,self->params.size(),address,bytes) ||
@@ -1549,16 +1549,17 @@ struct NativeAdmissionFrameDataScope {
         return admitted && readMemory(address,output,bytes) && self->core.live();
     }
 };
+using NativeAdmissionFrameDataScope=NativeAdmissionFrameDataScopeFor<NativeContextSurfaceOwner>;
 // Created view is borrowed from the same pinned VPHAL access callback.
 // Child8 is the proven renderer+2cb0 configuration container; only its first
 // pointer and AVS's two performance DWORDs are exposed, never a whole object.
-struct NativeRendererPerformanceRead {
-    NativeAdmissionFrameDataScope& base;const TglNativeCreatedVeboxRendererView& view;
+template<class SurfaceOwner> struct NativeRendererPerformanceReadFor {
+    NativeAdmissionFrameDataScopeFor<SurfaceOwner>& base;const TglNativeCreatedVeboxRendererView& view;
     NativeFrameDataRead capability() noexcept {return {this,&resolve};}
     static bool resolve(void* context,uintptr_t address,void* output,size_t bytes) noexcept {
-        auto* self=static_cast<NativeRendererPerformanceRead*>(context);
+        auto* self=static_cast<NativeRendererPerformanceReadFor*>(context);
         if(!self || !output || !bytes || !self->base.core.live())return false;
-        if(NativeAdmissionFrameDataScope::resolve(&self->base,address,output,bytes))return true;
+        if(NativeAdmissionFrameDataScopeFor<SurfaceOwner>::resolve(&self->base,address,output,bytes))return true;
         auto& core=self->base.core;
         if(self->view.image!=core.image || !self->view.renderer || self->view.renderer>UINTPTR_MAX-0x2cb8)return false;
         const uintptr_t slot=self->view.renderer+0x2cb0;
@@ -1575,15 +1576,16 @@ struct NativeRendererPerformanceRead {
         return readMemory(slot,&after,8) && after==performance && published==performance;
     }
 };
-struct NativeOptionalVpMetadataRead {
-    NativeRendererPerformanceRead& base;
+using NativeRendererPerformanceRead=NativeRendererPerformanceReadFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeOptionalVpMetadataReadFor {
+    NativeRendererPerformanceReadFor<SurfaceOwner>& base;
     const TglBorrowedVeboxByteView<12>& fill;
     const TglBorrowedVeboxByteView<8>& alpha;
     NativeFrameDataRead capability() noexcept {return {this,&resolve};}
     static bool resolve(void* context,uintptr_t address,void* output,size_t bytes) noexcept {
-        auto* self=static_cast<NativeOptionalVpMetadataRead*>(context);
+        auto* self=static_cast<NativeOptionalVpMetadataReadFor*>(context);
         if(!self || !output || !bytes || !self->base.base.core.live())return false;
-        if(NativeRendererPerformanceRead::resolve(&self->base,address,output,bytes))return true;
+        if(NativeRendererPerformanceReadFor<SurfaceOwner>::resolve(&self->base,address,output,bytes))return true;
         auto& admission=self->base.base;
         uintptr_t e0=0,f0=0;
         if(!admission.params.data() || !readMemory(reinterpret_cast<uintptr_t>(admission.params.data())+0xe0,&e0,8) ||
@@ -1599,15 +1601,16 @@ struct NativeOptionalVpMetadataRead {
             readMemory(reinterpret_cast<uintptr_t>(admission.params.data())+0xf0,&afterF0,8) && afterE0==e0 && afterF0==f0;
     }
 };
-struct NativeSfcFrameDataRead {
-    NativeOptionalVpMetadataRead& base;const TglSfcMhwBinding& binding;
+using NativeOptionalVpMetadataRead=NativeOptionalVpMetadataReadFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeSfcFrameDataReadFor {
+    NativeOptionalVpMetadataReadFor<SurfaceOwner>& base;const TglSfcMhwBinding& binding;
     NativeFrameDataRead capability() noexcept {return {this,&resolve};}
     static bool resolve(void* context,uintptr_t address,void* output,size_t bytes) noexcept {
-        auto* self=static_cast<NativeSfcFrameDataRead*>(context);
+        auto* self=static_cast<NativeSfcFrameDataReadFor*>(context);
         if(!self || !output || !bytes)return false;
         auto& core=self->base.base.base.core;
         if(!core.live())return false;
-        if(NativeOptionalVpMetadataRead::resolve(&self->base,address,output,bytes))return true;
+        if(NativeOptionalVpMetadataReadFor<SurfaceOwner>::resolve(&self->base,address,output,bytes))return true;
         uintptr_t linked=0,mhw=0;
         if(!core.childOwner.readLeasedStorage(core.child,core.generation,core.child+0x80,&linked,8) ||
             linked!=reinterpret_cast<uintptr_t>(core.vp.bytes.data()))return false;
@@ -1626,26 +1629,27 @@ struct NativeSfcFrameDataRead {
             linked==reinterpret_cast<uintptr_t>(core.vp.bytes.data());
     }
 };
+using NativeSfcFrameDataRead=NativeSfcFrameDataReadFor<NativeContextSurfaceOwner>;
 // One synchronous owner for the closed reader chain. Producers receive the
 // SAME capability object; its backing scopes cannot move while they use it.
-class NativeCompleteFrameDataScope {
-    NativeCoreFrameDataScope core_;
-    NativeAdmissionFrameDataScope admission_;
-    NativeRendererPerformanceRead performance_;
-    NativeOptionalVpMetadataRead optional_;
+template<class SurfaceOwner> class NativeCompleteFrameDataScopeFor {
+    NativeCoreFrameDataScopeFor<SurfaceOwner> core_;
+    NativeAdmissionFrameDataScopeFor<SurfaceOwner> admission_;
+    NativeRendererPerformanceReadFor<SurfaceOwner> performance_;
+    NativeOptionalVpMetadataReadFor<SurfaceOwner> optional_;
     TglSfcMhwBinding sfcBinding_;
-    NativeSfcFrameDataRead sfc_;
+    NativeSfcFrameDataReadFor<SurfaceOwner> sfc_;
     NativeFrameDataRead read_;
     bool attempted_=false;
 public:
-    NativeCompleteFrameDataScope(const NativeCoreFrameDataScope& core,NativeAdmissionParams& params,
+    NativeCompleteFrameDataScopeFor(const NativeCoreFrameDataScopeFor<SurfaceOwner>& core,NativeAdmissionParams& params,
         NativeAdmissionPass& pass,const TglVeboxAdmissionBorrowedInterfaces& interfaces,
         const TglNativeCreatedVeboxRendererView& pinned,const TglBorrowedVeboxByteView<12>& fill,
         const TglBorrowedVeboxByteView<8>& alpha) noexcept
         :core_(core),admission_{core_,params,pass,interfaces},performance_{admission_,pinned},
          optional_{performance_,fill,alpha},sfc_{optional_,sfcBinding_},read_(sfc_.capability()) {}
-    NativeCompleteFrameDataScope(const NativeCompleteFrameDataScope&)=delete;
-    NativeCompleteFrameDataScope& operator=(const NativeCompleteFrameDataScope&)=delete;
+    NativeCompleteFrameDataScopeFor(const NativeCompleteFrameDataScopeFor&)=delete;
+    NativeCompleteFrameDataScopeFor& operator=(const NativeCompleteFrameDataScopeFor&)=delete;
     template<class Use> int run(Use use) noexcept {
         static_assert(noexcept(use(std::declval<NativeFrameDataRead&>())) &&
             std::is_same_v<decltype(use(std::declval<NativeFrameDataRead&>())),int>);
@@ -1659,12 +1663,16 @@ public:
         return core_.live()?0:5;
     }
 };
+using NativeCompleteFrameDataScope=NativeCompleteFrameDataScopeFor<NativeContextSurfaceOwner>;
+template class NativeCompleteFrameDataScopeFor<NativeTemporarySurfaceOwner>;
+template int NativeCompleteFrameDataScopeFor<NativeTemporarySurfaceOwner>::run<int(*)(NativeFrameDataRead&) noexcept>(
+    int(*)(NativeFrameDataRead&) noexcept) noexcept;
 template int NativeCompleteFrameDataScope::run<int(*)(NativeFrameDataRead&) noexcept>(
     int(*)(NativeFrameDataRead&) noexcept) noexcept;
-struct NativeLeasedFrameInputScope {
+template<class SurfaceOwner> struct NativeLeasedFrameInputScopeFor {
     struct Inputs {
         NativeRendererCpuAssembly& assembly;size_t index;
-        NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+        SurfaceOwner& sourceOwner;SurfaceOwner& targetOwner;
         const TglNativeCreatedVeboxRendererView& pinned;
         const TglVeboxAdmissionBorrowedInterfaces& interfaces;
         uintptr_t parameters,pass;
@@ -1698,12 +1706,12 @@ struct NativeLeasedFrameInputScope {
             if(in.pinned.originalChildren[in.index]!=reinterpret_cast<uintptr_t>(child) ||
                 !source || !target || !in.sourceOwner.hasSurfaceLease(*source) ||
                 !in.targetOwner.hasSurfaceLease(*target))return result;
-            NativeCoreFrameDataScope core{owner,execution,in.sourceOwner,in.targetOwner,*source,*target,vp,
+            NativeCoreFrameDataScopeFor<SurfaceOwner> core{owner,execution,in.sourceOwner,in.targetOwner,*source,*target,vp,
                 in.pinned.image,reinterpret_cast<uintptr_t>(child),report,owner.allocationGeneration(),reset};
-            NativeAdmissionPacketScope packets(core,in.interfaces,in.parameters,in.pass);
+            NativeAdmissionPacketScopeFor<SurfaceOwner> packets(core,in.interfaces,in.parameters,in.pass);
             const int status=packets.run([&](NativeAdmissionParams& params,NativeAdmissionPass& pass,
                 TglBorrowedVeboxByteView<12>& fill,TglBorrowedVeboxByteView<8>& alpha) noexcept -> int {
-                NativeCompleteFrameDataScope data(core,params,pass,in.interfaces,in.pinned,fill,alpha);
+                NativeCompleteFrameDataScopeFor<SurfaceOwner> data(core,params,pass,in.interfaces,in.pinned,fill,alpha);
                 return data.run([&](NativeFrameDataRead& read) noexcept -> int {
                     static_assert(noexcept(use(core,graph,lines,params,pass,read)) &&
                         std::is_same_v<decltype(use(core,graph,lines,params,pass,read)),
@@ -1717,6 +1725,13 @@ struct NativeLeasedFrameInputScope {
         });
     }
 };
+using NativeLeasedFrameInputScope=NativeLeasedFrameInputScopeFor<NativeContextSurfaceOwner>;
+using NativeTemporaryFrameInputScope=NativeLeasedFrameInputScopeFor<NativeTemporarySurfaceOwner>;
+using NativeTemporaryFrameInputUse=TglOwnedVeboxCommandTransactionResult(*)(
+    NativeCoreFrameDataScopeFor<NativeTemporarySurfaceOwner>&,NativeVpGraph&,TglNativeVpLineResourceStorage&,
+    NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&) noexcept;
+template TglOwnedVeboxCommandTransactionResult NativeTemporaryFrameInputScope::run<NativeTemporaryFrameInputUse>(
+    NativeTemporaryFrameInputScope::Inputs&,NativeTemporaryFrameInputUse) noexcept;
 using NativeLeasedFrameInputUse=TglOwnedVeboxCommandTransactionResult(*)(NativeCoreFrameDataScope&,
     NativeVpGraph&,TglNativeVpLineResourceStorage&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&) noexcept;
 template TglOwnedVeboxCommandTransactionResult NativeLeasedFrameInputScope::run<NativeLeasedFrameInputUse>(
