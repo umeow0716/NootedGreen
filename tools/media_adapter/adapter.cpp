@@ -155,6 +155,37 @@ using NativeRendererCleanupContext=TglOwnedVeboxVpCleanupContext<NativeRendererB
 using NativeRendererCleanup=TglOwnedVeboxVpCleanupCallback<NativeRendererCleanupContext>;
 using NativeRendererCpu=TglNativeVeboxRendererCpuStorage<TglDarwinStmmSurfaceApi,NativeRendererCleanup>;
 static_assert(sizeof(NativeRendererCpu)>0 && !std::is_copy_constructible_v<NativeRendererCpu>);
+class NativeRendererCpuAssembly {
+    // Authority belongs to the enclosing creator state and outlives THIS
+    // assembly. Contexts precede CPU: child cleanup cannot outlive its context.
+    NativeRendererCleanupContext firstCleanup_,secondCleanup_;
+    NativeRendererCpu cpu_;
+    bool cleanupBound_=false;
+public:
+    NativeRendererCpuAssembly(NativeRendererRetirementAuthority& authority,uintptr_t image,
+        const TglNativeVphalResourceEnvironment& environment)
+        :firstCleanup_(authority),secondCleanup_(authority),
+         cpu_(image,&readMemory,NativeTglImageAdmission{image},&executableMemory,
+            environment.resources,environment.pageSize,environment.fill,
+            std::array<TglNativeTrackedCpuInvoker,2>{},
+            std::array<NativeRendererCleanup,2>{{{&firstCleanup_},{&secondCleanup_}}},
+            std::array<TglNativeTrackedCpuInvoker,2>{},std::array<TglNativeSfcLifetimeInvoker,2>{},
+            std::array<TglNativeVeboxDestructorInvoker,2>{}) {}
+    NativeRendererCpuAssembly(const NativeRendererCpuAssembly&)=delete;
+    NativeRendererCpuAssembly& operator=(const NativeRendererCpuAssembly&)=delete;
+    auto& cpu() noexcept {return cpu_;}
+    auto& backing() noexcept {return cpu_.backing();}
+    auto& children() noexcept {return cpu_.children();}
+    bool bindCleanupContexts() noexcept {
+        if(cleanupBound_)return false;
+        auto& first=children().first().owner();auto& second=children().second().owner();
+        if(!firstCleanup_.bind(backing(),first,first.constructedBase(),first.allocationGeneration(),0) ||
+            !secondCleanup_.bind(backing(),second,second.constructedBase(),second.allocationGeneration(),1))return false;
+        cleanupBound_=true;return true;
+    }
+    // No implicit retirement here. Existing VPHAL owner must retain this WHOLE
+    // allocation on any partial construction/cleanup/native teardown refusal.
+};
 struct Entry {
     using CodecOwner=NativeCodecOwner;
     // Factory table lifetime only, not the native physical context lifetime.
