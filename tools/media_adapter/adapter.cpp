@@ -2637,6 +2637,38 @@ struct NativeRetainedFrontendRuntime {
 // Missing metadata/retirement producers are not supplied by this assembler.
 struct NativeOriginalFrameExecution {
     using Frontend=NativeRetainedFrontendRuntime;
+    struct Request {
+        size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
+        uintptr_t parameters,pass;const TglOwnedVpEntrySet& catalogue;
+        NativeModeRetirementAuthority& retirement;const TglNativeVphalMhwView& view;
+        const TglOwnedGen12SurfaceFeatures& sourceFeatures;const TglOwnedGen12SurfaceFeatures& targetFeatures;
+        TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
+        NativeTargetDecompression& decompression;void* argument;
+        bool attempted=false;
+    };
+    // Construct execution Inputs ONLY inside the original retained frontend
+    // continuation. No caller-supplied core/graph/line storage or owner copies.
+    // Request metadata/capabilities remain explicit; no HDR/default completion
+    // or decompression producer is invented by this join.
+    static TglOwnedVeboxCommandTransactionResult runRetained(NativeContextRendererFrame& frame,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,Request& request) noexcept {
+        if(request.attempted)return {};
+        request.attempted=true;
+        Frontend::VpRequest vpRequest{request.childIndex,request.interfaces,request.parameters,request.pass,
+            request.catalogue,request.retirement,&request,
+            +[](void* context,NativeCoreFrameDataScope& core,NativeVpGraph& graph,
+                TglNativeVpLineResourceStorage& lines,NativeAdmissionParams& params,NativeAdmissionPass& pass,
+                NativeFrameDataRead& read,NativeVpProducerFrame& vp,const TglOwnedVpModeState& mode,
+                Frontend::VpFrontend& frontend) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                auto& request=*static_cast<Request*>(context);
+                Inputs input{frontend,core,graph,lines,params,pass,read,vp,request.catalogue,mode,request.view,
+                    request.sourceFeatures,request.targetFeatures,request.acquisition,request.decompressionStatus,
+                    request.decompression,request.argument};
+                return run(input);
+            }};
+        return Frontend::runVpInputs(frame,roles,sourceIndex,targetIndex,temporal,vpRequest);
+    }
     struct Inputs {
         Frontend::VpFrontend& frontend;NativeCoreFrameDataScope& core;NativeVpGraph& graph;
         TglNativeVpLineResourceStorage& lines;NativeAdmissionParams& params;NativeAdmissionPass& pass;
