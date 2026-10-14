@@ -2984,6 +2984,50 @@ struct NativeOriginalFrameExecution {
 };
 template TglOwnedVeboxCommandTransactionResult NativeOriginalFrameExecution::run<NativeTemporarySurfaceOwner>(
     InputsFor<NativeTemporarySurfaceOwner>&) noexcept;
+// Concrete synchronous lower continuation inside runWithDerivedRoots. The
+// outer retained graph/transaction owns original backing and copyback; this
+// object never installs tables, resolves new context owners or claims retirement.
+struct NativeTemporaryLowerContinuation {
+    NativeRendererCpuAssembly& assembly;const TglNativeCreatedVeboxRendererView& pinned;
+    NativeSourceGraph& originalGraph;NativeTemporarySurfaceOwner& source;
+    NativeTemporarySurfaceOwner& target;NativeContextSurfaceOwner* secondary;
+    NativeContextSurfaceOwner* previous;NativeDenoiseParameters& denoise;
+    size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
+    uintptr_t parameters,pass;const TglOwnedVpEntrySet& catalogue;
+    NativeModeRetirementAuthority& retirement;const TglNativeVphalMhwView& view;
+    TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
+    NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;
+    void* argument;bool attempted=false;
+    TglOwnedVeboxCommandTransactionResult run() noexcept {
+        if(attempted || childIndex>1 || !parameters || !pass || !acquisition.healthy())return {};
+        attempted=true;
+        const auto* current=source.surfaceBinding();const auto* output=target.surfaceBinding();
+        if(!current || !output)return {};
+        NativeTemporaryHistoryGraph history(originalGraph,source,*current);
+        if(!history.hasSurfaceLease(*current))return {};
+        NativeTemporaryFrontend frontend{assembly,pinned,childIndex,interfaces,history,
+            secondary,previous,denoise,retirement};
+        NativeTemporaryFrameInputScope::Inputs inputs{assembly,childIndex,source,target,pinned,
+            interfaces,parameters,pass,&retirement};
+        struct Call {NativeTemporaryLowerContinuation& self;NativeTemporaryFrontend& frontend;};
+        Call call{*this,frontend};
+        return NativeTemporaryVpFrameInputScope::run(inputs,catalogue,&call,
+            +[](void* context,NativeCoreFrameDataScopeFor<NativeTemporarySurfaceOwner>& core,
+                NativeVpGraph& graph,TglNativeVpLineResourceStorage& lines,NativeAdmissionParams& params,
+                NativeAdmissionPass& pass,NativeFrameDataRead& read,
+                NativeVpProducerFrameFor<NativeTemporarySurfaceOwner>& vp,const TglOwnedVpModeState& mode) noexcept {
+                auto& call=*static_cast<Call*>(context);auto& self=call.self;
+                TglOwnedGen12SurfaceFeatures sourceFeatures,targetFeatures;
+                if(!tglBindLeasedUnknownGen12SurfaceFeatures(sourceFeatures,core.sourceOwner,core.source,self.acquisition) ||
+                    !tglBindLeasedUnknownGen12SurfaceFeatures(targetFeatures,core.targetOwner,core.target,self.acquisition))
+                    return TglOwnedVeboxCommandTransactionResult{};
+                NativeOriginalFrameExecution::InputsFor<NativeTemporarySurfaceOwner> execution{
+                    call.frontend,core,graph,lines,params,pass,read,vp,self.catalogue,mode,self.view,
+                    sourceFeatures,targetFeatures,self.acquisition,self.decompressionStatus,self.decompression,self.argument};
+                return NativeOriginalFrameExecution::run(execution);
+            });
+    }
+};
 // Callback table entries carry no Entry/closure argument. Route the immutable
 // qualified native image and actual physical generation, never "current Entry".
 // Prepared backend only; factory callback publication remains disabled.
