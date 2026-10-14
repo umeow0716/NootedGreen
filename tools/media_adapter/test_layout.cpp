@@ -23756,6 +23756,28 @@ int main() {
                                 auto* child0=storage.children().first().owner().constructedBase();
                                 auto* child1=storage.children().second().owner().constructedBase();
                                 {
+                                    unsigned mode=0,reads=0;
+                                    auto types=[&](TglNativeFrontendCfTypes& out) noexcept {
+                                        ++reads;
+                                        if(mode==0)return false;
+                                        out={11,mode==1?uintptr_t{11}:mode==2 && reads==2?uintptr_t{13}:uintptr_t{12}};
+                                        return true;
+                                    };
+                                    auto pin=[&]() noexcept {
+                                        if(mode==3)return decltype(parent){};
+                                        return parents.pin(base,0x8000,1,parentAddress);
+                                    };
+                                    auto refuse=[](auto&&...) noexcept {return false;};
+                                    auto constructor=tglMakeNativeAdoptedFrontendConstructor<Adopted>(
+                                        storageOwner,Cf{refs},frameDn,types,pin,refuse);
+                                    for(mode=0;mode!=5;++mode) {
+                                        reads=0;
+                                        assert(!constructor(reinterpret_cast<uintptr_t>(&source),originalResolve,originalTarget));
+                                        assert(storageOwner.get()==cpuAddress && refs==originalRefs &&
+                                            !originalSource.borrowed && !originalTarget.borrowed && !originalHistory.borrowed);
+                                    }
+                                }
+                                {
                                     Adopted frontend(std::move(parent),reinterpret_cast<uintptr_t>(&source),originalResolve,
                                         originalTarget,Cf{refs},11,12,frameDn);
                                     assert(!parent.get() && !frontend.surfacesReady() && !frontend.requiresRetention());
@@ -23763,10 +23785,28 @@ int main() {
                                         assert(false);return {};
                                     }).status==5);
                                     assert(!frontend.adoptCpu(storageOwner,[](auto&&...) noexcept {return false;}) && storageOwner.get()==cpuAddress);
-                                    assert(frontend.adoptCpu(storageOwner,[&](const auto& owner,auto& cpu,const auto* a,const auto* b) noexcept {
+                                    assert(!frontend.adoptCpu(storageOwner,[&](const auto&,auto&,const auto*,const auto*) noexcept {
                                         assert(!frontend.adoptCpu(storageOwner,[](auto&&...) noexcept {assert(false);return true;}));
-                                        return owner.context()==parentAddress && &cpu==cpuAddress && a==&source && b==&target;
+                                        return false;
                                     }));
+                                    assert(storageOwner.get()==cpuAddress);
+                                }
+                                {
+                                    unsigned typeReads=0;
+                                    auto types=[&](TglNativeFrontendCfTypes& out) noexcept {
+                                        ++typeReads;out={11,12};return true;
+                                    };
+                                    auto pin=[&]() noexcept {return parents.pin(base,0x8000,1,parentAddress);};
+                                    auto admit=[&](const auto& owner,auto& cpu,const auto* a,const auto* b) noexcept {
+                                        return owner.context()==parentAddress && &cpu==cpuAddress && a==&source && b==&target;
+                                    };
+                                    auto constructor=tglMakeNativeAdoptedFrontendConstructor<Adopted>(
+                                        storageOwner,Cf{refs},frameDn,types,pin,admit);
+                                    std::unique_ptr<Adopted> constructed(constructor(
+                                        reinterpret_cast<uintptr_t>(&source),originalResolve,originalTarget));
+                                    assert(constructed && typeReads==2);
+                                    auto& frontend=*constructed;
+                                    assert(!constructor(reinterpret_cast<uintptr_t>(&source),originalResolve,originalTarget));
                                     assert(!storageOwner && frontend.surfacesReady() &&
                                         frontend.children().first().owner().constructedBase()==child0 &&
                                         frontend.children().second().owner().constructedBase()==child1 &&

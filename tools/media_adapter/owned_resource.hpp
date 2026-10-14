@@ -23764,6 +23764,8 @@ class TglNativeVeboxAdoptedFrontendFrameStorage {
     std::unique_ptr<CpuStorage> cpu_; // first destroyed, with original surfaces/DN still pinned
     bool busy_=false;
 public:
+    using CpuStorageType=CpuStorage;
+    using ParentLeaseType=ParentLease;
     using SourceOwnerType=SourceOwner;
     using TargetOwnerType=TargetOwner;
     template<class Resolve>
@@ -23815,6 +23817,55 @@ public:
         return result;
     }
 };
+
+// Actual ContextRendererFrameStorage construction signature, with native CF
+// types supplied by the qualified adapter Entry rather than fixture numbers.
+// Keep one stable producer instance; callers lend it through a noexcept lambda
+// to the enclosing root-frame constructor instead of copying its busy state.
+template<class Frontend,class CfApi,class DnBackend,class Types,class Pin,class Admit>
+class TglNativeAdoptedFrontendConstructor {
+    std::unique_ptr<typename Frontend::CpuStorageType>& cpu_;
+    CfApi cf_;DnBackend& parameters_;Types types_;Pin pin_;Admit admit_;
+    bool busy_=false;
+    static bool validTypes(const TglNativeFrontendCfTypes& types) noexcept {
+        return types.resource && types.surface && types.resource!=UINTPTR_MAX &&
+            types.surface!=UINTPTR_MAX && types.resource!=types.surface;
+    }
+public:
+    TglNativeAdoptedFrontendConstructor(std::unique_ptr<typename Frontend::CpuStorageType>& cpu,
+        CfApi cf,DnBackend& parameters,Types types,Pin pin,Admit admit) noexcept
+        :cpu_(cpu),cf_(std::move(cf)),parameters_(parameters),types_(std::move(types)),
+         pin_(std::move(pin)),admit_(std::move(admit)) {
+        static_assert(std::is_nothrow_move_constructible_v<CfApi> &&
+            std::is_nothrow_move_constructible_v<Types> && std::is_nothrow_move_constructible_v<Pin> &&
+            std::is_nothrow_move_constructible_v<Admit>);
+    }
+    TglNativeAdoptedFrontendConstructor(const TglNativeAdoptedFrontendConstructor&)=delete;
+    TglNativeAdoptedFrontendConstructor& operator=(const TglNativeAdoptedFrontendConstructor&)=delete;
+    template<class Resolve> Frontend* operator()(uintptr_t source,Resolve resolve,
+        typename Frontend::TargetOwnerType& target) noexcept {
+        static_assert(noexcept(types_(std::declval<TglNativeFrontendCfTypes&>())) &&
+            std::is_same_v<decltype(types_(std::declval<TglNativeFrontendCfTypes&>())),bool> &&
+            noexcept(pin_()) && std::is_same_v<decltype(pin_()),typename Frontend::ParentLeaseType>);
+        if(busy_ || !cpu_ || cpu_->backing().retention()())return nullptr;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        auto* original=cpu_.get();TglNativeFrontendCfTypes types,after;
+        if(!types_(types) || !validTypes(types) || cpu_.get()!=original)return nullptr;
+        auto parent=pin_();if(!parent.get())return nullptr;
+        std::unique_ptr<Frontend> frame(new(std::nothrow) Frontend(std::move(parent),source,resolve,
+            target,cf_,types.resource,types.surface,parameters_));
+        if(!frame || cpu_.get()!=original || !types_(after) || !validTypes(after) ||
+           after.resource!=types.resource || after.surface!=types.surface || cpu_.get()!=original ||
+           !frame->adoptCpu(cpu_,admit_))return nullptr;
+        return frame.release(); // No fallible operation after CPU ownership commit.
+    }
+};
+template<class Frontend,class CfApi,class DnBackend,class Types,class Pin,class Admit>
+auto tglMakeNativeAdoptedFrontendConstructor(std::unique_ptr<typename Frontend::CpuStorageType>& cpu,
+    CfApi cf,DnBackend& parameters,Types types,Pin pin,Admit admit) noexcept {
+    return TglNativeAdoptedFrontendConstructor<Frontend,CfApi,DnBackend,Types,Pin,Admit>(
+        cpu,std::move(cf),parameters,std::move(types),std::move(pin),std::move(admit));
+}
 
 // Integrated CPU ownership order: children may inspect the real frame surfaces
 // during cleanup, and surface/DN release still has its VP/command backing alive.
