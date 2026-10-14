@@ -53,16 +53,20 @@ template<class Read> bool collect(uint64_t registryId,Read read,Reply& output) n
 // Userspace transport boundary. Caller supplies a lifetime-pinned shared
 // connection and the independently admitted accelerator registry ID.
 // A well-formed terminated reply remains observable; it is not completion.
+inline bool validReply(const Reply& reply,uint64_t expectedRegistryId) noexcept {
+    if(!expectedRegistryId || reply.abiVersion!=version || reply.bytes!=sizeof(Reply) ||
+       reply.registryId!=expectedRegistryId) return false;
+    for(unsigned i=0;i<16;++i)
+        if(reply.familyUuid[i]!=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i]) return false;
+    return true;
+}
 template<class Call> bool query(uint64_t expectedRegistryId,Call call,Reply& output) noexcept {
     static_assert(noexcept(call(selector,static_cast<void*>(nullptr),static_cast<size_t*>(nullptr))),
                   "owned struct-method transport ABI");
     if(!expectedRegistryId) return false;
     Reply candidate{};size_t bytes=sizeof(candidate);
     if(call(selector,&candidate,&bytes)!=0 || bytes!=sizeof(candidate) ||
-       candidate.abiVersion!=version || candidate.bytes!=sizeof(candidate) ||
-       candidate.registryId!=expectedRegistryId) return false;
-    for(unsigned i=0;i<16;++i)
-        if(candidate.familyUuid[i]!=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i]) return false;
+       !validReply(candidate,expectedRegistryId)) return false;
     output.abiVersion=candidate.abiVersion;output.bytes=candidate.bytes;
     output.registryId=candidate.registryId;output.restartReports=candidate.restartReports;
     output.terminated=candidate.terminated;

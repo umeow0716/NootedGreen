@@ -15183,6 +15183,31 @@ static void testRetainedVeboxFrames() {
             auto stale=eventFrame;++stale.generation;
             const auto rejected=callbacks.observeFrameEvent(success.ticket,0x8000,stale,0x60000,eventRead,observe);
             assert(!rejected.called && !rejected.observed && nativeEvents==5);
+            for(unsigned mode=0;mode<11;++mode) {
+                unsigned deviceReads=0;
+                auto deviceRead=[&](NGVfDeviceObservation::Reply& reply) noexcept -> bool {
+                    ++deviceReads;
+                    if((mode==1 && deviceReads==1) || (mode==2 && deviceReads==2))return false;
+                    reply={1,40,0xabc,7,0,{}};
+                    for(unsigned i=0;i<16;++i)reply.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
+                    if(mode==3 && deviceReads==2)++reply.restartReports;
+                    if(mode==4 || (mode==5 && deviceReads==2))reply.terminated=1;
+                    if(mode==6 && deviceReads==2)++reply.registryId;
+                    if(mode==8 || (mode==9 && deviceReads==2))reply.familyUuid[0]^=1;
+                    if(mode==10)reply.bytes=39;
+                    return true;
+                };
+                nativeEventResult=mode==7?31:0;reported=1;
+                const auto result=callbacks.observeFrameEventWithDevice(success.ticket,0x8000,
+                    eventFrame,0x60000,eventRead,deviceRead,observe);
+                const bool entered=mode!=1 && mode!=4 && mode!=8 && mode!=10;
+                assert(result.nativeCalled==entered && deviceReads==(entered?2U:1U));
+                assert(result.nativeStatus==(entered?nativeEventResult:5));
+                assert(result.event.observed==(mode==0));
+                assert(result.event.status==(mode==0?0:mode==7?31:5));
+                if(mode==0)assert(result.deviceUnchanged && result.event.itemStatus==1);
+            }
+            nativeEventResult=0;
             assert(callbacks.withFrame(success.ticket,0x8000,[&](auto& frames) noexcept -> int {
                 return frames.retire(eventFrame,[](const Frame&,bool pending,const auto&) noexcept -> int {
                     assert(pending);return 0; // Explicit CPU-fixture discard, NOT event completion.

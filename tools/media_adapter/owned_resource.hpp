@@ -22588,6 +22588,38 @@ public:
         });
         return result;
     }
+    struct DeviceFrameEventObservationResult {
+        FrameEventObservationResult event;
+        NGVfDeviceObservation::Reply before{},after{};
+        int nativeStatus=5;
+        bool beforeCaptured=false,afterCaptured=false,nativeCalled=false,deviceUnchanged=false;
+    };
+    // The existing withFrame gate encloses BOTH device reads and native event
+    // observation: do not recursively reacquire the nonreentrant physical gate.
+    // Detect known invalidation, not all reset paths or genuine GPU completion.
+    // This method never retires/free resources, even for itemStatus1.
+    template<class EventRead,class DeviceRead,class Observe>
+    DeviceFrameEventObservationResult observeFrameEventWithDevice(
+        typename Registry::Ticket ticket,uintptr_t physical,typename Registry::FrameTicket frame,
+        uintptr_t batch,EventRead read,DeviceRead deviceRead,Observe observe) noexcept {
+        static_assert(noexcept(deviceRead(std::declval<NGVfDeviceObservation::Reply&>())) &&
+            std::is_same_v<decltype(deviceRead(std::declval<NGVfDeviceObservation::Reply&>())),bool>);
+        static_assert(noexcept(observe()) && std::is_same_v<decltype(observe()),int>);
+        DeviceFrameEventObservationResult result;
+        result.event=observeFrameEvent(ticket,physical,frame,batch,read,[&]() noexcept -> int {
+            result.beforeCaptured=deviceRead(result.before) &&
+                NGVfDeviceObservation::validReply(result.before,result.before.registryId);
+            if(!result.beforeCaptured || result.before.terminated) return 5;
+            result.nativeCalled=true;result.nativeStatus=observe();
+            result.afterCaptured=deviceRead(result.after) &&
+                NGVfDeviceObservation::validReply(result.after,result.before.registryId);
+            result.deviceUnchanged=result.afterCaptured && !result.after.terminated &&
+                result.before.restartReports==result.after.restartReports;
+            if(result.nativeStatus) return result.nativeStatus;
+            return result.deviceUnchanged?0:5;
+        });
+        return result;
+    }
     // Enter before EACH native request preparation: withFrame alone does not
     // exclude shells retained by an earlier asynchronous frame. Factory slot11
     // is a batch (15a99..15ac5), not one preparation. An outer batch admission
