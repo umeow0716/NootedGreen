@@ -17783,6 +17783,10 @@ inline bool tglRewindNativeVeboxCommand(TglOwnedVeboxBuilderScratch& scratch,
 // Context63c is not a durable reset epoch either: submit6fdc..6ffa counts
 // qualifying submissions at640 and clears BOTH63c/640 after1000. Equality
 // of sampled63c values cannot authorize retirement across native submission.
+// Native processSidebandBuffer9764 writes its third argument into68c at97b4,
+// clears it on parser failure9a2c, and returns its bit0 at9a8c. Thus68c is
+// per-command execution state, not persistent reset history: later work can
+// re-arm it after affectedByHardwareReset clears it. A sampled1 is no epoch.
 struct TglNativeVideoFenceEventInvoker {
     uint32_t operator()(uintptr_t entry,uintptr_t context,uint32_t index) const noexcept {
         using Finish=uint32_t(*)(void*,uint32_t);
