@@ -20174,6 +20174,9 @@ int main() {
                     })==-17);
                     assert(backing.live==3 && !backing.releases);
                     frame.retention().observe(TglOwnedVeboxCommandTransactionResult{31,31,true,false});
+                    assert(frame.retireVpResources(0,[]() noexcept -> int {
+                        assert(false);return 0;
+                    })==5 && backing.live==3 && !backing.releases);
                     assert(frame.reinitializeVpPass(0,[]() noexcept -> int {
                         assert(false);return 0;
                     })==5);
@@ -23978,6 +23981,20 @@ int main() {
                                         return 0;
                                     })==0);
                                     unsigned retireCalls=0;
+                                    assert(paired.retireVpResources(2,[]() noexcept -> int {assert(false);return 0;})==5);
+                                    assert(paired.withVpResources(1,[&](auto&,auto&,auto&) noexcept -> int {
+                                        return paired.retireVpResources(1,[]() noexcept -> int {assert(false);return 0;});
+                                    })==5);
+                                    unsigned cleanupRetires=0;
+                                    assert(paired.retireVpResources(1,[&]() noexcept -> int {++cleanupRetires;return 31;})==31);
+                                    assert(paired.retireVpResources(1,[&]() noexcept -> int {
+                                        ++cleanupRetires;
+                                        assert(paired.retireVpResources(1,[]() noexcept -> int {assert(false);return 0;})==5);
+                                        return 0;
+                                    })==0 && cleanupRetires==2 && paired.vpBound(1));
+                                    assert(paired.withVpResources(1,[&](auto& graph,auto& storage,auto&) noexcept -> int {
+                                        assert(graph.generation()==passGeneration && storage.bytes.data()==resetVp);return 0;
+                                    })==0); // No pass reset or graph/shell destruction during resource cleanup.
                                     assert(paired.reinitializeVpPass(1,[&]() noexcept -> int {
                                         ++retireCalls;return 31;
                                     })==31 && paired.vpBound(1));

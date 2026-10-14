@@ -19442,6 +19442,18 @@ public:
     // Qualified retirement is mandatory even before any accepted GPU work.
     // A latched native submission remains blocked until completion ownership
     // is implemented; never use this path to clear the retention latch.
+    // Cleanup component only: release owned native line resources while keeping
+    // the actual VP graph/shell pin alive for ordered creator teardown.
+    // Never clear the command retention latch or infer completion from native.
+    template<class Retire> int retireResources(Retire retire) noexcept {
+        static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);
+        if(!bound() || retention_())return 5;
+        preparing_=true;
+        struct EndPreparation {bool& active;~EndPreparation(){active=false;}} end{preparing_};
+        return resources_->retireForReinitialization([&]() noexcept -> int {
+            const int status=retire();return status?status:(retention_()?5:0);
+        });
+    }
     template<class Retire> int reinitializePass(Retire retire) noexcept {
         static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);
         if(!bound() || retention_()) return 5;
@@ -23902,6 +23914,9 @@ public:
     }
     template<class Retire> int reinitializeVpPass(size_t index,Retire retire) noexcept {
         auto* vp=selectVp(index);return vp?vp->reinitializePass(retire):5;
+    }
+    template<class Retire> int retireVpResources(size_t index,Retire retire) noexcept {
+        auto* vp=selectVp(index);return vp?vp->retireResources(retire):5;
     }
     template<class Use> int withVpResources(Use use) noexcept {return vp_.withResources(use);}
     template<class Read,class Retire,class Use>
