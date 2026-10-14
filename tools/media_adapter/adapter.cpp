@@ -402,6 +402,10 @@ using NativeBorrowedFrontend=TglNativeVeboxBorrowedFrontendWithCpuAllocator<Nati
     NativeFrontendEnvironment,NativeFrontendAccess>;
 using NativeContextRendererFrame=TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,
     NativeBorrowedFrontend>;
+using NativePhysicalRegistry=TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;
+using NativePhysicalFrameScope=typename NativePhysicalRegistry::Scope;
+using NativePhysicalCallbacks=TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,
+    decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory)>;
 struct NativeFrontendRuntimeScope {
     template<class Use> static TglOwnedVeboxCommandTransactionResult run(NativeBorrowedFrontend& frontend,
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
@@ -717,6 +721,9 @@ template class TglNativeVeboxBorrowedFrontendWithCpuAllocator<NativeVphalFramePi
     NativeContextSurfaceOwner,NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi,
     NativeFrontendEnvironment,NativeFrontendAccess>;
 template class TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,NativeBorrowedFrontend>;
+template class TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;
+template class TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,
+    decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory)>;
 using NativeFrontendResolve=NativeContextSurfaceOwner*(*)(uintptr_t) noexcept;
 using NativeFrontendConsumer=TglOwnedVeboxCommandTransactionResult(*)(NativeRendererCpuAssembly&,
     NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
@@ -728,6 +735,9 @@ using NativeFrontendAdmit=bool(*)(NativeRendererCpuAssembly&,const TglNativeCrea
     const TglOwnedSurfaceStorage*,const TglOwnedSurfaceStorage*) noexcept;
 template NativeBorrowedFrontend* Entry::createBorrowedFrontend<TglOwnedPhysicalMutationAuthority,
     NativeFrontendResolve,NativeFrontendAdmit>(TglOwnedPhysicalMutationAuthority&,uintptr_t,uint64_t,
+    uintptr_t,uintptr_t,NativeFrontendResolve,NativeContextSurfaceOwner&,NativeFrontendAdmit) const noexcept;
+template NativeBorrowedFrontend* Entry::createBorrowedFrontend<NativePhysicalFrameScope,
+    NativeFrontendResolve,NativeFrontendAdmit>(NativePhysicalFrameScope&,uintptr_t,uint64_t,
     uintptr_t,uintptr_t,NativeFrontendResolve,NativeContextSurfaceOwner&,NativeFrontendAdmit) const noexcept;
 template int NativeRendererCpuAssembly::withChildLifetimeScopes<
     int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept>(
