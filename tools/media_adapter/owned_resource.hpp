@@ -17127,6 +17127,27 @@ struct TglOwnedDiIecpPacket {
     std::array<const std::array<uint8_t,0x148>*,11> resources{};
     std::array<uint32_t,12> controls{};
 };
+// Native TGL12d4e0 copies cache settings to child111c. Exact ICL packet
+// producers consume seven scalar fields1120..1138, sharing1134 for outputs
+//5/6; no ICL object pointer/vtable/command is transplanted. Slots8..10 are
+// unpopulated by this producer. Pipe2's outer policy70 update is separate.
+template<class Owner>
+bool tglReadLeasedDiIecpCacheControls(Owner& owner,uintptr_t child,uintptr_t image,
+    std::array<uint32_t,11>& output) noexcept {
+    const auto generation=owner.allocationGeneration();
+    auto live=[&]() noexcept {
+        return generation && owner.allocationGeneration()==generation &&
+            owner.hasPrivateChildImageLease(child,image);
+    };
+    std::array<uint32_t,7> words{},after{};
+    if(!child || child>UINTPTR_MAX-0x113c || !live() ||
+        !owner.readLeasedStorage(child,generation,child+0x1120,words.data(),sizeof(words)) || !live() ||
+        !owner.readLeasedStorage(child,generation,child+0x1120,after.data(),sizeof(after)) ||
+        after!=words || !live())return false;
+    std::array<uint32_t,11> candidate{};
+    for(size_t i=0;i<6;++i)candidate[i]=words[i];
+    candidate[6]=words[5];candidate[7]=words[6];output=candidate;return true;
+}
 static_assert(offsetof(TglOwnedDiIecpPacket,resources) == 0x20);
 static_assert(offsetof(TglOwnedDiIecpPacket,controls) == 0x78);
 static_assert(sizeof(TglOwnedDiIecpPacket) == 0xa8);

@@ -2051,7 +2051,7 @@ struct NativeFrameSurfaceAdmission {
 };
 struct NativeRetainedDiIecpCapture {
     NativeAllocationPlanner& planner;NativeFrameDataRead& read;
-    const std::array<uint32_t,11>& controls;NativeDenoiseParameters* parameters;
+    uintptr_t image;NativeDenoiseParameters* parameters;
     bool busy=false;
     const TglDiIecpInputs* active=nullptr;uint64_t generation=0;
     bool live() const noexcept {
@@ -2088,12 +2088,15 @@ struct NativeRetainedDiIecpCapture {
             !planner.childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(planner.child)) ||
             !planner.executionOwner.hasExecutionLease(planner.execution) ||
             !planner.input.hasSurfaceLease(planner.source))return 5;
+        std::array<uint32_t,11> controls{};
+        if(!tglReadLeasedDiIecpCacheControls(planner.childOwner,
+            reinterpret_cast<uintptr_t>(planner.child),self->image,controls))return 5;
         self->busy=true;struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{self->busy};
         // Allocation selection is read at producer use, not guessed from a
         // pre-allocation report. Every tail view remains inside this consume.
         return tglRunRetainedDiIecpFrameInput(planner.storage,planner.input,planner.target,
             planner.secondary,planner.previous,planner.childOwner,planner.executionOwner,
-            planner.child,planner.execution,planner.source,self->read,planner.alignDi64,self->controls,
+            planner.child,planner.execution,planner.source,self->read,planner.alignDi64,controls,
             [&](const TglDiIecpInputs& input) noexcept -> int {
                 if(self->active)return 5;
                 self->active=&input;self->generation=planner.childOwner.allocationGeneration();
@@ -2268,7 +2271,7 @@ struct NativeFrameExecutionAssembly {
         NativeVpProducerFrame& vp;NativeAdmissionStages& admission;
         NativeAllocationPlanner& planner;NativeModeReleaseContext& mode;
         const TglVeboxRenderBinding& binding;void* argument;
-        const std::array<uint32_t,11>& controls;TglOwnedVeboxPacketLeases leases;
+        TglOwnedVeboxPacketLeases leases;
         NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
         bool disableTemporalDenoise;
     };
@@ -2280,7 +2283,7 @@ struct NativeFrameExecutionAssembly {
         const int status=in.vp.run([&](NativeVpPreparedCallbacks& callbacks) noexcept -> int {
             NativePreparedAdmissionRender prepared{callbacks,in.admission,in.binding,in.argument};
             NativeAllocatedAdmissionRender allocated{prepared,in.planner,in.mode};
-            NativeRetainedDiIecpCapture capture{in.planner,in.admission.read,in.controls,&in.parameters};
+            NativeRetainedDiIecpCapture capture{in.planner,in.admission.read,in.view.renderer.image,&in.parameters};
             NativeCompleteFrameConsumer consumer{in.assembly,in.view,capture,in.leases,in.parameters,
                 in.csc,allocated,in.disableTemporalDenoise};
             result=consumer.run();
@@ -2296,7 +2299,7 @@ struct NativeModeFrameExecution {
         NativeVpProducerFrame& vp;NativeAdmissionFrameAssembly& admission;
         NativeModeAllocationPlan& allocation;
         const TglVeboxRenderBinding& binding;void* argument;
-        const std::array<uint32_t,11>& controls;TglOwnedVeboxPacketLeases leases;
+        TglOwnedVeboxPacketLeases leases;
         NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;
         bool disableTemporalDenoise;
     };
@@ -2314,7 +2317,7 @@ struct NativeModeFrameExecution {
                 NativeModeReleaseContext& mode) noexcept -> NativeAdmissionStages::Result {
                 auto& call=*static_cast<Call*>(context);auto& in=call.in;
                 NativeFrameExecutionAssembly::Inputs execution{in.assembly,in.view,in.vp,call.stages,
-                    planner,mode,in.binding,in.argument,in.controls,in.leases,in.parameters,in.csc,
+                    planner,mode,in.binding,in.argument,in.leases,in.parameters,in.csc,
                     in.disableTemporalDenoise};
                 return NativeFrameExecutionAssembly::run(execution);
             });
@@ -2330,7 +2333,7 @@ struct NativePolicyFrameExecution {
         NativeVpProducerFrame& vp;NativeOutputPipeFrameScope& policy;NativeFrameDataRead& read;
         const NativeAdmissionFrameAssembly::Inputs& admission;NativeModeAllocationPlan& allocation;
         const TglVeboxRenderBinding& binding;void* argument;
-        const std::array<uint32_t,11>& controls;TglOwnedVeboxPacketLeases leases;
+        TglOwnedVeboxPacketLeases leases;
         NativeDenoiseParameters& parameters;NativeVeboxCscProducer csc;bool disableTemporalDenoise;
     };
     static NativeAdmissionStages::Result run(Inputs& in) noexcept {
@@ -2345,7 +2348,7 @@ struct NativePolicyFrameExecution {
         const int status=p.run([&](NativeOutputPipeSelector& selector) noexcept -> int {
             NativeAdmissionFrameAssembly admission(a,selector,in.read);
             NativeModeFrameExecution::Inputs mode{in.assembly,in.view,in.vp,admission,in.allocation,
-                in.binding,in.argument,in.controls,in.leases,in.parameters,in.csc,in.disableTemporalDenoise};
+                in.binding,in.argument,in.leases,in.parameters,in.csc,in.disableTemporalDenoise};
             result=NativeModeFrameExecution::run(mode);
             return result.status;
         });
@@ -2621,7 +2624,7 @@ struct NativeOriginalFrameExecution {
         const TglNativeVphalMhwView& view;
         const TglOwnedGen12SurfaceFeatures& sourceFeatures;const TglOwnedGen12SurfaceFeatures& targetFeatures;
         TglVeboxPipeAcquisition& acquisition;uint32_t& compressionFormat;int& decompressionStatus;
-        NativeTargetDecompression& decompression;const std::array<uint32_t,11>& controls;
+        NativeTargetDecompression& decompression;
         bool disableTemporalDenoise;void* argument;
     };
     static TglOwnedVeboxCommandTransactionResult run(Inputs& in) noexcept {
@@ -2663,7 +2666,7 @@ struct NativeOriginalFrameExecution {
                                         auto& next=*static_cast<Policy*>(context);auto& stage=next.stage;
                                         auto& state=stage.packet.state;auto& in=state.input;
                                         NativePolicyFrameExecution::Inputs execution{in.frontend.assembly,in.view,in.vp,
-                                            next.policy,in.read,admission,stage.plan,state.render,in.argument,in.controls,
+                                            next.policy,in.read,admission,stage.plan,state.render,in.argument,
                                             stage.packet.leases,in.frontend.denoise,state.csc,in.disableTemporalDenoise};
                                         state.result=NativePolicyFrameExecution::run(execution);
                                         return state.result.status;

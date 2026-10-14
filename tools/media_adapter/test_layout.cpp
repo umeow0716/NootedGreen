@@ -154,6 +154,38 @@ struct TestFeatureExecutionOwner {
         busy=false;return status;
     }
 };
+static void testLeasedDiIecpCacheControls() {
+    struct Owner {
+        std::array<uint32_t,7> words{0x10,0x21,0x32,0x43,0x54,0x65,0x76};
+        uint64_t epoch=1;unsigned reads=0;bool active=true,deny=false,change=false,revoke=false;
+        uint64_t allocationGeneration() const noexcept {return epoch;}
+        bool hasPrivateChildImageLease(uintptr_t child,uintptr_t image) const noexcept {
+            return active && child==0x1000 && image==0x200000;
+        }
+        bool readLeasedStorage(uintptr_t child,uint64_t generation,uintptr_t address,void* out,size_t bytes) noexcept {
+            if(deny || !active || child!=0x1000 || generation!=epoch || address!=child+0x1120 || bytes!=sizeof(words))return false;
+            ++reads;std::memcpy(out,words.data(),bytes);
+            if(change && reads==2)static_cast<uint32_t*>(out)[6]^=1;
+            if(revoke)active=false;
+            return true;
+        }
+    } owner;
+    std::array<uint32_t,11> controls{};
+    assert(tglReadLeasedDiIecpCacheControls(owner,0x1000,0x200000,controls) && owner.reads==2);
+    for(size_t i=0;i<6;++i)assert(controls[i]==owner.words[i]);
+    assert(controls[6]==owner.words[5] && controls[7]==owner.words[6]);
+    assert(!controls[8] && !controls[9] && !controls[10]);
+    controls.fill(0xabcdef01);const auto unchanged=controls;
+    owner.reads=0;
+    assert(!tglReadLeasedDiIecpCacheControls(owner,0x1000,0x200001,controls) && !owner.reads && controls==unchanged);
+    assert(!tglReadLeasedDiIecpCacheControls(owner,UINTPTR_MAX-4,0x200000,controls) && !owner.reads);
+    owner.deny=true;assert(!tglReadLeasedDiIecpCacheControls(owner,0x1000,0x200000,controls) && controls==unchanged);
+    owner.deny=false;owner.change=true;
+    assert(!tglReadLeasedDiIecpCacheControls(owner,0x1000,0x200000,controls) && owner.reads==2 && controls==unchanged);
+    owner.reads=0;owner.change=false;owner.revoke=true;
+    assert(!tglReadLeasedDiIecpCacheControls(owner,0x1000,0x200000,controls) && owner.reads==1 && controls==unchanged);
+}
+
 static void testTrackedCpuOwner() {
     {
         TglOwnedDescriptorOnlySurface descriptor;
@@ -31418,6 +31450,7 @@ int main() {
             assert(std::memcmp(&packet,expected.data(),expected.size()) == 0);
         }
     }
+    testLeasedDiIecpCacheControls();
     testTrackedCpuOwner();
     testOwnedVeboxVtable();
     testNativeCscBinding();
