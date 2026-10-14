@@ -1983,6 +1983,66 @@ struct TglNativePrimaryRendererTable {
     }
 };
 
+// Same native renderer, same destructors/outer frame. Only temporary-pass
+// dispatch changes. Storage/code/renderer lifetime must be pinned by Admit.
+class TglOwnedPrimaryRendererTable {
+    std::array<uintptr_t,14> entries_{};
+    uintptr_t source_=0,object_=0;
+public:
+    enum class Publication { Unpublished,Published,Detached,Ambiguous };
+private:
+    Publication publication_=Publication::Unpublished;
+public:
+    TglOwnedPrimaryRendererTable()=default;
+    TglOwnedPrimaryRendererTable(const TglOwnedPrimaryRendererTable&)=delete;
+    TglOwnedPrimaryRendererTable& operator=(const TglOwnedPrimaryRendererTable&)=delete;
+    template<class Read,class Qualify,class Executable,class OwnedAdmit>
+    bool build(uintptr_t image,uintptr_t temporary,Read read,Qualify qualify,
+        Executable executable,OwnedAdmit ownedAdmit) noexcept {
+        std::array<uintptr_t,12> original{};
+        if(source_ || !temporary || !qualify(image) || !ownedAdmit(temporary,1) ||
+           !TglNativePrimaryRendererTable::capture(image,read,executable,original)) return false;
+        for(auto entry:original) if(entry==temporary) return false;
+        entries_[0]=0;entries_[1]=image+0x75bc00;
+        for(size_t i=0;i<original.size();++i) entries_[i+2]=original[i];
+        entries_[2+TglNativePrimaryRendererTable::temporaryPassSlot]=temporary;
+        source_=image+0x75bba0;return true;
+    }
+    uintptr_t addressPoint() const noexcept {
+        return source_?reinterpret_cast<uintptr_t>(entries_.data()+2):0;
+    }
+    uintptr_t source() const noexcept {return source_;}
+    uintptr_t object() const noexcept {return object_;}
+    Publication publication() const noexcept {return publication_;}
+    bool requiresRetention() const noexcept {
+        return publication_==Publication::Published || publication_==Publication::Ambiguous;
+    }
+    template<class Read,class Write,class Admit>
+    bool publish(uintptr_t object,Read read,Write write,Admit admit) noexcept {
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            noexcept(write(uintptr_t{},uintptr_t{})) && noexcept(admit(uintptr_t{},size_t{})));
+        uintptr_t current=0;
+        if(!source_ || publication_!=Publication::Unpublished || !object || (object&7) ||
+           object>UINTPTR_MAX-0x2cb8 || !admit(object,0x2cb8) ||
+           !read(object,&current,8) || current!=source_) return false;
+        object_=object;publication_=Publication::Ambiguous;
+        if(!write(object,addressPoint()) || !read(object,&current,8) ||
+           current!=addressPoint()) return false;
+        publication_=Publication::Published;return true;
+    }
+    template<class Read,class Write,class Admit>
+    bool detach(Read read,Write write,Admit admit) noexcept {
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            noexcept(write(uintptr_t{},uintptr_t{})) && noexcept(admit(uintptr_t{},size_t{})));
+        uintptr_t current=0;
+        if(publication_!=Publication::Published || !admit(object_,0x2cb8) ||
+           !read(object_,&current,8) || current!=addressPoint()) return false;
+        publication_=Publication::Ambiguous;
+        if(!write(object_,source_) || !read(object_,&current,8) || current!=source_) return false;
+        publication_=Publication::Detached;return true;
+    }
+};
+
 struct TglNativeCreatedVeboxRendererView {
     uintptr_t image=0,creator=0,renderer=0,configuration=0;
     std::array<uintptr_t,3> originalChildren{}; // 910/918/native920

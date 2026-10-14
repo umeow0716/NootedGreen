@@ -17106,6 +17106,37 @@ int main() {
         assert(!Table::capture(image,read,[](uintptr_t,size_t) noexcept {return false;},output));
         assert(!Table::capture(UINTPTR_MAX,read,executable,output));
         assert(output==saved);
+        TglOwnedPrimaryRendererTable owned;
+        const uintptr_t callback=0x20000000,object=0x30000000;
+        uintptr_t installed=image+0x75bba0;
+        auto ownerRead=[&](uintptr_t at,void* out,size_t n) noexcept {
+            if(at==object && n==8) {std::memcpy(out,&installed,8);return true;}
+            return read(at,out,n);
+        };
+        auto admit=[&](uintptr_t at,size_t n) noexcept {return at==object && n==0x2cb8;};
+        auto write=[&](uintptr_t at,uintptr_t value) noexcept {
+            if(at!=object) return false;installed=value;return true;
+        };
+        assert(owned.build(image,callback,ownerRead,
+            [](uintptr_t at) noexcept {return at==image;},executable,
+            [&](uintptr_t at,size_t) noexcept {return at==callback;}));
+        const auto* copied=reinterpret_cast<const uintptr_t*>(owned.addressPoint());
+        assert(copied[-2]==0 && copied[-1]==image+0x75bc00);
+        for(size_t i=0;i<12;++i)
+            assert(copied[i]==(i==10?callback:saved[i]));
+        assert(!owned.publish(object+8,ownerRead,write,admit));
+        assert(owned.publish(object,ownerRead,write,admit) && owned.requiresRetention());
+        assert(!owned.publish(object,ownerRead,write,admit));
+        assert(owned.detach(ownerRead,write,admit) && !owned.requiresRetention());
+        assert(installed==image+0x75bba0 && !owned.detach(ownerRead,write,admit));
+        TglOwnedPrimaryRendererTable uncertain;
+        assert(uncertain.build(image,callback,ownerRead,
+            [](uintptr_t at) noexcept {return at==image;},executable,
+            [&](uintptr_t at,size_t) noexcept {return at==callback;}));
+        assert(!uncertain.publish(object,ownerRead,
+            [](uintptr_t,uintptr_t) noexcept {return false;},admit));
+        assert(uncertain.requiresRetention() && uncertain.publication()==
+            TglOwnedPrimaryRendererTable::Publication::Ambiguous);
     }
     {
         std::array<uint8_t,0x139> parameters{};std::array<uint8_t,0x60> pass{};
