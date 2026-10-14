@@ -2329,6 +2329,18 @@ template<class SurfaceOwner> using NativeVeboxProducerTypesFor=TglOwnedVeboxFram
 using NativeVeboxProducerTypes=NativeVeboxProducerTypesFor<NativeContextSurfaceOwner>;
 template<class SurfaceOwner> using NativeVeboxProducerResolveFor=typename NativeVeboxProducerTypesFor<SurfaceOwner>::Resolve;
 using NativeVeboxProducerResolve=NativeVeboxProducerResolveFor<NativeContextSurfaceOwner>;
+template<class SurfaceOwner> struct NativeVeboxSendRenderScopeFor {
+    using Producer=typename NativeVeboxProducerTypesFor<SurfaceOwner>::Context;
+    using Render=NativeAllocatedAdmissionRenderFor<SurfaceOwner>;
+    using Result=typename NativeAdmissionStagesFor<SurfaceOwner>::Result;
+    void* context=nullptr;
+    Result(*invoke)(void*,Producer&,Render&) noexcept=nullptr;
+    int(*send)(void*) noexcept=nullptr;
+    bool valid() const noexcept {
+        return context && invoke && send && ownedExecutableMemory(reinterpret_cast<uintptr_t>(invoke),1) &&
+            ownedExecutableMemory(reinterpret_cast<uintptr_t>(send),1);
+    }
+};
 template<class SurfaceOwner> struct NativeVeboxFrameCapabilityScopeFor {
     using Use=typename NativeAdmissionStagesFor<SurfaceOwner>::Result(*)(void*,NativeVeboxLivePacketFrame&) noexcept;
     static typename NativeAdmissionStagesFor<SurfaceOwner>::Result run(NativeRendererCpuAssembly& assembly,
@@ -2382,7 +2394,8 @@ template<class SurfaceOwner> struct NativeVeboxPacketProducerScopeFor {
         return tglBindOwnedVeboxDndiHook<NativeVeboxProducerResolveFor<SurfaceOwner>>(hooks);
     }
     static typename NativeAdmissionStagesFor<SurfaceOwner>::Result run(NativeVeboxLivePacketFrame& frame,NativeDenoiseParameters& parameters,
-        NativeVeboxCscProducerFor<SurfaceOwner> csc,NativeAllocatedAdmissionRenderFor<SurfaceOwner>& render) noexcept {
+        NativeVeboxCscProducerFor<SurfaceOwner> csc,NativeAllocatedAdmissionRenderFor<SurfaceOwner>& render,
+        NativeVeboxSendRenderScopeFor<SurfaceOwner>* sendScope=nullptr) noexcept {
         typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
         auto& admission=render.render.admission;auto& child=admission.reset.childOwner;
         auto& execution=admission.reset.executionOwner;
@@ -2407,7 +2420,11 @@ template<class SurfaceOwner> struct NativeVeboxPacketProducerScopeFor {
                 if(!tglBuildOwnedVeboxCompleteHooks<Lifetime,NativeAdmissionResolveFor<SurfaceOwner>,NativeAllocationResolveFor<SurfaceOwner>,
                     NativeVeboxProducerResolveFor<SurfaceOwner>,NativeModeReleaseScope,TglOwnedFormatReader>(object,hooks) ||
                     !child.matchesPrivateVtableHooks(hooks))return 5;
-                return producer.pass.withBuilder([&]() noexcept -> int {result=render.run();return result.status;});
+                if(sendScope && (!sendScope->valid() || !child.matchesPrivateSend(sendScope->send)))return 5;
+                return producer.pass.withBuilder([&]() noexcept -> int {
+                    result=sendScope?sendScope->invoke(sendScope->context,producer,render):render.run();
+                    return result.status;
+                });
             });
         if(status) {result.status=status;result.admitted=false;}
         return result;
@@ -2422,6 +2439,7 @@ template<class SurfaceOwner> struct NativeCompleteFrameConsumerFor {
     NativeDenoiseParameters& parameters;NativeVeboxCscProducerFor<SurfaceOwner> csc;
     NativeAllocatedAdmissionRenderFor<SurfaceOwner>& render;
     bool attempted=false;
+    NativeVeboxSendRenderScopeFor<SurfaceOwner>* sendScope=nullptr;
     typename NativeAdmissionStagesFor<SurfaceOwner>::Result run() noexcept {
         typename NativeAdmissionStagesFor<SurfaceOwner>::Result result;
         auto& admission=render.render.admission;
@@ -2433,7 +2451,7 @@ template<class SurfaceOwner> struct NativeCompleteFrameConsumerFor {
         return NativeVeboxFrameCapabilityScopeFor<SurfaceOwner>::run(assembly,view,capture,leases,this,
             [](void* context,NativeVeboxLivePacketFrame& frame) noexcept -> typename NativeAdmissionStagesFor<SurfaceOwner>::Result {
                 auto& self=*static_cast<NativeCompleteFrameConsumerFor*>(context);
-                return NativeVeboxPacketProducerScopeFor<SurfaceOwner>::run(frame,self.parameters,self.csc,self.render);
+                return NativeVeboxPacketProducerScopeFor<SurfaceOwner>::run(frame,self.parameters,self.csc,self.render,self.sendScope);
             });
     }
     static TglOwnedVeboxCommandTransactionResult consume(void* context,NativeRendererCpuAssembly& cpu,
@@ -2767,6 +2785,44 @@ struct NativeVeboxSendSubmissionStage {
 };
 template struct NativeVeboxSendSubmissionStage::ProducerRequest<NativeContextSurfaceOwner>;
 template struct NativeVeboxSendSubmissionStage::ProducerRequest<NativeTemporarySurfaceOwner>;
+template<class SurfaceOwner> struct NativeVeboxRenderSendRequestFor {
+    using Stage=NativeVeboxSendSubmissionStage;
+    using Scope=NativeVeboxSendRenderScopeFor<SurfaceOwner>;
+    NativeContextRendererFrame& frame;TglNativeVeboxSendTailBinding& tail;
+    const TglNativeOsCommandSubmitBinding& submit;const TglNativeVeboxSetupBinding& setup;
+    const TglNativeVeboxBuilderBinding& builder;TglOwnedVeboxBuilderScratch& scratch;
+    TglOwnedVeboxFrameRetention& retention;uintptr_t image,os;
+    Stage::Admit admit;Stage::AdmitChild admitChild;bool attempted=false;
+    static typename Scope::Result dispatch(void* raw,typename Scope::Producer& producer,
+        typename Scope::Render& render) noexcept {
+        typename Scope::Result result;
+        if(!raw)return result;
+        auto& request=*static_cast<NativeVeboxRenderSendRequestFor*>(raw);
+        if(request.attempted || request.image!=render.render.binding.image ||
+            &request.retention!=&render.render.admission.reset.backing.retention())return result;
+        request.attempted=true;
+        TglOwnedVeboxCommandTransactionResult command;
+        Stage::SendContext context{request.frame,producer.pass,request.tail,request.submit,
+            request.scratch,command,request.retention,request.image,request.admit,request.admitChild};
+        typename Stage::template ProducerRequest<SurfaceOwner> preparation{context,
+            render.render.admission.feature.sourceOwner,producer,request.setup,request.builder,request.os};
+        struct Call {
+            typename Scope::Render& render;typename Scope::Result& result;
+            static int invoke(void* raw) noexcept {
+                auto& self=*static_cast<Call*>(raw);self.result=self.render.run();return self.result.status;
+            }
+        } call{render,result};
+        const int status=preparation.withNativeCall(&call,&Call::invoke);
+        TglOwnedVeboxCommandSequence sequence;sequence.observe(result.native);sequence.observe(command);
+        result.native=sequence.finish(status);request.retention.observe(result.native);
+        result.status=status?status:result.native.status;
+        result.admitted=result.admitted && !result.status;
+        return result;
+    }
+    Scope scope() noexcept {return {this,&dispatch,&Stage::send};}
+};
+template struct NativeVeboxRenderSendRequestFor<NativeContextSurfaceOwner>;
+template struct NativeVeboxRenderSendRequestFor<NativeTemporarySurfaceOwner>;
 using NativePhysicalRegistry=TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;
 using NativePhysicalFrameScope=typename NativePhysicalRegistry::Scope;
 using NativePhysicalCallbacks=TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,
