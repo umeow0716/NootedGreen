@@ -2698,6 +2698,30 @@ struct NativeVeboxSendSubmissionStage {
         return context->result;
     }
     using NativeCall=int(*)(void*) noexcept;
+    template<class SurfaceOwner> struct ProducerRequest {
+        SendContext& send;SurfaceOwner& sourceOwner;
+        typename NativeVeboxProducerTypesFor<SurfaceOwner>::Context& packets;
+        const TglNativeVeboxSetupBinding& setup;const TglNativeVeboxBuilderBinding& builder;
+        uintptr_t os;bool attempted=false;
+        static int prepare(void* raw,SendContext& active,void* child) noexcept {
+            if(!raw)return 5;
+            auto& request=*static_cast<ProducerRequest*>(raw);
+            if(request.attempted || &request.send!=&active ||
+                &request.packets.pass!=&active.pass ||
+                request.packets.leases.child!=reinterpret_cast<uintptr_t>(child))return 5;
+            request.attempted=true;
+            return buildCommand(active,request.sourceOwner,request.packets.childOwner,
+                request.packets.executionOwner,child,request.packets.leases.execution,
+                request.packets.leases.source,request.packets,request.setup,request.builder,request.os);
+        }
+        int withNativeCall(void* argument,NativeCall call) noexcept {
+            if(attempted || send.entered || send.build || send.buildContext)return 5;
+            send.buildContext=this;send.build=&prepare;
+            const int result=withSendScope(reinterpret_cast<void*>(packets.leases.child),send,argument,call);
+            send.build=nullptr;send.buildContext=nullptr;
+            return result;
+        }
+    };
     static int withSendScope(void* child,SendContext& context,void* argument,NativeCall call) noexcept {
         if(!child || !argument || !call || !context.buildContext || !context.build ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(context.build),1) ||
@@ -2740,34 +2764,9 @@ struct NativeVeboxSendSubmissionStage {
         retention.observe(command);
         return status;
     }
-    static int setup(const TglNativeVeboxSetupBinding& binding,uintptr_t child,
-        TglOwnedVeboxBuilderScratch& scratch,int32_t& remaining,uintptr_t image,
-        TglOwnedVeboxProducerPass& pass) noexcept {
-        if(!pass.acceptsProducer())return 5;
-        const int status=binding.callOwned(child,scratch,remaining,&readMemory,
-            NativeTglImageAdmission{image},&executableMemory);
-        if(!pass.record(status))return status?status:5;
-        return status?status:(pass.acceptsProducer()?0:pass.submissionStatus(0));
-    }
-    static int run(NativeContextRendererFrame& frame,TglOwnedVeboxProducerPass& pass,
-        const TglNativeOsCommandSubmitBinding& binding,TglOwnedVeboxBuilderScratch& scratch,
-        TglOwnedVeboxCommandTransactionResult& command,TglOwnedVeboxFrameRetention& retention,
-        uint32_t flags,Admit admit) noexcept {
-        int prior=command.status;
-        if(!prior && (!command.acquired || !command.writtenBack || command.builderStatus))
-            prior=command.builderStatus?command.builderStatus:5;
-        if(!prior && (flags>1 || !admit || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1)))prior=5;
-        const int status=pass.withSubmission(prior,[&]() noexcept -> int {
-            const auto observed=frame.observeNativeOsSubmit(binding,scratch.command.data(),flags,&readMemory,admit);
-            command.nativeEntered=command.nativeEntered || observed.submit.called;
-            const int native=observed.submit.status();
-            return native?native:(observed.observed && !frame.invalidated()?0:5);
-        });
-        if(!command.status && status)command.status=status;
-        retention.observe(command); // before any Send/packet/resource scope unwinds
-        return status;
-    }
 };
+template struct NativeVeboxSendSubmissionStage::ProducerRequest<NativeContextSurfaceOwner>;
+template struct NativeVeboxSendSubmissionStage::ProducerRequest<NativeTemporarySurfaceOwner>;
 using NativePhysicalRegistry=TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;
 using NativePhysicalFrameScope=typename NativePhysicalRegistry::Scope;
 using NativePhysicalCallbacks=TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,
