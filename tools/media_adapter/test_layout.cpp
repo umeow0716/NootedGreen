@@ -15046,6 +15046,76 @@ static void testRetainedVeboxFrames() {
                             },[](auto&) noexcept -> int {return 0;})==0);
                         }
                         assert(flushed.clear());
+                        if(mode==1 || mode==4) {
+                            static_assert(TglRetainedFrameNativeState<Storage>::supported);
+                            TglOwnedVeboxPhysicalFrameRegistry<Storage,1> work;
+                            const auto ticket=work.reserve(image);assert(ticket.generation);
+                            assert(work.publish(ticket,image,0x8000));
+                            decltype(owners) generationOwners;unsigned generationDeaths=0;
+                            assert(generationOwners.adopt(image,0x8000,ticket.generation,
+                                new NativeContextOwner{0x20000,generationDeaths}));
+                            using Work=decltype(work);typename Work::FrameTicket firstFrame,otherFrame;
+                            assert(work.withLive(ticket,image,0x8000,[&](auto& pool) noexcept -> int {
+                                firstFrame=pool.create(generationOwners,image,0x8000,ticket.generation,renderRoots,
+                                    address,historyAddress,readGraph,admitGraph,admitGraph,construct);
+                                otherFrame=pool.create(generationOwners,image,0x8000,ticket.generation,renderRoots,
+                                    address,historyAddress,readGraph,admitGraph,admitGraph,construct);
+                                assert(firstFrame.generation && otherFrame.generation);return 0;
+                            })==0);
+                            nativeContext=0x78000;flags=0;reportReadable=true;flushes=0;
+                            assert(work.withLive(ticket,image,0x8000,[&](auto& pool) noexcept -> int {
+                                const auto run=pool.run(firstFrame,[&](auto& held) noexcept {
+                                    const int status=held.withFrame([&](auto&) noexcept -> int {
+                                        const auto observation=held.observeNativeFlush(flush,flushContext,reportRead,admitFlush,invoke);
+                                        assert(observation.called && flushes==1);return int(observation.nativeStatus);
+                                    });
+                                    // Native flush happened even though consumer omitted nativeEntered.
+                                    return TglOwnedVeboxCommandTransactionResult{status,0,false,false,false};
+                                });
+                                assert(pool.workFaulted() && run.status==(mode==4?31:5) && run.builderStatus==0);
+                                assert(!pool.create(generationOwners,image,0x8000,ticket.generation,renderRoots,
+                                    address,historyAddress,readGraph,admitGraph,admitGraph,construct).generation);
+                                assert(pool.run(otherFrame,[](auto&) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                    assert(false);return {};
+                                }).status==5);
+                                return mode==4?run.status:0; // Preserve31; refuse masked success on observed fault.
+                            })==(mode==4?31:5));
+                            assert(!work.lookup(image,0x8000).generation);
+                            assert(!work.pinDependency(ticket,image,0x8000).live());
+                            assert(work.withLive(ticket,image,0x8000,[](auto&) noexcept -> int {assert(false);return 0;})==5);
+                            auto denied=[](uintptr_t,uintptr_t,uint64_t) noexcept -> int {return 31;};
+                            assert(work.withFaultedFrames(ticket,image,0x8000,denied,
+                                [](auto&) noexcept -> int {assert(false);return 0;})==31);
+                            auto quiescent=[&](uintptr_t i,uintptr_t p,uint64_t g) noexcept -> int {
+                                assert(i==image && p==0x8000 && g==ticket.generation);
+                                return 0; // Explicit generation CPU-fixture certificate, NOT hardware proof.
+                            };
+                            assert(work.withFaultedFrames(ticket,image,0x8000,quiescent,[&](auto& pool) noexcept -> int {
+                                for(auto frame:{firstFrame,otherFrame}) {
+                                    const int result=pool.retirePrepared(frame,
+                                        [&](const auto&,bool pending,const auto&) noexcept -> int {
+                                            assert(pending==(frame.generation==firstFrame.generation));return 0;
+                                        },[](auto& held,bool,const auto&) noexcept -> int {
+                                            if(held.invalidated())return held.prepareQuiescentRetirement(
+                                                [](const auto&,bool,uint32_t,bool) noexcept -> int {return 0;},
+                                                [](auto&) noexcept -> int {return 0;});
+                                            return held.prepareRetirement([](const auto&,bool) noexcept -> int {return 0;},
+                                                [](auto&) noexcept -> int {return 0;});
+                                        });
+                                    if(result)return result;
+                                }
+                                assert(pool.workFaulted());
+                                assert(!pool.create(generationOwners,image,0x8000,ticket.generation,renderRoots,
+                                    address,historyAddress,readGraph,admitGraph,admitGraph,construct).generation);
+                                return 0;
+                            })==0);
+                            assert(work.withLive(ticket,image,0x8000,[](auto&) noexcept -> int {assert(false);return 0;})==5);
+                            assert(generationOwners.reconcileSuccessfulRemoval(image,0x8000,ticket.generation,removed)==0 && generationDeaths==1);
+                            unsigned physicalDestroys=0;
+                            assert(work.destroy(ticket,image,0x8000,[&](uintptr_t p) noexcept -> int {
+                                assert(p==0x8000);++physicalDestroys;return 0;
+                            })==0 && physicalDestroys==1);
+                        }
                     }
                 }
                 {

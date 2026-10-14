@@ -21290,6 +21290,21 @@ public:
         status=value;return true;
     }
 };
+template<class Registry,class Renderer,size_t Capacity> class TglNativeContextRendererFrameStorage;
+// Legacy CPU-only pool fixtures have no native fault state. Production uses
+// the explicit concrete owner specialization, not optional method detection.
+template<class Frame> struct TglRetainedFrameNativeState {
+    static constexpr bool supported=false;
+    static bool invalidated(const Frame&) noexcept {return false;}
+    static bool retained(const Frame&) noexcept {return false;}
+};
+template<class Registry,class Renderer,size_t Capacity>
+struct TglRetainedFrameNativeState<TglNativeContextRendererFrameStorage<Registry,Renderer,Capacity>> {
+    static constexpr bool supported=true;
+    using Frame=TglNativeContextRendererFrameStorage<Registry,Renderer,Capacity>;
+    static bool invalidated(const Frame& frame) noexcept {return frame.invalidated();}
+    static bool retained(const Frame& frame) noexcept {return frame.requiresRetention();}
+};
 template<class Frame,size_t Capacity=2> class TglOwnedVeboxRetainedFrames {
     static_assert(Capacity>0 && Capacity<=2,"bounded pending-frame budget");
     static_assert(std::is_nothrow_destructible_v<Frame>,"frame cleanup must not throw");
@@ -21302,9 +21317,11 @@ template<class Frame,size_t Capacity=2> class TglOwnedVeboxRetainedFrames {
     // reconstructed at the same address must not resurrect an old ticket.
     inline static std::atomic<uint64_t> nextGeneration_{0};
     bool physicalTeardownStarted_=false;
+    std::atomic<bool> workFaulted_{false}; // sticky for this physical generation
     bool nativeRequestItemActive_=false; // protected by enclosing registry gate
     struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}};
 public:
+    bool workFaulted() const noexcept {return workFaulted_.load(std::memory_order_acquire);}
     // Embed in a stable-address per-physical registry entry. Keep that entry
     // until all frames retire; unresolved frames are not destructor-cleaned.
     TglOwnedVeboxRetainedFrames()=default;
@@ -21322,7 +21339,7 @@ public:
         static_assert(std::is_nothrow_constructible_v<Frame,Args...>,"frame construction reports native failures separately");
         if(gate_.test_and_set(std::memory_order_acquire)) return {};
         Unlock unlock{gate_};
-        if(physicalTeardownStarted_) return {};
+        if(physicalTeardownStarted_ || workFaulted()) return {};
         for(size_t i=0;i<Capacity;++i) if(!slots_[i].frame) {
             auto generation=nextGeneration_.load(std::memory_order_relaxed);
             do {
@@ -21341,7 +21358,7 @@ public:
             std::is_same_v<decltype(invoke(std::declval<Frame&>())),TglOwnedVeboxCommandTransactionResult>);
         if(gate_.test_and_set(std::memory_order_acquire)) return {};
         Unlock unlock{gate_};
-        if(physicalTeardownStarted_ || ticket.pool!=this || ticket.index>=Capacity) return {};
+        if(physicalTeardownStarted_ || workFaulted() || ticket.pool!=this || ticket.index>=Capacity) return {};
         auto& slot=slots_[ticket.index];
         if(!slot.frame || !ticket.generation || slot.generation!=ticket.generation || slot.pending) return {};
         slot.result=invoke(*slot.frame);
@@ -21349,7 +21366,12 @@ public:
         // Retain it conservatively and expose the protocol failure unchanged
         // from the original builder result.
         if(slot.result.writtenBack && !slot.result.acquired) slot.result.status=5;
-        slot.pending=slot.result.requiresRetention();
+        const bool fault=TglRetainedFrameNativeState<Frame>::invalidated(*slot.frame);
+        slot.pending=slot.result.requiresRetention() || TglRetainedFrameNativeState<Frame>::retained(*slot.frame) || fault;
+        if(fault) {
+            workFaulted_.store(true,std::memory_order_release);
+            if(!slot.result.status)slot.result.status=5;
+        }
         return slot.result;
     }
     // Bind only to the exact retained frame ticket, under its physical scope.
@@ -21381,7 +21403,7 @@ public:
     bool emptyForNativeRequest() noexcept {
         if(gate_.test_and_set(std::memory_order_acquire)) return false;
         Unlock unlock{gate_};
-        if(physicalTeardownStarted_) return false;
+        if(physicalTeardownStarted_ || workFaulted()) return false;
         for(const auto& slot:slots_) if(slot.frame) return false;
         return true;
     }
@@ -21521,7 +21543,9 @@ public:
     public:
         Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
         // Called while the enclosing physical gate is held; no recursive lookup.
-        DependencyLease retainPhysicalDependency() noexcept {return retainDependency(entry_);}
+        DependencyLease retainPhysicalDependency() noexcept {
+            return frames_.workFaulted()?DependencyLease{}:retainDependency(entry_);
+        }
         // Pass this exact scope through synchronous owned renderer dispatch;
         // never reenter the enclosing registry gate or retain Scope references.
         template<class Invoke> int withNativeRequestItem(uintptr_t context,Invoke invoke) noexcept {
@@ -21603,7 +21627,7 @@ public:
         Unlock unlock{gate_};
         for(size_t i=0;i<Capacity;++i) {
             const auto* entry=entries_[i];
-            if(entry && entry->state==State::Live && entry->image==image && entry->physical==physical)
+            if(entry && entry->state==State::Live && !entry->frames.workFaulted() && entry->image==image && entry->physical==physical)
                 return {i,entry->generation,this};
         }
         return {};
@@ -21611,7 +21635,7 @@ public:
     DependencyLease pinDependency(Ticket ticket,uintptr_t image,uintptr_t physical) noexcept {
         if(gate_.test_and_set(std::memory_order_acquire)) return {};
         Unlock unlock{gate_};auto* entry=resolve(ticket);
-        if(!entry || entry->state!=State::Live || entry->image!=image || entry->physical!=physical) return {};
+        if(!entry || entry->state!=State::Live || entry->frames.workFaulted() || entry->image!=image || entry->physical!=physical) return {};
         return retainDependency(*entry);
     }
     template<class Use> int withLive(Ticket ticket,uintptr_t image,uintptr_t physical,Use use) noexcept {
@@ -21619,8 +21643,29 @@ public:
             std::is_same_v<decltype(use(std::declval<Pool&>())),int>);
         if(gate_.test_and_set(std::memory_order_acquire)) return 5;
         Unlock unlock{gate_};auto* entry=resolve(ticket);
-        if(!entry || entry->state!=State::Live || entry->image!=image || entry->physical!=physical) return 5;
-        return use(entry->frames); // scoped access; never publish this reference
+        if(!entry || entry->state!=State::Live || entry->frames.workFaulted() || entry->image!=image || entry->physical!=physical) return 5;
+        const int result=use(entry->frames); // scoped access; never publish this reference
+        return result?result:(entry->frames.workFaulted()?5:0);
+    }
+    // Fault cleanup never reopens work admission. Native partial-teardown
+    // Quarantined entries are excluded; they cannot safely reenter callbacks.
+    template<class Quiescent,class Cleanup>
+    int withFaultedFrames(Ticket ticket,uintptr_t image,uintptr_t physical,
+        Quiescent quiescent,Cleanup cleanup) noexcept {
+        static_assert(noexcept(quiescent(uintptr_t{},uintptr_t{},uint64_t{})) &&
+            std::is_same_v<decltype(quiescent(uintptr_t{},uintptr_t{},uint64_t{})),int> &&
+            noexcept(cleanup(std::declval<Pool&>())) &&
+            std::is_same_v<decltype(cleanup(std::declval<Pool&>())),int>);
+        if(gate_.test_and_set(std::memory_order_acquire))return 5;
+        Unlock unlock{gate_};auto* entry=resolve(ticket);
+        if(!entry || entry->state!=State::Live || !entry->frames.workFaulted() ||
+           entry->image!=image || entry->physical!=physical)return 5;
+        const int status=quiescent(image,physical,ticket.generation);
+        if(status)return status;
+        entry->state=State::Quarantined; // BEFORE potentially partial native detach
+        const int result=cleanup(entry->frames);
+        if(!result)entry->state=State::Live; // identity only: sticky work fault still rejects ALL work
+        return result;
     }
     template<class Use> int withScope(Ticket ticket,uintptr_t image,uintptr_t physical,Use use) noexcept {
         static_assert(noexcept(use(std::declval<Scope&>())) &&
@@ -24371,6 +24416,9 @@ public:
     }
     bool surfacesReady() const noexcept {return renderer_ && renderer_->surfacesReady();}
     bool invalidated() const noexcept {return flushUncertain_ || lossFlags_;}
+    bool requiresRetention() const noexcept {
+        return flushEntered_ || (renderer_ && renderer_->backing().retention()());
+    }
     uint32_t lossFlags() const noexcept {return lossFlags_;}
     bool flushUncertain() const noexcept {return flushUncertain_;}
     // Enter only from this frame's withFrame producer scope. Admit verifies
