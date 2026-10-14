@@ -3977,6 +3977,9 @@ struct NativeCreatorPreparation {
     struct Record {
         uintptr_t image=0,physical=0,creator=0,renderer=0;uint64_t generation=0;
         NativeRendererCpuAssembly* storage=nullptr;NativeVphalOwner* owner=nullptr;
+        // Per-pass retained allocations must never reference a stack backend
+        // or the shorter-lived AVD factory Entry. This ledger outlives both.
+        std::unique_ptr<NativeRetainedTemporaryTransaction::Backend> passBackend;
         bool used=false,adopted=false,lifetimePublished=false,childrenReady=false;
         bool publicationAttempted=false,childrenPublished=false;
         bool mainPublicationAttempted=false,mainPublished=false;
@@ -4004,6 +4007,10 @@ struct NativeCreatorPreparation {
                 record->used=true;record->image=image;record->physical=address;
                 record->generation=generation;record->creator=creator;
                 record->selection=selection;
+                record->passBackend.reset(new(std::nothrow) NativeRetainedTemporaryTransaction::Backend(
+                    image,&readMemory,NativeTglImageAdmission{image},&executableMemory,TglNativeTrackedCpuInvoker{}));
+                if(!record->passBackend || !record->passBackend->bound() ||
+                    record->passBackend->image()!=factory.nativeCpu.image)return 5;
                 Entry::ConstructionParent parent;TglNativeVphalResourceEnvironment environment;
                 if(!factory.constructionResourceEnvironment(std::move(pin),creator,parent,environment) || !parent.view()) {
                     *record={};return 5; // No owned candidate/publication exists.
@@ -4130,6 +4137,26 @@ struct NativeCreatorPreparation {
                 NativeTglImageAdmission{image},&executableMemory,&ownedExecutableMemory);
             return record->mainPublished?0:5;
         });
+    }
+    template<class PhysicalScope>
+    static NativeRetainedTemporaryTransaction::Backend* passBackendFor(PhysicalScope& physical,
+        uintptr_t image,uintptr_t address,uint64_t generation,uintptr_t creator,uintptr_t renderer) noexcept {
+        if(!physical.matches(image,address,generation) || !creator || !renderer)return nullptr;
+        auto& state=ledger();
+        if(state.gate.test_and_set(std::memory_order_acquire))return nullptr;
+        struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
+        for(auto& record:state.records) {
+            if(!record.used || record.image!=image || record.physical!=address ||
+                record.generation!=generation || record.creator!=creator || record.renderer!=renderer)continue;
+            if(!record.adopted || !record.lifetimePublished || !record.childrenReady || !record.childrenPublished ||
+                !record.mainPublished || !record.selection.ownedSend ||
+                record.selection.domain!=NativeRendererCallbackDomain::Temporary || !record.passBackend ||
+                !record.passBackend->bound() || record.passBackend->image()!=image)return nullptr;
+            // Ledger retains this value-owned backend, including failed work.
+            // Returning it does not grant frame retirement or GPU completion.
+            return record.passBackend.get();
+        }
+        return nullptr;
     }
     // Full synchronous construction handoff, not a component-success alias.
     // Each component keeps its persistent partial state; failure never retries
@@ -4464,6 +4491,8 @@ template int NativeRendererCpuAssembly::withChildLifetimeScopes<
     int(*)(void*,void*,NativeRendererChildLifetime&,NativeRendererChildLifetime&) noexcept) noexcept;
 template int NativeCreatorPreparation::prepareOwner<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,const Entry&,uintptr_t,uintptr_t,uint64_t,uintptr_t,NativeRendererConstructionSelection) noexcept;
+template NativeRetainedTemporaryTransaction::Backend* NativeCreatorPreparation::passBackendFor<NativePhysicalFrameScope>(
+    NativePhysicalFrameScope&,uintptr_t,uintptr_t,uint64_t,uintptr_t,uintptr_t) noexcept;
 template int NativeCreatorPreparation::initializeChildren<TglOwnedPhysicalMutationAuthority>(
     TglOwnedPhysicalMutationAuthority&,uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 template int NativeCreatorPreparation::publishChildren<TglOwnedPhysicalMutationAuthority>(
