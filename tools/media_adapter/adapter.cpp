@@ -390,6 +390,37 @@ struct NativeModeRetirementAuthority {
     void* scope=nullptr;int(*admit)(void*) noexcept=nullptr;
     int operator()() const noexcept {return scope && admit?admit(scope):5;}
 };
+using NativeRendererBacking=std::remove_reference_t<decltype(std::declval<NativeRendererCpu&>().backing())>;
+struct NativeAdmissionReset {
+    NativeRendererChildOwner& childOwner;
+    NativeExecutionOwner& executionOwner;
+    NativeRendererBacking& backing;
+    NativeModeRetirementAuthority& retirement;
+    size_t index;void* child;uintptr_t execution;void* vp;
+    bool operator()() noexcept {
+        const auto address=reinterpret_cast<uintptr_t>(child);
+        const uint64_t generation=childOwner.allocationGeneration();
+        if(index>1 || !child || !vp || !generation || !retirement.scope || !retirement.admit ||
+            backing.retention()() || !childOwner.hasPrivateChildLease(address) ||
+            !executionOwner.hasExecutionLease(execution))return false;
+        auto admitRetirement=[&]() noexcept -> int {
+            if(backing.retention()() || childOwner.allocationGeneration()!=generation ||
+                !childOwner.hasPrivateChildLease(address) || !executionOwner.hasExecutionLease(execution))return 5;
+            const int status=retirement();
+            return status?status:(!backing.retention()() && childOwner.allocationGeneration()==generation &&
+                childOwner.hasPrivateChildLease(address) && executionOwner.hasExecutionLease(execution)?0:5);
+        };
+        using VpReset=TglOwnedVeboxPersistentVpAdmissionReset<NativeRendererChildOwner,
+            NativeRendererBacking,decltype(admitRetirement)>;
+        VpReset reset{childOwner,backing,index,child,vp,admitRetirement};
+        TglOwnedVeboxAdmissionResetStage<NativeRendererChildOwner,NativeExecutionOwner,VpReset>
+            stage{childOwner,executionOwner,child,execution,reset};
+        const bool accepted=stage();
+        return accepted && childOwner.allocationGeneration()==generation &&
+            childOwner.hasPrivateChildLease(address) && executionOwner.hasExecutionLease(execution) &&
+            !backing.retention()();
+    }
+};
 using NativeSurfaceFrameBacking=TglNativeVeboxSurfaceFrameStorage<TglDarwinStmmSurfaceApi>;
 using NativeVpLines=std::remove_reference_t<decltype(std::declval<TglNativeVpLineResourceStorage&>().resources())>;
 using NativeModeReleaseContext=TglOwnedVeboxModeReleaseContext<NativeSurfaceFrameBacking,
