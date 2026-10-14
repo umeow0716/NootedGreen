@@ -5676,6 +5676,57 @@ static void testVeboxPrefix() {
 
 static void testVeboxStateNativeOwnership() {
     {
+        alignas(8) std::array<uint8_t,0x88> base{};
+        std::array<uint8_t,0x80> hal{};std::array<uint8_t,0x6c> sku{};
+        std::array<uint8_t,8> vp{};
+        const uintptr_t address=reinterpret_cast<uintptr_t>(base.data());
+        const uintptr_t halAddress=reinterpret_cast<uintptr_t>(hal.data());
+        const uintptr_t skuAddress=reinterpret_cast<uintptr_t>(sku.data());
+        const uintptr_t vpAddress=reinterpret_cast<uintptr_t>(vp.data());
+        std::memcpy(base.data()+0x18,&halAddress,8);std::memcpy(base.data()+0x20,&skuAddress,8);
+        std::memcpy(hal.data()+0x78,&skuAddress,8);
+        TestVeboxChildLease owner{base.data()};
+        struct Graph {
+            void* vp;mutable unsigned calls=0;
+            bool ownsStorage(void* actual) const noexcept {++calls;return actual==vp;}
+        } graph{vp.data()};
+        unsigned vpReads=0;
+        auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+            if(p==address+0x80)++vpReads;
+            auto copy=[&](const auto& bytes) noexcept {
+                const uintptr_t start=reinterpret_cast<uintptr_t>(bytes.data());
+                if(p<start || p-start>bytes.size() || n>bytes.size()-(p-start))return false;
+                std::memcpy(out,bytes.data()+p-start,n);return true;
+            };
+            return copy(base)||copy(hal)||copy(sku);
+        };
+        for(uint64_t word:{uint64_t{0},uint64_t{1}<<12,uint64_t{1}<<17})for(bool present:{false,true}) {
+            const uintptr_t link=present?vpAddress:0;std::memcpy(base.data()+0x80,&link,8);
+            std::memcpy(sku.data()+0x64,&word,8);graph.calls=vpReads=0;
+            bool release=true;
+            assert(owner.withPrivateChild([&](void* child) noexcept -> int {
+                return tglSelectLeasedVeboxSfcRelease(release,owner,child,halAddress,skuAddress,graph,read)?0:5;
+            })==0);
+            const bool enabled=(word&(uint64_t{1}<<17))!=0;
+            assert(release==(enabled && present) && graph.calls==unsigned(enabled && present)*2 && vpReads==unsigned(enabled)*2);
+        }
+        bool release=false;const uint64_t word=uint64_t{1}<<17;
+        std::memcpy(sku.data()+0x64,&word,8);std::memcpy(base.data()+0x80,&vpAddress,8);
+        assert(!tglSelectLeasedVeboxSfcRelease(release,owner,base.data(),halAddress,skuAddress,graph,read));
+        assert(owner.withPrivateChild([&](void* child) noexcept -> int {
+            graph.vp=nullptr;
+            assert(!tglSelectLeasedVeboxSfcRelease(release,owner,child,halAddress,skuAddress,graph,read) && !release);
+            graph.vp=vp.data();unsigned words=0;
+            auto mutate=[&](uintptr_t p,void* out,size_t n) noexcept {
+                const bool copied=read(p,out,n);
+                if(p==skuAddress+0x64 && ++words==1) {const uint64_t zero=0;std::memcpy(sku.data()+0x64,&zero,8);}
+                return copied;
+            };
+            assert(!tglSelectLeasedVeboxSfcRelease(release,owner,child,halAddress,skuAddress,graph,mutate) && !release);
+            return 0;
+        })==0);
+    }
+    {
         std::array<uint8_t,0x28> base{};
         std::array<uint8_t,0x80> renderHal{};
         std::array<uint8_t,0x6c> sku{};

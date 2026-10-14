@@ -167,6 +167,13 @@ using NativeAllocationSfcFormat=TglOwnedVeboxSfcModeQuery<true,NativeRendererChi
 using NativeAllocationSfcColor=TglOwnedVeboxSfcModeQuery<false,NativeRendererChildOwner,NativeVpModeResolve>;
 using NativeExecutionBackend=TglExecutionBackend<decltype(&readMemory),NativeTglImageAdmission,TglNativeExecutionInvoker>;
 using NativeExecutionOwner=TglExecutionOwner<NativeExecutionBackend>;
+using NativeVpGraph=std::remove_reference_t<decltype(std::declval<TglNativeVpCpuStorage<>&>().graph())>;
+struct NativeSfcReleaseSelection {
+    NativeRendererChildOwner& owner;void* child;uintptr_t renderHal,sku;NativeVpGraph& graph;
+    bool operator()(bool& output) const noexcept {
+        return tglSelectLeasedVeboxSfcRelease(output,owner,child,renderHal,sku,graph,&readMemory);
+    }
+};
 static_assert(sizeof(NativeRendererCpu)>0 && !std::is_copy_constructible_v<NativeRendererCpu>);
 class NativeRendererCpuAssembly {
     static TglExecutionBinding executionBinding(uintptr_t image) noexcept {

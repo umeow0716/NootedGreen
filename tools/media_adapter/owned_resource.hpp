@@ -16628,6 +16628,34 @@ bool tglReadOwnedVeboxSkuWord(uint64_t& output,uintptr_t child,
     output=candidate;return true;
 }
 
+// ICL1f8865..1f88a7 selectively releases VP30 only for SKU64 bit17
+// and nonnull child80. This is NOT TGL126cf0's outer SKU DWORD bit12 gate.
+template<class ChildOwner,class Graph,class Read>
+bool tglSelectLeasedVeboxSfcRelease(bool& output,ChildOwner& owner,void* child,
+    uintptr_t renderHal,uintptr_t sku,Graph& graph,Read read) noexcept {
+    const uintptr_t address=reinterpret_cast<uintptr_t>(child);
+    const uint64_t generation=owner.allocationGeneration();
+    if(!generation || !address || address>UINTPTR_MAX-0x87 ||
+        !owner.hasPrivateChildLease(address))return false;
+    uint64_t word=0;
+    if(!tglReadOwnedVeboxSkuWord(word,address,renderHal,sku,read))return false;
+    uintptr_t vp=0;bool release=false;
+    if(word&(uint64_t{1}<<17)) {
+        if(!read(address+0x80,&vp,8))return false;
+        if(vp) {
+            static_assert(noexcept(graph.ownsStorage(reinterpret_cast<void*>(vp))));
+            if(!graph.ownsStorage(reinterpret_cast<void*>(vp)))return false;
+            release=true;
+        }
+    }
+    uint64_t after=0;uintptr_t afterVp=0;
+    if(!owner.hasPrivateChildLease(address) || owner.allocationGeneration()!=generation ||
+        !tglReadOwnedVeboxSkuWord(after,address,renderHal,sku,read) || after!=word ||
+        ((word&(uint64_t{1}<<17)) && (!read(address+0x80,&afterVp,8) || afterVp!=vp)) ||
+        (release && !graph.ownsStorage(reinterpret_cast<void*>(vp))))return false;
+    output=release;return true;
+}
+
 // Full ICL1fad80 final branch and pinned Gen12 SetupVeboxState2356 identify
 // this Darwin SKU64 bit38 as FtrSingleVeboxSlice. Linux bitfield layout is
 // NOT used: only its feature meaning is the reference.
