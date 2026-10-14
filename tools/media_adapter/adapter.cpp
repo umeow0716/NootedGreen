@@ -1508,6 +1508,48 @@ public:
 };
 template int NativeCompleteFrameDataScope::run<int(*)(NativeFrameDataRead&) noexcept>(
     int(*)(NativeFrameDataRead&) noexcept) noexcept;
+struct NativeLeasedFrameInputScope {
+    struct Inputs {
+        NativeRendererCpuAssembly& assembly;size_t index;
+        NativeContextSurfaceOwner& sourceOwner;NativeContextSurfaceOwner& targetOwner;
+        const TglNativeCreatedVeboxRendererView& pinned;
+        const TglVeboxAdmissionBorrowedInterfaces& interfaces;
+        uintptr_t parameters,pass;
+    };
+    template<class Use> static TglOwnedVeboxCommandTransactionResult run(Inputs& in,Use use) noexcept {
+        if constexpr(std::is_pointer_v<Use>)if(!use)return {};
+        if(in.index>1 || !in.pinned.creator || !in.pinned.renderer)return {};
+        return in.assembly.withChildVpResources(in.index,[&](auto& owner,auto& execution,void* child,
+            uintptr_t report,auto& graph,auto& vp,auto& lines) noexcept -> TglOwnedVeboxCommandTransactionResult {
+            TglOwnedVeboxCommandTransactionResult result;
+            const auto* source=in.sourceOwner.surfaceBinding();
+            const auto* target=in.targetOwner.surfaceBinding();
+            if(in.pinned.originalChildren[in.index]!=reinterpret_cast<uintptr_t>(child) ||
+                !source || !target || !in.sourceOwner.hasSurfaceLease(*source) ||
+                !in.targetOwner.hasSurfaceLease(*target))return result;
+            NativeCoreFrameDataScope core{owner,execution,in.sourceOwner,in.targetOwner,*source,*target,vp,
+                in.pinned.image,reinterpret_cast<uintptr_t>(child),report,owner.allocationGeneration()};
+            NativeAdmissionPacketScope packets(core,in.interfaces,in.parameters,in.pass);
+            const int status=packets.run([&](NativeAdmissionParams& params,NativeAdmissionPass& pass,
+                TglBorrowedVeboxByteView<12>& fill,TglBorrowedVeboxByteView<8>& alpha) noexcept -> int {
+                NativeCompleteFrameDataScope data(core,params,pass,in.interfaces,in.pinned,fill,alpha);
+                return data.run([&](NativeFrameDataRead& read) noexcept -> int {
+                    static_assert(noexcept(use(core,graph,lines,params,pass,read)) &&
+                        std::is_same_v<decltype(use(core,graph,lines,params,pass,read)),
+                            TglOwnedVeboxCommandTransactionResult>);
+                    result=use(core,graph,lines,params,pass,read);
+                    return result.status;
+                });
+            });
+            if(status)result.status=status;
+            return result;
+        });
+    }
+};
+using NativeLeasedFrameInputUse=TglOwnedVeboxCommandTransactionResult(*)(NativeCoreFrameDataScope&,
+    NativeVpGraph&,TglNativeVpLineResourceStorage&,NativeAdmissionParams&,NativeAdmissionPass&,NativeFrameDataRead&) noexcept;
+template TglOwnedVeboxCommandTransactionResult NativeLeasedFrameInputScope::run<NativeLeasedFrameInputUse>(
+    NativeLeasedFrameInputScope::Inputs&,NativeLeasedFrameInputUse) noexcept;
 struct NativeAdmissionStages {
     NativeAdmissionReset& reset;NativeOutputPipeSelector& select;
     NativeAdmissionHistorySetup& history;NativeAdmissionFeatureStage& feature;
