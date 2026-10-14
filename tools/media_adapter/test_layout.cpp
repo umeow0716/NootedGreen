@@ -27940,6 +27940,9 @@ int main() {
                     uint16_t alignment=0;
                     assert(!owner.readLeasedSfcAlignment(owner.constructedBase(),commandBinding,
                         alignmentObject+0x18,&alignment,sizeof(alignment),alignmentRead));
+                    std::array<uint32_t,4> limits{};
+                    assert(!owner.readLeasedSfcLimits(owner.constructedBase(),commandBinding,
+                        alignmentObject+0x1c,limits.data(),sizeof(limits),alignmentRead));
                     assert(!alignmentReads);
                     assert(owner.withPrivateChild([&](void* parent) noexcept -> int {
                         assert(owner.readLeasedSfcAlignment(parent,commandBinding,
@@ -27948,16 +27951,31 @@ int main() {
                         assert(owner.readLeasedSfcAlignment(parent,commandBinding,
                             alignmentObject+0x1a,&alignment,sizeof(alignment),alignmentRead));
                         assert(alignment==4);
+                        const std::array<uint32_t,4> expectedLimits{7,11,13,17};
+                        std::memcpy(reinterpret_cast<void*>(alignmentObject+0x1c),expectedLimits.data(),sizeof(expectedLimits));
+                        assert(owner.readLeasedSfcLimits(parent,commandBinding,
+                            alignmentObject+0x1c,limits.data(),sizeof(limits),alignmentRead));
+                        assert(limits==expectedLimits);
                         const auto reads=alignmentReads;
+                        assert(!owner.readLeasedSfcLimits(parent,commandBinding,
+                            alignmentObject+0x1b,limits.data(),4,alignmentRead));
+                        assert(!owner.readLeasedSfcLimits(parent,commandBinding,
+                            alignmentObject+0x2c,limits.data(),4,alignmentRead));
+                        assert(!owner.readLeasedSfcLimits(parent,commandBinding,
+                            alignmentObject+0x1c,limits.data(),sizeof(limits)+1,alignmentRead));
                         assert(!owner.readLeasedSfcAlignment(parent,commandBinding,
                             alignmentObject+0x1b,&alignment,sizeof(alignment),alignmentRead));
                         auto foreign=commandBinding;foreign.image++;
                         assert(!owner.readLeasedSfcAlignment(parent,foreign,
                             alignmentObject+0x18,&alignment,sizeof(alignment),alignmentRead));
+                        assert(!owner.readLeasedSfcLimits(parent,foreign,
+                            alignmentObject+0x1c,limits.data(),sizeof(limits),alignmentRead));
                         assert(alignmentReads==reads);
                         corruptAlignmentHeader=true;
                         assert(!owner.readLeasedSfcAlignment(parent,commandBinding,
                             alignmentObject+0x18,&alignment,sizeof(alignment),alignmentRead));
+                        assert(!owner.readLeasedSfcLimits(parent,commandBinding,
+                            alignmentObject+0x1c,limits.data(),sizeof(limits),alignmentRead));
                         corruptAlignmentHeader=false;
                         return 0;
                     })==0);

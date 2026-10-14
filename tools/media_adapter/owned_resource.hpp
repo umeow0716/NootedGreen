@@ -5418,6 +5418,26 @@ public:
         });
         return status==0;
     }
+    // Exact four-DWORD output-pipe limits, separately from alignment18/1a.
+    // Same short original-object borrow; no reservation held across send.
+    template<class Read>
+    bool readLeasedSfcLimits(void* parent,const TglSfcMhwBinding& binding,
+        uintptr_t address,void* output,size_t bytes,Read read) noexcept {
+        static_assert(noexcept(read(address,output,bytes)) &&
+            std::is_same_v<decltype(read(address,output,bytes)),bool>);
+        if(!output || !bytes || !hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(parent),binding.image) ||
+            sfc_.image()!=binding.image || !sfc_.os())return false;
+        const auto generation=sfc_.generation();
+        const int status=sfc_.withObject([&](void* object) noexcept -> int {
+            const auto mhw=reinterpret_cast<uintptr_t>(object);
+            if(!mhw || mhw>UINTPTR_MAX-0x2c || address<mhw+0x1c || address-mhw>=0x2c ||
+                bytes>0x2c-(address-mhw) || !binding.validateConstructedObject(mhw,sfc_.os(),read) ||
+                !read(address,output,bytes))return 5;
+            return sfc_.generation()==generation && sfc_.get()==object &&
+                hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(parent),binding.image)?0:5;
+        });
+        return status==0;
+    }
     // Parent CPU lease and native SFC reservation cover the same command
     // sequence. Never expose a persistent backend or transfer SFC ownership.
     template<class CommandInvoke,class Use>

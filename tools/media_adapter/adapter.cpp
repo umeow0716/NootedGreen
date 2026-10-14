@@ -1487,6 +1487,33 @@ struct NativeOptionalVpMetadataRead {
             readMemory(reinterpret_cast<uintptr_t>(admission.params.data())+0xf0,&afterF0,8) && afterE0==e0 && afterF0==f0;
     }
 };
+struct NativeSfcFrameDataRead {
+    NativeOptionalVpMetadataRead& base;const TglSfcMhwBinding& binding;
+    NativeFrameDataRead capability() noexcept {return {this,&resolve};}
+    static bool resolve(void* context,uintptr_t address,void* output,size_t bytes) noexcept {
+        auto* self=static_cast<NativeSfcFrameDataRead*>(context);
+        if(!self || !output || !bytes)return false;
+        auto& core=self->base.base.base.core;
+        if(!core.live())return false;
+        if(NativeOptionalVpMetadataRead::resolve(&self->base,address,output,bytes))return true;
+        uintptr_t linked=0,mhw=0;
+        if(!core.childOwner.readLeasedStorage(core.child,core.generation,core.child+0x80,&linked,8) ||
+            linked!=reinterpret_cast<uintptr_t>(core.vp.bytes.data()))return false;
+        std::memcpy(&mhw,core.vp.bytes.data()+0x20,8);
+        if(!mhw || mhw>UINTPTR_MAX-0x2c)return false;
+        bool read=false;
+        if(NativeCoreFrameDataScope::contains(mhw+0x18,4,address,bytes))
+            read=core.childOwner.readLeasedSfcAlignment(reinterpret_cast<void*>(core.child),self->binding,
+                address,output,bytes,&readMemory);
+        else if(NativeCoreFrameDataScope::contains(mhw+0x1c,16,address,bytes))
+            read=core.childOwner.readLeasedSfcLimits(reinterpret_cast<void*>(core.child),self->binding,
+                address,output,bytes,&readMemory);
+        if(!read || !core.live())return false;
+        uintptr_t after=0;std::memcpy(&after,core.vp.bytes.data()+0x20,8);
+        return after==mhw && core.childOwner.readLeasedStorage(core.child,core.generation,core.child+0x80,&linked,8) &&
+            linked==reinterpret_cast<uintptr_t>(core.vp.bytes.data());
+    }
+};
 // One synchronous owner for the closed reader chain. Producers receive the
 // SAME capability object; its backing scopes cannot move while they use it.
 class NativeCompleteFrameDataScope {
@@ -1494,6 +1521,8 @@ class NativeCompleteFrameDataScope {
     NativeAdmissionFrameDataScope admission_;
     NativeRendererPerformanceRead performance_;
     NativeOptionalVpMetadataRead optional_;
+    TglSfcMhwBinding sfcBinding_;
+    NativeSfcFrameDataRead sfc_;
     NativeFrameDataRead read_;
     bool attempted_=false;
 public:
@@ -1502,7 +1531,7 @@ public:
         const TglNativeCreatedVeboxRendererView& pinned,const TglBorrowedVeboxByteView<12>& fill,
         const TglBorrowedVeboxByteView<8>& alpha) noexcept
         :core_(core),admission_{core_,params,pass,interfaces},performance_{admission_,pinned},
-         optional_{performance_,fill,alpha},read_(optional_.capability()) {}
+         optional_{performance_,fill,alpha},sfc_{optional_,sfcBinding_},read_(sfc_.capability()) {}
     NativeCompleteFrameDataScope(const NativeCompleteFrameDataScope&)=delete;
     NativeCompleteFrameDataScope& operator=(const NativeCompleteFrameDataScope&)=delete;
     template<class Use> int run(Use use) noexcept {
@@ -1512,6 +1541,7 @@ public:
         if(attempted_ || !core_.live() || performance_.view.image!=core_.image ||
             !admission_.params.data() || !admission_.pass.data())return 5;
         attempted_=true;
+        if(!sfcBinding_.resolve(core_.image,&readMemory,NativeTglImageAdmission{core_.image},&executableMemory))return 5;
         const int status=use(read_);
         if(status)return status; // retain native error, never manufacture success
         return core_.live()?0:5;
