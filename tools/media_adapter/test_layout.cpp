@@ -17147,6 +17147,65 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        constexpr uintptr_t image=0x100000;
+        bool altered=false,allowed=true;
+        auto read=[&](uintptr_t at,void* out,size_t n) noexcept {
+            if(at==image+0x12eb80 && n==TglNativeVeboxSetupHints::constructor.size()) {
+                std::memcpy(out,TglNativeVeboxSetupHints::constructor.data(),n);
+                if(altered)static_cast<uint8_t*>(out)[11]^=1;return true;
+            }
+            if(at==image+0x3bf90 && n==TglNativeVeboxSetupHints::destructor.size()) {
+                std::memcpy(out,TglNativeVeboxSetupHints::destructor.data(),n);return true;
+            }
+            return false;
+        };
+        std::array<uint8_t,0x20> hints{};hints.fill(0xa5);
+        auto qualify=[&](uintptr_t at) noexcept {return allowed && at==image;};
+        auto executable=[](uintptr_t,size_t) noexcept {return true;};
+        assert(TglNativeVeboxSetupHints::initialize(hints,image,read,qualify,executable));
+        uintptr_t table=0;std::memcpy(&table,hints.data(),8);assert(table==image+0x757ef8);
+        for(size_t i=8;i<hints.size();++i)assert(hints[i]==0);
+        const auto before=hints;altered=true;
+        assert(!TglNativeVeboxSetupHints::initialize(hints,image,read,qualify,executable) && hints==before);
+        altered=false;allowed=false;
+        assert(!TglNativeVeboxSetupHints::initialize(hints,image,read,qualify,executable) && hints==before);
+        assert(!TglNativeVeboxSetupHints::initialize(hints,UINTPTR_MAX,read,qualify,executable));
+    }
+    {
+        TglOwnedVeboxProducerPass pass;unsigned submits=0;
+        auto submit=[&]() noexcept -> int {++submits;return 31;};
+        assert(pass.submissionStatus(0)==5 && pass.withSubmission(0,submit)==5 && submits==0);
+        assert(pass.withBuilder([&]() noexcept -> int {
+            assert(pass.submissionStatus(0)==5);
+            assert(pass.gate([]() noexcept -> int {return 0;})==0);
+            assert(pass.submissionStatus(17)==17 && pass.submissionStatus(0)==0);
+            assert(pass.withSubmission(0,submit)==31 && submits==1);
+            assert(pass.withSubmission(0,submit)==31 && submits==1);
+            return 0; // Native outer ignored the first submission error.
+        })==31);
+        assert(pass.withBuilder([&]() noexcept -> int {
+            assert(pass.record(17));
+            assert(pass.gate([]() noexcept -> int {assert(false);return 0;})==17);
+            assert(pass.submissionStatus(0)==17 && pass.withSubmission(0,submit)==17 && submits==1);
+            return 0;
+        })==17);
+        assert(pass.withBuilder([&]() noexcept -> int {
+            assert(pass.gate([]() noexcept -> int {return 0;})==0);
+            return pass.withSubmission(0,[&]() noexcept -> int {
+                ++submits;assert(pass.withSubmission(0,submit)==5);return 0;
+            });
+        })==5 && submits==2);
+        assert(pass.withBuilder([&]() noexcept -> int {
+            assert(pass.gate([]() noexcept -> int {return 0;})==0);
+            assert(pass.withSubmission(0,[&]() noexcept -> int {++submits;return 0;})==0);
+            assert(pass.withSubmission(0,submit)==5);return 0;
+        })==5 && submits==3);
+        assert(pass.withBuilder([&]() noexcept -> int {
+            assert(pass.gate([]() noexcept -> int {return 0;})==0);
+            assert(pass.withSubmission(47,submit)==47 && submits==3);return 0;
+        })==47);
+    }
+    {
         TglOwnedVeboxCommandSequence sequence;
         assert(sequence.acceptsPass() && sequence.finish(0).status==5);
         TglOwnedVeboxCommandTransactionResult pass;pass.status=0;pass.builderStatus=0;

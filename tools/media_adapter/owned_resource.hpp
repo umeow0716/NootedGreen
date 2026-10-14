@@ -12986,7 +12986,7 @@ int tglPrepareNativeLeasedOwnedVpCpuState(const TglOwnedVpFramePreparation& fram
 // so an early failed producer cannot be followed by native command emission.
 // Caller serializes begin/record/gate/close; this is NOT a GPU fence owner.
 class TglOwnedVeboxProducerPass {
-    bool active_=false,gated_=false,busy_=false,builder_=false;
+    bool active_=false,gated_=false,busy_=false,builder_=false,submitted_=false;
     int firstError_=0;
 public:
     TglOwnedVeboxProducerPass()=default;
@@ -13012,7 +13012,7 @@ public:
     }
     bool begin() noexcept {
         if(active_) return false;
-        active_=true;gated_=false;firstError_=0;return true;
+        active_=true;gated_=false;submitted_=false;firstError_=0;return true;
     }
     bool record(int status) noexcept {
         if(!active_ || gated_ || busy_) return false;
@@ -13037,6 +13037,29 @@ public:
         busy_=true;
         firstError_=produce();
         busy_=false;
+        return firstError_;
+    }
+    // Native12a230 overwrites its builder result with no-op150/158 then
+    // retries failed OS2d0 indefinitely. Owned Send must check THIS gate
+    // after setup/build/writeback,without beginning a second producer pass.
+    int submissionStatus(int nativeBuilderStatus) const noexcept {
+        if(!active_ || !builder_ || busy_)return 5;
+        if(firstError_)return firstError_;
+        if(nativeBuilderStatus)return nativeBuilderStatus;
+        return gated_?0:5;
+    }
+    template<class Submit> int withSubmission(int nativeBuilderStatus,Submit submit) noexcept {
+        static_assert(noexcept(submit()) && std::is_same_v<decltype(submit()),int>);
+        if(!active_ || !builder_)return 5;
+        const int admitted=submissionStatus(nativeBuilderStatus);
+        if(admitted || submitted_) {
+            if(!firstError_)firstError_=admitted?admitted:5;
+            return firstError_;
+        }
+        if(firstError_)return firstError_;
+        submitted_=true;busy_=true;
+        const int status=submit();busy_=false;
+        if(status && !firstError_)firstError_=status;
         return firstError_;
     }
     void close() noexcept {
@@ -18723,6 +18746,30 @@ struct TglOwnedVeboxBuilderScratch {
     std::array<uint8_t,0x2f0> command{};
     std::array<uint8_t,0x170> surfaceCommands{};
     std::array<uint8_t,0x20> completion{},setup{};
+};
+// Native129b70->12eb80 initializes Send's32-byte polymorphic hints object;
+// 3af60->3bf90 is empty. This is owned DATA initialization, not native command
+// allocation. The separate148-byte setup argument still needs its own lease.
+struct TglNativeVeboxSetupHints {
+    inline static constexpr std::array<uint8_t,60> constructor{
+        0x55,0x48,0x89,0xe5,0x48,0x8d,0x05,0x5d,0x93,0x62,0x00,0x48,0x05,0x10,0,0,0,
+        0x48,0x89,0x7d,0xf8,0x48,0x8b,0x4d,0xf8,0x48,0x89,0x01,
+        0xc6,0x41,0x08,0,0xc6,0x41,0x09,0,0xc7,0x41,0x0c,0,0,0,0,
+        0xc7,0x41,0x10,0,0,0,0,0x48,0xc7,0x41,0x18,0,0,0,0,0x5d,0xc3};
+    inline static constexpr std::array<uint8_t,10> destructor{
+        0x55,0x48,0x89,0xe5,0x48,0x89,0x7d,0xf8,0x5d,0xc3};
+    template<class Read,class Qualify,class Executable>
+    static bool initialize(std::array<uint8_t,0x20>& output,uintptr_t image,
+        Read read,Qualify qualify,Executable executable) noexcept {
+        auto first=constructor;auto last=destructor;
+        if(!image || image>UINTPTR_MAX-0x757ef8 || !qualify(image) ||
+            !executable(image+0x12eb80,first.size()) || !executable(image+0x3bf90,last.size()) ||
+            !read(image+0x12eb80,first.data(),first.size()) || first!=constructor ||
+            !read(image+0x3bf90,last.data(),last.size()) || last!=destructor)return false;
+        std::array<uint8_t,0x20> candidate{};
+        const uintptr_t table=image+0x757ef8;
+        std::memcpy(candidate.data(),&table,8);output=candidate;return true;
+    }
 };
 // TGL129af4..129b02 snapshots command15c before setup's child+d8.
 // Submit12a54d..12a5b7 rewinds failed emission before OS+2c8 writeback:

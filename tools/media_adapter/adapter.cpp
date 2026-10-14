@@ -2628,6 +2628,34 @@ struct NativeFrameHistoryRetirement {
         },prepare);
     }
 };
+// Planned Send tail, AFTER successful native setup/build/writeback under the
+// existing producer pass. Only OS2d0:150/158 and conditional ff190 remain
+// enclosing Send duties. Not an extra flush after whole native Render.
+struct NativeVeboxSendSubmissionStage {
+    using Admit=bool(*)(const NativeBorrowedFrontend&,uintptr_t,uintptr_t,uintptr_t) noexcept;
+    static bool prepareHints(TglOwnedVeboxBuilderScratch& scratch,uintptr_t image) noexcept {
+        return TglNativeVeboxSetupHints::initialize(scratch.setup,image,&readMemory,
+            NativeTglImageAdmission{image},&executableMemory);
+    }
+    static int run(NativeContextRendererFrame& frame,TglOwnedVeboxProducerPass& pass,
+        const TglNativeOsCommandSubmitBinding& binding,TglOwnedVeboxBuilderScratch& scratch,
+        TglOwnedVeboxCommandTransactionResult& command,TglOwnedVeboxFrameRetention& retention,
+        uint32_t flags,Admit admit) noexcept {
+        int prior=command.status;
+        if(!prior && (!command.acquired || !command.writtenBack || command.builderStatus))
+            prior=command.builderStatus?command.builderStatus:5;
+        if(!prior && (flags>1 || !admit || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1)))prior=5;
+        const int status=pass.withSubmission(prior,[&]() noexcept -> int {
+            const auto observed=frame.observeNativeOsSubmit(binding,scratch.command.data(),flags,&readMemory,admit);
+            command.nativeEntered=command.nativeEntered || observed.submit.called;
+            const int native=observed.submit.status();
+            return native?native:(observed.observed && !frame.invalidated()?0:5);
+        });
+        if(!command.status && status)command.status=status;
+        retention.observe(command); // before any Send/packet/resource scope unwinds
+        return status;
+    }
+};
 using NativePhysicalRegistry=TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;
 using NativePhysicalFrameScope=typename NativePhysicalRegistry::Scope;
 using NativePhysicalCallbacks=TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,
