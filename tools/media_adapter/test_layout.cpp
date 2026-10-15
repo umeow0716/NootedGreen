@@ -18532,8 +18532,8 @@ static void testRetainedVeboxFrames() {
 }
 
 static void testNativeCreatorRequestChains() {
-    for(unsigned scenario=0;scenario<7;++scenario) {
-        uintptr_t descriptor=0x2000;std::array<uint8_t,0x18> header{};
+    for(unsigned scenario=0;scenario<8;++scenario) {
+        uintptr_t descriptor=0x2000,auxiliary=0x7000;std::array<uint8_t,0x18> header{};
         const uint32_t count=2;const uintptr_t array=0x2800;
         std::memcpy(header.data(),&count,4);std::memcpy(header.data()+8,&array,8);
         std::array<uintptr_t,2> roots{0x3000,0x3100};
@@ -18551,6 +18551,7 @@ static void testNativeCreatorRequestChains() {
         auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept -> bool {
             ++reads;
             if(at==0x1000 && bytes==8){std::memcpy(out,&descriptor,8);return true;}
+            if(at==0x1008 && bytes==8){std::memcpy(out,&auxiliary,8);return true;}
             if(at==0x2000 && bytes==header.size()){std::memcpy(out,header.data(),bytes);return true;}
             if(at==array && bytes==sizeof(roots)){std::memcpy(out,roots.data(),bytes);return true;}
             for(size_t i=0;i<nodes.size();++i)if(at==0x3000+i*0x100 && bytes==0x40){
@@ -18566,7 +18567,7 @@ static void testNativeCreatorRequestChains() {
             uint32_t actualKind=0,actualProperty=0;uint64_t actualType=0;
             assert(snapshot.controls(1,actualKind,actualType,actualProperty) && actualKind==kind && actualType==type && actualProperty==property);
             assert(!snapshot.controls(3,actualKind,actualType,actualProperty) && !actualKind && !actualType && !actualProperty);
-            if(scenario==5)++header[4];else if(scenario==6)++nodes[2][0x10];else ++roots[0];
+            if(scenario==5)++header[4];else if(scenario==6)++nodes[2][0x10];else if(scenario==7)++auxiliary;else ++roots[0];
             assert(!snapshot.stable(read));
         } else assert(!snapshot.nodeCount());
         assert(!snapshot.capture(0x1000,read));

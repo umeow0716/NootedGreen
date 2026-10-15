@@ -26213,7 +26213,7 @@ struct TglNativeMixedContextFrameBinding {
 template<size_t Roots=16,size_t Nodes=64> class TglNativeCreatorRequestChains {
     static_assert(Roots>0 && Roots<=128 && Nodes>0 && Nodes<=128);
     struct Node {uintptr_t address=0;std::array<uint8_t,0x40> bytes{};};
-    uintptr_t input_=0,descriptor_=0,array_=0;
+    uintptr_t input_=0,descriptor_=0,array_=0,auxiliary_=0;
     std::array<uint8_t,0x18> header_{};
     std::array<uintptr_t,Roots> roots_{};
     std::array<Node,Nodes> nodes_{};
@@ -26221,7 +26221,7 @@ template<size_t Roots=16,size_t Nodes=64> class TglNativeCreatorRequestChains {
 public:
     template<class Read> bool capture(uintptr_t input,Read read) noexcept {
         if(attempted_)return false;attempted_=true;
-        if(!input || input>UINTPTR_MAX-8 || !read(input,&descriptor_,8) ||
+        if(!input || input>UINTPTR_MAX-16 || !read(input,&descriptor_,8) || !read(input+8,&auxiliary_,8) ||
             !descriptor_ || descriptor_>UINTPTR_MAX-header_.size() ||
             !read(descriptor_,header_.data(),header_.size()))return false;
         std::memcpy(&count_,header_.data(),4);std::memcpy(&array_,header_.data()+8,8);
@@ -26245,8 +26245,9 @@ public:
     }
     template<class Read> bool stable(Read read) const noexcept {
         if(!ready_)return false;
-        uintptr_t descriptor=0;std::array<uint8_t,0x18> header{};std::array<uintptr_t,Roots> roots{};
+        uintptr_t descriptor=0,auxiliary=0;std::array<uint8_t,0x18> header{};std::array<uintptr_t,Roots> roots{};
         if(!read(input_,&descriptor,8) || descriptor!=descriptor_ ||
+            !read(input_+8,&auxiliary,8) || auxiliary!=auxiliary_ ||
             !read(descriptor_,header.data(),header.size()) || header!=header_ ||
             (count_ && (!read(array_,roots.data(),size_t(count_)*8) || roots!=roots_)))return false;
         for(size_t i=0;i<used_;++i) {
