@@ -28399,6 +28399,9 @@ int main() {
                                     inspectionMode=2;
                                     assert(frontend.acknowledgeCompletedGroupWork(completedGroup,1,groupHistory,liveGroup)==5);
                                     assert(completedGroup.calls==2); // Repeated parent callback cannot write twice.
+                                    inspectionMode=0;
+                                    assert(frontend.preparePrivateRetirement()==5 && frontend.surfacesReady());
+                                    // No teardown while this parent's work/history remains pending.
                                     assert(storageOwner.get()==cpuAddress && !storage.backing().retention()());
                                 }
                                 assert(refs==originalRefs && !originalSource.borrowed && !originalTarget.borrowed && !originalHistory.borrowed);
@@ -28444,6 +28447,16 @@ int main() {
                                         assert(false);return {};
                                     });
                                     assert(refused.status==31 && calls==4 && !frontend.requiresRetention() && storageOwner.get()==cpuAddress);
+                                    assert(frontend.preparePrivateRetirement()==5 && frontend.surfacesReady());
+                                    allowAccess=true;
+                                    const auto heldRefs=refs;
+                                    assert(frontend.preparePrivateRetirement()==0 && !frontend.surfacesReady());
+                                    assert(refs==heldRefs && originalSource.borrowed && originalTarget.borrowed);
+                                    assert(storageOwner.get()==cpuAddress); // Shared parent/children NOT destroyed.
+                                    assert(frontend.preparePrivateRetirement()==5);
+                                    assert(frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                        assert(false);return {};
+                                    }).status==5);
                                 }
                                 assert(refs==originalRefs && !originalSource.borrowed && !originalTarget.borrowed && !originalHistory.borrowed);
                                 {

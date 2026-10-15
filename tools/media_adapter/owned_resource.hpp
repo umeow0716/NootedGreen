@@ -28820,6 +28820,27 @@ public:
         return !busy_ && ready_ && parent_.get() && parameters_.canRelease() &&
             source_.privateLinksQuiescent() && target_.privateLinksQuiescent();
     }
+    // Called ONLY by enclosing frame's live completion/history retirement
+    // scope. Keep every private reference until that frame is destroyed;
+    // never destroy shared CPU children or the original native shell here.
+    int preparePrivateRetirement() noexcept {
+        if(!privateLinksQuiescent())return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        bool entered=false,repeated=false;auto* held=parent_.get();
+        const int status=access_(parent_,[&](auto& cpu,const auto&) noexcept -> int {
+            if(entered) {repeated=true;return 5;}entered=true;
+            if(parent_.get()!=held || !held || cpu.backing().retention().admissionPending() ||
+                !parameters_.canRelease() || !source_.privateLinksQuiescent() || !target_.privateLinksQuiescent() ||
+                !cpu.children().first().owner().constructedBase() || !cpu.children().second().owner().constructedBase() ||
+                cpu.children().first().owner().allocationGeneration()!=generation0_ ||
+                cpu.children().second().owner().allocationGeneration()!=generation1_)return 5;
+            return 0;
+        });
+        if(status || !entered || repeated)return 5;
+        // Disable any subsequent frontend operation before aggregate teardown.
+        // Member order releases DN, target/source CF pins, then parent pin.
+        ready_=false;return 0;
+    }
     // Inspection is permitted for pending frames, but only const CPU/graph/
     // target views escape into this synchronous callback. No new Render,
     // retention clear or retirement certificate is manufactured here.
@@ -28970,6 +28991,7 @@ public:
     bool requiresRetention() const noexcept {return frontend_.requiresRetention();}
     bool requiresHistoryInspection() const noexcept {return frontend_.requiresHistoryInspection();}
     bool privateLinksQuiescent() const noexcept {return frontend_.privateLinksQuiescent();}
+    int preparePrivateRetirement() noexcept {return frontend_.preparePrivateRetirement();}
     template<class Use> TglOwnedVeboxCommandTransactionResult withCpuFrontend(Use use) noexcept {
         return frontend_.withCpuFrontend(use);
     }

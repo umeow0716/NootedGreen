@@ -2896,6 +2896,9 @@ struct NativeRendererHistoryInspection {
     }
 };
 struct NativePrivateFrameRetirementInspection {
+    static int prepare(NativeBorrowedFrontend& frontend) noexcept {
+        return frontend.preparePrivateRetirement();
+    }
     static TglNativeHistoryCacheInspection run(NativeBorrowedFrontend& frontend) noexcept {
         if(!frontend.privateLinksQuiescent())return {};
         const auto history=NativeRendererHistoryInspection::run(frontend);
