@@ -27298,18 +27298,20 @@ public:
         auto guarded=[&]() noexcept -> int {const int status=retire();return status?status:(retention()()?5:0);};
         auto* vp=selectVp(index);return vp?vp->reinitializePass(guarded):5;
     }
+    bool unsubmittedVpPending(size_t index) noexcept {
+        auto* vp=selectVp(index);if(!vp)return true;
+        const auto& local=vp->commandRetention();
+        if(local())return true;
+        if(!retention()())return false;
+        const auto* proof=TglOwnedVeboxUnusedChildAdmission::Binding::get(&retention());
+        return !proof || !proof->permits(retention(),local);
+    }
     // Distinct from retirement: only an exact scoped unused-command proof may
     // reinitialize a sibling's never-submitted VP while the aggregate is live.
     template<class Retire> int reinitializeUnsubmittedVpPass(size_t index,Retire retire) noexcept {
         static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);
         auto* vp=selectVp(index);if(!vp)return 5;
-        auto pending=[&]() noexcept {
-            const auto& local=vp->commandRetention();
-            if(local())return true;
-            if(!retention()())return false;
-            const auto* proof=TglOwnedVeboxUnusedChildAdmission::Binding::get(&retention());
-            return !proof || !proof->permits(retention(),local);
-        };
+        auto pending=[&]() noexcept {return unsubmittedVpPending(index);};
         if(pending())return 5;
         return vp->reinitializePass([&]() noexcept -> int {
             if(pending())return 5;

@@ -1446,6 +1446,17 @@ struct NativeModeRetirementAuthority {
     void* scope=nullptr;int(*admit)(void*) noexcept=nullptr;
     int operator()() const noexcept {return scope && admit?admit(scope):5;}
 };
+// This synchronous view changes only which pass-reset entry is selected.
+// It exposes no aggregate retirement API and cannot outlive its caller.
+struct NativeUnsubmittedVpResetBacking {
+    NativeRendererBacking& backing;
+    template<class Use> int withVpResources(size_t index,Use use) noexcept {
+        return backing.withVpResources(index,use);
+    }
+    template<class Retire> int reinitializeVpPass(size_t index,Retire retire) noexcept {
+        return backing.reinitializeUnsubmittedVpPass(index,retire);
+    }
+};
 using NativeRendererBacking=std::remove_reference_t<decltype(std::declval<NativeRendererCpu&>().backing())>;
 template<class SurfaceOwner> struct NativeSfcPreparationFor {
     using CpuBackend=TglTrackedCpuBackend<TglNativeTrackedCpuInvoker>;
@@ -1609,18 +1620,19 @@ struct NativeAdmissionReset {
         const auto address=reinterpret_cast<uintptr_t>(child);
         const uint64_t generation=childOwner.allocationGeneration();
         if(index>1 || !child || !vp || !generation || !retirement.scope || !retirement.admit ||
-            backing.retention()() || !childOwner.hasPrivateChildLease(address) ||
+            backing.unsubmittedVpPending(index) || !childOwner.hasPrivateChildLease(address) ||
             !executionOwner.hasExecutionLease(execution))return false;
         auto admitRetirement=[&]() noexcept -> int {
-            if(backing.retention()() || childOwner.allocationGeneration()!=generation ||
+            if(backing.unsubmittedVpPending(index) || childOwner.allocationGeneration()!=generation ||
                 !childOwner.hasPrivateChildLease(address) || !executionOwner.hasExecutionLease(execution))return 5;
             const int status=retirement();
-            return status?status:(!backing.retention()() && childOwner.allocationGeneration()==generation &&
+            return status?status:(!backing.unsubmittedVpPending(index) && childOwner.allocationGeneration()==generation &&
                 childOwner.hasPrivateChildLease(address) && executionOwner.hasExecutionLease(execution)?0:5);
         };
+        NativeUnsubmittedVpResetBacking resetBacking{backing};
         using VpReset=TglOwnedVeboxPersistentVpAdmissionReset<NativeRendererChildOwner,
-            NativeRendererBacking,decltype(admitRetirement)>;
-        VpReset legacy{childOwner,backing,index,child,vp,admitRetirement};
+            NativeUnsubmittedVpResetBacking,decltype(admitRetirement)>;
+        VpReset legacy{childOwner,resetBacking,index,child,vp,admitRetirement};
         auto reset=[&]() noexcept -> bool {
             if(preparedReset)return borrowedGraph && preparedReset->consume(childOwner,index,child,vp,*borrowedGraph);
             return !borrowedGraph && legacy();
@@ -1630,7 +1642,7 @@ struct NativeAdmissionReset {
         const bool accepted=stage();
         return accepted && childOwner.allocationGeneration()==generation &&
             childOwner.hasPrivateChildLease(address) && executionOwner.hasExecutionLease(execution) &&
-            !backing.retention()();
+            !backing.unsubmittedVpPending(index);
     }
 };
 using NativeAdmissionParams=TglBorrowedVeboxAdmissionPacketView<0x139>;
@@ -1865,7 +1877,7 @@ template<class SurfaceOwner> struct NativeLeasedFrameInputScopeFor {
             auto live=[&]() noexcept {
                 return in.index<2 && in.pinned.originalChildren[in.index]==reinterpret_cast<uintptr_t>(child) &&
                     generation && owner.allocationGeneration()==generation && execution.hasExecutionLease(report) &&
-                    owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) && !in.assembly.backing().retention()();
+                    owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) && !in.assembly.backing().unsubmittedVpPending(in.index);
             };
             if(!live() || !owner.readLeasedStorage(reinterpret_cast<uintptr_t>(child),generation,
                 reinterpret_cast<uintptr_t>(child)+0x80,&vp,8) || !vp)return 5;
@@ -1873,7 +1885,8 @@ template<class SurfaceOwner> struct NativeLeasedFrameInputScopeFor {
                 if(!live())return 5;
                 const int status=(*in.resetAuthority)();return status?status:live()?0:5;
             };
-            return NativePreparedVpReset::run(owner,in.assembly.backing(),in.index,child,reinterpret_cast<void*>(vp),
+            NativeUnsubmittedVpResetBacking resetBacking{in.assembly.backing()};
+            return NativePreparedVpReset::run(owner,resetBacking,in.index,child,reinterpret_cast<void*>(vp),
                 retire,[&](NativePreparedVpReset& reset) noexcept -> int {return live()?enter(&reset):5;});
         };
         return in.assembly.withChildVpResourcesPrepared(in.index,prepare,[&](auto& owner,auto& execution,void* child,
@@ -3080,13 +3093,21 @@ struct NativeRootPassAuthority {
     }
 };
 struct NativeUnsubmittedModeRetirement {
+    struct SelectedBacking {
+        NativeRendererCpuAssembly& cpu;size_t index;
+        struct Pending {
+            NativeRendererCpuAssembly& cpu;size_t index;
+            bool operator()() const noexcept {return cpu.backing().unsubmittedVpPending(index);}
+        };
+        Pending retention() const noexcept {return {cpu,index};}
+    } selected;
     using Proof=TglOwnedUnsubmittedVpRetirement<NativePhysicalFrameScope,NativeContextRendererFrame,
-        NativeRendererChildOwner,NativeRendererBacking>;
+        NativeRendererChildOwner,SelectedBacking>;
     Proof proof;bool valid_=false;
     NativeUnsubmittedModeRetirement(NativePhysicalFrameScope& physical,NativeContextRendererFrame& frame,
         NativeRendererCpuAssembly& cpu,size_t index,const TglNativeVphalMhwView& view,uintptr_t address,
         uint64_t generation,uintptr_t context) noexcept
-        :proof(physical,frame,index==1?cpu.children().second().owner():cpu.children().first().owner(),cpu.backing(),
+        :selected{cpu,index},proof(physical,frame,index==1?cpu.children().second().owner():cpu.children().first().owner(),selected,
             view.renderer.image,address,generation,context,index<2?view.renderer.originalChildren[index]:0,
             index==1?cpu.children().second().owner().allocationGeneration():cpu.children().first().owner().allocationGeneration()) {
         auto& owner=index==1?cpu.children().second().owner():cpu.children().first().owner();
