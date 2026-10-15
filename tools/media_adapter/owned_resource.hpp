@@ -26028,6 +26028,25 @@ public:
         if(!stable(read))return false;
         owned.header.count=count_;owned.header.records=reinterpret_cast<uintptr_t>(owned.records.data());return true;
     }
+    template<class Admit> bool admitVeboxQueryOutputs(const OwnedRecords& owned,Admit admit) const noexcept {
+        if(!ready_ || owned.header.count!=count_ || owned.header.records!=reinterpret_cast<uintptr_t>(owned.records.data()))return false;
+        auto overlap=[](uintptr_t a,size_t an,uintptr_t b,size_t bn) noexcept {
+            return a<b+bn && b<a+an;
+        };
+        for(size_t i=0;i<count_;++i){
+            uint64_t type=0;uint32_t operation=0,property=0;uintptr_t output=0,context=0;
+            const auto* record=owned.records[i].data();
+            std::memcpy(&type,record+8,8);std::memcpy(&property,record+0x10,4);
+            std::memcpy(&operation,record+0x20,4);std::memcpy(&output,record+0x28,8);
+            std::memcpy(&context,record+0x18,8);
+            // Exact2358e0 supports only these two0x4a-byte outputs.
+            if(type!=0x800 || operation!=5 || (property!=1002 && property!=1003) ||
+                context!=contexts_[i] || !output || output>UINTPTR_MAX-0x4a ||
+                overlap(output,0x4a,input_,16) || overlap(output,0x4a,records_,size_t(count_)*0x30) ||
+                overlap(output,0x4a,reinterpret_cast<uintptr_t>(&owned),sizeof(owned)) || !admit(output,size_t{0x4a}))return false;
+        }
+        return true;
+    }
     template<class Read> bool capture(uintptr_t input,Read read) noexcept {
         if(attempted_)return false;
         attempted_=true;

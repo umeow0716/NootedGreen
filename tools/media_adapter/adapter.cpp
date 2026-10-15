@@ -4957,6 +4957,7 @@ struct NativeFactoryContextProperties {
                 if(!batch.capture(reinterpret_cast<uintptr_t>(input),&readMemory))return 5;
                 TglNativeContextPropertyBatch<16>::OwnedRecords frozen;
                 if(operation==Operation::Query && !batch.freeze(&readMemory,frozen))return 5;
+                if(operation==Operation::Query && !batch.admitVeboxQueryOutputs(frozen,NativeDataAdmission{}))return 5;
                 using Lease=decltype(NativeCodecBackend::owners().pinExclusive(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{}));
                 std::array<Lease,16> leases;
                 std::array<uintptr_t,16> contexts{};size_t count=0;

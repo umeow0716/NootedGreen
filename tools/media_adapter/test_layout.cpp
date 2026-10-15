@@ -17666,6 +17666,23 @@ int main() {
         std::memcpy(&frozenContext,frozen.records[1].data()+0x18,8);
         std::memcpy(&payload,frozen.records[1].data()+0x28,8);
         assert(frozenContext==0x3000 && payload==0x5100);
+        auto queryAdmit=[](uintptr_t address,size_t size) noexcept {
+            return (address==0x5000 || address==0x5100) && size==0x4a;
+        };
+        assert(!batch.admitVeboxQueryOutputs(frozen,queryAdmit));
+        const uint64_t queryType=0x800;const uint32_t queryOperation=5,queryProperty=1002;
+        for(auto& record:frozen.records){
+            std::memcpy(record.data()+8,&queryType,8);std::memcpy(record.data()+0x10,&queryProperty,4);
+            std::memcpy(record.data()+0x20,&queryOperation,4);
+        }
+        assert(batch.admitVeboxQueryOutputs(frozen,queryAdmit));
+        const auto originalOutput=payload;
+        payload=0x2000;std::memcpy(frozen.records[1].data()+0x28,&payload,8);
+        assert(!batch.admitVeboxQueryOutputs(frozen,[](uintptr_t,size_t) noexcept {return true;}));
+        payload=UINTPTR_MAX-1;std::memcpy(frozen.records[1].data()+0x28,&payload,8);
+        assert(!batch.admitVeboxQueryOutputs(frozen,[](uintptr_t,size_t) noexcept {return true;}));
+        std::memcpy(frozen.records[1].data()+0x28,&originalOutput,8);
+        assert(!batch.admitVeboxQueryOutputs(frozen,[](uintptr_t,size_t) noexcept {return false;}));
         contexts[1]=0x4000;assert(!batch.stable(read));contexts[1]=0x3000;
         contexts[1]=0x4000;assert(!batch.freeze(read,frozen) && !frozen.input());contexts[1]=0x3000;
         count=0;TglNativeContextPropertyBatch<2> empty;assert(!empty.capture(0x1000,read));
