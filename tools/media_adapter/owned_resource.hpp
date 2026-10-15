@@ -24746,6 +24746,30 @@ public:
         if(!slot.frame || slot.generation!=ticket.generation || !slot.pending || !slot.receipt.valid)return 5;
         return use(*slot.frame,slot.receipt);
     }
+    template<class Use> int withPendingReceiptGroup(Use use) noexcept {
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        if(gate_.test_and_set(std::memory_order_acquire))return 5;
+        Unlock unlock{gate_};
+        if(physicalTeardownStarted_ || workFaulted())return 5;
+        std::array<Frame*,Capacity> frames{};
+        std::array<TglNativeFrameOutputReceipt,Capacity> receipts{};
+        std::array<Ticket,Capacity> tickets{};
+        size_t count=0;
+        for(size_t i=0;i<Capacity;++i) {
+            const auto& slot=slots_[i];
+            if(!slot.frame)continue;
+            // Never omit an unready sibling from shared-parent proof.
+            if(!slot.pending || !slot.generation || !slot.receipt.valid)return 5;
+            frames[count]=slot.frame;receipts[count]=slot.receipt;
+            tickets[count]={i,slot.generation,this};++count;
+        }
+        if(!count)return 5;
+        static_assert(std::is_nothrow_invocable_r_v<int,Use&,size_t,
+            const decltype(frames)&,const decltype(receipts)&,const decltype(tickets)&>);
+        // Borrow only while SAME pool and enclosing physical generation gates
+        // remain held. Enumeration is not GPU/history/retirement authority.
+        return use(count,std::as_const(frames),std::as_const(receipts),std::as_const(tickets));
+    }
     template<class Prepare> int retirePendingWithReceipt(Ticket ticket,Prepare prepare) noexcept {
         static_assert(std::is_nothrow_invocable_r_v<int,Prepare&,Frame&,const TglNativeFrameOutputReceipt&>);
         if constexpr(std::is_pointer_v<Prepare>)if(!prepare)return 5;

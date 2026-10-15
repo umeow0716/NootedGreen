@@ -14844,16 +14844,32 @@ static void testRetainedVeboxFrames() {
                 TglOwnedVeboxCommandTransactionResult r;r.acquired=true;return r;
             };
             group.run(first,submit);
+            auto noGroup=[](size_t,const auto&,const auto&,const auto&) noexcept -> int {
+                assert(false);return 0;
+            };
+            assert(group.withPendingReceiptGroup(noGroup)==5);
             const TglNativeFrameOutputReceipt shared{0x20000,0x78000,9,true};
             assert(!group.bindOutputReceipts(std::array{first,second},shared));
             assert(group.withOutputReceipt(first,[](const auto&) noexcept -> int {assert(false);return 0;})==5);
             group.run(second,submit);
+            assert(group.withPendingReceiptGroup(noGroup)==5);
             assert(!group.bindOutputReceipts(std::array{first,first},shared));
             assert(!group.bindOutputReceipts(std::array{first,outside},shared));
             auto stale=second;++stale.generation;
             assert(!group.bindOutputReceipts(std::array{first,stale},shared));
             assert(group.bindOutputReceipts(std::array{first,second},shared));
+            assert(group.withPendingReceiptGroup([&](size_t count,const auto& frames,
+                const auto& receipts,const auto& tickets) noexcept -> int {
+                assert(count==2 && frames[0] && frames[1] && frames[0]!=frames[1]);
+                assert(tickets[0].generation==first.generation && tickets[1].generation==second.generation);
+                assert(receipts[0].event==shared.event && receipts[1].event==shared.event);
+                assert(group.withPendingReceiptGroup(noGroup)==5);
+                return 31;
+            })==31);
+            size_t remaining=2;
             for(const auto ticket:{first,second}) {
+                assert(group.withPendingReceiptGroup([&](size_t count,const auto&,
+                    const auto&,const auto&) noexcept -> int {assert(count==remaining);return 0;})==0);
                 assert(group.withOutputReceipt(ticket,[&](const auto& receipt) noexcept -> int {
                     assert(receipt.context==shared.context && receipt.event==shared.event && receipt.index==9);return 0;
                 })==0);
@@ -14861,7 +14877,9 @@ static void testRetainedVeboxFrames() {
                 assert(group.retire(ticket,[](const auto&,bool pending,const auto&) noexcept -> int {
                     assert(pending);return 0; // CPU fixture authority only.
                 })==0);
+                --remaining;
             }
+            assert(group.withPendingReceiptGroup(noGroup)==5);
             assert(other.retire(outside,[](const auto&,bool pending,const auto&) noexcept -> int {
                 assert(!pending);return 0;
             })==0);
