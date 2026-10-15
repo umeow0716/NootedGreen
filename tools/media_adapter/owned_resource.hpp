@@ -26734,6 +26734,27 @@ template<size_t Capacity=16> struct TglNativeContextFamilyBatchSnapshot {
         // Multiple VP creators remain unsupported, never silently accepted.
         return vpCount==1 && selected && metadataCopied && handoffCompleted;
     }
+    template<class Read> bool matchesCreatorHandoffs(const std::array<uintptr_t,Capacity>& creators,
+        size_t completed,Read read) const noexcept {
+        if(!valid || !batch.wellFormed() || completed!=vpCount || completed>Capacity)return false;
+        for(size_t i=0;i<Capacity;++i) {
+            if(i>=completed){if(creators[i])return false;continue;}
+            if(!creators[i])return false;
+            for(size_t j=0;j<i;++j)if(creators[j]==creators[i])return false;
+        }
+        std::array<bool,Capacity> matched{};size_t found=0;
+        for(size_t i=0;i<batch.count;++i) {
+            if(!batch.contexts[i]){if(families[i]!=TglNativeContextFamily::Unknown)return false;continue;}
+            if(families[i]==TglNativeContextFamily::NativeOther)continue;
+            if(families[i]!=TglNativeContextFamily::VeboxVp || batch.contexts[i]>UINTPTR_MAX-0x12e8)return false;
+            uintptr_t creator=0,after=0;
+            if(!read(batch.contexts[i]+0x12e0,&creator,8) || !creator)return false;
+            size_t index=0;while(index<completed && creators[index]!=creator)++index;
+            if(index==completed || matched[index] || !read(batch.contexts[i]+0x12e0,&after,8) || after!=creator)return false;
+            matched[index]=true;++found;
+        }
+        return found==completed;
+    }
 };
 
 template<class PhysicalLease,class Read,class Write,class Admit,class Qualify,class Executable,

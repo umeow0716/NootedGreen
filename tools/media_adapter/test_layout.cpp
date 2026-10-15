@@ -15435,6 +15435,31 @@ static void testRetainedVeboxFrames() {
             assert(vpFamilies.acceptsCreatorSuccess(true,true,true));
             assert(!vpFamilies.acceptsCreatorSuccess(false,true,true) && !vpFamilies.acceptsCreatorSuccess(true,false,true) &&
                 !vpFamilies.acceptsCreatorSuccess(true,true,false));
+            {
+                TglNativeContextFamilyBatchSnapshot<3> mixed;
+                mixed.valid=true;mixed.batch.valid=true;mixed.batch.count=3;mixed.batch.contexts={0x10000,0x20000,0x30000};
+                mixed.families={TglNativeContextFamily::VeboxVp,TglNativeContextFamily::NativeOther,TglNativeContextFamily::VeboxVp};
+                mixed.vpCount=2;mixed.nativeOtherCount=1;
+                std::array<uintptr_t,3> completed{0x50000,0x60000,0};unsigned reads=0;
+                auto creatorsRead=[&](uintptr_t at,void* out,size_t bytes) noexcept -> bool {
+                    ++reads;assert(bytes==8 && at!=0x20000+0x12e0);
+                    const uintptr_t creator=at==0x10000+0x12e0?0x50000:at==0x30000+0x12e0?0x60000:0;
+                    if(!creator)return false;std::memcpy(out,&creator,8);return true;
+                };
+                assert(mixed.matchesCreatorHandoffs(completed,2,creatorsRead) && reads==4);
+                std::swap(completed[0],completed[1]);assert(mixed.matchesCreatorHandoffs(completed,2,creatorsRead));
+                assert(!mixed.matchesCreatorHandoffs(completed,1,creatorsRead));
+                completed[2]=0x70000;assert(!mixed.matchesCreatorHandoffs(completed,2,creatorsRead));completed[2]=0;
+                completed[1]=completed[0];assert(!mixed.matchesCreatorHandoffs(completed,2,creatorsRead));
+                completed={0x50000,0x70000,0};assert(!mixed.matchesCreatorHandoffs(completed,2,creatorsRead));
+                completed={0x50000,0x60000,0};
+                assert(!mixed.matchesCreatorHandoffs(completed,2,[](uintptr_t,void*,size_t) noexcept -> bool {return false;}));
+                unsigned unstable=0;
+                assert(!mixed.matchesCreatorHandoffs(completed,2,[&](uintptr_t,void* out,size_t) noexcept -> bool {
+                    const uintptr_t creator=++unstable==1?0x50000:0x60000;std::memcpy(out,&creator,8);return true;
+                }));
+                mixed.batch.contexts[2]=UINTPTR_MAX-7;assert(!mixed.matchesCreatorHandoffs(completed,2,creatorsRead));
+            }
             vpFamilies.vpCount=2;assert(!vpFamilies.acceptsCreatorSuccess(true,true,true));
             assert(!Codec::create(base,physical,ticket.generation+1,context,dependency,ownerRead,writeVptr,ownerAdmit,qualify,executable));
             assert(dependency.live());
