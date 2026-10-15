@@ -22748,6 +22748,9 @@ int main() {
                 };
                 {
                     using Backing=TglNativeVeboxVpFrameBacking<UnusedStmmApi,NativeCpu>;
+                    // This extra reset fixture has its own allocation cycles;
+                    // leave the later single-frame teardown-order recorder intact.
+                    stateCpu.releaseOrder=avsCpu.releaseOrder=nullptr;
                     TglOwnedVeboxFrameRetention aggregate,unrelated;
                     TglNativeVeboxCommandFrameStorage<UnusedStmmApi> second(
                         TglOwnedVeboxFrameRetention::AggregateLink{},aggregate,resources,4096,TglNativeBufferFillBinding{});
@@ -22758,18 +22761,35 @@ int main() {
                     assert(&paired.retention()==&aggregate);
                     auto& firstLocal=paired.command().backing().auxiliary().retention();
                     assert(firstLocal.linkedTo(aggregate) && !firstLocal());
+                    assert(paired.initializeVp(0,binding,resources.context,0x8000,0x3000,noRead,1,0)==0);
                     TglOwnedVeboxCommandTransactionResult acquired;acquired.acquired=true;
                     second.backing().auxiliary().retention().observe(acquired);
                     assert(paired.retention()() && !firstLocal());
-                    assert(paired.withVpResources(0,[](auto&...) noexcept -> int {assert(false);return 0;})==5);
+                    bool live=true;unsigned resetCalls=0;
+                    auto valid=[](const void* raw) noexcept {return *static_cast<const bool*>(raw);};
+                    TglOwnedVeboxUnusedChildAdmission admission(aggregate,firstLocal,&live,valid);
+                    auto reset=[&]() noexcept -> int {++resetCalls;return 0;};
+                    assert(paired.reinitializeUnsubmittedVpPass(0,reset)==5 && !resetCalls);
+                    {
+                        TglOwnedVeboxUnusedChildAdmission::Binding scope(&aggregate,admission);assert(scope.bound());
+                        assert(paired.reinitializeUnsubmittedVpPass(0,reset)==0 && resetCalls==1);
+                        assert(aggregate() && !firstLocal() && paired.vpBound(0));
+                        assert(paired.reinitializeVpPass(0,reset)==5 && resetCalls==1);
+                        assert(paired.retireVpResources(0,reset)==5 && resetCalls==1);
+                        live=false;
+                        assert(paired.reinitializeUnsubmittedVpPass(0,reset)==5 && resetCalls==1);
+                    }
+                    assert(paired.reinitializeUnsubmittedVpPass(0,reset)==5 && resetCalls==1);
                     assert(paired.withVpResources(1,[](auto&...) noexcept -> int {assert(false);return 0;})==5);
                     Backing denied(0x100000,allocatorRead,[](uintptr_t) noexcept {return true;},
                         [](uintptr_t,size_t) noexcept {return true;},resources,4096,TglNativeBufferFillBinding{},
                         typename Backing::PairedRetention{aggregate,unrelated,{nativeCpu,nativeCpu}});
                     assert(!denied.hasVpStorage(0) && !denied.hasVpStorage(1));
                     assert(denied.initializeVp(binding,resources.context,0x8000,0x3000,noRead,1,0)==5);
-                    assert(!stateCpu.live && !avsCpu.live && !backing.live);
+                    assert(!backing.live);
                 }
+                assert(!stateCpu.live && !avsCpu.live);
+                stateCpu.releaseOrder=avsCpu.releaseOrder=&releaseOrder;
                 {
                     TglNativeVeboxVpFrameBacking<UnusedStmmApi,NativeCpu> frame(0x100000,allocatorRead,
                         [](uintptr_t) noexcept {return true;},
