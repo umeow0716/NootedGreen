@@ -5984,8 +5984,11 @@ struct NativeCreatorScopedInvocation {
         // Separate observers cannot own the thread's debug state concurrently.
         constexpr uint8_t copyAnchor[]={0xe8,0x9c,0x42,0xf3,0xff};
         constexpr uint8_t creatorAnchor[]={0xff,0x51,0x18};
+        constexpr uint8_t rendererReturnAnchor[]={0x89,0x45,0xcc,0x83,0x7d,0xcc,0x00};
+        constexpr uint8_t childReturnAnchor[]={0x89,0x45,0xdc,0x83,0x7d,0xdc,0x00};
         uint8_t actualCopy[sizeof(copyAnchor)]{};
         uint8_t actualCreator[sizeof(creatorAnchor)]{};
+        uint8_t actualRendererReturn[sizeof(rendererReturnAnchor)]{},actualChildReturn[sizeof(childReturnAnchor)]{};
         std::vector<uint8_t> metadata;
         result.admission="metadata-allocation";
         try { metadata.resize(TglKernelMetadataAdapter::blobBytes); }
@@ -5997,13 +6000,19 @@ struct NativeCreatorScopedInvocation {
             !executableMemory(image+0x13260f,sizeof(copyAnchor)) ||
             !readMemory(image+0x13260f,actualCopy,sizeof(actualCopy)) ||
             std::memcmp(actualCopy,copyAnchor,sizeof(copyAnchor)) ||
+            !executableMemory(image+0x133c39,sizeof(rendererReturnAnchor)) ||
+            !readMemory(image+0x133c39,actualRendererReturn,sizeof(actualRendererReturn)) ||
+            std::memcmp(actualRendererReturn,rendererReturnAnchor,sizeof(rendererReturnAnchor)) ||
+            !executableMemory(image+0x132841,sizeof(childReturnAnchor)) ||
+            !readMemory(image+0x132841,actualChildReturn,sizeof(actualChildReturn)) ||
+            std::memcmp(actualChildReturn,childReturnAnchor,sizeof(childReturnAnchor)) ||
             !readMemory(image+0x531550,metadata.data(),metadata.size()) ||
             !TglKernelMetadataAdapter::translate(metadata))return result;
         result.admission="native-debug-observer";
-        NativeReturnObserver observer({image+0x13260f,image+0x133c0f,0,0},
+        NativeReturnObserver observer({image+0x13260f,image+0x133c0f,image+0x133c39,image+0x132841},
             0,0,0,0,0,0,
             {image+0x531550,reinterpret_cast<uintptr_t>(metadata.data()),metadata.size()},0,
-            {creatorScope.table().source(),creatorScope.table().addressPoint(),1});
+            {creatorScope.table().source(),creatorScope.table().addressPoint(),1},0xcu);
         if(!observer.isArmed())return result;
         currentObserver=&observer;
         result.admission="native-return";

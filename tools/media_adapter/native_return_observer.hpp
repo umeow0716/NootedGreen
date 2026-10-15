@@ -150,7 +150,7 @@ public:
     explicit NativeReturnObserver(const std::array<uintptr_t, 4> &selected, unsigned booleans = 0,
         unsigned rcx = 0, unsigned readRax32 = 0, unsigned rdxImage = 0,
         uintptr_t base = 0, uintptr_t bytes = 0, NativeOwnedCopy copy = {}, unsigned rcxImage = 0,
-        NativeOwnedCallTable callTable = {})
+        NativeOwnedCallTable callTable = {},unsigned rawReturns=0)
         : sites(selected), booleanSites(booleans), rcxSites(rcx), readRax32Sites(readRax32),
           rdxImageSites(rdxImage), rcxImageSites(rcxImage), imageBase(base), imageBytes(bytes), ownedCopy(copy),ownedCallTable(callTable) {
         for (unsigned i = 0; i != 4; ++i) {
@@ -159,7 +159,10 @@ public:
             wanted |= 1 << i;
         }
         if (!guard.owns_lock() || !wanted ||
-            ((booleanSites | rcxSites | readRax32Sites | rdxImageSites | rcxImageSites) & ~unsigned(wanted)) ||
+            ((booleanSites | rcxSites | readRax32Sites | rdxImageSites | rcxImageSites | rawReturns) & ~unsigned(wanted)) ||
+            (rawReturns & (booleanSites | rcxSites | readRax32Sites | rdxImageSites | rcxImageSites)) ||
+            (ownedCopy.bytes && (rawReturns&1u)) ||
+            (ownedCallTable.replacement && ownedCallTable.site<4 && (rawReturns&(1u<<ownedCallTable.site))) ||
             (rcxSites & readRax32Sites) ||
             (rdxImageSites & (booleanSites | rcxSites | readRax32Sites)) ||
             (rcxImageSites & (booleanSites | rcxSites | readRax32Sites | rdxImageSites)) ||
@@ -167,7 +170,7 @@ public:
                 imageBase + imageBytes < imageBase)) ||
             (ownedCopy.bytes && (!(wanted & 1) || booleanSites || rcxSites || readRax32Sites ||
                 ((rdxImageSites | rcxImageSites) & 1) ||
-                ((unsigned(wanted) & ~1u) != ((rdxImageSites | rcxImageSites) |
+                ((unsigned(wanted) & ~1u) != ((rdxImageSites | rcxImageSites | rawReturns) |
                     (ownedCallTable.replacement && ownedCallTable.site<4 ?
                         (1u<<ownedCallTable.site) : 0u))) ||
                 !ownedCopy.source || !ownedCopy.replacement || ownedCopy.source == ownedCopy.replacement ||

@@ -199,9 +199,10 @@ int main() {
         const uint32_t source=0x1234,replacement=0x5678;uint32_t destination=0;
         creatorNativeCalls=creatorOwnedCalls=0;expectedCreator=creator;
         NativeReturnObserver combined({reinterpret_cast<uintptr_t>(owned_debug_copy_site),
-            reinterpret_cast<uintptr_t>(owned_debug_creator_site),0,0},0,0,0,0,0,0,
+            reinterpret_cast<uintptr_t>(owned_debug_creator_site),reinterpret_cast<uintptr_t>(owned_debug_site_c),
+            reinterpret_cast<uintptr_t>(owned_debug_site_d)},0,0,0,0,0,0,
             {reinterpret_cast<uintptr_t>(&source),reinterpret_cast<uintptr_t>(&replacement),4},0,
-            {reinterpret_cast<uintptr_t>(nativeTable),reinterpret_cast<uintptr_t>(ownedTable),1});
+            {reinterpret_cast<uintptr_t>(nativeTable),reinterpret_cast<uintptr_t>(ownedTable),1},0xcu);
         if(!combined.isArmed())return 1;
         creatorRearmObserver=&combined;creatorRearmSite=1;creatorRearmCopy=true;
         for(unsigned i=0;i<2;++i) {
@@ -209,9 +210,11 @@ int main() {
                 owned_debug_copy_target(&destination,4,&source,4)!=replacement || destination!=replacement)return 1;
         }
         creatorRearmObserver=nullptr;creatorRearmSite=0;creatorRearmCopy=false;
+        if(owned_debug_target_c()!=0x369c || owned_debug_target_d()!=0x48ad ||
+            !combined.observedAll(2,0x369c) || !combined.observedAll(3,0x48ad))return 1;
         if(combined.observedCount(0)!=2 || combined.observedCount(1)!=2 ||
             !combined.observedAll(0,1) || !combined.observedAll(1,1) || creatorNativeCalls!=2 || creatorOwnedCalls!=2)return 1;
-        std::puts("SELF_DEBUG_TWO_SITE_REARM_OK creators=2 copies=2 native=2");
+        std::puts("SELF_DEBUG_TWO_SITE_REARM_OK creators=2 copies=2 native=2 raw-returns=2");
     }
     {
         NativeReturnObserver mixed({reinterpret_cast<uintptr_t>(owned_debug_creator_site),0,0,0},
