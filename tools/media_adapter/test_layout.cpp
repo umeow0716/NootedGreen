@@ -16371,6 +16371,7 @@ static void testRetainedVeboxFrames() {
                 } scope{image};
                 const auto pendingFrame=retained->reserveNativeOtherFrame(lease,scope);
                 assert(pendingFrame.serial && !retained->reserveNativeOtherFrame(lease,scope).serial);
+                assert(!retained->nativeOtherWorkQuiescent());
                 assert(!retained->prepareRemoval(same));
                 TglNativeOtherContextEventLineage outputLineage;
                 outputLineage.valid=true;outputLineage.context=0x8000;outputLineage.physical=0x9000;
@@ -16393,7 +16394,20 @@ static void testRetainedVeboxFrames() {
                 current.observed[0]=0;
                 assert(!retained->completeNativeOtherFrame(lease,scope,pendingFrame,99,completed,expected,current));
                 current.observed[0]=1;
-                assert(retained->completeNativeOtherFrame(lease,scope,pendingFrame,99,completed,expected,current));
+                bool ready=false;unsigned observations=0;
+                auto observe=[&](const auto& saved,const auto& savedFresh,auto& expectedOut,auto& freshOut,
+                    uint64_t& registry,auto& replyOut) noexcept -> bool {
+                    ++observations;assert(saved.expected==expected.expected && savedFresh.mapping==current.mapping);
+                    assert(!retained->prepareRemoval(same) && !retained->nativeOtherWorkQuiescent());
+                    if(!ready)return false;
+                    expectedOut=expected;freshOut=current;registry=99;replyOut=completed;return true;
+                };
+                assert(retained->serviceNativeOtherFrames(lease,scope,observe)==0 && observations==1);
+                assert(!retained->prepareRemoval(same) && !retained->nativeOtherWorkQuiescent());
+                ready=true;
+                assert(retained->serviceNativeOtherFrames(lease,scope,observe)==0 && observations==2);
+                assert(retained->nativeOtherWorkQuiescent());
+                assert(!retained->completeNativeOtherFrame(lease,scope,pendingFrame,99,completed,expected,current));
                 assert(!retained->confirmNativeRemoval(same));
                 assert(retained->prepareRemoval(same) && retained->confirmNativeRemoval(same));
                 assert(TglImplicitContextRelease<OtherOwner>::allowed(*retained));

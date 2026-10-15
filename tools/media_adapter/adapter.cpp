@@ -146,6 +146,7 @@ struct NativeCodecBackend {
         selected->adopted=result==0;if(result)return result;
         for(uint32_t i=0;i<batch.count;++i) {
             const auto context=batch.contexts[i];
+            if(!context)continue; // Native NULL request entries have no owner/table to publish.
             auto lease=owners().pinExclusive(scope.image(),physical,scope.generation(),context);
             if(!lease.get() || !lease.exclusive() || !lease.get()->publishFrame(lease,hook,
                 [&](uintptr_t image,uintptr_t parent,uint64_t generation,uintptr_t object) noexcept {
@@ -153,6 +154,25 @@ struct NativeCodecBackend {
                 },&ownedExecutableMemory))return 5;
         }
         selected->framesPublished=true;return 0;
+    }
+    template<class Scope,class Use>
+    static int withNativeOtherOwners(Scope& scope,uintptr_t image,uintptr_t physical,uint64_t generation,Use use) noexcept {
+        if(!scope.matches(image,physical,generation))return 5;
+        auto& storage=ledger();if(storage.gate.test_and_set(std::memory_order_acquire))return 5;
+        struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{storage.gate};
+        for(const auto& record:storage.records)if(record.used && record.image==image && record.physical==physical && record.generation==generation) {
+            if(!record.adopted || !record.framesPublished)return 5;
+            for(size_t i=0;i<record.batch.count;++i) {
+                const auto context=record.batch.contexts[i];if(!context)continue;
+                auto lease=owners().pin(image,physical,generation,context);
+                if(!lease.get() || lease.get()->context()!=context)return 5;
+                if(lease.get()->family()==TglNativeContextFamily::NativeOther) {
+                    const int status=use(lease);if(status)return status;
+                }
+                if(!scope.matches(image,physical,generation))return 5;
+            }
+        }
+        return 0;
     }
     // Called ONLY by coordinator after native removal returned success, under
     // the same empty-frame physical mutation gate. Never inspect freed objects.
@@ -5360,6 +5380,28 @@ struct NativeOtherFrameBackend {
             after.frameworkContext==fence.frameworkContext && after.count==fence.count &&
             scope.matches(image,physical,generation);
     }
+    static int poll(NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,uint64_t generation) noexcept {
+        return NativeCodecBackend::withNativeOtherOwners(scope,image,physical,generation,[&](auto& lease) noexcept -> int {
+            return lease.get()->serviceNativeOtherFrames(lease,scope,
+                [&](const auto& old,const auto& oldFresh,auto& expected,auto& fresh,uint64_t& registryId,auto& reply) noexcept -> bool {
+                    if(!oldFresh.valid)return false;
+                    const TglNativeFrameOutputReceipt receipt{old.codec,old.event,old.index,true};
+                    TglNativeOtherContextEventLineage lineage;
+                    if(!capture(scope,image,physical,generation,receipt,lineage,expected,fresh) ||
+                       !queryCompletion(lease,scope,image,physical,generation,old,registryId,reply))return false;
+                    // Re-read AFTER kernel query; completion cannot be based
+                    // on cached device44 values or a stale expected buffer.
+                    return capture(scope,image,physical,generation,receipt,lineage,expected,fresh);
+                });
+        });
+    }
+    static int poll(void* physical) noexcept {
+        const auto* source=NativeFactorySource::process().get();if(!source)return 5;
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return NativePhysicalBackend::withScope(address,[&](NativePhysicalFrameScope& scope,uint64_t generation) noexcept -> int {
+            return poll(scope,source->physical.image,address,generation);
+        });
+    }
     static int dispatch(Lease& lease,NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,
         uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
         auto* owner=lease.get();
@@ -5397,6 +5439,8 @@ struct NativeLateFactoryBatch {
     static int dispatch(void* raw,NativeFactoryFrameBatch::Lease& owner,NativePhysicalFrameScope& physical,
         uintptr_t image,uintptr_t address,uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
         if(!raw || !owner.get() || !physical.matches(image,address,generation))return 5;
+        const int completion=NativeOtherFrameBackend::poll(physical,image,address,generation);
+        if(completion)return completion;
         if(owner.get()->family()==TglNativeContextFamily::NativeOther)
             return NativeOtherFrameBackend::dispatch(owner,physical,image,address,generation,input,output);
         auto& self=*static_cast<NativeLateFactoryBatch*>(raw);
@@ -5830,7 +5874,9 @@ struct NativeFactoryLifecycle {
         return NativeLateFactoryBatch::run(physical,input,output,decompression,nullptr);
     }
     static int reportFrameEvents(void* physical,const void* input) noexcept {
-        return NativeFactorySource::process().get()?NativePhysicalBackend::reportFrameEvents(physical,input):5;
+        if(!NativeFactorySource::process().get())return 5;
+        const int native=NativePhysicalBackend::reportFrameEvents(physical,input);
+        return native?native:NativeOtherFrameBackend::poll(physical);
     }
     static int removeContexts(void* physical,const void* input) noexcept {
         return NativeFactorySource::process().get()?NativeCompositeContextRemoval::run(physical,input):5;

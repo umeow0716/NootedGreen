@@ -25197,6 +25197,22 @@ public:
             (other.fence.event==fence.event || (other.fence.wrapper==fence.wrapper && other.fence.index==fence.index)))return false;
         record->fence=fence;record->fresh=fresh;record->state=State::Bound;return true;
     }
+    template<class Observe>
+    bool service(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context,Observe observe) noexcept {
+        for(size_t i=0;i<records_.size();++i) {
+            auto& record=records_[i];if(record.state==State::Empty)continue;
+            if(record.state!=State::Bound || record.image!=image || record.physical!=physical ||
+               record.generation!=generation || record.context!=context)return false;
+            TglNativeFenceBackingObservation::Snapshot expected;
+            TglNativeFreshStampObservation::Snapshot fresh;
+            NGVfTaskCompletion::Reply reply{};uint64_t registryId=0;
+            if(!observe(std::as_const(record.fence),std::as_const(record.fresh),expected,fresh,registryId,reply))continue;
+            // A scan is not completion. Invalid/not-ready evidence retains the
+            // record; complete() alone can clear its exact one-shot ticket.
+            (void)complete({this,record.serial,i},image,physical,generation,context,registryId,reply,expected,fresh);
+        }
+        return true;
+    }
     // Caller authenticates registry through its retained native connection,
     // revalidates expected fence/lineage and captures fresh hardware stamps
     // under SAME generation/reset exclusion. Packet shape alone is not auth.
@@ -26612,6 +26628,12 @@ public:
         if constexpr(std::is_same_v<ParentBinding,TglNativeMixedContextParentView>)return state_->parentProof.family;
         return std::is_same_v<ParentBinding,TglNativeVeboxParentView>?TglNativeContextFamily::VeboxVp:TglNativeContextFamily::NativeOther;
     }
+    bool nativeOtherWorkQuiescent() noexcept {
+        if(!state_ || !enter())return false;
+        Unlock unlock{state_->busy};
+        return !state_->removed && state_->retainedIdentity() && state_->nativeParentMatches() &&
+            !state_->nativeOtherPending.pending();
+    }
     template<class OwnerLease,class Scope>
     TglNativeOtherPendingFrames::Ticket reserveNativeOtherFrame(const OwnerLease& lease,Scope& scope) noexcept {
         if(!state_ || lease.get()!=this || family()!=TglNativeContextFamily::NativeOther || !enter())return {};
@@ -26641,6 +26663,15 @@ public:
            !scope.matches(state_->image,state_->physical,state_->generation))return false;
         return state_->nativeOtherPending.complete(ticket,state_->image,state_->physical,state_->generation,state_->context,
             registryId,reply,fence,fresh);
+    }
+    template<class OwnerLease,class Scope,class Observe>
+    int serviceNativeOtherFrames(const OwnerLease& lease,Scope& scope,Observe observe) noexcept {
+        if(!state_ || lease.get()!=this || family()!=TglNativeContextFamily::NativeOther || !enter())return 5;
+        Unlock unlock{state_->busy};
+        if(state_->removed || !state_->retainedIdentity() || !state_->nativeParentMatches() ||
+           state_->table.publication()!=TglContextFramePublication::Published ||
+           !scope.matches(state_->image,state_->physical,state_->generation))return 5;
+        return state_->nativeOtherPending.service(state_->image,state_->physical,state_->generation,state_->context,observe)?0:5;
     }
     template<class OwnerLease>
     bool excludesPublishedContextWritableSpan(const OwnerLease& lease,uintptr_t address,size_t bytes) noexcept {
