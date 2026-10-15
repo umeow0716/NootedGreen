@@ -4,8 +4,24 @@ import hashlib
 import struct
 import sys
 from pathlib import Path
-from unicorn import Uc, UC_ARCH_X86, UC_MODE_64, UC_HOOK_CODE
-from unicorn.x86_const import *
+if '--task-identity-only' not in sys.argv[2:]:
+    from unicorn import Uc, UC_ARCH_X86, UC_MODE_64, UC_HOOK_CODE
+    from unicorn.x86_const import *
+
+
+def task_identity_anchors(image):
+    # Exact Tahoe VEBOX task source, independently joined to Family's
+    # Shared88 -> context598 publication. This is NOT completion evidence.
+    sites = {
+        0xda0d8: struct.pack('<Q', 0x76082),  # actual VEBOX vtable+968
+        0x76082: bytes.fromhex('554889e5488b87980500005dc3'),
+        0x75d51: bytes.fromhex(
+            '488b034889dfff9068090000488d351ca504004889c7ba02000000e8055c0000'),
+        0x7b9ad: bytes.fromhex('4c89fe4c89f2e81c000000'),
+        0x7b9f9: bytes.fromhex('48897758'),
+    }
+    return all(image[site:site + len(anchor)] == anchor
+               for site, anchor in sites.items()), sites
 
 
 def run(image, success, candidate=False, outer=False):
@@ -147,6 +163,20 @@ def run(image, success, candidate=False, outer=False):
 
 
 image = Path(sys.argv[1]).read_bytes()
+identity_ok, identity_sites = task_identity_anchors(image)
+assert identity_ok, 'native VEBOX task ownership ABI drift'
+mutated = bytearray(image)
+for site, anchor in identity_sites.items():
+    for byte in range(len(anchor)):
+        mutated[site + byte] ^= 1
+        assert not task_identity_anchors(mutated)[0], 'task identity mutation accepted'
+        mutated[site + byte] ^= 1
+del mutated
+if sys.argv[2:] == ['--task-identity-only']:
+    print('PASS exact native VEBOX context598->hardwareContext58 identity; '
+          f'{sum(map(len, identity_sites.values()))} changed-byte mutations rejected; '
+          'static identity only, no constructor/GPU/completion execution')
+    sys.exit(0)
 assert hashlib.sha256(image[0x7cebc:0x7cfb0]).hexdigest() == \
     '67dfb7530b4142f6a2186b617e396df18dcb46517e45ab2ce540a38c1cc20fd1'
 assert hashlib.sha256(image[0x8114:0x817a]).hexdigest() == \
@@ -158,6 +188,7 @@ for outer in (False, True):
         for result in (False, True):
             run(image, result, candidate, outer)
 print('PASS native constructor ABI and production no-cave failure branch;'
+      ' exact VEBOX context598->hardwareContext58 identity and byte mutations;'
       ' original ignores false, candidate skips backing/setup;'
       ' selected outer factory/free release once;'
       ' bridge callbacks mocked; no actual pool/base refs or GPU proof')

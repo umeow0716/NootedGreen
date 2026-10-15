@@ -5,6 +5,13 @@ compiler="${CXX:-clang++}"
 task_output="$(mktemp -d "${TMPDIR:-/tmp}/ngreen-static.XXXXXX")"
 printf 'Diagnostic directory: %s\n' "$task_output"
 failed=0
+if python3 -B tools/vf_command_pool_native_abi_test.py \
+    sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+    --task-identity-only; then
+    printf 'PASS exact native VEBOX task ownership anchors and mutations\n'
+else
+    failed=1
+fi
 # Native-host CPU-only tests; no driver load or GPU access. The dedicated
 # macos-26-intel workflow also runs these with the real Darwin VM APIs.
 if "$compiler" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined \

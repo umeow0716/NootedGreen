@@ -103,7 +103,6 @@ INDIRECT_OR_EXTERNAL_PROGRAMS = {
     "tools/linux_mmio_mapper/validate_mappings.py": "imported by mapper harness",
     "tools/tahoe_ioaccel_mapping_contract_test.py": "manual pinned System/Boot KC contract",
     "tools/vf_command_pool_free_test.py": "manual pinned KC Unicorn execution",
-    "tools/vf_command_pool_native_abi_test.py": "manual pinned payload Unicorn execution",
 }
 EXPECTED_TOOL_DATA = {
     "tools/media_adapter/tgl_capability_adapter.hpp",
