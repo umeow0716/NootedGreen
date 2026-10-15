@@ -2795,6 +2795,27 @@ struct NativeRetainedFenceOwnerAdmission {
         return !status && proved;
     }
 };
+struct NativeRetainedStampOwnerAdmission {
+    uintptr_t image=0,physical=0;
+    bool operator()(NativeBorrowedFrontend& frontend,
+        const TglNativeFenceBackingObservation::Snapshot& fence,
+        const TglNativeFreshStampObservation::Snapshot& stamps,uint64_t bytes) const noexcept {
+        if(!fence.valid || !stamps.device || !stamps.channels || stamps.channels>8 ||
+            bytes!=uint64_t(stamps.channels)*64 ||
+            !NativeRetainedFenceOwnerAdmission{image,physical}(frontend,fence.codec,fence.wrapper,
+                fence.frameworkContext,fence.mapping,fence.bytes,fence.index) ||
+            !leafMemoryPermissions(stamps.device,0x34,VM_PROT_READ,VM_PROT_EXECUTE) ||
+            !leafMemoryPermissions(stamps.mapping,size_t(bytes),VM_PROT_READ,VM_PROT_EXECUTE) ||
+            !leafMemoryPermissions(stamps.table,size_t(stamps.channels)*8,VM_PROT_READ,VM_PROT_EXECUTE))return false;
+        uintptr_t device=0,mapping=0,table=0;uint32_t channels=0;
+        return readMemory(fence.wrapper,&device,8) && device==stamps.device &&
+            readMemory(device+0x20,&mapping,8) && mapping==stamps.mapping &&
+            readMemory(device+0x28,&table,8) && table==stamps.table &&
+            readMemory(device+0x30,&channels,4) && channels==stamps.channels;
+        // This proves scoped owner/topology/readable extent only. It does NOT
+        // exclude termination or CPU-synthesized stamps and grants no retire.
+    }
+};
 struct NativeRendererHistoryInspection {
     static TglNativeHistoryCacheInspection run(NativeBorrowedFrontend& frontend) noexcept {
         TglNativeHistoryCacheInspection result;
@@ -4246,6 +4267,20 @@ struct NativePhysicalBackend {
         TglNativePhysicalCallbackBinding native;if(!binding(native))return 5;
         return captureExpectedFence(physical,frame,0,
             NativeRetainedFenceOwnerAdmission{native.image,reinterpret_cast<uintptr_t>(physical)},output);
+    }
+    static int captureNativeFreshFence(void* physical,typename NativePhysicalRegistry::FrameTicket frame,
+        const TglNativeFreshStampObservation& fresh,uint64_t stampBytes,
+        TglNativeFenceBackingObservation::Snapshot& expected,
+        TglNativeFreshStampObservation::Snapshot& observed) noexcept {
+        TglNativePhysicalCallbackBinding native;TglNativeFenceBackingObservation fence;
+        if(!binding(native) || !fence.resolve(native.image,&readMemory,
+            NativeTglImageAdmission{native.image},&executableMemory))return 5;
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.captureFreshFence(ticket,address,frame,fence,fresh,stampBytes,&readMemory,
+                NativeRetainedFenceOwnerAdmission{native.image,address},
+                NativeRetainedStampOwnerAdmission{native.image,address},expected,observed);
+        });
     }
     using RemovedBatch=TglNativeRemovedContextBatch<16>;
     using RemovalScope=typename NativePhysicalRegistry::DependencyAdoptionScope;
