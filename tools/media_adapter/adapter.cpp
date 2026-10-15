@@ -2812,9 +2812,12 @@ template<class SurfaceOwner> struct NativeRendererCompleteHooksFor {
     static int install(NativeRendererCpuAssembly& assembly,const TglNativeVphalMhwView& view,
         const std::array<int(*)(void*) noexcept,2>& send={}) noexcept {
         return assembly.withChildLifetimeScopes([&](void*,void*,auto&,auto&) noexcept -> int {
-            return tglInstallOwnedRendererCompleteTablesFromCreator<LifetimeResolve,NativeAdmissionResolveFor<SurfaceOwner>,
+            const char* refusal="none";
+            const int status=tglInstallOwnedRendererCompleteTablesFromCreator<LifetimeResolve,NativeAdmissionResolveFor<SurfaceOwner>,
                 NativeAllocationResolveFor<SurfaceOwner>,NativeVeboxProducerResolveFor<SurfaceOwner>,NativeModeReleaseScope,TglOwnedFormatReader>(
-                    assembly.cpu(),view,&readMemory,NativeTglImageAdmission{view.renderer.image},&executableMemory,send);
+                    assembly.cpu(),view,&readMemory,NativeTglImageAdmission{view.renderer.image},&executableMemory,send,&refusal);
+            os_log_info(OS_LOG_DEFAULT,"NGRN_CHILD_HOOK_INSTALL status=%{public}d refusal=%{public}s",status,refusal);
+            return status;
         });
     }
 };

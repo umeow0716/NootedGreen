@@ -3112,21 +3112,29 @@ struct TglOwnedVeboxVtable {
     }
     template<class Read, class Qualify, class Executable>
     bool build(uintptr_t image, const std::array<uintptr_t,20>& owned,
-               Read read, Qualify qualify, Executable executable) {
+               Read read, Qualify qualify, Executable executable,const char** refusal=nullptr) {
         offsetToTop = 0; typeInfo = 0; entries = {};
         constexpr auto max = std::numeric_limits<uintptr_t>::max();
-        if (!image || image > max - 0x757ed0 || !qualify(image)) return false;
+        if (!image || image > max - 0x757ed0 || !qualify(image)) {
+            if(refusal)*refusal="table-image";return false;
+        }
         std::array<uintptr_t,2> metadata{};
         if (!read(image+0x757c88,metadata.data(),sizeof(metadata)) ||
-            metadata[0] != 0 || metadata[1] != image+0x757ed0) return false;
+            metadata[0] != 0 || metadata[1] != image+0x757ed0) {
+            if(refusal)*refusal="table-metadata";return false;
+        }
         std::array<uintptr_t,count> candidate{};
-        if (!read(image + 0x757c98, candidate.data(), sizeof(candidate))) return false;
+        if (!read(image + 0x757c98, candidate.data(), sizeof(candidate))) {
+            if(refusal)*refusal="table-read";return false;
+        }
         for (size_t i = 0; i < count; ++i) {
             bool mustBeNull = false;
             for (size_t offset : missing) mustBeNull |= i * 8 == offset;
-            if (mustBeNull != (candidate[i] == 0)) return false;
+            if (mustBeNull != (candidate[i] == 0)) {if(refusal)*refusal="table-null-topology";return false;}
             if (candidate[i] && (candidate[i] < image+0x1160 ||
-                candidate[i] - image >= 0x23e03f || !executable(candidate[i], 1))) return false;
+                candidate[i] - image >= 0x23e03f || !executable(candidate[i], 1))) {
+                if(refusal)*refusal="table-native-executable";return false;
+            }
         }
         if (candidate[0] != image+0x12e240 || candidate[1] != image+0x12e250 ||
             // Renderer132510 invokes both children+10 before frame allocation.
@@ -3174,12 +3182,12 @@ struct TglOwnedVeboxVtable {
             candidate[0x160/8] != image+0x12a740 || candidate[0x168/8] != image+0x12ab10 ||
             candidate[0x170/8] != image+0x12aba0 || candidate[0x180/8] != image+0x12b1d0 ||
             candidate[0xd0/8] != image+0x71e80 ||
-            candidate[0x1b8/8] != image+0x71e80) return false;
+            candidate[0x1b8/8] != image+0x71e80) {if(refusal)*refusal="table-native-identity";return false;}
         for (size_t i = 0; i < required.size(); ++i) {
             // Owned replacements are trusted compiled addresses, not pointers
             // discovered in an object. Never substitute another native callback.
             if (!owned[i] || (owned[i] >= image && owned[i] - image < 0x23e03f) ||
-                !executable(owned[i], 1)) return false;
+                !executable(owned[i], 1)) {if(refusal)*refusal="table-owned-executable";return false;}
             candidate[required[i]/8] = owned[i];
         }
         entries = candidate; typeInfo = metadata[1]; return true;
@@ -3188,10 +3196,11 @@ struct TglOwnedVeboxVtable {
     // it must not change any other native slot or the retained ABI metadata.
     template<class Read,class Qualify,class Executable>
     bool buildWithSend(uintptr_t image,const std::array<uintptr_t,20>& owned,
-        int(*send)(void*) noexcept,Read read,Qualify qualify,Executable executable) {
-        if(!build(image,owned,read,qualify,executable))return false;
+        int(*send)(void*) noexcept,Read read,Qualify qualify,Executable executable,const char** refusal=nullptr) {
+        if(!build(image,owned,read,qualify,executable,refusal))return false;
         const auto entry=reinterpret_cast<uintptr_t>(send);
         if(!entry || (entry>=image && entry-image<0x23e03f) || !executable(entry,1)) {
+            if(refusal)*refusal="table-send-executable";
             offsetToTop=0;typeInfo=0;entries={};return false;
         }
         entries[0x148/8]=entry;return true;
@@ -6035,21 +6044,29 @@ public:
     template<class Read,class Qualify,class Executable>
     bool installPrivateVtable(const std::array<uintptr_t,20>& hooks,
         Read read,Qualify qualify,Executable executable,
-        int(*send)(void*) noexcept=nullptr) noexcept {
+        int(*send)(void*) noexcept=nullptr,const char** refusal=nullptr) noexcept {
         static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
             noexcept(qualify(uintptr_t{})) && noexcept(executable(uintptr_t{},size_t{})),
             "private table admission must report failure without throwing");
-        if(!ready_ || busy_ || tableInstalled_) return false;
+        if(!ready_ || busy_ || tableInstalled_) {
+            if(refusal)*refusal="child-state";
+            return false;
+        }
         // This slot is implemented, not an injectable platform policy. Reject
         // an accidental native FALSE or arbitrary replacement before mutation.
-        if(hooks[15]!=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported))
+        if(hooks[15]!=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported)) {
+            if(refusal)*refusal="child-csc";
             return false;
+        }
         uintptr_t nativeTable=0;
         std::memcpy(&nativeTable,reinterpret_cast<void*>(storage_.get()),8);
-        if(nativeTable!=image_+0x757c98) return false;
+        if(nativeTable!=image_+0x757c98) {
+            if(refusal)*refusal="child-native-table";
+            return false;
+        }
         busy_=true;
-        const bool valid=send?table_.buildWithSend(image_,hooks,send,read,qualify,executable):
-            table_.build(image_,hooks,read,qualify,executable);
+        const bool valid=send?table_.buildWithSend(image_,hooks,send,read,qualify,executable,refusal):
+            table_.build(image_,hooks,read,qualify,executable,refusal);
         if(valid) {
             const auto address=table_.addressPoint();
             std::memcpy(reinterpret_cast<void*>(storage_.get()),&address,8);
@@ -6250,15 +6267,17 @@ public:
     template<class Read,class Qualify,class Executable>
     bool installPrivateVtables(const std::array<std::array<uintptr_t,20>,2>& hooks,
         Read read,Qualify qualify,Executable executable,
-        const std::array<int(*)(void*) noexcept,2>& send={}) noexcept {
-        if(!bound()) return false;
+        const std::array<int(*)(void*) noexcept,2>& send={},const char** refusal=nullptr) noexcept {
+        if(!bound()) {if(refusal)*refusal="pair-unbound";return false;}
         const auto csc=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported);
-        if(hooks[0][15]!=csc || hooks[1][15]!=csc) return false;
-        if(!first_.owner().installPrivateVtable(hooks[0],read,qualify,executable,send[0]) ||
-           !second_.owner().installPrivateVtable(hooks[1],read,qualify,executable,send[1])) return false;
-        return first_.owner().matchesPrivateVtableHooks(hooks[0]) &&
+        if(hooks[0][15]!=csc || hooks[1][15]!=csc) {if(refusal)*refusal="pair-csc";return false;}
+        if(!first_.owner().installPrivateVtable(hooks[0],read,qualify,executable,send[0],refusal) ||
+           !second_.owner().installPrivateVtable(hooks[1],read,qualify,executable,send[1],refusal)) return false;
+        const bool matched=first_.owner().matchesPrivateVtableHooks(hooks[0]) &&
             second_.owner().matchesPrivateVtableHooks(hooks[1]) &&
             first_.owner().matchesPrivateSend(send[0]) && second_.owner().matchesPrivateSend(send[1]);
+        if(!matched && refusal)*refusal="pair-installed-match";
+        return matched;
     }
     template<class Admit> bool canDetach(void* renderer,uint64_t generation,Admit admit) noexcept {
         return publication_.canDetach(renderer,generation,admit);
@@ -30306,12 +30325,15 @@ public:
     template<class Read,class Qualify,class Executable>
     int installPrivateVtablesFromCreator(const TglNativeVphalMhwView& view,
         const std::array<std::array<uintptr_t,20>,2>& hooks,Read read,Qualify qualify,Executable executable,
-        const std::array<int(*)(void*) noexcept,2>& send={}) noexcept {
+        const std::array<int(*)(void*) noexcept,2>& send={},const char** refusal=nullptr) noexcept {
         TglVeboxHardwareBinding hardware;
         if(backing_.retention()() || !children_.first().owner().constructedBase() ||
             !children_.second().owner().constructedBase() ||
-            !creatorEnvironment(view,read,qualify,executable,hardware))return 5;
-        return children_.installPrivateVtables(hooks,read,qualify,executable,send)?0:5;
+            !creatorEnvironment(view,read,qualify,executable,hardware)) {
+            if(refusal)*refusal="creator-environment";
+            return 5;
+        }
+        return children_.installPrivateVtables(hooks,read,qualify,executable,send,refusal)?0:5;
     }
     // Enclosing exclusive VPHAL owner retains parent60 until THIS storage
     // (including VP resources) is destroyed, before native135020 can free it.
@@ -32354,13 +32376,16 @@ template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
     class ProducerResolve,class ModeResolve,class FormatRead,class Storage,class Read,class Qualify,class Executable>
 int tglInstallOwnedRendererCompleteTablesFromCreator(Storage& storage,const TglNativeVphalMhwView& view,
     Read read,Qualify qualify,Executable executable,
-    const std::array<int(*)(void*) noexcept,2>& send={}) noexcept {
+    const std::array<int(*)(void*) noexcept,2>& send={},const char** refusal=nullptr) noexcept {
     std::array<std::array<uintptr_t,20>,2> hooks{};
     if(!tglBuildOwnedVeboxCompleteHooks<LifetimeResolve,AdmissionResolve,AllocationResolve,ProducerResolve,ModeResolve,FormatRead>(
             storage.children().first().owner().constructedBase(),hooks[0]) ||
        !tglBuildOwnedVeboxCompleteHooks<LifetimeResolve,AdmissionResolve,AllocationResolve,ProducerResolve,ModeResolve,FormatRead>(
-            storage.children().second().owner().constructedBase(),hooks[1]))return 5;
-    return storage.installPrivateVtablesFromCreator(view,hooks,read,qualify,executable,send);
+            storage.children().second().owner().constructedBase(),hooks[1])) {
+        if(refusal)*refusal="lifetime-catalogue";
+        return 5;
+    }
+    return storage.installPrivateVtablesFromCreator(view,hooks,read,qualify,executable,send,refusal);
 }
 
 // Installation precedes the private-child lease used by native execution.
