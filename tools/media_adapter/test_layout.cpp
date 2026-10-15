@@ -16507,6 +16507,13 @@ static void testRetainedVeboxFrames() {
                     };
                     const TglNativeFrameOutputReceipt fenceReceipt{renderRoots.parent.context,0x90000,1,true};
                     assert(!retained.captureExpectedFence(fenceBacking,fenceReceipt,0xa0000,readGraph,denyFenceOwner,fenceSnapshot));
+                    TglNativeFreshStampObservation freshBinding;
+                    TglNativeFreshStampObservation::Snapshot freshSnapshot;
+                    auto denyFreshOwner=[](RendererFixture&,const auto&,const auto&,uint64_t) noexcept {
+                        assert(false);return false;
+                    };
+                    assert(!retained.captureFreshFence(fenceBacking,freshBinding,fenceReceipt,0xa0000,128,
+                        readGraph,denyFenceOwner,denyFreshOwner,fenceSnapshot,freshSnapshot));
                     size_t sourceRole=0,targetRole=0;
                     assert(retained.retainedRoleIndices(selected.roles,sourceRole,targetRole) && sourceRole==5 && targetRole==0);
                     auto ambiguous=selected.roles;ambiguous.sources[6]=address;ambiguous.sourceCount=2;

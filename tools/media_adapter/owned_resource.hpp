@@ -26914,6 +26914,24 @@ public:
             });
         });
     }
+    template<class FenceRead,class ExpectedAdmit,class FreshAdmit>
+    int captureFreshFence(typename Registry::Ticket ticket,uintptr_t physical,
+        typename Registry::FrameTicket frame,const TglNativeFenceBackingObservation& binding,
+        const TglNativeFreshStampObservation& fresh,uint64_t stampBytes,FenceRead read,
+        ExpectedAdmit expectedAdmit,FreshAdmit freshAdmit,
+        TglNativeFenceBackingObservation::Snapshot& expectedOutput,
+        TglNativeFreshStampObservation::Snapshot& freshOutput) noexcept {
+        if(binding.image()!=binding_.image || physical>UINTPTR_MAX-0x58)return 5;
+        if constexpr(std::is_pointer_v<FenceRead>)if(!read)return 5;
+        return withFrame(ticket,physical,[&](auto& pool) noexcept -> int {
+            uintptr_t wrapper=0;
+            if(!read(physical+0x50,&wrapper,8) || !wrapper)return 5;
+            return pool.withRetainedFrameObservation(frame,[&](auto& retained,const auto& receipt) noexcept -> int {
+                return retained.captureFreshFence(binding,fresh,receipt,wrapper,stampBytes,read,
+                    expectedAdmit,freshAdmit,expectedOutput,freshOutput)?0:5;
+            });
+        });
+    }
     struct DeviceFrameEventObservationResult {
         FrameEventObservationResult event;
         NGVfDeviceObservation::Reply before{},after{};
@@ -29331,10 +29349,10 @@ public:
         return busy_ && renderer_==&renderer && !retirementStarted_ && !invalidated();
     }
     bool invalidated() const noexcept {return flushUncertain_ || lossFlags_;}
-    template<class Read,class Admit>
-    bool captureExpectedFence(const TglNativeFenceBackingObservation& binding,
+    template<class Read,class Admit,class Use>
+    bool withExpectedFenceObservation(const TglNativeFenceBackingObservation& binding,
         const TglNativeFrameOutputReceipt& receipt,uintptr_t wrapper,Read read,Admit admit,
-        TglNativeFenceBackingObservation::Snapshot& output) noexcept {
+        Use use) noexcept {
         static_assert(std::is_nothrow_invocable_r_v<bool,Read&,uintptr_t,void*,size_t> &&
             std::is_nothrow_invocable_r_v<bool,Admit&,Renderer&,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uint64_t,uint32_t>);
         if constexpr(std::is_pointer_v<Read>)if(!read)return false;
@@ -29344,10 +29362,48 @@ public:
         busy_=true;struct Reset{bool& busy;~Reset(){busy=false;}} reset{busy_};
         // OS database flushContext_ is NOT the fence wrapper. Caller proves
         // the separate wrapper through this retained renderer/physical owner.
-        return binding.capture(receipt,wrapper,read,
+        TglNativeFenceBackingObservation::Snapshot candidate;
+        const auto owner=[&](uintptr_t codec,uintptr_t object,uintptr_t context,uintptr_t mapping,uint64_t bytes,uint32_t index) noexcept {
+            return codec==codec_ && admit(*renderer_,codec,object,context,mapping,bytes,index);
+        };
+        if(!binding.capture(receipt,wrapper,read,owner,candidate))return false;
+        // The consumer runs while THIS SAME retained frame is busy; it may
+        // read stamps but cannot reenter frame/retirement operations.
+        static_assert(std::is_nothrow_invocable_r_v<bool,Use&,Renderer&,
+            const TglNativeFenceBackingObservation::Snapshot&>);
+        return use(*renderer_,candidate);
+    }
+    template<class Read,class Admit>
+    bool captureExpectedFence(const TglNativeFenceBackingObservation& binding,
+        const TglNativeFrameOutputReceipt& receipt,uintptr_t wrapper,Read read,Admit admit,
+        TglNativeFenceBackingObservation::Snapshot& output) noexcept {
+        return withExpectedFenceObservation(binding,receipt,wrapper,read,admit,
+            [&](Renderer&,const auto& candidate) noexcept {output=candidate;return true;});
+    }
+    template<class Read,class ExpectedAdmit,class FreshAdmit>
+    bool captureFreshFence(const TglNativeFenceBackingObservation& binding,
+        const TglNativeFreshStampObservation& fresh,const TglNativeFrameOutputReceipt& receipt,
+        uintptr_t wrapper,uint64_t stampBytes,Read read,ExpectedAdmit expectedAdmit,FreshAdmit freshAdmit,
+        TglNativeFenceBackingObservation::Snapshot& expectedOutput,
+        TglNativeFreshStampObservation::Snapshot& freshOutput) noexcept {
+        if constexpr(std::is_pointer_v<FreshAdmit>)if(!freshAdmit)return false;
+        return withExpectedFenceObservation(binding,receipt,wrapper,read,expectedAdmit,
+            [&](Renderer& renderer,const auto& expected) noexcept {
+                uintptr_t device=0;TglNativeFreshStampObservation::Snapshot candidate;
+                if(!read(expected.wrapper,&device,8) || !device ||
+                    !fresh.capture(device,stampBytes,expected,read,
+                        [&](const auto& fence,const auto& stamps,uint64_t bytes) noexcept {
+                            return freshAdmit(renderer,fence,stamps,bytes);
+                        },candidate))return false;
+                TglNativeFenceBackingObservation::Snapshot after;
+                if(!binding.capture(receipt,wrapper,read,
             [&](uintptr_t codec,uintptr_t object,uintptr_t context,uintptr_t mapping,uint64_t bytes,uint32_t index) noexcept {
-                return codec==codec_ && admit(*renderer_,codec,object,context,mapping,bytes,index);
-            },output);
+                        return codec==codec_ && expectedAdmit(renderer,codec,object,context,mapping,bytes,index);
+                    },after) || after.expected!=expected.expected || after.mapping!=expected.mapping ||
+                    after.bytes!=expected.bytes || after.frameworkContext!=expected.frameworkContext ||
+                    after.count!=expected.count)return false;
+                expectedOutput=expected;freshOutput=candidate;return true;
+            });
     }
     bool requiresRetention() const noexcept {
         return nativeFrameEntered_ || flushEntered_ || (renderer_ && renderer_->requiresRetention());
