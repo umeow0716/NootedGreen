@@ -25927,6 +25927,26 @@ struct TglNativeContextFrameBinding {
 // 13e6c/13e74 and1417d/14199: input->descriptor, DWORD count,
 // descriptor+10 output pointer array. Read only after successful creation and
 // inside its physical generation scope. This snapshot owns NO native contexts.
+// Exact13e43 constructor branches and their final vptr stores, including
+// wrappers followed to their actual constructors (renderer-family-decompile).
+// Classification is NOT lifetime/GPU authority and must occur under the
+// same qualified image/physical lease. Never infer family from operation bits:
+// linked records can select a different class for the same operation.
+enum class TglNativeContextFamily { Unknown,NativeOther,VeboxVp };
+constexpr TglNativeContextFamily tglNativeContextFamilyFromVtable(uintptr_t image,uintptr_t table) noexcept {
+    if(!image || table<image)return TglNativeContextFamily::Unknown;
+    switch(table-image) {
+        case 0x75d028:return TglNativeContextFamily::VeboxVp;
+        case 0x7541a0:case 0x7542c0:case 0x754350:case 0x754408:
+        case 0x754550:case 0x754608:case 0x754728:case 0x7547e0:
+        case 0x7549b0:case 0x754a68:case 0x754af8:case 0x754bb0:
+        case 0x755070:case 0x755130:case 0x75cd98:case 0x75ce68:
+        case 0x75cef8:case 0x75cf88:case 0x75d0a8:
+            return TglNativeContextFamily::NativeOther;
+        default:return TglNativeContextFamily::Unknown;
+    }
+}
+
 template<size_t Capacity=16> struct TglNativeCreatedContextBatch {
     static_assert(Capacity>0 && Capacity<=128,"owned adoption work budget, not native limit");
     std::array<uintptr_t,Capacity> contexts{};
