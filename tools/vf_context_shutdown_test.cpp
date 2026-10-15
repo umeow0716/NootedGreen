@@ -151,6 +151,26 @@ int main() {
     assert(unmarked.finish(unmarkedToken, 1, true));
     assert(unmarked.hasSubmittedWork() && !unmarked.hasMarkerCoverage());
     assert(!unmarked.gpuComplete(7, 4, false));
+    {
+        NGVfSubmissionCoverage::Tracker tracker{};
+        NGVfSubmissionCoverage::Tracker::CompletionEvidence evidence{99,88,77};
+        assert(!tracker.completionEvidence(1,7,4,false,evidence));
+        assert(evidence.observationSerial==99);
+        const auto token=tracker.begin(1,7,8,4,true);
+        assert(tracker.claim(token,1,7,8) && tracker.publish(token,1,7,8));
+        assert(!tracker.completionEvidence(token,7,4,false,evidence)); // active owner
+        assert(tracker.finish(token,1,true));
+        assert(!tracker.completionEvidence(token+1,7,4,false,evidence));
+        assert(!tracker.completionEvidence(token,6,4,false,evidence));
+        assert(!tracker.completionEvidence(token,7,8,false,evidence));
+        assert(!tracker.completionEvidence(token,7,4,true,evidence));
+        assert(evidence.observationSerial==99);
+        assert(tracker.completionEvidence(token,7,4,false,evidence));
+        assert(evidence.observationSerial==token && evidence.stamp==7 && evidence.head==4);
+        assert(tracker.resetForReuse());
+        assert(!tracker.completionEvidence(token,7,4,false,evidence));
+        assert(!unmarked.completionEvidence(unmarkedToken,7,4,false,evidence));
+    }
 
     // Independent contexts may reuse the same numeric token. The production
     // bridge must first select/pin the exact context; a token is not a global

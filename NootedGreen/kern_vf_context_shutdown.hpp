@@ -188,6 +188,24 @@ struct Tracker {
 			(observedHead & ringHeadMask) == coveredHead;
 	}
 
+	struct CompletionEvidence {
+		uint64_t observationSerial;
+		uint32_t stamp, head;
+	};
+	// Stricter than the caller's unsubmitted-context idle shortcut. This is
+	// tracker evidence only: caller must pin the context/table lifetime, bind
+	// this serial to its submission, and exclude reset/termination before AND
+	// after sampling. Never accept a serial from a different/recreated table.
+	bool completionEvidence(uint64_t expectedSerial, uint32_t observedStamp,
+	                        uint32_t observedHead, bool softwareCompletionPossible,
+	                        CompletionEvidence &output) const {
+		if (!expectedSerial || serial != expectedSerial || !submitted ||
+		    !gpuComplete(observedStamp, observedHead, softwareCompletionPossible))
+			return false;
+		output = {serial, coveredStamp, coveredHead};
+		return true;
+	}
+
 	// Preserve serial across context-slot reuse. Resetting/reconstructing this
 	// tracker would permit an old token to alias a new invocation (ABA).
 	// Production must also ensure stale callers cannot outlive table teardown.
