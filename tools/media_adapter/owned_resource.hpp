@@ -20589,6 +20589,26 @@ public:
     bool ownsBackingOf(const TglOwnedSurfaceStorage& shell) const noexcept {
         return ready_ && shell_==&shell && matches(shell);
     }
+    struct RetainedBackingSnapshot {
+        uintptr_t shellIdentity=0;uint32_t planeCount=0;
+        std::array<uintptr_t,4> planes{};
+        uintptr_t surface=0;
+    };
+    bool captureRetainedBacking(RetainedBackingSnapshot& output) const noexcept {
+        // Historical CF ownership, independent of CURRENT mutable metadata.
+        // Never dereference shell_: native input builders may have rewritten
+        // its handles/counts after this frame's GPU work completed. This value
+        // does NOT prove CPU shell allocation lifetime or permit its access,
+        // transfer references, admit a new request, or certify GPU retirement.
+        if(!ready_ || !shell_ || !count_ || count_>4 || !pins_[4].owns(handles_[4]))return false;
+        RetainedBackingSnapshot candidate;candidate.shellIdentity=reinterpret_cast<uintptr_t>(shell_);
+        candidate.planeCount=count_;candidate.surface=handles_[4];
+        for(size_t i=0;i<count_;++i) {
+            if(!pins_[i].owns(handles_[i]))return false;
+            candidate.planes[i]=handles_[i];
+        }
+        output=candidate;return true;
+    }
     bool independentlyPinsSameBackingAs(const TglOwnedType1SurfaceReferences& other) const noexcept {
         if(this==&other || !ready_ || !other.ready_ || !shell_ || shell_!=other.shell_ ||
             count_!=other.count_ || handles_!=other.handles_ || !matches(*shell_) || !other.matches(*shell_))return false;

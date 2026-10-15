@@ -19638,8 +19638,17 @@ int main() {
             assert(pins.acquire(owner,shell,11,12) && pins.ownsBackingOf(shell));
             for(size_t i=1;i<6;++i) assert(refs[i]==1);
             assert(!pins.acquire(owner,shell,11,12));
+            typename TglOwnedType1SurfaceReferences<Api>::RetainedBackingSnapshot historical;
+            assert(pins.captureRetainedBacking(historical));
+            assert(historical.shellIdentity==reinterpret_cast<uintptr_t>(&shell) && historical.planeCount==4 &&
+                historical.surface==5 && (historical.planes==std::array<uintptr_t,4>{1,2,3,4}));
             const uintptr_t changed=0;std::memcpy(shell.resource.data()+0x68,&changed,8);
             assert(!pins.ownsBackingOf(shell));
+            assert(pins.captureRetainedBacking(historical)); // References survived metadata drift.
+            assert(historical.planes[0]==1 && refs[1]==1 && refs[5]==1);
+            const uint32_t changedCount=0;std::memcpy(shell.resource.data()+0x60,&changedCount,4);
+            assert(pins.captureRetainedBacking(historical) && historical.planeCount==4);
+            std::memcpy(shell.resource.data()+0x60,&count,4); // Owned fixture restoration only.
         }
         for(auto ref:refs) assert(!ref);
         const uintptr_t restored=1;std::memcpy(shell.resource.data()+0x68,&restored,8);
@@ -19654,6 +19663,9 @@ int main() {
             {
                 TglOwnedType1SurfaceReferences<Api> partial(Api{refs,3,&order,&count});
                 assert(!partial.acquire(owner,shell,11,12));
+                typename TglOwnedType1SurfaceReferences<Api>::RetainedBackingSnapshot untouched;
+                untouched.surface=123;
+                assert(!partial.captureRetainedBacking(untouched) && untouched.surface==123);
             }
             assert(count==2 && order[0]==1 && order[1]==2);
             order={};count=0;
