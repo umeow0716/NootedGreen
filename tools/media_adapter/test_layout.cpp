@@ -17699,6 +17699,34 @@ int main() {
         assert(!binding.capture(receipt,wrapper,read,admit,snapshot));
     }
     {
+        using Fresh=TglNativeFreshStampObservation;
+        TglNativeFenceBackingObservation::Snapshot fence;fence.valid=true;
+        fence.expected.fill(UINT64_MAX);fence.expected[0]=(uint64_t(17)<<32)|1;
+        uintptr_t mapping=0x2000,table=0x3000,pointer=0x2040;
+        uint32_t channels=2,stamp=16;bool deny=false,drift=false;unsigned admissions=0;
+        auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            if(address==0x1020 && size==8){std::memcpy(out,&mapping,8);return true;}
+            if(address==0x1028 && size==8){std::memcpy(out,&table,8);return true;}
+            if(address==0x1030 && size==4){std::memcpy(out,&channels,4);return true;}
+            if(address==0x3008 && size==8){std::memcpy(out,&pointer,8);return true;}
+            if(address==0x2040 && size==4){std::memcpy(out,&stamp,4);return true;}
+            return false; // Cache reads and every unknown address are denied.
+        };
+        auto admit=[&](const auto&,const auto&,uint64_t) noexcept {
+            return !deny && !(drift && ++admissions>1);
+        };
+        Fresh::Snapshot result;
+        assert(Fresh::capture(0x1000,128,fence,read,admit,result));
+        assert(result.valid && result.active[0] && !result.active[1] && result.observed[0]==16);
+        auto preserved=result;pointer=0x2044;
+        assert(!Fresh::capture(0x1000,128,fence,read,admit,result));pointer=0x2040;
+        assert(result.observed==preserved.observed);
+        assert(!Fresh::capture(0x1000,64,fence,read,admit,result));
+        channels=1;assert(!Fresh::capture(0x1000,128,fence,read,admit,result));channels=2;
+        deny=true;assert(!Fresh::capture(0x1000,128,fence,read,admit,result));deny=false;
+        drift=true;admissions=0;assert(!Fresh::capture(0x1000,128,fence,read,admit,result));
+    }
+    {
         uint32_t count=2;uintptr_t records=0x2000;
         std::array<uintptr_t,2> contexts{0x3000,0x3000}; // Repeated properties on one codec are legal.
         bool unreadable=false,drift=false;unsigned headerReads=0;

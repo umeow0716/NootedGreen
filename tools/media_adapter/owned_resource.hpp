@@ -24424,6 +24424,52 @@ public:
         candidate.valid=true;output=candidate;return true;
     }
 };
+// Exact Tahoe device-installed callback 7ff80f462fe3. This intentionally
+// bypasses device44 cached values and NEVER writes them. A snapshot is NOT
+// retirement authority: admission must hold backing leases; reset/termination
+// exclusion (including CPU-synthesized stamps) remains a separate obligation.
+class TglNativeFreshStampObservation {
+public:
+    struct Snapshot {
+        uintptr_t device=0,mapping=0,table=0;
+        uint32_t channels=0;
+        std::array<uint32_t,8> observed{};
+        std::array<bool,8> active{};
+        bool valid=false;
+    };
+    template<class Read,class Admit>
+    static bool capture(uintptr_t device,uint64_t mappingBytes,
+        const TglNativeFenceBackingObservation::Snapshot& fence,
+        Read read,Admit admit,Snapshot& output) noexcept {
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
+        if(!fence.valid || !device || device>UINTPTR_MAX-0x34 || !mappingBytes)return false;
+        Snapshot candidate;candidate.device=device;
+        auto metadata=[&](Snapshot& value) noexcept {
+            return read(device+0x20,&value.mapping,8) && value.mapping &&
+                value.mapping<=UINTPTR_MAX-mappingBytes &&
+                read(device+0x28,&value.table,8) && value.table &&
+                read(device+0x30,&value.channels,4) && value.channels &&
+                value.channels<=8 && value.table<=UINTPTR_MAX-size_t(value.channels)*8;
+        };
+        if(!metadata(candidate) || !admit(fence,candidate,mappingBytes))return false;
+        for(size_t i=0;i<8;++i) {
+            const uint32_t channel=uint32_t(fence.expected[i]);
+            if(channel==UINT32_MAX)continue;
+            if(channel>=candidate.channels || size_t(channel)*64>mappingBytes ||
+                mappingBytes-size_t(channel)*64<4)return false;
+            const uintptr_t stamp=candidate.mapping+size_t(channel)*64;
+            uintptr_t pointer=0,afterPointer=0;
+            if(!read(candidate.table+size_t(channel)*8,&pointer,8) || pointer!=stamp ||
+                !read(stamp,&candidate.observed[i],4) ||
+                !read(candidate.table+size_t(channel)*8,&afterPointer,8) || afterPointer!=pointer)return false;
+            candidate.active[i]=true;
+        }
+        Snapshot after;after.device=device;
+        if(!metadata(after) || after.mapping!=candidate.mapping || after.table!=candidate.table ||
+            after.channels!=candidate.channels || !admit(fence,candidate,mappingBytes))return false;
+        candidate.valid=true;output=candidate;return true;
+    }
+};
 // Exact slot12=15b01: batch count0/list8, 24-byte items with event0,
 // type8/wait12/status16. Status1 is only a native report, NOT completion:
 // wait/test may bypass on reset/termination. Caller holds the SAME retained
