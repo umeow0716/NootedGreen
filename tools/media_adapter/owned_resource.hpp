@@ -7859,6 +7859,8 @@ struct TglNativePerPassHistorySavePlan {
 };
 struct TglNativeHistoryCacheInspection {
     bool observed=false,referencesFrame=true;
+    // Stronger than !referencesFrame: foreign entries still retain history.
+    bool wholeCacheEmpty=false;
 };
 // Fixed renderer928[18] snapshot. Unknown/unstable reads are NOT an empty
 // cache, and the snapshot never dereferences addresses stored in the cache.
@@ -7873,10 +7875,11 @@ TglNativeHistoryCacheInspection tglInspectNativeHistoryCache(uintptr_t renderer,
     if(!read(renderer+0x928,first.data(),sizeof(first)) || !live() ||
         !read(renderer+0x928,second.data(),sizeof(second)) || first!=second || !live() ||
         !graph.valid() || target.storage()!=destination)return result;
-    bool referenced=false;
+    bool referenced=false,empty=true;
+    for(auto address:first)if(address)empty=false;
     for(auto address:first)if(address && (address==reinterpret_cast<uintptr_t>(destination) ||
         graph.hasRetainedSurfaceAddress(address)))referenced=true;
-    result.observed=true;result.referencesFrame=referenced;return result;
+    result.observed=true;result.referencesFrame=referenced;result.wholeCacheEmpty=empty;return result;
 }
 // Exact1300f0 mode1 saves at most18 C0 links, without clearing untouched
 // suffix slots. This computes/validates the expected native data mutation;

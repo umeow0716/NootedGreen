@@ -19740,15 +19740,15 @@ int main() {
                     auto inspect=[&]() noexcept {
                         reads=0;return tglInspectNativeHistoryCache(base,graph,target,readCache,[&]() noexcept {return held;});
                     };
-                    auto result=inspect();assert(result.observed && !result.referencesFrame && reads==2);
+                    auto result=inspect();assert(result.observed && !result.referencesFrame && result.wholeCacheEmpty && reads==2);
                     std::memcpy(renderer.data()+0x928+17*8,&p,8);
                     result=inspect();assert(result.observed && result.referencesFrame);
                     const auto destination=reinterpret_cast<uintptr_t>(&shell);
                     std::memcpy(renderer.data()+0x928+17*8,&destination,8);
                     result=inspect();assert(result.observed && result.referencesFrame);
                     const uintptr_t foreign=1;std::memcpy(renderer.data()+0x928+17*8,&foreign,8);
-                    result=inspect();assert(result.observed && !result.referencesFrame);
-                    stable=false;result=inspect();assert(!result.observed && result.referencesFrame);stable=true;
+                    result=inspect();assert(result.observed && !result.referencesFrame && !result.wholeCacheEmpty);
+                    stable=false;result=inspect();assert(!result.observed && result.referencesFrame && !result.wholeCacheEmpty);stable=true;
                     allowed=false;result=inspect();assert(!result.observed && result.referencesFrame);allowed=true;
                     held=false;result=inspect();assert(!result.observed && result.referencesFrame && !reads);held=true;
                     result=tglInspectNativeHistoryCache(UINTPTR_MAX,graph,target,readCache,[]() noexcept {return true;});
