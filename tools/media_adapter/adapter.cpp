@@ -216,6 +216,12 @@ class NativeRendererCpuAssembly {
     NativeRendererCleanupContext firstCleanup_,secondCleanup_;
     NativeExecutionBackend executionBackend_;
     NativeRendererCpu cpu_;
+    using CommandStorage=std::remove_reference_t<decltype(std::declval<NativeRendererCpu&>().backing().command())>;
+    // Destroy before cpu_: this child's latch notifies cpu_'s stable aggregate.
+    // Native OS/database callbacks remain the SAME qualified environment.
+    // Qualified storage removal destroys/detaches BOTH children before deleting
+    // this assembly; no direct deletion is permitted for unresolved work.
+    CommandStorage secondCommand_;
     std::array<NativeExecutionOwner,2> executions_;
     bool cleanupBound_=false,basesAttempted_=false,basesReady_=false,vpAttempted_=false;
 public:
@@ -230,11 +236,16 @@ public:
             std::array<NativeRendererCleanup,2>{{{&firstCleanup_},{&secondCleanup_}}},
             std::array<TglNativeTrackedCpuInvoker,2>{},std::array<TglNativeSfcLifetimeInvoker,2>{},
             std::array<TglNativeVeboxDestructorInvoker,2>{}),
+         secondCommand_(TglOwnedVeboxFrameRetention::AggregateLink{},cpu_.backing().retention(),
+            environment.resources,environment.pageSize,environment.fill),
          executions_{{NativeExecutionOwner(executionBackend_),NativeExecutionOwner(executionBackend_)}} {}
     NativeRendererCpuAssembly(const NativeRendererCpuAssembly&)=delete;
     NativeRendererCpuAssembly& operator=(const NativeRendererCpuAssembly&)=delete;
     auto& cpu() noexcept {return cpu_;}
     auto& backing() noexcept {return cpu_.backing();}
+    CommandStorage* commandForChild(size_t index) noexcept {
+        return index==0?&cpu_.backing().command():index==1?&secondCommand_:nullptr;
+    }
     auto& children() noexcept {return cpu_.children();}
     bool readyForFrontend() noexcept {
         if(!executionBackend_.bound() || !basesReady_ || !cleanupBound_ || backing().retention()() ||
@@ -3146,7 +3157,7 @@ struct NativeRetainedFrontendRuntime {
             frontend.pinned.originalChildren[frontend.childIndex]!=core.child ||
             frontend.assembly.backing().retention()())return 5;
         const int status=tglWithOriginalVeboxPacketLeases(core.sourceOwner,core.source,core.targetOwner,core.target,
-            frontend.assembly.backing().command(),core.child,core.execution,
+            *frontend.assembly.commandForChild(frontend.childIndex),core.child,core.execution,
             frontend.interfaces.renderHal,frontend.interfaces.sku,
             [&](TglOwnedVeboxPacketLeases& leases) noexcept -> int {return use(context,leases);});
         return status?status:core.live()?0:5;
@@ -3163,7 +3174,7 @@ struct NativeRetainedFrontendRuntime {
             frontend.assembly.backing().retention()())return 5;
         NativeSfcReleaseSelection selection{core.childOwner,reinterpret_cast<void*>(core.child),
             frontend.interfaces.renderHal,frontend.interfaces.sku,graph};
-        NativeModeAllocationPlanFor<SurfaceOwner> allocation{frontend.assembly.backing().command().backing(),lines.resources(),
+        NativeModeAllocationPlanFor<SurfaceOwner> allocation{frontend.assembly.commandForChild(frontend.childIndex)->backing(),lines.resources(),
             selection,frontend.retirement,core.sourceOwner,core.targetOwner,frontend.secondary,frontend.previous,
             // Exact ICL1f7990 initializes each STMM only when allocator's
             // changed flag is set; owner.ensure already implements that lane.
