@@ -18197,6 +18197,29 @@ static void testRetainedVeboxFrames() {
         assert(callbacks.releaseBacking(success.ticket,0x8000,25,typedRelease)==31 && typedBackingCalls==2);
         assert(callbacks.releasePool(success.ticket,0x8000,5,poolRelease)==31 && poolCalls==1);
         assert(callbacks.allocatePool(success.ticket,0x8000,input,poolAllocate)==31 && poolAllocateCalls==1);
+        {
+            bool quiescent=false;unsigned admittedCalls=0,guardCalls=0;
+            auto guarded=[&](uintptr_t,uintptr_t physical,auto,auto& scope) noexcept -> int {
+                ++guardCalls;
+                assert(scope.matches(image,physical,success.ticket.generation));
+                // Guard and native call still hold the actual registry gate.
+                assert(callbacks.withFrameScope(success.ticket,physical,[](auto&) noexcept -> int {
+                    assert(false);return 0;
+                })==5);
+                if(!quiescent)return 5;
+                ++admittedCalls;return -31;
+            };
+            auto operations=[&](int expected) {
+                assert(callbacks.allocateBacking(success.ticket,0x8000,input,guarded)==expected);
+                assert(callbacks.releaseBacking(success.ticket,0x8000,25,guarded)==expected);
+                assert(callbacks.allocatePool(success.ticket,0x8000,input,guarded)==expected);
+                assert(callbacks.releasePool(success.ticket,0x8000,5,guarded)==expected);
+                assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Set,guarded)==expected);
+                assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Query,guarded)==expected);
+            };
+            operations(5);assert(!admittedCalls && guardCalls==6);
+            quiescent=true;operations(-31);assert(admittedCalls==6 && guardCalls==12);
+        }
         assert(callbacks.allocatePool(success.ticket,0x8000,nullptr,poolAllocate)==5 && poolAllocateCalls==1);
         assert(callbacks.allocatePool(success.ticket,0x8001,input,poolAllocate)==5 && poolAllocateCalls==1);
         poolAllocateAnchor[0]^=1;

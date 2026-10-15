@@ -28011,6 +28011,14 @@ struct TglNativeBackingReleaseInvoker {
         return reinterpret_cast<int(*)(void*,uint32_t)>(entry)(reinterpret_cast<void*>(physical),type);
     }
 };
+template<class Native,class Argument,class Scope>
+int tglInvokeScopedPhysicalMutation(Native& native,uintptr_t entry,uintptr_t physical,Argument argument,Scope& scope) noexcept {
+    static_assert(std::is_nothrow_invocable_r_v<int,Native&,uintptr_t,uintptr_t,Argument,Scope&> ||
+        std::is_nothrow_invocable_r_v<int,Native&,uintptr_t,uintptr_t,Argument>);
+    if constexpr(std::is_nothrow_invocable_r_v<int,Native&,uintptr_t,uintptr_t,Argument,Scope&>)
+        return native(entry,physical,argument,scope);
+    else return native(entry,physical,argument);
+}
 struct TglNativePhysicalCallbackInvoker {
     int initialize(uintptr_t entry,void** output,const void* input) const noexcept {
         return reinterpret_cast<int(*)(void**,const void*)>(entry)(output,input);
@@ -28750,62 +28758,62 @@ public:
         static_assert(noexcept(mutate()) && std::is_same_v<decltype(mutate()),int>);
         return withNewRequest(ticket,physical,[&](auto&) noexcept -> int {return mutate();});
     }
+    template<class Mutate> int withScopedBackingMutation(typename Registry::Ticket ticket,
+        uintptr_t physical,Mutate mutate) noexcept {
+        return withFrameScope(ticket,physical,[&](typename Registry::Scope& scope) noexcept -> int {
+            return scope.withEmptyFrameMutation([&](typename Registry::Scope& active) noexcept -> int {
+                return mutate(active);
+            });
+        });
+    }
     template<class Native=TglNativeBackingAllocateInvoker> int allocateBacking(typename Registry::Ticket ticket,
         uintptr_t physical,const void* input,Native native=Native{}) noexcept {
-        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
-            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
         if(!input) return 5;
-        return withBackingMutation(ticket,physical,[&]() noexcept -> int {
+        return withScopedBackingMutation(ticket,physical,[&](auto& scope) noexcept -> int {
             constexpr std::array<uint8_t,17> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
                 0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18};
             std::array<uint8_t,17> actual{};
             if(binding_.image>UINTPTR_MAX-0x155d1-anchor.size() ||
                 !executable_(binding_.image+0x155d1,anchor.size()) ||
                 !read_(binding_.image+0x155d1,actual.data(),actual.size()) || actual!=anchor) return 5;
-            return native(binding_.image+0x155d1,physical,input);
+            return tglInvokeScopedPhysicalMutation(native,binding_.image+0x155d1,physical,input,scope);
         });
     }
     template<class Native=TglNativeBackingReleaseInvoker> int releaseBacking(typename Registry::Ticket ticket,
         uintptr_t physical,uint32_t type,Native native=Native{}) noexcept {
-        static_assert(noexcept(native(uintptr_t{},uintptr_t{},uint32_t{})) &&
-            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},uint32_t{})),int>);
-        return withBackingMutation(ticket,physical,[&]() noexcept -> int {
+        return withScopedBackingMutation(ticket,physical,[&](auto& scope) noexcept -> int {
             constexpr std::array<uint8_t,11> anchor{0x55,0x48,0x89,0xe5,0x53,0x50,0xff,0xce,0x83,0xfe,0x1a};
             std::array<uint8_t,11> actual{};
             if(binding_.image>UINTPTR_MAX-0x1580c-anchor.size() ||
                 !executable_(binding_.image+0x1580c,anchor.size()) ||
                 !read_(binding_.image+0x1580c,actual.data(),actual.size()) || actual!=anchor) return 5;
-            return native(binding_.image+0x1580c,physical,type);
+            return tglInvokeScopedPhysicalMutation(native,binding_.image+0x1580c,physical,type,scope);
         });
     }
     // Slot6 resets/allocates the same pools via960b/9710, before returning handles.
     template<class Native=TglNativeBackingAllocateInvoker> int allocatePool(typename Registry::Ticket ticket,
         uintptr_t physical,const void* input,Native native=Native{}) noexcept {
-        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
-            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
         if(!input)return 5;
-        return withBackingMutation(ticket,physical,[&]() noexcept -> int {
+        return withScopedBackingMutation(ticket,physical,[&](auto& scope) noexcept -> int {
             constexpr std::array<uint8_t,14> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x54,0x53,0x48,0x89,0xf3};
             std::array<uint8_t,14> actual{};
             if(binding_.image>UINTPTR_MAX-0x1541c-anchor.size() ||
                 !executable_(binding_.image+0x1541c,anchor.size()) ||
                 !read_(binding_.image+0x1541c,actual.data(),actual.size()) || actual!=anchor)return 5;
-            return native(binding_.image+0x1541c,physical,input);
+            return tglInvokeScopedPhysicalMutation(native,binding_.image+0x1541c,physical,input,scope);
         });
     }
     // Slot7 releases pools at physical+80/+1090 via98b3, independently
     // of slot10's backing groups. Never admit cleanup while frames retain data.
     template<class Native=TglNativeBackingReleaseInvoker> int releasePool(typename Registry::Ticket ticket,
         uintptr_t physical,uint32_t type,Native native=Native{}) noexcept {
-        static_assert(noexcept(native(uintptr_t{},uintptr_t{},uint32_t{})) &&
-            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},uint32_t{})),int>);
-        return withBackingMutation(ticket,physical,[&]() noexcept -> int {
+        return withScopedBackingMutation(ticket,physical,[&](auto& scope) noexcept -> int {
             constexpr std::array<uint8_t,13> anchor{0x55,0x48,0x89,0xe5,0x85,0xf6,0x74,0x0c,0x83,0xfe,0x05,0x75,0x15};
             std::array<uint8_t,13> actual{};
             if(binding_.image>UINTPTR_MAX-0x154cf-anchor.size() ||
                 !executable_(binding_.image+0x154cf,anchor.size()) ||
                 !read_(binding_.image+0x154cf,actual.data(),actual.size()) || actual!=anchor)return 5;
-            return native(binding_.image+0x154cf,physical,type);
+            return tglInvokeScopedPhysicalMutation(native,binding_.image+0x154cf,physical,type,scope);
         });
     }
     // Slot15 sets physical+a858/shared-wrapper+130; slot16 queries can lazily
@@ -28815,19 +28823,17 @@ public:
     template<class Native=TglNativeBackingAllocateInvoker> int physicalProperties(
         typename Registry::Ticket ticket,uintptr_t physical,const void* input,
         PropertyOperation operation,Native native=Native{}) noexcept {
-        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
-            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
         if(!input || (operation!=PropertyOperation::Set && operation!=PropertyOperation::Query)) return 5;
         const bool query=operation==PropertyOperation::Query;
         const uintptr_t offset=query?0x161c3:0x15f96;
         const std::array<uint8_t,20> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
             0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,static_cast<uint8_t>(query?0x98:0x88),0x01,0,0};
-        return withBackingMutation(ticket,physical,[&]() noexcept -> int {
+        return withScopedBackingMutation(ticket,physical,[&](auto& scope) noexcept -> int {
             std::array<uint8_t,20> actual{};
             if(binding_.image>UINTPTR_MAX-offset-anchor.size() ||
                 !executable_(binding_.image+offset,anchor.size()) ||
                 !read_(binding_.image+offset,actual.data(),actual.size()) || actual!=anchor) return 5;
-            return native(binding_.image+offset,physical,input);
+            return tglInvokeScopedPhysicalMutation(native,binding_.image+offset,physical,input,scope);
         });
     }
     // Context creation13e43 is a batch registry MUTATOR, not merely allocation:

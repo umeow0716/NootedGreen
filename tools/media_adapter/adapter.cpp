@@ -196,6 +196,23 @@ struct NativeCodecBackend {
 using NativeRemovalProof=bool(*)(uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept;
 template int NativeCodecBackend::reconcile<NativeRemovalProof>(uintptr_t,uintptr_t,uint64_t,
     const TglNativeRemovedContextBatch<16>&,NativeRemovalProof) noexcept;
+// Invoked ONLY by coordinator while its real empty-frame physical Scope is
+// live. No check-before-lock permission or fabricated mutation capability.
+struct NativeBackingMutationGuard {
+    uintptr_t image=0,physical=0;uint64_t generation=0;
+    template<class Argument,class Scope>
+    int operator()(uintptr_t entry,uintptr_t address,Argument input,Scope& scope) const noexcept {
+        if(address!=physical || !scope.matches(image,physical,generation) ||
+           NativeCodecBackend::withNativeOtherOwners(scope,image,physical,generation,
+               [](auto& lease) noexcept -> int {return lease.get()->nativeOtherWorkQuiescent()?0:5;}))return 5;
+        if constexpr(std::is_same_v<Argument,uint32_t>)return TglNativeBackingReleaseInvoker{}(entry,address,input);
+        else {
+            static_assert(std::is_same_v<Argument,const void*>);
+            return TglNativeBackingAllocateInvoker{}(entry,address,input);
+        }
+    }
+};
+
 struct NativeRendererRetirementAuthority {
     void* scope=nullptr;
     int(*admit)(void*,void*,uint64_t,size_t) noexcept=nullptr;
@@ -4309,37 +4326,43 @@ struct NativePhysicalBackend {
     static int allocateBacking(void* physical,const void* input) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
         return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
-            return callbacks.allocateBacking(ticket,address,input);
+            return callbacks.allocateBacking(ticket,address,input,
+                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation});
         });
     }
     static int releaseBacking(void* physical,uint32_t type) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
         return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
-            return callbacks.releaseBacking(ticket,address,type);
+            return callbacks.releaseBacking(ticket,address,type,
+                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation});
         });
     }
     static int allocatePool(void* physical,const void* input) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
         return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
-            return callbacks.allocatePool(ticket,address,input);
+            return callbacks.allocatePool(ticket,address,input,
+                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation});
         });
     }
     static int releasePool(void* physical,uint32_t type) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
         return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
-            return callbacks.releasePool(ticket,address,type);
+            return callbacks.releasePool(ticket,address,type,
+                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation});
         });
     }
     static int setProperties(void* physical,const void* input) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
         return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
-            return callbacks.physicalProperties(ticket,address,input,NativePhysicalCallbacks::PropertyOperation::Set);
+            return callbacks.physicalProperties(ticket,address,input,NativePhysicalCallbacks::PropertyOperation::Set,
+                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation});
         });
     }
     static int queryProperties(void* physical,const void* input) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
         return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
-            return callbacks.physicalProperties(ticket,address,input,NativePhysicalCallbacks::PropertyOperation::Query);
+            return callbacks.physicalProperties(ticket,address,input,NativePhysicalCallbacks::PropertyOperation::Query,
+                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation});
         });
     }
     template<class Admit>
