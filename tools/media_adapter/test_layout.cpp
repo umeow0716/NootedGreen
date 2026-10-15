@@ -18054,6 +18054,29 @@ int main() {
         const uint64_t arbitraryType=0x400;
         std::memcpy(frozen.records[1].data()+8,&arbitraryType,8);
         assert(!batch.admitsVeboxConfiguration(frozen));
+        const uint64_t scalarType=0x10000;
+        for(auto& record:frozen.records) {
+            std::memcpy(record.data()+8,&scalarType,8);
+            std::memcpy(record.data()+0x28,&originalOutput,8);
+        }
+        std::array<uint8_t,0x30> scalar{};scalar.fill(0x5a);
+        bool allowPayload=false,stablePayload=true;unsigned payloadReads=0;
+        auto payloadRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+            if(at!=originalOutput)return read(at,out,bytes);
+            if(!allowPayload)return false;
+            assert(bytes==scalar.size());std::memcpy(out,scalar.data(),bytes);
+            if(!stablePayload && (++payloadReads%2)==0)static_cast<uint8_t*>(out)[0]^=1;
+            return true;
+        };
+        assert(!batch.freezeVeboxScalarPayloads(payloadRead,frozen));allowPayload=true;stablePayload=false;
+        assert(!batch.freezeVeboxScalarPayloads(payloadRead,frozen));stablePayload=true;
+        assert(batch.freezeVeboxScalarPayloads(payloadRead,frozen));
+        assert(!batch.freezeVeboxScalarPayloads(payloadRead,frozen));
+        for(size_t i=0;i<2;++i) {
+            uintptr_t captured=0;std::memcpy(&captured,frozen.records[i].data()+0x28,8);
+            assert(captured==reinterpret_cast<uintptr_t>(frozen.scalarPayloads[i].data()) && frozen.scalarPayloads[i]==scalar);
+        }
+        scalar.fill(0);assert(frozen.scalarPayloads[0][0]==0x5a); // Caller drift no longer changes native input.
         contexts[1]=0x4000;assert(!batch.stable(read));contexts[1]=0x3000;
         contexts[1]=0x4000;assert(!batch.freeze(read,frozen) && !frozen.input());contexts[1]=0x3000;
         count=0;TglNativeContextPropertyBatch<2> empty;assert(!empty.capture(0x1000,read));

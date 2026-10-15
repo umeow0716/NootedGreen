@@ -26741,6 +26741,8 @@ template<size_t Capacity=16> class TglNativeContextPropertyBatch {
 public:
     struct OwnedRecords {
         alignas(8) std::array<std::array<uint8_t,0x30>,Capacity> records{};
+        alignas(8) std::array<std::array<uint8_t,0x30>,Capacity> scalarPayloads{};
+        bool scalarPayloadsFrozen=false;
         struct Header {uint32_t count=0,reserved=0;uintptr_t records=0;} header;
         OwnedRecords()=default;
         OwnedRecords(const OwnedRecords&)=delete;
@@ -26751,7 +26753,7 @@ public:
         // Publish self-referencing header only after every record is copied and
         // its context matches the identity that will be pinned. Payload pointers
         // remain original: this does not claim ownership of caller output buffers.
-        owned.header={};
+        owned.header={};owned.scalarPayloadsFrozen=false;
         if(!stable(read))return false;
         for(size_t i=0;i<count_;++i){uintptr_t context=0;
             if(!read(records_+i*0x30,owned.records[i].data(),0x30))return false;
@@ -26774,6 +26776,29 @@ public:
                   (type==0x200 && operation==4)))return false;
         }
         return true;
+    }
+    template<class Read> bool freezeVeboxScalarPayloads(Read read,OwnedRecords& owned) const noexcept {
+        // Exact234210 reads twelve DWORDs and copies them into context12f8
+        // BEFORE135410; no caller payload pointer escapes that copy.
+        // Other supported property families are unchanged, NOT certified here.
+        if(owned.scalarPayloadsFrozen || !admitsVeboxConfiguration(owned) || !stable(read))return false;
+        std::array<bool,Capacity> captured{};
+        for(size_t i=0;i<count_;++i) {
+            uint64_t type=0;uintptr_t payload=0;
+            std::memcpy(&type,owned.records[i].data()+8,8);
+            if(type!=0x10000)continue;
+            std::memcpy(&payload,owned.records[i].data()+0x28,8);
+            std::array<uint8_t,0x30> first{},second{};
+            if(!payload || payload>UINTPTR_MAX-first.size() || !read(payload,first.data(),first.size()) ||
+                !read(payload,second.data(),second.size()) || first!=second)return false;
+            owned.scalarPayloads[i]=first;captured[i]=true;
+        }
+        if(!stable(read))return false;
+        for(size_t i=0;i<count_;++i)if(captured[i]) {
+            const uintptr_t payload=reinterpret_cast<uintptr_t>(owned.scalarPayloads[i].data());
+            std::memcpy(owned.records[i].data()+0x28,&payload,8);
+        }
+        owned.scalarPayloadsFrozen=true;return true;
     }
     template<class Admit> bool admitVeboxQueryOutputs(const OwnedRecords& owned,Admit admit) const noexcept {
         if(!ready_ || owned.header.count!=count_ || owned.header.records!=reinterpret_cast<uintptr_t>(owned.records.data()))return false;
