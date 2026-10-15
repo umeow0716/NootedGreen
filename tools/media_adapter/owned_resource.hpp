@@ -20482,6 +20482,8 @@ public:
         if(!image || !physical || !generation || roots.parent.physical!=physical ||
             !proof_.resolve(roots,read,admit)) return false;
         for(size_t i=0;i<proof_.size();++i) {
+            // Reference pin only: safe while codec dispatch owns its separate
+            // execution gate. Never recursively dispatch/enter the codec here.
             auto lease=registry.pin(image,physical,generation,proof_.context());
             if(!lease.get()) {clear();return false;}
             owners_[i]=new(std::nothrow) Owner(std::move(lease),proof_,proof_.at(i),writable);

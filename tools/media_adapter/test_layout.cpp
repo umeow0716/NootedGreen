@@ -15046,11 +15046,37 @@ static void testRetainedVeboxFrames() {
             {
                 auto pin=codecs.pin(base,physical,ticket.generation,context);assert(pin.get()==owner);
                 unsigned calls=0;
+                std::array<TglOwnedSurfaceStorage,2> realShells{};
                 assert(physicals.withScope(ticket,base,physical,[&](auto& active) noexcept -> int {
                     auto invoke=[&](uintptr_t address,uintptr_t c,uintptr_t request,uintptr_t output,auto& same) noexcept -> int {
                         ++calls;assert(address==entry && c==context && request==0x55000 && output==0x66000 && &same==&active);
                         assert(owner->dispatchScopedFrame(pin,active,request,output,
                             [](uintptr_t,uintptr_t,uintptr_t,uintptr_t,auto&) noexcept -> int {assert(false);return 0;})==5);
+                        // Actual sidecar acquisition while THIS codec owner is
+                        // dispatch-busy. Pins are references, not recursive calls.
+                        TglNativeContextInputRoots roots;
+                        roots.parent.context=context;roots.parent.physical=physical;roots.input=0x88000;
+                        roots.sources[0]=reinterpret_cast<uintptr_t>(&realShells[0]);
+                        roots.targets[0]=reinterpret_cast<uintptr_t>(&realShells[1]);
+                        auto shellAdmit=[&](uintptr_t p,size_t n) noexcept {
+                            return n==sizeof(TglOwnedSurfaceStorage) && (p==roots.sources[0] || p==roots.targets[0]);
+                        };
+                        auto shellRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+                            if(p!=roots.sources[0]+0xb4 || n!=8)return false;
+                            std::memcpy(out,realShells[0].prefix.data()+0xb4,n);return true;
+                        };
+                        using Sidecars=TglNativeContextSurfaceOwners<std::remove_reference_t<decltype(codecs)>>;
+                        Sidecars sidecars;
+                        assert(sidecars.initialize(codecs,base,physical,ticket.generation,roots,shellRead,shellAdmit,shellAdmit));
+                        auto* sourceOwner=sidecars.resolve(roots.sources[0]);
+                        auto* targetOwner=sidecars.resolve(roots.targets[0]);
+                        assert(sourceOwner && targetOwner && sourceOwner!=targetOwner);
+                        {
+                            typename Sidecars::Owner::SurfaceOwnerLease sourceLease(*sourceOwner),targetLease(*targetOwner);
+                            assert(sourceLease.storage()==&realShells[0] && targetLease.storage()==&realShells[1]);
+                            assert(sourceOwner->hasSurfaceLease(realShells[0]) && targetOwner->hasSurfaceLease(realShells[1]));
+                        }
+                        assert(sourceOwner->canDestroy() && targetOwner->canDestroy());
                         return 0;
                     };
                     actualParent+=8;assert(owner->dispatchScopedFrame(pin,active,0x55000,0x66000,invoke)==5 && !calls);
