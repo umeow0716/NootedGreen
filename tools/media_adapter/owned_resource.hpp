@@ -19460,6 +19460,10 @@ public:
     }
     template<class Read,class Admit,class Invoke=TglNativeVeboxPostWritebackInvoker>
     int postWriteback(Read read,Admit admit,Invoke invoke={}) noexcept {
+        // Exact TGL12a730..12a73c and8f380..8f38c both return zero without
+        // touching command storage. They are lifecycle callbacks, not a final
+        // GPU drain packet; their successful invocation grants no completion
+        // authority and cannot extend the earlier VEBOX tag past native tail.
         if(postAttempted_ || finishAttempted_)return 5;postAttempted_=true;
         if(!available(read) || !available(admit) || !available(invoke) ||
             !prepared_ || !live(read) || !admit(child_,snapshot_.os,snapshot_.mhw))return 5;
