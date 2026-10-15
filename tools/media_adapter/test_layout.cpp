@@ -17641,6 +17641,31 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        uint32_t count=2;uintptr_t records=0x2000;
+        std::array<uintptr_t,2> contexts{0x3000,0x3000}; // Repeated properties on one codec are legal.
+        bool unreadable=false,drift=false;unsigned headerReads=0;
+        auto read=[&](uintptr_t address,void* output,size_t size) noexcept {
+            if(address==0x1000 && size==4){++headerReads;auto value=count;
+                if(drift && headerReads>1)++value;std::memcpy(output,&value,4);return true;}
+            if(address==0x1008 && size==8){std::memcpy(output,&records,8);return true;}
+            for(size_t i=0;i<2;++i)if(address==0x2000+i*0x30+0x18 && size==8){
+                if(unreadable)return false;std::memcpy(output,&contexts[i],8);return true;}
+            return false;
+        };
+        TglNativeContextPropertyBatch<2> batch;
+        assert(batch.capture(0x1000,read) && batch.count()==2 && batch.context(1)==0x3000);
+        assert(batch.request(1)==0x2030 && !batch.request(2) && !batch.capture(0x1000,read));
+        contexts[1]=0x4000;assert(!batch.stable(read));contexts[1]=0x3000;
+        count=0;TglNativeContextPropertyBatch<2> empty;assert(!empty.capture(0x1000,read));
+        count=3;TglNativeContextPropertyBatch<2> oversized;assert(!oversized.capture(0x1000,read));
+        count=2;records=UINTPTR_MAX-16;TglNativeContextPropertyBatch<2> overflow;
+        assert(!overflow.capture(0x1000,read));records=0x2000;
+        contexts[0]=0;TglNativeContextPropertyBatch<2> nullContext;assert(!nullContext.capture(0x1000,read));contexts[0]=0x3000;
+        unreadable=true;TglNativeContextPropertyBatch<2> badRead;assert(!badRead.capture(0x1000,read));unreadable=false;
+        drift=true;headerReads=0;TglNativeContextPropertyBatch<2> changed;
+        assert(!changed.capture(0x1000,read) && changed.count()==0 && !changed.context(0));
+    }
+    {
         constexpr uintptr_t image=0x100000;
         bool altered=false,allowed=true;
         auto read=[&](uintptr_t at,void* out,size_t n) noexcept {

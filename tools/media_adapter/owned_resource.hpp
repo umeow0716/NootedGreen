@@ -25997,6 +25997,45 @@ struct TglNativePhysicalCallbackBinding {
         image=base;initialize=base+0x135d9;destroy=base+0x13c8c;return true;
     }
 };
+// Factory13/14 use contiguous0x30 records, unlike factory11's pointer array.
+// Snapshot carries identities only: caller must pin every codec before native use.
+template<size_t Capacity=16> class TglNativeContextPropertyBatch {
+    static_assert(Capacity>0 && Capacity<=128);
+    uintptr_t input_=0,records_=0;
+    uint32_t count_=0;
+    std::array<uintptr_t,Capacity> contexts_{};
+    bool attempted_=false,ready_=false;
+public:
+    template<class Read> bool capture(uintptr_t input,Read read) noexcept {
+        if(attempted_)return false;
+        attempted_=true;
+        uint32_t count=0;uintptr_t records=0;
+        if(!input || input>UINTPTR_MAX-16 || !read(input,&count,4) || !count || count>Capacity ||
+            !read(input+8,&records,8) || !records || records>UINTPTR_MAX-size_t(count)*0x30)return false;
+        std::array<uintptr_t,Capacity> contexts{};
+        for(size_t i=0;i<count;++i)
+            if(!read(records+i*0x30+0x18,&contexts[i],8) || !contexts[i])return false;
+        uint32_t finalCount=0;uintptr_t finalRecords=0;
+        if(!read(input,&finalCount,4) || !read(input+8,&finalRecords,8) ||
+            finalCount!=count || finalRecords!=records)return false;
+        input_=input;records_=records;count_=count;contexts_=contexts;ready_=true;
+        if(!stable(read)){ready_=false;return false;}
+        return true;
+    }
+    template<class Read> bool stable(Read read) const noexcept {
+        if(!ready_)return false;
+        uint32_t count=0;uintptr_t records=0;
+        if(!read(input_,&count,4) || !read(input_+8,&records,8) || count!=count_ || records!=records_)return false;
+        for(size_t i=0;i<count_;++i){uintptr_t context=0;
+            if(!read(records_+i*0x30+0x18,&context,8) || context!=contexts_[i])return false;
+        }
+        return true;
+    }
+    size_t count() const noexcept{return ready_?count_:0;}
+    uintptr_t context(size_t i) const noexcept{return ready_ && i<count_?contexts_[i]:0;}
+    uintptr_t request(size_t i) const noexcept{return ready_ && i<count_?records_+i*0x30:0;}
+};
+
 struct TglNativeFrameBatchBinding {
     uintptr_t image=0,entry=0;
     template<class Read,class Qualify,class Executable>
