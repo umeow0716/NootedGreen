@@ -4635,21 +4635,23 @@ static void testVeboxHardwareBinding() {
                     if(p==context+0x54 && n==4){std::memcpy(out,&flags,4);return true;}
                     return read(p,out,n);
                 };
-                for(unsigned mode=0;mode<6;++mode) {
-                    nativeContext=0x3000;flags=0;readable=true;calls=0;
+                for(unsigned mode=0;mode<8;++mode) {
+                    nativeContext=0x3000;flags=mode==6?0x40000000U:(mode==7?0x20000000U:0);
+                    const auto before=flags;readable=true;calls=0;
                     auto invoke=[&](uintptr_t e,uintptr_t c,uint8_t kind) noexcept -> uint32_t {
                         assert(e==entry && c==context && kind==2);++calls;
                         if(mode==1)flags=0x40000000;
                         if(mode==2)flags=0x20000000;
                         if(mode==4)nativeContext+=8;
                         if(mode==5)readable=false;
+                        if(mode==6 || mode==7)flags=0; // Native consumes prior loss report.
                         return mode==3?31:0;
                     };
                     const auto observation=binding.observeFlush(context,reportRead,invoke);
                     assert(observation.called && calls==1 && observation.nativeStatus==(mode==3?31U:0U));
                     assert(observation.observed==(mode!=4 && mode!=5));
-                    assert(observation.lossBitsObserved()==(mode==1 || mode==2));
-                    assert(!observation.flagsBefore);
+                    assert(observation.lossBitsObserved()==(mode==1 || mode==2 || mode==6 || mode==7));
+                    assert(observation.flagsBefore==before);
                 }
                 calls=0;readable=false;
                 const auto denied=binding.observeFlush(context,reportRead,

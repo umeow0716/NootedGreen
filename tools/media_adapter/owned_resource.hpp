@@ -19631,7 +19631,7 @@ public:
         uint32_t nativeStatus=5,flagsBefore=0,flagsAfter=0;
         uintptr_t context=0,nativeContext=0;
         bool called=false,observed=false;
-        bool lossBitsObserved() const noexcept {return observed && (flagsAfter&0x60000000U);}
+        bool lossBitsObserved() const noexcept {return observed && ((flagsBefore|flagsAfter)&0x60000000U);}
     };
     template<class Read,class Qualify,class Executable>
     bool resolve(uintptr_t image,Read read,Qualify qualify,Executable executable) noexcept {
