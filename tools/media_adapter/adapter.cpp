@@ -5027,10 +5027,38 @@ struct NativeCreatorPreparation {
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;
         void* argument;
         std::array<NativePhysicalRegistry::FrameTicket,2> frames{};
-        std::array<TglNativeOuterHistoryReconnectTarget,2> historyTargets{};
+        TglNativeOuterHistoryReconnectTarget currentHistoryTarget{};
+        std::array<NativeBorrowedFrontend::HistoryReservation,2> historyReservations{};
         size_t frameCount=0;
         TglOwnedVeboxCommandTransactionResult work{};
         bool consumed=false,running=false;
+        int updateHistory(bool arm,bool allowCancel) noexcept {
+            if(!frameCount)return 0;
+            return physical.withRequestFramesForHistory(context,[&](size_t count,const auto& held,
+                const auto& tickets) noexcept -> int {
+                if(count!=frameCount)return 5;
+                for(size_t i=0;i<count;++i) {
+                    if(tickets[i].pool!=frames[i].pool || tickets[i].index!=frames[i].index ||
+                        tickets[i].generation!=frames[i].generation || !held[i])return 5;
+                    auto& reservation=historyReservations[i];
+                    // The upcoming native mode0 is ONE outer operation.
+                    // Re-arm all retained graphs against its CURRENT target,
+                    // not each frame's target from a preceding main pass.
+                    const auto& selection=currentHistoryTarget;
+                    if(!arm && !reservation.pending())continue;
+                    if(arm && selection.observed && !selection.source)continue; // Native mode0 absent.
+                    const int status=held[i]->reconcileNativeHistoryBoundary(reservation,selection,&readMemory,
+                        [&](const NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view) noexcept {
+                            return physical.matches(image,address,generation) && physical.matchesActiveContextRequest(context) &&
+                                cpu.completeRetentionMembership() && view.image==image && view.creator==creator &&
+                                view.renderer==renderer && view.matchesRendererTable(&readMemory) &&
+                                NativeDataAdmission{}(renderer,0x9b8);
+                        },arm,allowCancel);
+                    if(status)return status;
+                }
+                return 0;
+            });
+        }
         static TglOwnedVeboxCommandTransactionResult produce(void* raw,uintptr_t actual,void* parameters,void* pass) noexcept {
             // Native outer132389 rewrites the SAME stack parameter block for
             // each pass, then132454 updates renderer9bc before lower131520.
@@ -5040,12 +5068,21 @@ struct NativeCreatorPreparation {
             auto& self=*static_cast<LateRequest*>(raw);
             if(!self.running || actual!=self.renderer || self.frameCount==self.frames.size() ||
                 !self.physical.matchesActiveContextRequest(self.context))return {};
+            // A preceding main pass may already have executed mode0; inside
+            // the same outer loop it may still be unchanged. Settle ONLY one
+            // of these exact planned states before constructing another frame.
+            const int before=self.updateHistory(false,true);
+            if(before) {TglOwnedVeboxCommandTransactionResult failed;failed.status=before;return failed;}
             auto result=bootstrapLowerPass(self.physical,self.image,self.address,self.generation,
                 self.context,self.creator,self.renderer,reinterpret_cast<uintptr_t>(parameters),
                 reinterpret_cast<uintptr_t>(pass),self.decompression,self.argument,self.frameCount!=0);
             if(result.frame.generation) {
-                self.historyTargets[self.frameCount]=result.historyTarget;
                 self.frames[self.frameCount++]=result.frame;
+            }
+            if(result.historyTarget.observed) {
+                self.currentHistoryTarget=result.historyTarget;
+                const int armed=self.updateHistory(true,false);
+                if(armed && !result.work.status)result.work.status=armed;
             }
             return result.work;
         }
@@ -5063,6 +5100,8 @@ struct NativeCreatorPreparation {
                 self.running=true;
                 struct Reset {bool& value;~Reset(){value=false;}} reset{self.running};
                 self.work=NativeLateLowerRequestDispatch::run(pin,active,codec,parameters,self.renderer,&self,&produce);
+                const int history=self.updateHistory(false,self.work.status!=0);
+                if(history && !self.work.status)self.work.status=history;
                 // Pin remains live until this retention publication completes.
                 if(self.work.nativeEntered && !pin.get()->retainNativeRequest(pin) && !self.work.status)self.work.status=5;
                 return self.work.status;

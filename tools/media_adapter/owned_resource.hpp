@@ -21256,6 +21256,49 @@ public:
         return valid()?status:5;
     }
 };
+// One retained frame's planned native mode0 boundary. The caller must keep
+// its exact FrameTicket and parent lease live; this record owns no surface
+// and never writes renderer/cache/C0 or grants GPU retirement.
+template<class Graph> class TglNativeHistoryReconnectReservation {
+    Graph* graph_=nullptr;
+    typename Graph::DeferredForwardToken token_;
+    uintptr_t renderer_=0;
+    std::array<uintptr_t,18> before_{},after_{};
+    bool pending_=false;
+public:
+    bool pending() const noexcept {return pending_;}
+    template<class Read,class Live>
+    bool begin(Graph& graph,uintptr_t renderer,const TglNativeOuterHistoryReconnectTarget& target,
+        Read read,Live live) noexcept {
+        static_assert(noexcept(live()));
+        if(pending_ || !target.observed || !target.source || !renderer ||
+            renderer>UINTPTR_MAX-0x9b8 || !live())return false;
+        const auto* first=graph.retainedStorageAt(target.source);
+        if(!first)return false;
+        std::array<uintptr_t,18> before{},verified{};
+        TglNativeHistoryReconnectPlan plan;
+        if(!read(renderer+0x928,before.data(),sizeof(before)) || !live() ||
+            !tglPlanNativeHistoryReconnect(plan,before,graph,*first) ||
+            !read(renderer+0x928,verified.data(),sizeof(verified)) || verified!=before || !live())return false;
+        typename Graph::DeferredForwardToken token;
+        if(!graph.beginDeferredForwardLinks(plan.changes,plan.count,token))return false;
+        graph_=&graph;token_=token;renderer_=renderer;before_=before;after_=plan.cache;pending_=true;
+        return true;
+    }
+    template<class Read,class Live>
+    bool settle(Graph& graph,Read read,Live live,bool allowUnchangedCancel) noexcept {
+        static_assert(noexcept(live()));
+        if(!pending_ || graph_!=&graph || !live())return false;
+        std::array<uintptr_t,18> cache{},verified{};
+        if(!read(renderer_+0x928,cache.data(),sizeof(cache)) || !live() ||
+            !read(renderer_+0x928,verified.data(),sizeof(verified)) || verified!=cache || !live())return false;
+        if(cache==after_ && graph.finishDeferredForwardLinks(token_)) {pending_=false;return true;}
+        if(allowUnchangedCancel && cache==before_ && graph.cancelDeferredForwardLinks(token_)) {
+            pending_=false;return true;
+        }
+        return false; // Unknown/partial native changes keep ALL leases reserved.
+    }
+};
 // Resolve temporal roles from the actual selected source, not another pass's
 // cached pair. Nonnull links must have retained graph owners; unknown is not
 // equivalent to absent. Output publication is atomic on success only.
@@ -28647,6 +28690,7 @@ class TglNativeVeboxBorrowedFrontendFrameStorage {
     template<class Pin,class Use>
     static int producerAccess(const Access& access,const Pin& pin,Use use,long) noexcept {return access(pin,use);}
 public:
+    using HistoryReservation=TglNativeHistoryReconnectReservation<TglOwnedFrontendSourceGraph<SourceOwner,CfApi>>;
     using ParentLeaseType=ParentLease;
     using SourceOwnerType=SourceOwner;
     using TargetOwnerType=TargetOwner;
@@ -28705,6 +28749,33 @@ public:
                 std::is_same_v<decltype(use(std::as_const(cpu),view,std::as_const(source_),std::as_const(target_),historyPublished_)),int>);
             const int result=use(std::as_const(cpu),view,std::as_const(source_),std::as_const(target_),historyPublished_);
             return result?result:valid(cpu)?0:5;
+        });
+        return status?status:(entered && !repeated)?0:5;
+    }
+    template<class Read,class Live>
+    int reconcileNativeHistoryBoundary(HistoryReservation& reservation,
+        const TglNativeOuterHistoryReconnectTarget& selection,Read read,Live live,bool arm,bool allowCancel) noexcept {
+        if constexpr(std::is_pointer_v<Read>)if(!read)return 5;
+        if constexpr(std::is_pointer_v<Live>)if(!live)return 5;
+        if(busy_ || !ready_ || !parent_.get() || !target_.storage() ||
+            (!arm && !reservation.pending()))return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        bool entered=false,repeated=false;auto* held=parent_.get();
+        const int status=access_(parent_,[&](auto& cpu,const auto& view) noexcept -> int {
+            if(entered) {repeated=true;return 5;}entered=true;
+            auto qualified=[&]() noexcept {
+                static_assert(noexcept(live(std::as_const(cpu),view)));
+                return parent_.get()==held && held && target_.storage() &&
+                    cpu.children().first().owner().constructedBase() && cpu.children().second().owner().constructedBase() &&
+                    cpu.children().first().owner().allocationGeneration()==generation0_ &&
+                    cpu.children().second().owner().allocationGeneration()==generation1_ && live(std::as_const(cpu),view);
+            };
+            if(!qualified())return 5;
+            // Finish deliberately does NOT require source_.valid(): exact
+            // native C0 mutation temporarily differs from the OLD stamps.
+            // Reservation owns the only admissible expected replacement.
+            return (arm?reservation.begin(source_,view.renderer,selection,read,qualified):
+                reservation.settle(source_,read,qualified,allowCancel))?0:5;
         });
         return status?status:(entered && !repeated)?0:5;
     }
@@ -28776,6 +28847,7 @@ class TglNativeVeboxBorrowedFrontendWithCpuAllocator {
     Backend parameters_; // LAST destroyed; frontend DN owner borrows this
     TglNativeVeboxBorrowedFrontendFrameStorage<ParentLease,SourceOwner,TargetOwner,CfApi,Backend,Access> frontend_;
 public:
+    using HistoryReservation=TglNativeHistoryReconnectReservation<TglOwnedFrontendSourceGraph<SourceOwner,CfApi>>;
     using ParentLeaseType=ParentLease;
     using SourceOwnerType=SourceOwner;
     using TargetOwnerType=TargetOwner;
@@ -28796,6 +28868,11 @@ public:
     template<class Group,class History,class Live>
     int acknowledgeCompletedGroupWork(Group& group,size_t count,const History& history,Live live) noexcept {
         return frontend_.acknowledgeCompletedGroupWork(group,count,history,live);
+    }
+    template<class Read,class Live>
+    int reconcileNativeHistoryBoundary(HistoryReservation& reservation,
+        const TglNativeOuterHistoryReconnectTarget& selection,Read read,Live live,bool arm,bool allowCancel) noexcept {
+        return frontend_.reconcileNativeHistoryBoundary(reservation,selection,read,live,arm,allowCancel);
     }
     bool surfacesReady() const noexcept {return frontend_.surfacesReady();}
     bool requiresRetention() const noexcept {return frontend_.requiresRetention();}
@@ -29889,6 +29966,16 @@ public:
         if(!busy_)return 5;
         if(status && !renderPassFailure_)renderPassFailure_=status;
         return renderPassFailure_;
+    }
+    template<class Reservation,class Read,class Live>
+    int reconcileNativeHistoryBoundary(Reservation& reservation,
+        const TglNativeOuterHistoryReconnectTarget& selection,Read read,Live live,bool arm,bool allowCancel) noexcept {
+        if(busy_ || flushBusy_ || !renderer_ || retired_ || retirementStarted_ || invalidated() ||
+            (arm && !surfacesReady()) || (!arm && !reservation.pending()))return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        // This is the narrow finish path for a graph whose native C0 changes
+        // await reconciliation. It cannot run Render, clear retention or free.
+        return renderer_->reconcileNativeHistoryBoundary(reservation,selection,read,live,arm,allowCancel);
     }
     template<class Use> int withRenderPass(Use use) noexcept {
         static_assert(noexcept(use(std::declval<Renderer&>())) &&

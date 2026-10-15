@@ -19770,6 +19770,55 @@ int main() {
                     std::memcpy(root.prefix.data()+0xc8,&p,8); // CPU fixture restore, not product recovery.
                     assert(graph.finishDeferredForwardLinks(token) && graph.valid() && refs==heldRefs);
                     changes[0]={&root,o};
+                    {
+                        TglNativeHistoryReconnectReservation<Graph> reservation;
+                        constexpr uintptr_t renderer=0x90000;
+                        TglNativeOuterHistoryReconnectTarget selection{reinterpret_cast<uintptr_t>(&root),0,true};
+                        std::array<uintptr_t,18> cache{};cache[0]=p;cache[2]=o;
+                        bool live=true,readable=true,drift=false;unsigned reads=0;
+                        auto cacheRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                            if(!readable || address!=renderer+0x928 || size!=sizeof(cache))return false;
+                            auto value=cache;if(drift && ++reads==2)value[0]=1;
+                            std::memcpy(bytes,value.data(),size);return true;
+                        };
+                        auto held=[&]() noexcept {return live;};
+                        drift=true;
+                        assert(!reservation.begin(graph,renderer,selection,cacheRead,held));
+                        assert(!reservation.pending() && graph.valid());drift=false;
+                        assert(reservation.begin(graph,renderer,selection,cacheRead,held) && reservation.pending());
+                        assert(!reservation.begin(graph,renderer,selection,cacheRead,held));
+                        Graph foreign(Api{refs});
+                        assert(!reservation.settle(foreign,cacheRead,held,true));
+                        std::memcpy(root.prefix.data()+0xc0,&p,8);cache[0]=0;
+                        cache[2]=0; // Native mode0 MUST leave suffix after first NULL untouched.
+                        assert(!reservation.settle(graph,cacheRead,held,true) && reservation.pending());
+                        cache[2]=o;
+                        assert(reservation.settle(graph,cacheRead,held,false) && !reservation.pending() && graph.valid());
+                        assert(!reservation.settle(graph,cacheRead,held,false));
+                        cache[0]=o;
+                        assert(reservation.begin(graph,renderer,selection,cacheRead,held));
+                        cache[0]=0; // Cache clear alone is NOT proof that native reconnected C0.
+                        assert(!reservation.settle(graph,cacheRead,held,true) && reservation.pending());
+                        cache[0]=o; // CPU fixture restores its own cache, never product rollback.
+                        assert(reservation.settle(graph,cacheRead,held,true) && graph.valid());
+                        assert(reservation.begin(graph,renderer,selection,cacheRead,held));
+                        assert(!reservation.settle(graph,cacheRead,held,false));
+                        live=false;assert(!reservation.settle(graph,cacheRead,held,true));live=true;
+                        readable=false;assert(!reservation.settle(graph,cacheRead,held,true));readable=true;
+                        assert(reservation.settle(graph,cacheRead,held,true) && graph.valid());
+                        cache={};
+                        assert(reservation.begin(graph,renderer,selection,cacheRead,held));
+                        assert(reservation.settle(graph,cacheRead,held,false) && graph.valid());
+                        selection.source=1;
+                        assert(!reservation.begin(graph,renderer,selection,cacheRead,held));
+                        selection.source=0;
+                        assert(!reservation.begin(graph,renderer,selection,cacheRead,held));
+                        assert(refs==heldRefs);
+                    }
+                    // Restore this CPU fixture's original C0 for following cases.
+                    assert(graph.withForwardLinkReconciliation(changes,1,[&]() noexcept -> int {
+                        std::memcpy(root.prefix.data()+0xc0,&o,8);return 0;
+                    })==0);
                     assert(graph.withForwardLinkReconciliation(changes,1,[&]() noexcept -> int {
                         const uintptr_t zero=0;std::memcpy(root.prefix.data()+0xc8,&zero,8);return 0;
                     })==5 && !graph.valid());
