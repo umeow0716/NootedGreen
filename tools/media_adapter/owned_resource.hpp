@@ -2030,6 +2030,7 @@ struct TglNativeVeboxRendererView {
 // thirteenth callback. Keep this admission separate from publication authority.
 struct TglNativePrimaryRendererTable {
     static constexpr size_t slotCount=12;
+    static constexpr size_t initializeSlot=4; // +20, exact native132510
     static constexpr size_t temporaryPassSlot=10; // +50, native1b1ed0
     static constexpr std::array<uintptr_t,slotCount> offsets{{
         0x1c9190,0x1c91b0,0x1b17a0,0x1b1bc0,0x132510,0x131fa0,
@@ -2070,14 +2071,19 @@ public:
     TglOwnedPrimaryRendererTable& operator=(const TglOwnedPrimaryRendererTable&)=delete;
     template<class Read,class Qualify,class Executable,class OwnedAdmit>
     bool build(uintptr_t image,uintptr_t temporary,Read read,Qualify qualify,
-        Executable executable,OwnedAdmit ownedAdmit) noexcept {
+        Executable executable,OwnedAdmit ownedAdmit,uintptr_t initialize=0) noexcept {
         std::array<uintptr_t,12> original{};
         if(source_ || !temporary || !qualify(image) || !ownedAdmit(temporary,1) ||
            !TglNativePrimaryRendererTable::capture(image,read,executable,original,rttiImport(qualify,0))) return false;
         for(auto entry:original) if(entry==temporary) return false;
+        if(initialize) {
+            if(initialize==temporary || !ownedAdmit(initialize,1))return false;
+            for(auto entry:original)if(entry==initialize)return false;
+        }
         entries_[0]=0;entries_[1]=image+0x75bc00;
         for(size_t i=0;i<original.size();++i) entries_[i+2]=original[i];
         entries_[2+TglNativePrimaryRendererTable::temporaryPassSlot]=temporary;
+        if(initialize)entries_[2+TglNativePrimaryRendererTable::initializeSlot]=initialize;
         source_=image+0x75bba0;return true;
     }
     uintptr_t addressPoint() const noexcept {
@@ -27452,7 +27458,7 @@ public:
     // destruction; callback dispatch never owns a second renderer object.
     template<class ExclusiveLease,class Qualify,class Executable,class OwnedExecutable>
     bool publishRenderer(const ExclusiveLease& lease,uintptr_t temporary,Qualify qualify,
-        Executable executable,OwnedExecutable ownedExecutable) noexcept {
+        Executable executable,OwnedExecutable ownedExecutable,uintptr_t initialize=0) noexcept {
         if(!state_ || lease.get()!=this || !lease.exclusive() || state_->storageBusy ||
             state_->nativeRequestPending.pending() ||
             !state_->storage || !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
@@ -27462,7 +27468,7 @@ public:
         bool expected=false;
         if(!state_->storageBusy.compare_exchange_strong(expected,true,std::memory_order_acq_rel))return false;
         struct Unlock {std::atomic<bool>& busy;~Unlock(){busy.store(false,std::memory_order_release);}} unlock{state_->storageBusy};
-        return state_->rendererTable.build(state_->image,temporary,state_->read,qualify,executable,ownedExecutable) &&
+        return state_->rendererTable.build(state_->image,temporary,state_->read,qualify,executable,ownedExecutable,initialize) &&
             state_->rendererTable.publish(state_->renderer,state_->read,state_->write,state_->tableAdmit);
     }
     template<class ImageRead,class Qualify,class Executable,class OwnedExecutable,class CreatorAdmit>

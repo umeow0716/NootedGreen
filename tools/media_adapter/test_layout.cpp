@@ -19600,6 +19600,22 @@ int main() {
             [&](uintptr_t at,size_t) noexcept {return at==callback;}));
         const auto* copied=reinterpret_cast<const uintptr_t*>(owned.addressPoint());
         assert(copied[-2]==0 && copied[-1]==image+0x75bc00);
+        {
+            const uintptr_t initialize=callback+0x100;
+            auto callbacks=[&](uintptr_t at,size_t) noexcept {return at==callback || at==initialize;};
+            auto qualified=[](uintptr_t at) noexcept {return at==image;};
+            TglOwnedPrimaryRendererTable initialized,duplicate,nativeInit,denied;
+            assert(initialized.build(image,callback,ownerRead,qualified,executable,callbacks,initialize));
+            const auto* entries=reinterpret_cast<const uintptr_t*>(initialized.addressPoint());
+            for(size_t i=0;i<Table::slotCount;++i)
+                assert(entries[i]==(i==Table::initializeSlot?initialize:i==Table::temporaryPassSlot?callback:saved[i]));
+            assert(entries[-2]==0 && entries[-1]==image+0x75bc00);
+            assert(!duplicate.build(image,callback,ownerRead,qualified,executable,callbacks,callback));
+            assert(!nativeInit.build(image,callback,ownerRead,qualified,executable,
+                [](uintptr_t,size_t) noexcept {return true;},saved[Table::initializeSlot]));
+            assert(!denied.build(image,callback,ownerRead,qualified,executable,
+                [&](uintptr_t at,size_t) noexcept {return at==callback;},initialize));
+        }
         for(size_t i=0;i<12;++i)
             assert(copied[i]==(i==10?callback:saved[i]));
         assert(!owned.publish(object+8,ownerRead,write,admit));
