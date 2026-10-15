@@ -4275,6 +4275,22 @@ struct NativeCreatorPreparation {
         return NativeRetainedContextFrameDispatch::runOwned(lease,physical,frame,*backend,view,
             childIndex,interfaces,catalogue,retirement,decompression,temporal,argument,input,output,receipt);
     }
+    using RuntimeView=TglNativeBorrowedVphalMhwLease<NativeVphalFramePin>;
+    static bool acquireRuntimeView(NativePhysicalFrameScope& physical,uintptr_t image,uintptr_t address,
+        uint64_t generation,uintptr_t creator,uintptr_t renderer,RuntimeView& output) noexcept {
+        if(output.view() || !passBackendFor(physical,image,address,generation,creator,renderer))return false;
+        return tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
+            auto pin=NativeVphalRouter::pinFrame(image,address,generation,creator);
+            auto* owner=pin.get();
+            if(!owner || owner->context()!=creator)return 5;
+            return output.acquireOwned(std::move(pin),image,creator,creator,owner->lifetime(),
+                &readMemory,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,
+                [creator,renderer](const NativeVphalOwner& actual,const TglNativeVphalMhwView& view) noexcept {
+                    return actual.context()==creator && actual.lifetime().object()==creator &&
+                        view.parent==creator && view.renderer.creator==creator && view.renderer.renderer==renderer;
+                })?0:5;
+        })==0;
+    }
     // Full synchronous construction handoff, not a component-success alias.
     // Each component keeps its persistent partial state; failure never retries
     // construction or destroys objects still owned by the native creator.
