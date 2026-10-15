@@ -4447,12 +4447,9 @@ struct NativePhysicalBackend {
         if(!status)output=candidate;
         return status; // Value observation only; no pending/history clear.
     }
-    static int acknowledgeNativeCompletedGroupWork(void* physical) noexcept {
-        TglNativePhysicalCallbackBinding native;TglNativeFenceBackingObservation fence;
-        if(!binding(native) || !library.resourceCreate || !fence.resolve(native.image,&readMemory,
-            NativeTglImageAdmission{native.image},&executableMemory))return 5;
-        const auto address=reinterpret_cast<uintptr_t>(physical);
-        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+    template<class ObserveGroup>
+    static int acknowledgeNativeCompletedGroupWorkUsing(const TglNativePhysicalCallbackBinding& native,
+        ObserveGroup observeGroup) noexcept {
             TglOwnedVeboxPairCompletionGroup<NativeRendererCpuAssembly> group;
             NativeBorrowedFrontend* first=nullptr;
             uintptr_t creator=0,renderer=0;
@@ -4477,8 +4474,7 @@ struct NativePhysicalBackend {
                     return group.unchanged(cpu) && sameView(view)?0:5;
                 })==0;
             };
-            return callbacks.withTaskCompletionGroup(ticket,address,fence,&readMemory,
-                NativeRetainedFenceOwnerAdmission{native.image,address},query,
+            return observeGroup(query,
                 [](NativeBorrowedFrontend& frontend) noexcept {return NativeRendererHistoryInspection::run(frontend);},
                 [&](size_t count,const auto& frames,const auto& receipts,const auto&,
                     const auto&,const auto&,const auto& history) noexcept -> int {
@@ -4527,6 +4523,27 @@ struct NativePhysicalBackend {
                     // admission. Leave nonempty history retryable, not failed.
                     return acknowledged?acknowledged:drained?0:5;
                 });
+    }
+    static int acknowledgeNativeCompletedGroupWork(void* physical) noexcept {
+        TglNativePhysicalCallbackBinding native;TglNativeFenceBackingObservation fence;
+        if(!binding(native) || !library.resourceCreate || !fence.resolve(native.image,&readMemory,
+            NativeTglImageAdmission{native.image},&executableMemory))return 5;
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return acknowledgeNativeCompletedGroupWorkUsing(native,[&](auto query,auto history,auto use) noexcept -> int {
+                return callbacks.withTaskCompletionGroup(ticket,address,fence,&readMemory,
+                    NativeRetainedFenceOwnerAdmission{native.image,address},query,history,use);
+            });
+        });
+    }
+    static int acknowledgeNativeCompletedGroupWorkScoped(NativePhysicalFrameScope& scope,uintptr_t address,uint64_t generation) noexcept {
+        TglNativePhysicalCallbackBinding native;TglNativeFenceBackingObservation fence;
+        if(!binding(native) || !library.resourceCreate || !scope.matches(native.image,address,generation) ||
+            !fence.resolve(native.image,&readMemory,NativeTglImageAdmission{native.image},&executableMemory))return 5;
+        NativePhysicalCallbacks callbacks(registry(),native,&readMemory,NativeTglImageAdmission{native.image},&executableMemory);
+        return acknowledgeNativeCompletedGroupWorkUsing(native,[&](auto query,auto history,auto use) noexcept -> int {
+            return callbacks.withTaskCompletionGroupScoped(scope,generation,address,fence,&readMemory,
+                NativeRetainedFenceOwnerAdmission{native.image,address},query,history,use);
         });
     }
     static int retireNativeTaskCompletedFrame(void* physical,typename NativePhysicalRegistry::FrameTicket frame,
@@ -4554,6 +4571,14 @@ struct NativePhysicalBackend {
             NativeRetainedFenceOwnerAdmission{native.image,address},
             NativeRetainedTaskCompletionQuery{native.image,library.resourceCreate},
             [](NativeBorrowedFrontend& frontend) noexcept {return NativePrivateFrameRetirementInspection::run(frontend);},prepare);
+    }
+    static int serviceNativeCompletedFramesScoped(NativePhysicalFrameScope& scope,uintptr_t image,
+        uintptr_t address,uint64_t generation) noexcept {
+        return tglServiceScopedCompletedFrames<typename NativePhysicalRegistry::FrameTicket>(scope,image,address,generation,
+            [&]() noexcept -> int {return acknowledgeNativeCompletedGroupWorkScoped(scope,address,generation);},
+            [&](auto frame) noexcept -> int {
+                return retireNativeTaskCompletedFrameScoped(scope,address,generation,frame,&NativePrivateFrameRetirementInspection::prepare);
+            });
     }
     static int serviceNativeCompletedFrames(void* physical) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
@@ -5480,6 +5505,8 @@ struct NativeLateFactoryBatch {
     static int dispatch(void* raw,NativeFactoryFrameBatch::Lease& owner,NativePhysicalFrameScope& physical,
         uintptr_t image,uintptr_t address,uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
         if(!raw || !owner.get() || !physical.matches(image,address,generation))return 5;
+        const int vpCompletion=NativePhysicalBackend::serviceNativeCompletedFramesScoped(physical,image,address,generation);
+        if(vpCompletion)return vpCompletion;
         const int completion=NativeOtherFrameBackend::poll(physical,image,address,generation);
         if(completion)return completion;
         if(owner.get()->family()==TglNativeContextFamily::NativeOther)

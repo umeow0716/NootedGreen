@@ -28245,6 +28245,29 @@ struct TglNativeBackingAllocateInvoker {
 struct TglNativeContextPreAdmission {
     template<class Scope> bool operator()(Scope&) const noexcept {return true;}
 };
+// Orchestration only: acknowledgement and retirement must supply the existing
+// authenticated GPU/history proof. Never keep borrowed pool/frame pointers.
+template<class Ticket,size_t Capacity=2,class Scope,class Acknowledge,class Retire>
+int tglServiceScopedCompletedFrames(Scope& scope,uintptr_t image,uintptr_t physical,uint64_t generation,
+    Acknowledge acknowledge,Retire retire) noexcept {
+    if(!generation || !scope.matches(image,physical,generation))return 5;
+    std::array<Ticket,Capacity> tickets{};size_t count=0;
+    const int captured=scope.withCompletionService([&](auto& pool) noexcept -> int {
+        if(pool.emptyForNativeRequest())return 0;
+        return pool.withPendingReceiptGroup([&](size_t n,const auto&,const auto&,const auto& saved) noexcept -> int {
+            if(!n || n>Capacity)return 5;
+            count=n;for(size_t i=0;i<n;++i)tickets[i]=saved[i];return 0;
+        });
+    });
+    if(captured || !count)return captured;
+    const int acknowledged=acknowledge();if(acknowledged)return acknowledged;
+    for(size_t i=0;i<count;++i) {
+        if(!scope.matches(image,physical,generation))return 5;
+        const int status=retire(tickets[i]);if(status)return status;
+    }
+    if(!scope.matches(image,physical,generation))return 5;
+    return scope.withCompletionService([](auto& pool) noexcept -> int {return pool.emptyForNativeRequest()?0:5;});
+}
 struct TglNativeBackingReleaseInvoker {
     int operator()(uintptr_t entry,uintptr_t physical,uint32_t type) const noexcept {
         return reinterpret_cast<int(*)(void*,uint32_t)>(entry)(reinterpret_cast<void*>(physical),type);

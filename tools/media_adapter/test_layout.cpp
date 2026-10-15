@@ -18566,6 +18566,49 @@ static void testRetainedVeboxFrames() {
     }
 }
 
+struct ScopedCompletionFlowFixture {
+    struct Pool {
+        size_t remaining=2;bool failed=false;
+        bool emptyForNativeRequest() noexcept {return !remaining;}
+        template<class Use> int withPendingReceiptGroup(Use use) noexcept {
+            if(failed)return 5;
+            const std::array<unsigned,2> tickets{1,2},unused{};
+            return use(remaining,unused,unused,tickets);
+        }
+    } pool;
+    bool busy=false,live=true;
+    bool matches(uintptr_t image,uintptr_t physical,uint64_t generation) noexcept {
+        return live && image==0x1000 && physical==0x2000 && generation==3;
+    }
+    template<class Use> int withCompletionService(Use use) noexcept {
+        if(busy || !live)return 5;busy=true;
+        const int result=use(pool);busy=false;return result;
+    }
+};
+static void testScopedCompletionFlow() {
+    for(unsigned scenario=0;scenario<8;++scenario) {
+        ScopedCompletionFlowFixture scope;unsigned acknowledgements=0,retirements=0;
+        if(scenario==1)scope.pool.remaining=0;
+        if(scenario==3)scope.pool.failed=true;
+        if(scenario==6)scope.live=false;
+        if(scenario==7)scope.pool.remaining=3;
+        auto acknowledge=[&]() noexcept -> int {
+            ++acknowledgements;assert(!scope.busy);
+            assert(scope.withCompletionService([](auto&) noexcept -> int {return 0;})==0);
+            return scenario==2?31:0;
+        };
+        auto retire=[&](unsigned ticket) noexcept -> int {
+            ++retirements;assert(!scope.busy && ticket==retirements);
+            if(scenario==4 && ticket==2)return 17;
+            if(scenario!=5)--scope.pool.remaining;return 0;
+        };
+        const int result=tglServiceScopedCompletedFrames<unsigned>(scope,0x1000,0x2000,3,acknowledge,retire);
+        assert(result==((scenario==0 || scenario==1)?0:scenario==2?31:scenario==4?17:5));
+        assert(acknowledgements==((scenario==0 || scenario==2 || scenario==4 || scenario==5)?1U:0U));
+        assert(retirements==((scenario==0 || scenario==4 || scenario==5)?2U:0U));
+        assert(scope.pool.remaining==(scenario==0 || scenario==1?0U:scenario==4?1U:scenario==7?3U:2U));
+    }
+}
 static void testNativeCreatorRequestChains() {
     for(unsigned scenario=0;scenario<8;++scenario) {
         uintptr_t descriptor=0x2000,auxiliary=0x7000;std::array<uint8_t,0x18> header{};
@@ -18655,6 +18698,7 @@ static void testNativeCreatorRequestChains() {
     }
 }
 static void testActualNv12LayoutSnapshot() {
+    testScopedCompletionFlow();
     testNativeCreatorRequestChains();
     // Exact native-other query callbacks; no synthetic native result and no
     // success inferred from the zero-write branches.
