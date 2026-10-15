@@ -15359,8 +15359,15 @@ static void testRetainedVeboxFrames() {
             uintptr_t actualParent=physical;
             bool nativeRemoved=false;
             bool allocationProof=true;
+            bool queryShellPresent=false;
             auto ownerRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
                 assert(!nativeRemoved); // No native-object read after successful removal.
+                if(bytes==8 && address>=0x70008 && address<0x700d8 && (address-0x70008)%8==0) {
+                    const uintptr_t shell=address==0x70008 && queryShellPresent?0x80000:0;std::memcpy(out,&shell,8);return true;
+                }
+                if(bytes==8 && (address==0x800c0 || address==0x800c8)) {
+                    const uintptr_t next=0;std::memcpy(out,&next,8);return true;
+                }
                 constexpr std::array<uintptr_t,4> sizeSites{0x233532,0x233554,0x233576,0x233598};
                 constexpr std::array<uintptr_t,4> storeSites{0x23354d,0x23356f,0x233591,0x2335b3};
                 constexpr std::array<std::array<uint8_t,5>,4> sizes{{
@@ -15399,7 +15406,8 @@ static void testRetainedVeboxFrames() {
             };
             auto ownerAdmit=[](uintptr_t p,size_t bytes) noexcept {
                 return (p==context && (bytes==8 || bytes==0x12f8)) || (p==physical && bytes==0x58) ||
-                    (p==os && bytes==0x10) || (p==wrapper && bytes==0x50);
+                    (p==os && bytes==0x10) || (p==wrapper && bytes==0x50) ||
+                    (p==0x70000 && bytes==0xd8) || (p==0x80000 && bytes==0x2a8);
             };
             // Owner type is defined without instantiating any Frame registry.
             using Codec=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,decltype(ownerRead),
@@ -15450,6 +15458,11 @@ static void testRetainedVeboxFrames() {
                 }
                 allocationProof=false;assert(!owner->excludesPublishedContextWritableSpan(exclusive,0x60000,1));allocationProof=true;
                 assert(!owner->excludesPublishedContextWritableSpan(exclusive,UINTPTR_MAX,1));
+                queryShellPresent=true;
+                assert(!owner->excludesPublishedContextWritableSpan(exclusive,0x80000,1));
+                assert(!owner->excludesPublishedContextWritableSpan(exclusive,0x802a7,2));
+                assert(owner->excludesPublishedContextWritableSpan(exclusive,0x802a8,1));
+                queryShellPresent=false;
                 assert(!owner->confirmNativeRemoval([](auto...) noexcept {assert(false);return true;}));
             }
             TglNativeRemovedContextBatch<1> removed;removed.valid=true;removed.count=1;removed.contexts[0]=context;
@@ -16836,6 +16849,20 @@ static void testRetainedVeboxFrames() {
                 };
                 TglNativeContextSurfaceProvenance<2> proof;
                 assert(proof.resolve(roots,readGraph,admitGraph) && proof.contains(address) && proof.contains(historyAddress));
+                TglNativeContextSurfaceProvenance<2> closure;
+                assert(closure.resolveOwnedShellClosure(roots,readGraph,admitGraph));
+                assert(closure.contains(address) && closure.contains(historyAddress));
+                assert(!closure.excludesWritableShellSpan(address,1) && !closure.excludesWritableShellSpan(historyAddress+0x2a7,2));
+                assert(closure.excludesWritableShellSpan(1,1) && !closure.excludesWritableShellSpan(UINTPTR_MAX,1));
+                unsigned edgeReads=0;
+                auto drifting=[&](uintptr_t p,void* out,size_t n) noexcept {
+                    if(!readGraph(p,out,n))return false;
+                    if(++edgeReads==5){const uintptr_t changed=0;std::memcpy(out,&changed,8);}
+                    return true;
+                };
+                assert(!closure.resolveOwnedShellClosure(roots,drifting,admitGraph) && !closure.context());
+                TglNativeContextSurfaceProvenance<1> boundedClosure;
+                assert(!boundedClosure.resolveOwnedShellClosure(roots,readGraph,admitGraph) && !boundedClosure.context());
                 RootOwner temporal(owners.pin(image,0x8000,success.ticket.generation,0x20000),proof,historyAddress,admitGraph);
                 typename RootOwner::SurfaceOwnerLease historyLease(temporal);assert(historyLease.storage()==&history);
                 TglNativeContextSurfaceProvenance<1> tooSmall;

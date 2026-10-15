@@ -1904,6 +1904,35 @@ public:
         for(size_t i=0;i<count_;++i) if(shells_[i]==shell) return true;
         return false;
     }
+    bool excludesWritableShellSpan(uintptr_t address,size_t bytes) const noexcept {
+        if(!ready_ || !address || !bytes || address>UINTPTR_MAX-bytes)return false;
+        for(size_t i=0;i<count_;++i)
+            if(address<shells_[i]+0x2a8 && shells_[i]<address+bytes)return false;
+        return true;
+    }
+    // Query hardening: follow complete native cleanup C0/C8 links, not the
+    // narrower registration counts. No retain/free or ownership transfer.
+    template<class Read,class Admit>
+    bool resolveOwnedShellClosure(const TglNativeContextInputRoots& roots,Read read,Admit admit) noexcept {
+        *this={};TglNativeContextSurfaceProvenance candidate;
+        if(!roots.input || !roots.parent.context)return false;
+        std::array<std::array<uintptr_t,2>,Capacity> links{};
+        auto add=[&](uintptr_t shell) noexcept {
+            if(!shell)return true;
+            for(size_t i=0;i<candidate.count_;++i)if(candidate.shells_[i]==shell)return true;
+            if((shell&7) || shell>UINTPTR_MAX-0x2a8 || candidate.count_==Capacity || !admit(shell,size_t{0x2a8}))return false;
+            candidate.shells_[candidate.count_++]=shell;return true;
+        };
+        for(auto shell:roots.sources)if(!add(shell))return false;
+        for(auto shell:roots.targets)if(!add(shell))return false;
+        for(size_t i=0;i<candidate.count_;++i)for(size_t edge=0;edge<2;++edge)
+            if(!read(candidate.shells_[i]+0xc0+edge*8,&links[i][edge],8) || !add(links[i][edge]))return false;
+        for(size_t i=0;i<candidate.count_;++i)for(size_t edge=0;edge<2;++edge) {
+            uintptr_t current=0;
+            if(!read(candidate.shells_[i]+0xc0+edge*8,&current,8) || current!=links[i][edge])return false;
+        }
+        candidate.context_=roots.parent.context;candidate.ready_=true;*this=candidate;return true;
+    }
     template<class Read,class Admit>
     bool resolve(const TglNativeContextInputRoots& roots,Read read,Admit admit) noexcept {
         static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
@@ -26259,7 +26288,15 @@ public:
                 !state_->read(state_->context+fields[i],&buffer,8) ||
                 (i==0 && buffer!=state_->os) || !excludes(buffer,extents[i]))return false;
         }
-        return true; // Context-owned shells/creator/physical graph still separate.
+        TglNativeContextInputRoots roots,finalRoots;
+        TglNativeContextSurfaceProvenance<64> shells; // Owned work budget, not native topology maximum.
+        return roots.resolve(state_->context,state_->read,state_->admit) &&
+            shells.resolveOwnedShellClosure(roots,state_->read,state_->admit) &&
+            shells.excludesWritableShellSpan(address,bytes) &&
+            finalRoots.resolve(state_->context,state_->read,state_->admit) &&
+            finalRoots.parent.context==roots.parent.context && finalRoots.parent.physical==roots.parent.physical &&
+            finalRoots.parent.os==roots.parent.os && finalRoots.parent.wrapper==roots.parent.wrapper &&
+            finalRoots.input==roots.input && finalRoots.sources==roots.sources && finalRoots.targets==roots.targets;
     }
     const TglOwnedContextFrameVtable& frameTable() const noexcept {return state_->table;}
     bool nativeRemovalConfirmed() const noexcept {
