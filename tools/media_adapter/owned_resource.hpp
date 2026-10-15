@@ -20933,6 +20933,8 @@ template<class Owner,class Api,size_t Capacity=32> class TglOwnedFrontendSourceG
     struct Slot {Lease* lease=nullptr;std::array<uint8_t,24> links{};};
     Api api_;std::array<Slot,Capacity> slots_{};
     size_t count_=0;bool attempted_=false,ready_=false,busy_=false,reconciling_=false;
+    uint64_t forwardEpoch_=0;
+    std::array<std::array<uint8_t,24>,Capacity> pendingForward_{};
     static std::array<uint8_t,24> links(const TglOwnedSurfaceStorage& shell) noexcept {
         std::array<uint8_t,24> out{};
         std::memcpy(out.data(),shell.prefix.data()+0xb4,8);
@@ -20992,24 +20994,29 @@ public:
     // C0 mutation before entering, then commit link stamps atomically. Counts,
     // C8, resource identity and retained membership must remain unchanged.
 private:
-    template<class Use> int reconcileForwardLinks(
-        const std::array<TglNativeForwardLinkChange,18>& changes,size_t count,Use use,bool deferred) noexcept {
-        static_assert(noexcept(use()) && std::is_same_v<decltype(use()),int>);
-        if(busy_ || reconciling_ || !valid() || count>changes.size())return 5;
-        std::array<std::array<uint8_t,24>,Capacity> expected{};
+    bool planForwardLinks(const std::array<TglNativeForwardLinkChange,18>& changes,size_t count,
+        std::array<std::array<uint8_t,24>,Capacity>& expected) const noexcept {
+        if(busy_ || reconciling_ || !valid() || count>changes.size())return false;
         for(size_t i=0;i<count_;++i)expected[i]=slots_[i].links;
         for(size_t i=0;i<count;++i) {
-            if(!changes[i].source)return 5;
-            for(size_t j=0;j<i;++j)if(changes[j].source==changes[i].source)return 5;
+            if(!changes[i].source)return false;
+            for(size_t j=0;j<i;++j)if(changes[j].source==changes[i].source)return false;
             size_t found=Capacity;bool nextKnown=!changes[i].next;
             for(size_t j=0;j<count_;++j) {
                 const auto* shell=slots_[j].lease->storage();
                 if(shell==changes[i].source)found=j;
                 if(reinterpret_cast<uintptr_t>(shell)==changes[i].next)nextKnown=true;
             }
-            if(found==Capacity || !nextKnown)return 5;
+            if(found==Capacity || !nextKnown)return false;
             std::memcpy(expected[found].data()+8,&changes[i].next,8);
         }
+        return true;
+    }
+    template<class Use> int reconcileForwardLinks(
+        const std::array<TglNativeForwardLinkChange,18>& changes,size_t count,Use use,bool deferred) noexcept {
+        static_assert(noexcept(use()) && std::is_same_v<decltype(use()),int>);
+        std::array<std::array<uint8_t,24>,Capacity> expected{};
+        if(!planForwardLinks(changes,count,expected))return 5;
         reconciling_=true;if(!deferred)busy_=true;
         struct Reset {bool& busy;bool& pending;~Reset(){busy=false;pending=false;}} reset{busy_,reconciling_};
         const int status=use();
@@ -21022,6 +21029,39 @@ private:
         return status;
     }
 public:
+    class DeferredForwardToken {
+        friend class TglOwnedFrontendSourceGraph;
+        const TglOwnedFrontendSourceGraph* graph_=nullptr;
+        uint64_t epoch_=0;
+    public:
+        DeferredForwardToken()=default;
+    };
+    // Split reservation for native outer -> late callback -> final mode0.
+    // Graph and all surface leases stay owned by the retained frame. These
+    // operations validate CPU link mutation only, never GPU retirement.
+    bool beginDeferredForwardLinks(const std::array<TglNativeForwardLinkChange,18>& changes,
+        size_t count,DeferredForwardToken& output) noexcept {
+        std::array<std::array<uint8_t,24>,Capacity> expected{};
+        if(forwardEpoch_==UINT64_MAX || !planForwardLinks(changes,count,expected))return false;
+        pendingForward_=expected;reconciling_=true;++forwardEpoch_;
+        DeferredForwardToken candidate;candidate.graph_=this;candidate.epoch_=forwardEpoch_;
+        output=candidate;return true;
+    }
+    bool finishDeferredForwardLinks(const DeferredForwardToken& token) noexcept {
+        if(token.graph_!=this || token.epoch_!=forwardEpoch_ || !reconciling_ || busy_)return false;
+        for(size_t i=0;i<count_;++i) {
+            const auto* shell=slots_[i].lease->storage();
+            if(!shell || !slots_[i].lease->hasSurfaceLease(*shell) || links(*shell)!=pendingForward_[i])return false;
+        }
+        for(size_t i=0;i<count_;++i)slots_[i].links=pendingForward_[i];
+        reconciling_=false;return true;
+    }
+    bool cancelDeferredForwardLinks(const DeferredForwardToken& token) noexcept {
+        // Cancellation only when ALL original link/count values are unchanged.
+        // Unknown or partial mutation stays reserved and fully retained.
+        if(token.graph_!=this || token.epoch_!=forwardEpoch_ || !reconciling_ || busy_ || !valid())return false;
+        reconciling_=false;return true;
+    }
     template<class Use> int withForwardLinkReconciliation(
         const std::array<TglNativeForwardLinkChange,18>& changes,size_t count,Use use) noexcept {
         return reconcileForwardLinks(changes,count,use,false);
