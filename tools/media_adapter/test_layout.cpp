@@ -18485,6 +18485,28 @@ static void testRetainedVeboxFrames() {
         assert(!preparedRegistry.lookup(image,0xf200).generation);
         assert(preparedCallbacks.removePreparedContextsAndReconcileBatch<2>(preparedPhysical.ticket,0xf200,input,
             prepareOwners,preparedReconcile,preparedNative)==5 && removalStage==1);
+        for(unsigned mixed=0;mixed<5;++mixed) {
+            TglNativeRemovedContextBatch<2> batch;batch.valid=true;batch.count=2;batch.contexts={0x10000,0x20000};
+            if(mixed==3)batch.contexts[1]=batch.contexts[0];
+            unsigned reads=0;
+            auto readCreator=[&](uintptr_t at,void* out,size_t bytes) noexcept -> bool {
+                ++reads;assert(mixed==1 && at==0x20000+0x12e0 && bytes==8);
+                const uintptr_t creator=0x30000;std::memcpy(out,&creator,8);return true;
+            };
+            TglNativeRemovedCreatorSnapshot<2> selected;
+            const bool ok=selected.captureSelected(batch,readCreator,
+                [&](uint32_t index,uintptr_t) noexcept -> TglNativeContextFamily {
+                    if(mixed==2)return TglNativeContextFamily::Unknown;
+                    return mixed==1 && index==1?TglNativeContextFamily::VeboxVp:TglNativeContextFamily::NativeOther;
+                });
+            assert(ok==(mixed==0 || mixed==1 || mixed==4));
+            assert(reads==(mixed==1?1U:0U));
+            if(ok) {
+                assert(selected.matches(batch) && selected.creators()->count==(mixed==1?1U:0U));
+                if(mixed==1)assert(selected.creators()->contexts[0]==0x30000 && !selected.creators()->contexts[1]);
+                auto changed=batch;++changed.contexts[0];assert(!selected.matches(changed));
+            } else assert(!selected.creators());
+        }
         for(unsigned scenario=0;scenario<5;++scenario) {
             TglNativeRemovedContextBatch<2> codecs;codecs.valid=true;codecs.count=2;codecs.contexts={0x10000,0x20000};
             if(scenario==3)codecs.contexts[1]=0;

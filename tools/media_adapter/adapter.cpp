@@ -5630,9 +5630,12 @@ struct NativeCompositeContextRemoval {
             [&](const std::array<NativeCodecOwner*,16>& owners,uint32_t count) noexcept -> int {
                 if(count!=batch.count)return 5;
                 for(uint32_t i=0;i<count;++i)if(!owners[i] || owners[i]->context()!=batch.contexts[i])return 5;
-                if(!self.snapshot.capture(batch,&readMemory))return 5;
+                if(!self.snapshot.captureSelected(batch,&readMemory,
+                    [&](uint32_t index,uintptr_t context) noexcept -> TglNativeContextFamily {
+                        return index<count && owners[index]->context()==context?owners[index]->family():TglNativeContextFamily::Unknown;
+                    }))return 5;
                 const auto* creators=self.snapshot.creators();if(!creators)return 5;
-                for(uint32_t i=0;i<count;++i) {
+                for(uint32_t i=0;i<creators->count;++i) {
                     const int result=NativeCreatorPreparation::prepareExternalRemoval(scope,image,physical,generation,creators->contexts[i]);
                     if(result)return result;
                 }
@@ -5649,7 +5652,8 @@ struct NativeCompositeContextRemoval {
         auto& self=*static_cast<NativeCompositeContextRemoval*>(raw);
         if(!self.prepared || self.confirmed || !scope.matches(image,physical,generation) || !self.snapshot.matches(batch))return 5;
         const auto* creators=self.snapshot.creators();if(!creators)return 5;
-        const int status=NativeCreatorPreparation::reconcileExternalRemoval(scope,image,physical,generation,*creators);
+        const int status=creators->count?
+            NativeCreatorPreparation::reconcileExternalRemoval(scope,image,physical,generation,*creators):0;
         self.confirmed=status==0;return status;
     }
     static int run(void* physical,const void* input) noexcept {

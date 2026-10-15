@@ -26276,18 +26276,34 @@ template<size_t Capacity=16> class TglNativeRemovedCreatorSnapshot {
     bool attempted_=false,ready_=false;
 public:
     template<class Read> bool capture(const TglNativeRemovedContextBatch<Capacity>& batch,Read read) noexcept {
+        return captureSelected(batch,read,[](uint32_t,uintptr_t) noexcept {
+            return TglNativeContextFamily::VeboxVp;
+        });
+    }
+    // Family authority comes from retained owners, never from a cloned vptr
+    // or a guessed VP field in a native-other object.
+    template<class Read,class Family> bool captureSelected(const TglNativeRemovedContextBatch<Capacity>& batch,
+        Read read,Family family) noexcept {
         static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
             std::is_same_v<decltype(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),bool>);
+        static_assert(noexcept(family(uint32_t{},uintptr_t{})) &&
+            std::is_same_v<decltype(family(uint32_t{},uintptr_t{})),TglNativeContextFamily>);
         if(attempted_)return false;attempted_=true;
         if(!batch.valid || batch.count>Capacity)return false;
         TglNativeRemovedContextBatch<Capacity> creators;
         for(uint32_t i=0;i<batch.count;++i) {
             const auto codec=batch.contexts[i];
-            if(!codec || codec>UINTPTR_MAX-0x12e8 || !read(codec+0x12e0,&creators.contexts[i],8) ||
-                !creators.contexts[i])return false;
-            for(uint32_t j=0;j<i;++j)if(batch.contexts[j]==codec || creators.contexts[j]==creators.contexts[i])return false;
+            if(!codec)return false;
+            for(uint32_t j=0;j<i;++j)if(batch.contexts[j]==codec)return false;
+            const auto selected=family(i,codec);
+            if(selected==TglNativeContextFamily::NativeOther)continue;
+            if(selected!=TglNativeContextFamily::VeboxVp)return false;
+            uintptr_t creator=0;
+            if(codec>UINTPTR_MAX-0x12e8 || !read(codec+0x12e0,&creator,8) || !creator)return false;
+            for(uint32_t j=0;j<creators.count;++j)if(creators.contexts[j]==creator)return false;
+            creators.contexts[creators.count++]=creator;
         }
-        creators.count=batch.count;creators.valid=true;
+        creators.valid=true;
         codecs_=batch;creators_=creators;ready_=true;return true;
     }
     bool matches(const TglNativeRemovedContextBatch<Capacity>& batch) const noexcept {
