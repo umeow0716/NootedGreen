@@ -16522,6 +16522,15 @@ static void testRetainedVeboxFrames() {
                     };
                     assert(!retained.captureTaskCompletion(fenceBacking,fenceReceipt,0xa0000,readGraph,
                         denyFenceOwner,denyTaskQuery,fenceSnapshot,completion));
+                    assert(retained.prepareTaskCompletionRetirement(fenceBacking,fenceReceipt,0xa0000,readGraph,
+                        denyFenceOwner,denyTaskQuery,
+                        [](RendererFixture&) noexcept -> TglNativeHistoryCacheInspection {assert(false);return {};},
+                        [](RendererFixture&) noexcept -> int {assert(false);return 0;})==5);
+                    assert(retained.canDestroy()); // No rejected query fabricated retention/retirement.
+                    using MissingHistory=TglNativeHistoryCacheInspection(*)(RendererFixture&) noexcept;
+                    using MissingPrepare=int(*)(RendererFixture&) noexcept;
+                    assert(retained.prepareTaskCompletionRetirement(fenceBacking,fenceReceipt,0xa0000,readGraph,
+                        denyFenceOwner,denyTaskQuery,MissingHistory{},MissingPrepare{})==5);
                     size_t sourceRole=0,targetRole=0;
                     assert(retained.retainedRoleIndices(selected.roles,sourceRole,targetRole) && sourceRole==5 && targetRole==0);
                     auto ambiguous=selected.roles;ambiguous.sources[6]=address;ambiguous.sourceCount=2;

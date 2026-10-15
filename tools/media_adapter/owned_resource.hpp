@@ -29454,11 +29454,10 @@ public:
                 expectedOutput=expected;freshOutput=candidate;return true;
             });
     }
-    template<class Read,class ExpectedAdmit,class Query>
-    bool captureTaskCompletion(const TglNativeFenceBackingObservation& binding,
+    template<class Read,class ExpectedAdmit,class Query,class Use>
+    bool withTaskCompletionObservation(const TglNativeFenceBackingObservation& binding,
         const TglNativeFrameOutputReceipt& receipt,uintptr_t wrapper,Read read,
-        ExpectedAdmit admit,Query query,TglNativeFenceBackingObservation::Snapshot& expectedOutput,
-        NGVfTaskCompletion::Reply& completionOutput) noexcept {
+        ExpectedAdmit admit,Query query,Use use) noexcept {
         if constexpr(std::is_pointer_v<Query>)if(!query)return false;
         return withExpectedFenceObservation(binding,receipt,wrapper,read,admit,
             [&](Renderer& renderer,const auto& expected) noexcept {
@@ -29477,8 +29476,42 @@ public:
                     },after) || after.expected!=expected.expected || after.mapping!=expected.mapping ||
                     after.bytes!=expected.bytes || after.frameworkContext!=expected.frameworkContext ||
                     after.count!=expected.count)return false;
+                return use(renderer,expected,candidate);
+            });
+    }
+    template<class Read,class ExpectedAdmit,class Query>
+    bool captureTaskCompletion(const TglNativeFenceBackingObservation& binding,
+        const TglNativeFrameOutputReceipt& receipt,uintptr_t wrapper,Read read,
+        ExpectedAdmit admit,Query query,TglNativeFenceBackingObservation::Snapshot& expectedOutput,
+        NGVfTaskCompletion::Reply& completionOutput) noexcept {
+        return withTaskCompletionObservation(binding,receipt,wrapper,read,admit,query,
+            [&](Renderer&,const auto& expected,const auto& candidate) noexcept {
                 expectedOutput=expected;completionOutput=candidate;return true;
             });
+    }
+    template<class Read,class Admit,class Query,class History,class Prepare>
+    int prepareTaskCompletionRetirement(const TglNativeFenceBackingObservation& binding,
+        const TglNativeFrameOutputReceipt& receipt,uintptr_t wrapper,Read read,Admit admit,Query query,
+        History history,Prepare prepare) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<TglNativeHistoryCacheInspection,History&,Renderer&> &&
+            std::is_nothrow_invocable_r_v<int,Prepare&,Renderer&>);
+        if constexpr(std::is_pointer_v<History>)if(!history)return 5;
+        if constexpr(std::is_pointer_v<Prepare>)if(!prepare)return 5;
+        int result=5;
+        const bool observed=withTaskCompletionObservation(binding,receipt,wrapper,read,admit,query,
+            [&](Renderer& renderer,const auto&,const auto&) noexcept {
+                const auto cache=history(renderer);
+                if(!cache.observed || cache.referencesFrame || invalidated() || retirementFailed_)return false;
+                // SAME frame remains busy from expected capture to detach.
+                // Pending/unknown query and history references did not begin
+                // teardown and remain retryable. Partial detach quarantines.
+                retirementStarted_=true;
+                result=prepare(renderer);
+                if(result)retirementFailed_=true;
+                else retired_=true;
+                return true;
+            });
+        return observed?result:5;
     }
     bool requiresRetention() const noexcept {
         return nativeFrameEntered_ || flushEntered_ || (renderer_ && renderer_->requiresRetention());
