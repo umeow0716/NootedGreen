@@ -18503,6 +18503,7 @@ int main() {
     }
     for(bool expire:{false,true}) {
         TglOwnedVeboxFrameRetention root;
+        assert(!root.mayHaveGpuWork() && !root.mayHaveNativeHistory());
         TglOwnedVeboxFrameRetention local(TglOwnedVeboxFrameRetention::AggregateLink{},root);
         TglOwnedVeboxCommandTransactionResult pending;pending.nativeEntered=true;root.observe(pending);
         bool live=true;unsigned renders=0;
@@ -18528,6 +18529,29 @@ int main() {
         }
     }
     {
+        for(unsigned mask=0;mask<16;++mask) {
+            TglOwnedVeboxFrameRetention root;
+            TglOwnedVeboxFrameRetention child(TglOwnedVeboxFrameRetention::AggregateLink{},root);
+            TglOwnedVeboxCommandTransactionResult result;
+            result.acquired=mask&1;result.writtenBack=mask&2;
+            result.nativeEntered=mask&4;result.nativeHistoryPublished=mask&8;
+            child.observe(result);
+            assert(child()==bool(mask) && root()==bool(mask));
+            assert(child.mayHaveGpuWork()==bool(mask&7) && root.mayHaveGpuWork()==bool(mask&7));
+            assert(child.mayHaveNativeHistory()==bool(mask&8) && root.mayHaveNativeHistory()==bool(mask&8));
+            child.observe(TglOwnedVeboxCommandTransactionResult{});
+            assert(child()==bool(mask) && root()==bool(mask));
+        }
+        {
+            TglOwnedVeboxFrameRetention root;
+            TglOwnedVeboxFrameRetention a(TglOwnedVeboxFrameRetention::AggregateLink{},root);
+            TglOwnedVeboxFrameRetention b(TglOwnedVeboxFrameRetention::AggregateLink{},root);
+            TglOwnedVeboxCommandTransactionResult work,history;work.nativeEntered=true;history.nativeHistoryPublished=true;
+            a.observe(work);b.observe(history);
+            assert(a.mayHaveGpuWork() && !a.mayHaveNativeHistory());
+            assert(!b.mayHaveGpuWork() && b.mayHaveNativeHistory());
+            assert(root.mayHaveGpuWork() && root.mayHaveNativeHistory());
+        }
         struct ModeFrame {
             bool lost=false,ready=true;
             bool invalidated() const noexcept {return lost;}

@@ -14991,11 +14991,17 @@ TglOwnedVeboxCommandTransactionResult tglRunLeasedVeboxSurfaceRender(
 
 class TglOwnedVeboxFrameRetention {
     bool pending_=false;
+    bool workPending_=false,historyPending_=false;
     TglOwnedVeboxFrameRetention* const aggregate_=nullptr;
-    void retain(bool value) noexcept {
-        if(!value)return;
+    void retain(bool work,bool history=false) noexcept {
+        if(!work && !history)return;
         pending_=true;
-        if(aggregate_)aggregate_->pending_=true;
+        workPending_=workPending_ || work;historyPending_=historyPending_ || history;
+        if(aggregate_) {
+            aggregate_->pending_=true;
+            aggregate_->workPending_=aggregate_->workPending_ || work;
+            aggregate_->historyPending_=aggregate_->historyPending_ || history;
+        }
     }
 public:
     struct AggregateLink {};
@@ -15007,13 +15013,16 @@ public:
     TglOwnedVeboxFrameRetention(const TglOwnedVeboxFrameRetention&)=delete;
     TglOwnedVeboxFrameRetention& operator=(const TglOwnedVeboxFrameRetention&)=delete;
     bool operator()() const noexcept {return pending_;}
+    // Reasons are monotonic observations, not completion or clear authority.
+    bool mayHaveGpuWork() const noexcept {return workPending_;}
+    bool mayHaveNativeHistory() const noexcept {return historyPending_;}
     bool linkedTo(const TglOwnedVeboxFrameRetention& aggregate) const noexcept {
         return aggregate_==&aggregate;
     }
     bool aggregateRoot() const noexcept {return !aggregate_;}
     bool admissionPending() const noexcept;
     void observe(const TglOwnedVeboxCommandTransactionResult& result) noexcept {
-        retain(result.requiresRetention());
+        retain(result.acquired || result.writtenBack || result.nativeEntered,result.nativeHistoryPublished);
     }
     template<class Result> void observe(const Result& result) noexcept {
         // Legacy CPU producer results expose only acquisition/writeback.
