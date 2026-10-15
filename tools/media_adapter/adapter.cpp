@@ -5321,6 +5321,29 @@ struct NativeCubeSnapshotBudget {
         return tglCubeSnapshotBudget(statistics.free_count,size_t(page));
     }
 };
+struct NativePropertyParentMutation {
+    template<class Views,class Use>
+    static int run(Views& parents,size_t count,size_t index,NativePhysicalFrameScope& physical,
+        uintptr_t image,uintptr_t address,uint64_t generation,Use& use) noexcept {
+        if(index==count)return use();
+        return parents[index].withParentLease([&](const NativeVphalFramePin& pin,const TglNativeVphalMhwView& view) noexcept -> int {
+            if(!pin.get())return 5;
+            return tglWithVphalRouterIdentity(physical,image,address,generation,view.parent,[&]() noexcept -> int {
+              return pin.get()->withNativePropertyMutation(pin,[&]() noexcept -> int {
+                auto healthy=[&]() noexcept {
+                    return pin.get()->withPinnedStorage(pin,NativeDataAdmission{},NativeTglImageAdmission{image},
+                        &executableMemory,[](auto& cpu,const auto&) noexcept -> int {
+                            return cpu.backing().retention().admissionPending()?5:0;
+                        });
+                };
+                const int before=healthy();if(before)return before;
+                const int result=run(parents,count,index+1,physical,image,address,generation,use);
+                return result?result:healthy();
+              });
+            });
+        });
+    }
+};
 struct NativeFactoryContextProperties {
     // NOT PUBLISHED: metadata is frozen only for exact VEBOX property families;
     // payload/owned-allocation alias admission remains a publication prerequisite.
@@ -5334,20 +5357,14 @@ struct NativeFactoryContextProperties {
         if(!NativePhysicalBackend::binding(native))return 5;
         const auto image=native.image;
         const auto address=reinterpret_cast<uintptr_t>(physical);
-        return NativePhysicalBackend::withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
-            return callbacks.withNewRequest(ticket,address,[&](auto&) noexcept -> int {
+        return NativePhysicalBackend::withScope(address,[&](NativePhysicalFrameScope& physical,uint64_t generation) noexcept -> int {
+            return physical.withEmptyFrameMutation([&](NativePhysicalFrameScope& mutation) noexcept -> int {
+                if(!mutation.matches(image,address,generation))return 5;
                 TglNativeContextPropertyBatch<16> batch;
                 if(!batch.capture(reinterpret_cast<uintptr_t>(input),&readMemory))return 5;
                 TglNativeContextPropertyBatch<16>::OwnedRecords frozen;
                 if(!batch.freeze(&readMemory,frozen))return 5;
                 if(operation==Operation::Configure && !batch.admitsVeboxConfiguration(frozen))return 5;
-                if(operation==Operation::Configure && !batch.freezeVeboxScalarPayloads(&readMemory,frozen))return 5;
-                if(operation==Operation::Configure && !batch.freezeVeboxInlineConversionPayloads(&readMemory,frozen))return 5;
-                // withNewRequest keeps the process registry gate through
-                // capture AND native consumption, serializing our cube batches.
-                // Refresh VM headroom per call; no cached/guessed GPU cap.
-                if(operation==Operation::Configure && !batch.freezeVeboxCubePayloads(
-                    &readMemory,frozen,NativeCubeSnapshotBudget::available()))return 5;
                 if(operation==Operation::Query && !batch.admitVeboxQueryOutputs(frozen,NativeDataAdmission{}))return 5;
                 using Lease=decltype(NativeCodecBackend::owners().pinExclusive(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{}));
                 std::array<Lease,16> leases;
@@ -5356,12 +5373,24 @@ struct NativeFactoryContextProperties {
                     const auto context=batch.context(i);size_t found=0;
                     while(found<count && contexts[found]!=context)++found;
                     if(found<count)continue;
-                    leases[count]=NativeCodecBackend::owners().pinExclusive(image,address,ticket.generation,context);
+                    leases[count]=NativeCodecBackend::owners().pinExclusive(image,address,generation,context);
                     if(!leases[count].get() || !leases[count].exclusive())return 5;
                     const auto& table=leases[count].get()->frameTable();uintptr_t vptr=0;
                     if(table.publication()!=TglOwnedContextFrameVtable::Publication::Published || !table.addressPoint() ||
                         !readMemory(context,&vptr,8) || vptr!=reinterpret_cast<uintptr_t>(table.addressPoint()))return 5;
                     contexts[count++]=context;
+                }
+                std::array<NativeCreatorPreparation::RuntimeView,16> parents;
+                std::array<uintptr_t,16> creators{};size_t parentCount=0;
+                for(size_t i=0;i<count;++i) {
+                    uintptr_t creator=0,renderer=0;
+                    if(contexts[i]>UINTPTR_MAX-0x12e8 || !readMemory(contexts[i]+0x12e0,&creator,8) ||
+                        !creator || creator>UINTPTR_MAX-0x70 || !readMemory(creator+0x68,&renderer,8) || !renderer)return 5;
+                    size_t found=0;while(found<parentCount && creators[found]!=creator)++found;
+                    if(found<parentCount)continue;
+                    if(parentCount==parents.size() || !NativeCreatorPreparation::acquireRuntimeView(
+                        mutation,image,address,generation,creator,renderer,parents[parentCount]))return 5;
+                    creators[parentCount++]=creator;
                 }
                 const uintptr_t offset=operation==Operation::Configure?0x15c0e:0x15f1f;
                 constexpr std::array<uint8_t,17> configure{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x58};
@@ -5372,7 +5401,15 @@ struct NativeFactoryContextProperties {
                     !readMemory(image+offset,actual.data(),size) ||
                     std::memcmp(actual.data(),operation==Operation::Configure?configure.data():query.data(),size) ||
                     !batch.stable(&readMemory))return 5;
-                return TglNativeBackingAllocateInvoker{}(image+offset,address,frozen.input());
+                auto invoke=[&]() noexcept -> int {
+                    // All parent reservations admitted BEFORE capture or native
+                    // mutation; registry gate serializes our cube batches.
+                    if(operation==Operation::Configure && (!batch.freezeVeboxScalarPayloads(&readMemory,frozen) ||
+                        !batch.freezeVeboxInlineConversionPayloads(&readMemory,frozen) ||
+                        !batch.freezeVeboxCubePayloads(&readMemory,frozen,NativeCubeSnapshotBudget::available())))return 5;
+                    return batch.stable(&readMemory)?TglNativeBackingAllocateInvoker{}(image+offset,address,frozen.input()):5;
+                };
+                return NativePropertyParentMutation::run(parents,parentCount,0,mutation,image,address,generation,invoke);
             });
         });
     }

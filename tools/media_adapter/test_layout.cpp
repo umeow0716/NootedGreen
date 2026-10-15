@@ -21282,6 +21282,16 @@ int main() {
                             assert(access(siblingPin,useBorrowed)==31);
                             decltype(framePin) emptyFramePin;
                             assert(!owner->retainNativeRequest(emptyFramePin));
+                            unsigned propertyCalls=0;
+                            auto neverProperty=[]() noexcept -> int {assert(false);return 0;};
+                            assert(owner->withNativePropertyMutation(emptyFramePin,neverProperty)==5);
+                            assert(owner->withNativePropertyMutation(framePin,[&]() noexcept -> int {
+                                ++propertyCalls;
+                                assert(owner->withNativePropertyMutation(siblingPin,neverProperty)==5);
+                                assert(access(siblingPin,useBorrowed)==31); // No storage lock held across native body.
+                                return -17;
+                            })==-17 && propertyCalls==1);
+                            assert(owner->withNativePropertyMutation(framePin,[]() noexcept -> int {return 0;})==0);
                             assert(access(emptyFramePin,producer)==5);
                             assert(!backingReleased && !ownedNativeCalls);
                             OwnerRouter::Callbacks::deletingDestroy(reinterpret_cast<void*>(creatorAddress));

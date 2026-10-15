@@ -25438,6 +25438,10 @@ public:
         bool matchesActiveContextRequest(uintptr_t context) const noexcept {
             return context && context==context_ && entry_.state==State::Live && !frames_.workFaulted();
         }
+        template<class Use> int withEmptyFrameMutation(Use use) noexcept {
+            if(context_ || creatingPass_ || activeRequestFrame_ || !frames_.emptyForNativeRequest())return 5;
+            return use(*this); // Enclosing registry gate remains held, pool gate does not.
+        }
         bool matchesActiveContextFrame(uintptr_t context,const Frame* frame) const noexcept {
             return matchesActiveContextRequest(context) && requestFrame_.generation && frame && frame==activeRequestFrame_;
         }
@@ -26424,6 +26428,25 @@ public:
     template<class OwnerLease> bool retainNativeRequest(const OwnerLease& lease) noexcept {
         if(!state_ || lease.get()!=this)return false;
         state_->nativeRequestPending.retain();return true;
+    }
+    template<class ParentPin,class Use>
+    int withNativePropertyMutation(const ParentPin& pin,Use use) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<int,Use&>);
+        if(!state_ || pin.get()!=this || state_->nativeRequestPending.pending() || state_->storageBusy ||
+            !state_->storage || state_->destruction.phase()!=TglOwnedVphalDestructionState::Phase::Idle ||
+            state_->table.publication()!=TglOwnedVphalLifetimeTable::Publication::Published ||
+            !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
+            !state_->boundRenderer() || !state_->boundPhysicalOs())return 5;
+        bool expected=false;
+        if(!state_->frameBusy.compare_exchange_strong(expected,true,std::memory_order_acq_rel))return 5;
+        struct Reset {std::atomic<bool>& busy;~Reset(){busy.store(false,std::memory_order_release);}} reset{state_->frameBusy};
+        // Do NOT hold storageBusy across native configuration: owned renderer
+        // callbacks must enter their normal pinned-storage scope themselves.
+        if(state_->nativeRequestPending.pending())return 5;
+        const int result=use();
+        if(result)return result;
+        return pin.get()==this && !state_->nativeRequestPending.pending() && !state_->storageBusy &&
+            state_->boundRenderer() && state_->boundPhysicalOs()?0:5;
     }
     template<class OwnerLease,class Scope>
     int publishNativeRequestCoverage(const OwnerLease& lease,Scope& scope,
