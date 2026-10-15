@@ -28443,6 +28443,18 @@ int main() {
                                     assert(frontend.acknowledgeCompletedGroupWork(completedGroup,1,groupHistory,liveGroup)==5);
                                     assert(completedGroup.calls==2); // Repeated parent callback cannot write twice.
                                     inspectionMode=0;
+                                    TestCompletedGroupScope gatedGroup;
+                                    assert(frontend.acknowledgeCompletedGroupWork(gatedGroup,1,groupHistory,liveGroup,
+                                        [](const auto&,auto&,const auto&,auto) noexcept {return true;})==5);
+                                    assert(!gatedGroup.calls); // Omitted commit transition is not success.
+                                    assert(frontend.acknowledgeCompletedGroupWork(gatedGroup,1,groupHistory,liveGroup,
+                                        [&](const auto& pin,auto& actual,const auto&,auto transition) noexcept {
+                                            assert(pin.get() && &actual==&cpu);
+                                            const bool first=transition();assert(!transition());return first;
+                                        })==5 && gatedGroup.calls==1);
+                                    assert(frontend.acknowledgeCompletedGroupWork(gatedGroup,1,groupHistory,liveGroup,
+                                        [](const auto&,auto&,const auto&,auto transition) noexcept {return transition();})==0);
+                                    assert(gatedGroup.calls==2);
                                     assert(frontend.preparePrivateRetirement()==5 && frontend.surfacesReady());
                                     // No teardown while this parent's work/history remains pending.
                                     assert(storageOwner.get()==cpuAddress && !storage.backing().retention()());

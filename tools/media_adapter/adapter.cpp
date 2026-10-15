@@ -4430,30 +4430,43 @@ struct NativePhysicalBackend {
             return callbacks.withTaskCompletionGroup(ticket,address,fence,&readMemory,
                 NativeRetainedFenceOwnerAdmission{native.image,address},query,
                 [](NativeBorrowedFrontend& frontend) noexcept {return NativeRendererHistoryInspection::run(frontend);},
-                [&](size_t count,const auto& frames,const auto&,const auto&,
+                [&](size_t count,const auto& frames,const auto& receipts,const auto&,
                     const auto&,const auto&,const auto& history) noexcept -> int {
                     if(!first)return 5;
                     auto healthy=[&]() noexcept {
                         for(size_t i=0;i<count;++i)if(!frames[i] || frames[i]->invalidated())return false;
                         return true;
                     };
-                    if(!healthy())return 5;
+                    if(!count || !healthy())return 5;
+                    bool drained=true;
+                    for(size_t i=0;i<count;++i) {
+                        if(!history[i].observed || !history[i].wholeCacheEmpty || history[i].referencesFrame)drained=false;
+                        if(!receipts[i].valid || receipts[i].context!=receipts[0].context ||
+                            receipts[i].event!=receipts[0].event || receipts[i].index!=receipts[0].index)return 5;
+                    }
+                    auto emptyCache=[&](const auto& view) noexcept {
+                        std::array<uintptr_t,18> before{},after{};
+                        if(!readMemory(view.renderer+0x928,before.data(),sizeof(before)) ||
+                            !readMemory(view.renderer+0x928,after.data(),sizeof(after)) || before!=after)return false;
+                        for(auto entry:after)if(entry)return false;
+                        return true;
+                    };
                     // All physical/pool/frame observation scopes remain live.
                     // Re-enter the SAME retained parent's mutable storage gate;
                     // consume revisions there, never via a const_cast or cache.
                     return first->acknowledgeCompletedGroupWork(group,count,history,
                         [&](const auto& cpu,const auto& view) noexcept {
                             if(!healthy() || !group.unchanged(cpu) || !sameView(view))return false;
-                            bool drainClaim=true;
-                            for(size_t i=0;i<count;++i)
-                                if(!history[i].wholeCacheEmpty || history[i].referencesFrame)drainClaim=false;
-                            if(drainClaim) {
-                                std::array<uintptr_t,18> before{},after{};
-                                if(!readMemory(view.renderer+0x928,before.data(),sizeof(before)) ||
-                                    !readMemory(view.renderer+0x928,after.data(),sizeof(after)) || before!=after)return false;
-                                for(auto entry:after)if(entry)return false;
-                            }
+                            if(drained && !emptyCache(view))return false;
                             return healthy() && group.unchanged(cpu) && sameView(view);
+                        },[&](const auto& pin,auto& cpu,const auto& view,auto transition) noexcept {
+                            if(!drained)return transition(); // Keep request pin for nonempty history.
+                            return pin.get() && pin.get()->acknowledgeNativeRequestCoverage(pin,receipts[0],count,frames,
+                                [&]() noexcept {
+                                    if(!transition())return false;
+                                    return !cpu.backing().retention().admissionPending() && healthy() &&
+                                        sameView(view) && emptyCache(view) && healthy() && sameView(view);
+                                });
                         });
                 });
         });

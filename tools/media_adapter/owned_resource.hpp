@@ -26408,6 +26408,14 @@ public:
         });
     }
     const TglOwnedPrimaryRendererTable& rendererLifetime() const noexcept {return state_->rendererTable;}
+    template<class OwnerLease,class Frames,class Live>
+    bool acknowledgeNativeRequestCoverage(const OwnerLease& lease,const TglNativeFrameOutputReceipt& receipt,
+        size_t count,const Frames& frames,Live live) noexcept {
+        if(!state_ || lease.get()!=this || !state_->storageBusy || state_->frameBusy ||
+            !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
+            !state_->boundRenderer() || !state_->boundPhysicalOs())return false;
+        return state_->nativeRequestPending.acknowledgeCoverage(receipt,count,frames,live);
+    }
     //235b00 prepares context12e8 BEFORE VPHAL+10. Consume that exact late
     // boundary under the already-active request/frame, never invoke235ab0
     // recursively or acquire the creator storage lock across native rendering.
@@ -28973,6 +28981,11 @@ public:
     }
     template<class Group,class History,class Live>
     int acknowledgeCompletedGroupWork(Group& group,size_t count,const History& history,Live live) noexcept {
+        return acknowledgeCompletedGroupWork(group,count,history,live,
+            [](const auto&,auto&,const auto&,auto transition) noexcept {return transition();});
+    }
+    template<class Group,class History,class Live,class Commit>
+    int acknowledgeCompletedGroupWork(Group& group,size_t count,const History& history,Live live,Commit commit) noexcept {
         if constexpr(std::is_pointer_v<Live>)if(!live)return 5;
         if(busy_ || !surfacesReady())return 5;
         busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
@@ -28987,10 +29000,15 @@ public:
                     cpu.children().second().owner().allocationGeneration()==generation1_;
             };
             if(!valid())return 5;
-            return group.acknowledge(cpu,count,history,[&]() noexcept {
-                static_assert(noexcept(live(std::as_const(cpu),view)));
-                return valid() && live(std::as_const(cpu),view) && valid();
-            })?0:5;
+            bool transitioned=false,replayed=false;
+            const bool committed=commit(parent_,cpu,view,[&]() noexcept {
+                if(transitioned) {replayed=true;return false;}transitioned=true;
+                return group.acknowledge(cpu,count,history,[&]() noexcept {
+                    static_assert(noexcept(live(std::as_const(cpu),view)));
+                    return valid() && live(std::as_const(cpu),view) && valid();
+                });
+            });
+            return committed && transitioned && !replayed?0:5;
         });
         return status?status:(entered && !repeated)?0:5;
     }
@@ -29060,6 +29078,10 @@ public:
     template<class Group,class History,class Live>
     int acknowledgeCompletedGroupWork(Group& group,size_t count,const History& history,Live live) noexcept {
         return frontend_.acknowledgeCompletedGroupWork(group,count,history,live);
+    }
+    template<class Group,class History,class Live,class Commit>
+    int acknowledgeCompletedGroupWork(Group& group,size_t count,const History& history,Live live,Commit commit) noexcept {
+        return frontend_.acknowledgeCompletedGroupWork(group,count,history,live,commit);
     }
     template<class Read,class Live>
     int reconcileNativeHistoryBoundary(HistoryReservation& reservation,
