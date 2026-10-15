@@ -25354,6 +25354,13 @@ public:
 };
 // Physical and image identity are NOT inferred from a factory Entry. Concrete
 // retirement admission must cover every outstanding frame/resource dependency.
+class TglOwnedNativeRequestRetention {
+    std::atomic<bool> pending_{false};
+public:
+    void retain() noexcept {pending_.store(true,std::memory_order_release);}
+    bool pending() const noexcept {return pending_.load(std::memory_order_acquire);}
+    // No clear API: a native return or an empty frame pool proves no drain.
+};
 template<class Storage,class PhysicalLease,class Read,class Write,
     class TableAdmit,class ChildAdmit,class Native>
 class TglOwnedVphalRendererOwner {
@@ -25366,7 +25373,7 @@ class TglOwnedVphalRendererOwner {
         Storage* storage=nullptr;
         std::atomic<bool> storageBusy{false};
         std::atomic<bool> frameBusy{false};
-        std::atomic<bool> nativeRequestPending{false};
+        TglOwnedNativeRequestRetention nativeRequestPending;
         State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t o,uintptr_t r,
             Read rd,Write wr,TableAdmit ta,ChildAdmit ca,Native n) noexcept
             :image(i),physical(p),object(o),renderer(r),generation(g),
@@ -25383,7 +25390,7 @@ class TglOwnedVphalRendererOwner {
                 read(os+0x8,&embedded,8) && embedded==wrapper+0x48;
         }
         int prepare() noexcept {
-            if(frameBusy || nativeRequestPending.load(std::memory_order_acquire) ||
+            if(frameBusy || nativeRequestPending.pending() ||
                 !physicalLease.matches(image,physical,generation) || !boundRenderer() || !boundPhysicalOs()) return 5;
             using Publication=TglOwnedPrimaryRendererTable::Publication;
             if(rendererTable.publication()==Publication::Ambiguous) return 5;
@@ -25429,7 +25436,7 @@ public:
     // no lower/root callback. No CPU/native return can clear this obligation.
     template<class OwnerLease> bool retainNativeRequest(const OwnerLease& lease) noexcept {
         if(!state_ || lease.get()!=this)return false;
-        state_->nativeRequestPending.store(true,std::memory_order_release);return true;
+        state_->nativeRequestPending.retain();return true;
     }
     const TglOwnedPrimaryRendererTable& rendererLifetime() const noexcept {return state_->rendererTable;}
     //235b00 prepares context12e8 BEFORE VPHAL+10. Consume that exact late
@@ -25448,6 +25455,7 @@ public:
     int dispatchPreparedRequest(const OwnerLease& lease,Scope& scope,
         uintptr_t context,uintptr_t parameters,Executable executable,Invoke invoke) noexcept {
         if(!state_ || lease.get()!=this || !context || context>UINTPTR_MAX-0x12f0 || !parameters ||
+            state_->nativeRequestPending.pending() ||
             !state_->storage || state_->storageBusy ||
             state_->destruction.phase()!=TglOwnedVphalDestructionState::Phase::Idle ||
             state_->table.publication()!=TglOwnedVphalLifetimeTable::Publication::Published ||
@@ -25472,6 +25480,7 @@ public:
     bool publishRenderer(const ExclusiveLease& lease,uintptr_t temporary,Qualify qualify,
         Executable executable,OwnedExecutable ownedExecutable) noexcept {
         if(!state_ || lease.get()!=this || !lease.exclusive() || state_->storageBusy ||
+            state_->nativeRequestPending.pending() ||
             !state_->storage || !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
             !state_->boundRenderer() || !state_->boundPhysicalOs() ||
             state_->table.publication()!=TglOwnedVphalLifetimeTable::Publication::Published ||
@@ -25487,6 +25496,7 @@ public:
         Qualify qualify,Executable executable,OwnedExecutable ownedExecutable,CreatorAdmit creatorAdmit,
         uintptr_t frame=0) noexcept {
         if(!state_ || !state_->storage || !state_->boundRenderer() || !state_->boundPhysicalOs() ||
+            state_->nativeRequestPending.pending() ||
             !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
             state_->destruction.phase()!=TglOwnedVphalDestructionState::Phase::Idle) return false;
         TglNativeCreatedVeboxRendererView created;
@@ -25524,7 +25534,7 @@ public:
     template<class ExclusiveLease,class CreatorAdmit,class Qualify,class Executable,class Use>
     int withCreatorStorage(const ExclusiveLease& lease,CreatorAdmit admit,Qualify qualify,
         Executable executable,Use use) noexcept {
-        if(!state_ || lease.get()!=this || !lease.exclusive()) return 5;
+        if(!state_ || lease.get()!=this || !lease.exclusive() || state_->nativeRequestPending.pending()) return 5;
         return withStorageScope(false,admit,qualify,executable,use);
     }
     // Enclose teardown, including storage deletion. TLS is keyed by storage

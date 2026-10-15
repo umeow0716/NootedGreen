@@ -17473,6 +17473,15 @@ int main() {
         nativeFailure.observe(pass);assert(nativeFailure.finish(59).status==59);
     }
     {
+        TglOwnedNativeRequestRetention retention;
+        static_assert(!std::is_copy_constructible_v<TglOwnedNativeRequestRetention>);
+        assert(!retention.pending());retention.retain();
+        assert(retention.pending());retention.retain();assert(retention.pending());
+        // No producer result, empty pool or scope exit clears this obligation.
+        {TglOwnedVeboxCommandTransactionResult native;native.status=0;assert(!native.status);}
+        assert(retention.pending());
+    }
+    {
         std::array<uint8_t,0x148> resource{};
         auto put=[&](size_t at,uint32_t value) noexcept {std::memcpy(resource.data()+at,&value,4);};
         uint32_t token=99;
@@ -19872,6 +19881,7 @@ int main() {
                             assert(access(framePin,useBorrowed)==31);
                             assert(access(siblingPin,useBorrowed)==31);
                             decltype(framePin) emptyFramePin;
+                            assert(!owner->retainNativeRequest(emptyFramePin));
                             assert(access(emptyFramePin,producer)==5);
                             assert(!backingReleased && !ownedNativeCalls);
                             OwnerRouter::Callbacks::deletingDestroy(reinterpret_cast<void*>(creatorAddress));
