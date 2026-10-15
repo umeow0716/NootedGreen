@@ -16190,6 +16190,30 @@ static void testRetainedVeboxFrames() {
                 corrupt=-1;rx=false;assert(!resolveFamily());rx=true;
                 identity=false;assert(!resolveFamily());identity=true;
                 actualTable=image+0x75d018;assert(!resolveFamily()); // VP uses its stronger dedicated binding.
+                actualTable=image+schema.table;
+                using Table=TglOwnedNativeOtherContextFrameVtable;
+                static_assert(!std::is_copy_constructible_v<Table> && !std::is_move_constructible_v<Table>);
+                Table owned;
+                constexpr uintptr_t hook=0xf000;
+                assert(owned.build(image,0x8000,hook,readFamily,qualified,executableFamily,
+                    [](uintptr_t p,size_t n) noexcept {return p==hook && n==1;}));
+                assert(owned.callbackCount()==schema.count && owned.nativeFrame()==image+schema.callbacks[5]);
+                for(size_t i=0;i<schema.count;++i)
+                    assert(owned.addressPoint()[i]==(i==5?hook:image+schema.callbacks[i]));
+                assert(!owned.addressPoint()[-2] && owned.addressPoint()[-1]==image+schema.rtti);
+                auto writeTable=[&](uintptr_t p,uintptr_t value) noexcept {
+                    if(p!=0x8000)return false;actualTable=value;return true;
+                };
+                auto admitTable=[](uintptr_t p,size_t n) noexcept {return p==0x8000 && n==8;};
+                assert(owned.publish(readFamily,writeTable,admitTable) && owned.requiresRetention());
+                assert(owned.canDetach(readFamily,admitTable) && owned.detach(readFamily,writeTable,admitTable));
+                assert(actualTable==image+schema.table && !owned.requiresRetention());
+                Table ambiguous;
+                assert(ambiguous.build(image,0x8000,hook,readFamily,qualified,executableFamily,
+                    [](uintptr_t,size_t) noexcept {return true;}));
+                auto failedWrite=[&](uintptr_t,uintptr_t value) noexcept {actualTable=value;return false;};
+                assert(!ambiguous.publish(readFamily,failedWrite,admitTable) && ambiguous.requiresRetention());
+                assert(ambiguous.publication()==Table::Publication::Ambiguous);
             }
         }
         {

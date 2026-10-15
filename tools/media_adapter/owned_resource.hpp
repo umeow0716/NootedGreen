@@ -26136,30 +26136,33 @@ struct TglNativeContextFrameInvoker {
 // No native image modification. Caller must pin this owner before publication.
 // Its enclosing context owner must retain this object and both code images
 // until all calls end; copying/moving or rebuilding a published table is unsafe.
-class TglOwnedContextFrameVtable {
-    std::array<uintptr_t,TglNativeContextFrameBinding::callbackCount+2> table_{};
+template<class Binding> class TglOwnedContextFrameVtableFor {
+    decltype(std::declval<Binding>().original) table_{};
+    size_t callbackCount_=0;
     uintptr_t context_=0,nativeFrame_=0,originalVptr_=0;bool attempted_=false,ready_=false;
 public:
     enum class Publication { Unpublished,Published,RemovalPrepared,NativeDestroyed,Detached,Ambiguous };
 private:
     Publication publication_=Publication::Unpublished;
 public:
-    TglOwnedContextFrameVtable()=default;
-    TglOwnedContextFrameVtable(const TglOwnedContextFrameVtable&)=delete;
-    TglOwnedContextFrameVtable& operator=(const TglOwnedContextFrameVtable&)=delete;
+    TglOwnedContextFrameVtableFor()=default;
+    TglOwnedContextFrameVtableFor(const TglOwnedContextFrameVtableFor&)=delete;
+    TglOwnedContextFrameVtableFor& operator=(const TglOwnedContextFrameVtableFor&)=delete;
     template<class Read,class Qualify,class Executable,class OwnedExecutable>
     bool build(uintptr_t image,uintptr_t context,uintptr_t hook,Read read,
         Qualify qualify,Executable executable,OwnedExecutable ownedExecutable) noexcept {
         if(attempted_) return false;
         attempted_=true;
-        TglNativeContextFrameBinding native;
+        Binding native;
         if(!hook || !ownedExecutable(hook,1) ||
             !native.resolve(image,context,read,qualify,executable)) return false;
         table_=native.original;
+        callbackCount_=native.callbackCount;
         table_[2+0x28/8]=hook;
         context_=context;nativeFrame_=native.frame;originalVptr_=native.vtable;ready_=true;return true;
     }
     const uintptr_t* addressPoint() const noexcept {return ready_?table_.data()+2:nullptr;}
+    size_t callbackCount() const noexcept {return ready_?callbackCount_:0;}
     uintptr_t nativeFrame() const noexcept {return ready_?nativeFrame_:0;}
     Publication publication() const noexcept {return publication_;}
     bool requiresRetention() const noexcept {
@@ -26293,6 +26296,9 @@ public:
             });
     }
 };
+
+using TglOwnedContextFrameVtable=TglOwnedContextFrameVtableFor<TglNativeContextFrameBinding>;
+using TglOwnedNativeOtherContextFrameVtable=TglOwnedContextFrameVtableFor<TglNativeOtherContextFrameBinding>;
 
 // Concrete codec-context table owner. It owns NO native context allocation:
 // native slot4 remains responsible for deleting that allocation. Its physical
