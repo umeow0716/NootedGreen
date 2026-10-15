@@ -4659,16 +4659,20 @@ struct NativePhysicalBackend {
             return scope.matches(native.image,address,generation)?invoke(context,scope,batch,address,generation,input,output):5;
         });
     }
-    template<class Native> static int createContexts(uintptr_t physical,const void* input,Native nativeCreate) noexcept {
+    template<class Native> static int createContexts(uintptr_t physical,const void* input,Native nativeCreate,
+        const char** admission=nullptr) noexcept {
         using AdoptionScope=typename NativePhysicalRegistry::DependencyAdoptionScope;
         static_assert(noexcept(nativeCreate(uintptr_t{},uintptr_t{},input,std::declval<AdoptionScope&>())) &&
             std::is_same_v<decltype(nativeCreate(uintptr_t{},uintptr_t{},input,std::declval<AdoptionScope&>())),int>);
         if constexpr(std::is_pointer_v<Native>)if(!nativeCreate)return 5;
         TglNativePhysicalCallbackBinding native;
+        if(admission)*admission="physical-input-binding";
         if(!physical || !input || !binding(native))return 5;
+        if(admission)*admission="physical-generation";
         const auto ticket=registry().lookup(native.image,physical);
         if(!ticket.generation)return 5;
         NativePhysicalCallbacks callbacks(registry(),native,&readMemory,NativeTglImageAdmission{native.image},&executableMemory);
+        if(admission)*admission="physical-anchor-or-adoption";
         return callbacks.createContextsAndAdoptBatchScoped(ticket,physical,input,
             [](AdoptionScope& scope,uintptr_t address,const NativeCodecBackend::Batch& batch) noexcept -> int {
                 return NativeCodecBackend::adopt(scope,address,batch);
@@ -5839,7 +5843,7 @@ struct NativeCreatorScopedInvocation {
                 if(!result.creator.nativeInvoked)return 5;
                 if(result.creator.nativeResult)return result.creator.nativeResult;
                 return result.creator.handoffCompleted || result.creator.nativeOtherOnly?0:5;
-            });
+            },&result.admission);
         return result;
     }
     template<class Admit>
