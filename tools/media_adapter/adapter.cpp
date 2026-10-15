@@ -407,8 +407,49 @@ struct NativeVphalRoutingPolicy {
 };
 using NativeVphalRouter=TglOwnedVphalProcessRouter<NativeVphalOwner,NativeVphalRoutingPolicy>;
 using NativeVphalFramePin=decltype(NativeVphalRouter::pinFrame(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{}));
-using NativeFrontendAccess=TglPinnedVphalStorageAccess<NativeDataAdmission,NativeTglImageAdmission,
-    decltype(&executableMemory)>;
+struct NativeFrontendRequestProof {
+    uintptr_t image,creator,renderer;size_t childIndex;
+    const void* scope;bool(*valid)(const void*) noexcept;
+    struct Domain;
+    using Binding=TglOwnedScopedContext<NativeFrontendRequestProof,Domain>;
+    bool matches(NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view) const noexcept {
+        if(childIndex>1 || view.image!=image || view.creator!=creator || view.renderer!=renderer || !scope || !valid)return false;
+        auto& child=childIndex?cpu.children().second().owner():cpu.children().first().owner();
+        return view.originalChildren[childIndex]==reinterpret_cast<uintptr_t>(child.constructedBase()) &&
+            child.allocationGeneration() && valid(scope);
+    }
+};
+class NativeFrontendAccess {
+    using Base=TglPinnedVphalStorageAccess<NativeDataAdmission,NativeTglImageAdmission,decltype(&executableMemory)>;
+    Base base_;size_t childIndex_;
+public:
+    NativeFrontendAccess(NativeDataAdmission admit,NativeTglImageAdmission qualify,
+        decltype(&executableMemory) executable,size_t childIndex=SIZE_MAX) noexcept
+        :base_(admit,qualify,executable),childIndex_(childIndex) {}
+    template<class Pin,class Use> int operator()(const Pin& pin,Use use) const noexcept {
+        return base_(pin,use); // retained inspection keeps its original admission
+    }
+    template<class Pin,class Use> int withProducerAdmission(const Pin& pin,Use use) const noexcept {
+        static_assert(noexcept(use(std::declval<NativeRendererCpuAssembly&>(),std::declval<const TglNativeCreatedVeboxRendererView&>())) &&
+            std::is_same_v<decltype(use(std::declval<NativeRendererCpuAssembly&>(),std::declval<const TglNativeCreatedVeboxRendererView&>())),int>);
+        return base_(pin,[&](NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view) noexcept -> int {
+            auto& root=cpu.backing().retention();
+            if(!root())return use(cpu,view);
+            auto* proof=NativeFrontendRequestProof::Binding::get(reinterpret_cast<void*>(view.creator));
+            if(!proof || proof->childIndex!=childIndex_ || !proof->matches(cpu,view))return 5;
+            auto* command=cpu.commandForChild(childIndex_);if(!command)return 5;
+            struct Payload {NativeFrontendRequestProof& proof;NativeRendererCpuAssembly& cpu;
+                const TglNativeCreatedVeboxRendererView& view;};
+            Payload payload{*proof,cpu,view};
+            TglOwnedVeboxUnusedChildAdmission admission(root,command->backing().auxiliary().retention(),&payload,
+                [](const void* raw) noexcept {
+                    const auto& p=*static_cast<const Payload*>(raw);return p.proof.matches(p.cpu,p.view);
+                });
+            TglOwnedVeboxUnusedChildAdmission::Binding binding(&root,admission);
+            return binding.bound() && !root.admissionPending()?use(cpu,view):5;
+        });
+    }
+};
 using NativeFrontendEnvironment=TglNativeFrontendCpuEnvironment<decltype(&readMemory),NativeTglImageAdmission,
     decltype(&executableMemory)>;
 using NativeContextSurfaceOwner=typename TglNativeContextSurfaceOwners<NativeCodecBackend::Registry>::Owner;
@@ -3008,6 +3049,17 @@ template struct NativeVeboxRenderSendRequestFor<NativeContextSurfaceOwner>;
 template struct NativeVeboxRenderSendRequestFor<NativeTemporarySurfaceOwner>;
 using NativePhysicalRegistry=TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;
 using NativePhysicalFrameScope=typename NativePhysicalRegistry::Scope;
+struct NativeContinuationScopeProof {
+    NativePhysicalFrameScope& physical;
+    uintptr_t image,address,context;uint64_t generation;
+    const NativeContextRendererFrame* frame;bool construction;
+    static bool valid(const void* raw) noexcept {
+        const auto& p=*static_cast<const NativeContinuationScopeProof*>(raw);
+        return p.physical.matches(p.image,p.address,p.generation) &&
+            (p.construction?p.physical.matchesContinuationConstruction(p.context):
+                p.physical.matchesContinuationFrame(p.context,p.frame));
+    }
+};
 struct NativeRootPassAuthority {
     NativePhysicalFrameScope* physical=nullptr;
     uintptr_t address=0,context=0;uint64_t generation=0;
@@ -4128,7 +4180,7 @@ struct Entry {
     template<class PhysicalScope,class Resolve,class Admit>
     NativeBorrowedFrontend* createBorrowedFrontend(PhysicalScope& physical,uintptr_t address,
         uint64_t generation,uintptr_t creator,uintptr_t source,Resolve resolve,
-        NativeContextSurfaceOwner& target,Admit admit) const noexcept {
+        NativeContextSurfaceOwner& target,size_t childIndex,Admit admit) const noexcept {
         if constexpr(std::is_pointer_v<Resolve>)if(!resolve)return nullptr;
         if constexpr(std::is_pointer_v<Admit>)if(!admit)return nullptr;
         const uintptr_t image=nativeCpu.image;
@@ -4148,7 +4200,7 @@ struct Entry {
                     cpu.readyForFrontend() && src && dst && admit(cpu,view,src,dst) &&
                     physical.matches(image,address,generation);
             };
-            NativeFrontendAccess access(NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory);
+            NativeFrontendAccess access(NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,childIndex);
             auto construct=tglMakeNativeBorrowedFrontendConstructor<NativeBorrowedFrontend>(
                 TglDarwinTypedCfReferenceApi{},environment,types,pin,access,qualified);
             result=construct(source,resolve,target);
@@ -4157,12 +4209,14 @@ struct Entry {
         return status?nullptr:result;
     }
     NativePhysicalRegistry::FrameTicket createContextPassRootFrame(NativePhysicalFrameScope& physical,
-        uintptr_t address,uint64_t generation,uintptr_t creator,const TglNativeContextPassRootSelection& selected,
+        uintptr_t address,uint64_t generation,uintptr_t creator,uintptr_t renderer,uintptr_t context,size_t childIndex,
+        const TglNativeContextPassRootSelection& selected,
         bool continuation=false) const noexcept {
         const uintptr_t image=nativeCpu.image;
-        if(!image || !creator || !selected.source || !selected.target || !physical.matches(image,address,generation))return {};
+        if(!image || !creator || !renderer || !context || childIndex>1 || !selected.source || !selected.target ||
+            !physical.matches(image,address,generation))return {};
         auto construct=[&](uintptr_t source,auto resolve,NativeContextSurfaceOwner& target) noexcept -> NativeBorrowedFrontend* {
-            return createBorrowedFrontend(physical,address,generation,creator,source,resolve,target,
+            return createBorrowedFrontend(physical,address,generation,creator,source,resolve,target,childIndex,
                 [image,creator](NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view,
                     const TglOwnedSurfaceStorage* input,const TglOwnedSurfaceStorage* output) noexcept -> bool {
                     return input && output && view.image==image && view.creator==creator &&
@@ -4172,8 +4226,14 @@ struct Entry {
                         !cpu.backing().retention()();
                 });
         };
-        if(continuation)return physical.createNextContextPassFrame(&readMemory,NativeDataAdmission{},NativeCodecBackend::owners(),
-            image,address,generation,selected,&readMemory,NativeDataAdmission{},&writableDataMemory,construct);
+        if(continuation) {
+            NativeContinuationScopeProof scope{physical,image,address,context,generation,nullptr,true};
+            NativeFrontendRequestProof proof{image,creator,renderer,childIndex,&scope,&NativeContinuationScopeProof::valid};
+            NativeFrontendRequestProof::Binding binding(reinterpret_cast<void*>(creator),proof);
+            if(!binding.bound())return {};
+            return physical.createNextContextPassFrame(&readMemory,NativeDataAdmission{},NativeCodecBackend::owners(),
+                image,address,generation,selected,&readMemory,NativeDataAdmission{},&writableDataMemory,construct);
+        }
         return physical.createContextRootFrame(&readMemory,NativeDataAdmission{},NativeCodecBackend::owners(),
             image,address,generation,selected,&readMemory,NativeDataAdmission{},&writableDataMemory,construct);
     }
@@ -4446,17 +4506,25 @@ struct NativeCreatorPreparation {
         if(!roots.resolve(context,&readMemory,NativeDataAdmission{}) || roots.parent.physical!=address ||
             !readMemory(context+0x12e0,&actualCreator,8) || actualCreator!=creator ||
             !input.capture(roots,renderer,parameters,pass,&readMemory))return result;
-        result.frame=factory.createContextPassRootFrame(physical,address,generation,creator,input.selected,continuation);
+        result.frame=factory.createContextPassRootFrame(physical,address,generation,creator,renderer,context,input.childIndex,
+            input.selected,continuation);
         if(!result.frame.generation)return result;
         result.work=physical.runContextRootFrame([&](NativeContextRendererFrame& frame) noexcept {
             if(!frame.beginNativeFrame())return TglOwnedVeboxCommandTransactionResult{};
-            TglVeboxPipeAcquisition acquisition;int decompressionStatus=0;
-            TglOwnedVpEntrySet base; // All callbacks come from the real scoped producers.
-            NativeRetainedTemporaryExecution::PassProvider provider{frame,*backend,base,*parent.view(),
-                acquisition,decompressionStatus,decompression,argument,temporal};
-            provider.authority={&physical,address,context,generation};
-            return NativeRetainedTemporaryExecution::PassProvider::produce(&provider,frame,renderer,
-                reinterpret_cast<void*>(parameters),reinterpret_cast<void*>(pass));
+            auto produce=[&]() noexcept {
+                TglVeboxPipeAcquisition acquisition;int decompressionStatus=0;
+                TglOwnedVpEntrySet base; // All callbacks come from the real scoped producers.
+                NativeRetainedTemporaryExecution::PassProvider provider{frame,*backend,base,*parent.view(),
+                    acquisition,decompressionStatus,decompression,argument,temporal};
+                provider.authority={&physical,address,context,generation};
+                return NativeRetainedTemporaryExecution::PassProvider::produce(&provider,frame,renderer,
+                    reinterpret_cast<void*>(parameters),reinterpret_cast<void*>(pass));
+            };
+            if(!continuation)return produce();
+            NativeContinuationScopeProof scope{physical,image,address,context,generation,&frame,false};
+            NativeFrontendRequestProof proof{image,creator,renderer,input.childIndex,&scope,&NativeContinuationScopeProof::valid};
+            NativeFrontendRequestProof::Binding binding(reinterpret_cast<void*>(creator),proof);
+            return binding.bound()?produce():TglOwnedVeboxCommandTransactionResult{};
         });
         return result; // Frame remains pooled; caller must bind receipt/real completion separately.
     }
@@ -4849,10 +4917,10 @@ using NativeFrontendAdmit=bool(*)(NativeRendererCpuAssembly&,const TglNativeCrea
     const TglOwnedSurfaceStorage*,const TglOwnedSurfaceStorage*) noexcept;
 template NativeBorrowedFrontend* Entry::createBorrowedFrontend<TglOwnedPhysicalMutationAuthority,
     NativeFrontendResolve,NativeFrontendAdmit>(TglOwnedPhysicalMutationAuthority&,uintptr_t,uint64_t,
-    uintptr_t,uintptr_t,NativeFrontendResolve,NativeContextSurfaceOwner&,NativeFrontendAdmit) const noexcept;
+    uintptr_t,uintptr_t,NativeFrontendResolve,NativeContextSurfaceOwner&,size_t,NativeFrontendAdmit) const noexcept;
 template NativeBorrowedFrontend* Entry::createBorrowedFrontend<NativePhysicalFrameScope,
     NativeFrontendResolve,NativeFrontendAdmit>(NativePhysicalFrameScope&,uintptr_t,uint64_t,
-    uintptr_t,uintptr_t,NativeFrontendResolve,NativeContextSurfaceOwner&,NativeFrontendAdmit) const noexcept;
+    uintptr_t,uintptr_t,NativeFrontendResolve,NativeContextSurfaceOwner&,size_t,NativeFrontendAdmit) const noexcept;
 using NativeChildVpResourceUse=TglOwnedVeboxCommandTransactionResult(*)(NativeRendererChildOwner&,
     NativeExecutionOwner&,void*,uintptr_t,NativeVpGraph&,TglOwnedVpSfcCallerStorage&,
     TglNativeVpLineResourceStorage&) noexcept;

@@ -27719,6 +27719,11 @@ class TglNativeVeboxBorrowedFrontendFrameStorage {
     Access access_;
     bool busy_=false,retained_=false,ready_=false,historyPublished_=false;
     uint64_t generation0_=0,generation1_=0;
+    template<class A,class Pin,class Use>
+    static auto producerAccess(const A& access,const Pin& pin,Use use,int) noexcept
+        ->decltype(access.withProducerAdmission(pin,use)) {return access.withProducerAdmission(pin,use);}
+    template<class Pin,class Use>
+    static int producerAccess(const Access& access,const Pin& pin,Use use,long) noexcept {return access(pin,use);}
 public:
     using ParentLeaseType=ParentLease;
     using SourceOwnerType=SourceOwner;
@@ -27738,19 +27743,19 @@ public:
         if(busy_ || ready_ || !parent_.get() || !source_.storage() || !target_.storage())return false;
         busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
         bool entered=false;
-        const int status=access_(parent_,[&](auto& cpu,const auto& view) noexcept -> int {
+        const int status=producerAccess(access_,parent_,[&](auto& cpu,const auto& view) noexcept -> int {
             static_assert(noexcept(admit(cpu,view,source_.storage(),target_.storage())) &&
                 std::is_same_v<decltype(admit(cpu,view,source_.storage(),target_.storage())),bool>);
             if(entered)return 5;
             entered=true;
             auto& first=cpu.children().first().owner();auto& second=cpu.children().second().owner();
-            if(cpu.backing().retention()() || !first.constructedBase() || !second.constructedBase())return 5;
+            if(cpu.backing().retention().admissionPending() || !first.constructedBase() || !second.constructedBase())return 5;
             const auto a=first.allocationGeneration(),b=second.allocationGeneration();
-            if(!admit(cpu,view,source_.storage(),target_.storage()) || cpu.backing().retention()() ||
+            if(!admit(cpu,view,source_.storage(),target_.storage()) || cpu.backing().retention().admissionPending() ||
                 !first.constructedBase() || !second.constructedBase() ||
                 first.allocationGeneration()!=a || second.allocationGeneration()!=b)return 5;
             generation0_=a;generation1_=b;ready_=true;return 0;
-        });
+        },0);
         if(status || !entered)ready_=false;
         return ready_;
     }
@@ -27786,8 +27791,8 @@ public:
         if(busy_ || retained_ || !surfacesReady())return result;
         busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
         bool entered=false;
-        const int status=access_(parent_,[&](auto& cpu,const auto& view) noexcept -> int {
-            if(entered || cpu.backing().retention()() ||
+        const int status=producerAccess(access_,parent_,[&](auto& cpu,const auto& view) noexcept -> int {
+            if(entered || cpu.backing().retention().admissionPending() ||
                !cpu.children().first().owner().constructedBase() ||
                !cpu.children().second().owner().constructedBase() ||
                cpu.children().first().owner().allocationGeneration()!=generation0_ ||
@@ -27806,7 +27811,7 @@ public:
             retained_=cpu.backing().retention()();
             historyPublished_=historyPublished_ || result.nativeHistoryPublished;
             return result.status;
-        });
+        },0);
         if(!entered)result.status=status?status:5;
         else if(!result.status && status)result.status=status;
         return result;
