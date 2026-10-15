@@ -15715,6 +15715,8 @@ static void testRetainedVeboxFrames() {
             0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18};
         const std::array<uint8_t,11> backingReleaseAnchor{0x55,0x48,0x89,0xe5,0x53,0x50,0xff,0xce,0x83,0xfe,0x1a};
         auto removalAnchor=backingAllocateAnchor;
+        std::array<uint8_t,17> eventAnchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+            0x41,0x55,0x41,0x54,0x53,0x50,0x83,0x3e,0};
         auto propertySetAnchor=creationAnchor;propertySetAnchor[16]=0x88;
         auto propertyQueryAnchor=creationAnchor;propertyQueryAnchor[16]=0x98;
         auto read=[&](uintptr_t address,void* bytes,size_t size) noexcept {
@@ -15728,6 +15730,7 @@ static void testRetainedVeboxFrames() {
             else if(address==image+0x1580c && size==backingReleaseAnchor.size()) std::memcpy(bytes,backingReleaseAnchor.data(),size);
             else if(address==image+0x13e43 && size==creationAnchor.size()) std::memcpy(bytes,creationAnchor.data(),size);
             else if(address==image+0x15128 && size==removalAnchor.size()) std::memcpy(bytes,removalAnchor.data(),size);
+            else if(address==image+0x15b01 && size==eventAnchor.size()) std::memcpy(bytes,eventAnchor.data(),size);
             else if(address==image+0x15f96 && size==20) std::memcpy(bytes,propertySetAnchor.data(),size);
             else if(address==image+0x161c3 && size==20) std::memcpy(bytes,propertyQueryAnchor.data(),size);
             else if(address==0x3300 && size==8) std::memcpy(bytes,&batchDescriptor,8);
@@ -15745,6 +15748,7 @@ static void testRetainedVeboxFrames() {
             return (address==image+0x135d9 && size==16) || (address==image+0x135f6 && size==7) ||
                 (address==image+0x13c8c && size==16) ||
                 (address==image+0x155d1 && size==17) || (address==image+0x1580c && size==11) ||
+                (address==image+0x15b01 && size==17) ||
                 (address==image+0x13e43 && size==20) || (address==image+0x15128 && size==17) ||
                 ((address==image+0x15f96 || address==image+0x161c3) && size==20) ||
                 ((address==image+0x132510 || address==image+0x131fa0) && size==1);
@@ -15755,9 +15759,10 @@ static void testRetainedVeboxFrames() {
             table[1]=image+0x135d9;table[2]=image+0x13c8c;table[3]=image+0x13e43;
             table[9]=image+0x155d1;table[10]=image+0x1580c;
             table[15]=image+0x15f96;table[16]=image+0x161c3;
+            table[12]=image+0x15b01;
             const auto saved=table;
             assert(binding.matchesFactoryTable(table) && table==saved);
-            for(unsigned slot:{1U,2U,3U,9U,10U,15U,16U}) {
+            for(unsigned slot:{1U,2U,3U,9U,10U,12U,15U,16U}) {
                 ++table[slot];assert(!binding.matchesFactoryTable(table));--table[slot];
             }
             assert(!TglNativePhysicalCallbackBinding{}.matchesFactoryTable(table));
@@ -17127,6 +17132,14 @@ static void testRetainedVeboxFrames() {
             ++typedBackingCalls;assert(entry==image+0x1580c && physical==0x8000 && type==25);return 31;};
         assert(callbacks.allocateBacking(success.ticket,0x8000,input,typedAllocate)==5);
         assert(callbacks.releaseBacking(success.ticket,0x8000,25,typedRelease)==5 && typedBackingCalls==0);
+        unsigned nativeReportCalls=0;
+        auto report=[&](uintptr_t entry,uintptr_t physical,const void* original) noexcept -> int {
+            ++nativeReportCalls;assert(entry==image+0x15b01 && physical==0x8000 && original==input);return 31;
+        };
+        assert(callbacks.reportFrameEvents(success.ticket,0x8000,input,report)==31 && nativeReportCalls==1);
+        ++eventAnchor[0];
+        assert(callbacks.reportFrameEvents(success.ticket,0x8000,input,report)==5 && nativeReportCalls==1);
+        --eventAnchor[0];
         assert(callbacks.createContexts(success.ticket,0x8000,input,typedAllocate)==5 && typedBackingCalls==0);
         auto mutateBacking=[&]() noexcept -> int {
             ++backingCalls;

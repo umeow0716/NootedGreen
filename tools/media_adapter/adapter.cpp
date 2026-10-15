@@ -4173,6 +4173,12 @@ struct NativePhysicalBackend {
             return callbacks.physicalProperties(ticket,address,input,NativePhysicalCallbacks::PropertyOperation::Query);
         });
     }
+    static int reportFrameEvents(void* physical,const void* input) noexcept {
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.reportFrameEvents(ticket,address,input);
+        });
+    }
     template<class Use> static int withScope(uintptr_t physical,Use use) noexcept {
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         TglNativePhysicalCallbackBinding native;

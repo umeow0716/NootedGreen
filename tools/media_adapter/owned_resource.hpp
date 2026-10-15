@@ -25867,6 +25867,7 @@ struct TglNativePhysicalCallbackBinding {
         return image && image<=UINTPTR_MAX-0x161c3 && initialize && destroy &&
             table[1]==initialize && table[2]==destroy && table[3]==image+0x13e43 &&
             table[9]==image+0x155d1 && table[10]==image+0x1580c &&
+            table[12]==image+0x15b01 &&
             table[15]==image+0x15f96 && table[16]==image+0x161c3;
     }
     template<class Read,class Qualify,class Executable>
@@ -26439,6 +26440,23 @@ public:
         uint32_t itemStatus=0;
         bool called=false,observed=false;
     };
+    // Slot12 remains callable while frames are pending. Its native status is
+    // reporting only: neither return0 nor a batch item grants retirement.
+    template<class Native=TglNativeBackingAllocateInvoker>
+    int reportFrameEvents(typename Registry::Ticket ticket,uintptr_t physical,
+        const void* input,Native native=Native{}) noexcept {
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+        constexpr std::array<uint8_t,17> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+            0x41,0x55,0x41,0x54,0x53,0x50,0x83,0x3e,0};
+        std::array<uint8_t,17> actual{};
+        if(!input || !valid() || binding_.image>UINTPTR_MAX-0x15b01-anchor.size() ||
+            !executable_(binding_.image+0x15b01,anchor.size()) ||
+            !read_(binding_.image+0x15b01,actual.data(),actual.size()) || actual!=anchor)return 5;
+        return withEventObservation(ticket,physical,[&]() noexcept -> int {
+            return native(binding_.image+0x15b01,physical,input);
+        });
+    }
     // Native event reporting remains admitted while frames are pending. Copy
     // the receipt under the pool lock, release that lock before native, then
     // revalidate the SAME ticket/receipt before publishing an observation.
