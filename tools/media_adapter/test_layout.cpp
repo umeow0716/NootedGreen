@@ -17604,17 +17604,25 @@ int main() {
         bool live=true;
         auto valid=[](const void* scope) noexcept {return *static_cast<const bool*>(scope);};
         TglOwnedVeboxUnusedChildAdmission admission(aggregate,first,&live,valid);
+        TglOwnedVeboxFrameRetention unusedSibling(Link{},aggregate),foreignBacking;
+        TglOwnedVeboxAllocationRenderRetention allocationKeep{aggregate,first};
+        TglOwnedVeboxAllocationRenderRetention siblingKeep{aggregate,unusedSibling};
+        TglOwnedVeboxAllocationRenderRetention foreignKeep{aggregate,foreignBacking};
+        assert(allocationKeep() && siblingKeep() && foreignKeep());
         using AdmissionBinding=TglOwnedVeboxUnusedChildAdmission::Binding;
         assert(aggregate.admissionPending());
         {
             AdmissionBinding binding(&aggregate,admission);assert(binding.bound());
             assert(aggregate() && !aggregate.admissionPending() && !first());
+            assert(!allocationKeep() && siblingKeep() && foreignKeep());
             AdmissionBinding reentrant(&aggregate,admission);assert(!reentrant.bound());
-            live=false;assert(aggregate.admissionPending());
+            live=false;assert(aggregate.admissionPending() && allocationKeep());
             live=true;assert(!aggregate.admissionPending());
             first.observe(work);assert(first() && aggregate() && aggregate.admissionPending());
+            assert(allocationKeep());
         }
         assert(aggregate() && aggregate.admissionPending());
+        assert(allocationKeep() && siblingKeep() && foreignKeep());
         TglOwnedVeboxFrameRetention foreign;foreign.observe(work);
         {
             AdmissionBinding wrongKey(&foreign,admission);assert(wrongKey.bound());

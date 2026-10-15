@@ -14967,6 +14967,10 @@ public:
         return &aggregate==&aggregate_ && aggregate_.aggregateRoot() && child_.linkedTo(aggregate_) &&
             !child_() && scope_ && valid_ && valid_(scope_) && !child_();
     }
+    bool permits(const TglOwnedVeboxFrameRetention& aggregate,
+        const TglOwnedVeboxFrameRetention& child) const noexcept {
+        return &child==&child_ && permits(aggregate);
+    }
 };
 inline bool TglOwnedVeboxFrameRetention::admissionPending() const noexcept {
     if(!pending_)return false;
@@ -29509,7 +29513,14 @@ TglOwnedVeboxCommandTransactionResult tglWithRetainedVeboxFrameNativeRender(
 struct TglOwnedVeboxAllocationRenderRetention {
     TglOwnedVeboxFrameRetention& render;
     TglOwnedVeboxFrameRetention& backing;
-    bool operator()() const noexcept {return render() || backing();}
+    bool operator()() const noexcept {
+        if(backing())return true;
+        if(!render())return false;
+        const auto* admission=TglOwnedVeboxUnusedChildAdmission::Binding::get(&render);
+        // Allocation may proceed only on the exact unused command backing
+        // proved by the active request. Pending siblings remain retained.
+        return !admission || !admission->permits(render,backing);
+    }
 };
 template<class ChildOwner,class Allocate>
 using TglOwnedVeboxRenderAllocationContext=TglOwnedVeboxAllocationContext<ChildOwner,Allocate,
