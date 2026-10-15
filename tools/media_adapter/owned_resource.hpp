@@ -25113,6 +25113,92 @@ public:
         candidate.valid=true;output=candidate;return true;
     }
 };
+// Serialization and physical/context/image pins belong to the enclosing
+// owner. Reservations precede native effects; no failure path frees them.
+class TglNativeOtherPendingFrames {
+public:
+    struct Ticket {const void* owner=nullptr;uint64_t serial=0;size_t slot=32;};
+private:
+    enum class State {Empty,Reserved,Bound,Ambiguous};
+    struct Record {
+        State state=State::Empty;uint64_t serial=0,generation=0;
+        uintptr_t image=0,physical=0,context=0;
+        TglNativeFenceBackingObservation::Snapshot fence{};
+        TglNativeFreshStampObservation::Snapshot fresh{};
+    };
+    std::array<Record,32> records_{};uint64_t serial_=0;
+    Record* find(Ticket ticket) noexcept {
+        if(ticket.owner!=this || ticket.slot>=records_.size() || !ticket.serial)return nullptr;
+        auto& record=records_[ticket.slot];
+        return record.state!=State::Empty && record.serial==ticket.serial?&record:nullptr;
+    }
+public:
+    TglNativeOtherPendingFrames()=default;
+    TglNativeOtherPendingFrames(const TglNativeOtherPendingFrames&)=delete;
+    TglNativeOtherPendingFrames& operator=(const TglNativeOtherPendingFrames&)=delete;
+    bool pending() const noexcept {for(const auto& record:records_)if(record.state!=State::Empty)return true;return false;}
+    Ticket reserve(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
+        if(!image || !physical || !generation || !context || serial_==UINT64_MAX)return {};
+        for(const auto& record:records_)if(record.state==State::Ambiguous || record.state==State::Reserved)return {};
+        for(size_t i=0;i<records_.size();++i)if(records_[i].state==State::Empty) {
+            auto& record=records_[i];record.state=State::Reserved;record.serial=++serial_;
+            record.image=image;record.physical=physical;record.generation=generation;record.context=context;
+            return {this,record.serial,i};
+        }
+        return {};
+    }
+    bool markAmbiguous(Ticket ticket) noexcept {
+        auto* record=find(ticket);if(!record)return false;record->state=State::Ambiguous;return true;
+    }
+    bool bind(Ticket ticket,const TglNativeOtherContextEventLineage& lineage,
+        const TglNativeFenceBackingObservation::Snapshot& fence,
+        const TglNativeFreshStampObservation::Snapshot& fresh) noexcept {
+        auto* record=find(ticket);if(!record || record->state!=State::Reserved)return false;
+        record->state=State::Ambiguous; // Refused post-native evidence retains ownership.
+        if(!lineage.valid || lineage.context!=record->context || lineage.physical!=record->physical ||
+           !fence.valid || fence.codec!=lineage.context || fence.wrapper!=lineage.wrapper || fence.event!=lineage.event ||
+           fence.index!=lineage.index || fence.count!=lineage.count || !fence.count || fence.index>=fence.count ||
+           !fence.frameworkContext || !fence.mapping || !fence.bytes || (fence.bytes&63) || fence.bytes/64!=fence.count ||
+           !fresh.valid || !fresh.device ||
+           !fresh.mapping || !fresh.table || !fresh.channels || fresh.channels>8)return false;
+        NGVfTaskCompletion::Request request{NGVfTaskCompletion::version,sizeof(NGVfTaskCompletion::Request),{}};
+        for(size_t i=0;i<8;++i) {
+            request.expected[i]=fence.expected[i];const auto channel=uint32_t(fence.expected[i]);
+            if(channel!=UINT32_MAX && (channel>=fresh.channels || !fresh.active[i]))return false;
+        }
+        if(!NGVfTaskCompletion::validRequest(request))return false;
+        for(const auto& other:records_)if(&other!=record && other.state==State::Bound &&
+            (other.fence.event==fence.event || (other.fence.wrapper==fence.wrapper && other.fence.index==fence.index)))return false;
+        record->fence=fence;record->fresh=fresh;record->state=State::Bound;return true;
+    }
+    // Caller authenticates registry through its retained native connection,
+    // revalidates expected fence/lineage and captures fresh hardware stamps
+    // under SAME generation/reset exclusion. Packet shape alone is not auth.
+    bool complete(Ticket ticket,uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context,
+        uint64_t registryId,const NGVfTaskCompletion::Reply& reply,
+        const TglNativeFenceBackingObservation::Snapshot& expected,
+        const TglNativeFreshStampObservation::Snapshot& fresh) noexcept {
+        auto* record=find(ticket);
+        if(!record || record->state!=State::Bound || record->image!=image || record->physical!=physical ||
+           record->generation!=generation || record->context!=context || !expected.valid || !fresh.valid)return false;
+        const auto& old=record->fence;
+        if(expected.codec!=old.codec || expected.wrapper!=old.wrapper || expected.frameworkContext!=old.frameworkContext ||
+           expected.mapping!=old.mapping || expected.bytes!=old.bytes || expected.event!=old.event ||
+           expected.index!=old.index || expected.count!=old.count || expected.expected!=old.expected ||
+           fresh.device!=record->fresh.device || fresh.mapping!=record->fresh.mapping ||
+           fresh.table!=record->fresh.table || fresh.channels!=record->fresh.channels)return false;
+        NGVfTaskCompletion::Request request{NGVfTaskCompletion::version,sizeof(NGVfTaskCompletion::Request),{}};
+        for(size_t i=0;i<8;++i) {
+            request.expected[i]=old.expected[i];
+            if(uint32_t(old.expected[i])==UINT32_MAX)continue;
+            const auto target=uint32_t(old.expected[i]>>32);
+            if(!fresh.active[i] || uint32_t(fresh.observed[i]-target)>uint32_t(INT32_MAX))return false;
+        }
+        if(!NGVfTaskCompletion::validReply(reply,registryId,request))return false;
+        *record={};return true;
+    }
+};
+
 // Exact slot12=15b01: batch count0/list8, 24-byte items with event0,
 // type8/wait12/status16. Status1 is only a native report, NOT completion:
 // wait/test may bypass on reset/termination. Caller holds the SAME retained
@@ -26453,6 +26539,7 @@ class TglOwnedNativeCodecContextOwner {
         ParentBinding parentProof;
         Read read;Write write;Admit admit;Qualify qualify;Executable executable;
         FrameTable table;
+        TglNativeOtherPendingFrames nativeOtherPending;
         std::atomic<bool> busy{false};bool removed=false;
         State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c,uintptr_t o,uintptr_t wptr,ParentBinding proof,
             Read r,Write w,Admit a,Qualify q,Executable e) noexcept
@@ -26498,6 +26585,36 @@ public:
         if(!state_)return TglNativeContextFamily::Unknown;
         if constexpr(std::is_same_v<ParentBinding,TglNativeMixedContextParentView>)return state_->parentProof.family;
         return std::is_same_v<ParentBinding,TglNativeVeboxParentView>?TglNativeContextFamily::VeboxVp:TglNativeContextFamily::NativeOther;
+    }
+    template<class OwnerLease,class Scope>
+    TglNativeOtherPendingFrames::Ticket reserveNativeOtherFrame(const OwnerLease& lease,Scope& scope) noexcept {
+        if(!state_ || lease.get()!=this || family()!=TglNativeContextFamily::NativeOther || !enter())return {};
+        Unlock unlock{state_->busy};
+        if(state_->removed || !state_->retainedIdentity() || !state_->nativeParentMatches() ||
+           !scope.matches(state_->image,state_->physical,state_->generation) ||
+           state_->table.publication()!=TglContextFramePublication::Published)return {};
+        return state_->nativeOtherPending.reserve(state_->image,state_->physical,state_->generation,state_->context);
+    }
+    template<class OwnerLease,class Scope>
+    bool bindNativeOtherFrame(const OwnerLease& lease,Scope& scope,TglNativeOtherPendingFrames::Ticket ticket,
+        const TglNativeOtherContextEventLineage& lineage,const TglNativeFenceBackingObservation::Snapshot& fence,
+        const TglNativeFreshStampObservation::Snapshot& fresh) noexcept {
+        if(!state_ || lease.get()!=this || family()!=TglNativeContextFamily::NativeOther || !enter())return false;
+        Unlock unlock{state_->busy};
+        if(!state_->retainedIdentity() || !state_->nativeParentMatches() ||
+           !scope.matches(state_->image,state_->physical,state_->generation))return false;
+        return state_->nativeOtherPending.bind(ticket,lineage,fence,fresh);
+    }
+    template<class OwnerLease,class Scope>
+    bool completeNativeOtherFrame(const OwnerLease& lease,Scope& scope,TglNativeOtherPendingFrames::Ticket ticket,
+        uint64_t registryId,const NGVfTaskCompletion::Reply& reply,const TglNativeFenceBackingObservation::Snapshot& fence,
+        const TglNativeFreshStampObservation::Snapshot& fresh) noexcept {
+        if(!state_ || lease.get()!=this || family()!=TglNativeContextFamily::NativeOther || !enter())return false;
+        Unlock unlock{state_->busy};
+        if(!state_->retainedIdentity() || !state_->nativeParentMatches() ||
+           !scope.matches(state_->image,state_->physical,state_->generation))return false;
+        return state_->nativeOtherPending.complete(ticket,state_->image,state_->physical,state_->generation,state_->context,
+            registryId,reply,fence,fresh);
     }
     template<class OwnerLease>
     bool excludesPublishedContextWritableSpan(const OwnerLease& lease,uintptr_t address,size_t bytes) noexcept {
@@ -26629,7 +26746,7 @@ public:
     template<class ScopeAdmit> bool prepareRemoval(ScopeAdmit scope) noexcept {
         if(!enter())return false;
         Unlock unlock{state_->busy};
-        if(state_->removed || !state_->retainedIdentity() ||
+        if(state_->removed || state_->nativeOtherPending.pending() || !state_->retainedIdentity() ||
             !scope(state_->image,state_->physical,state_->generation,state_->context) || !state_->nativeParentMatches())return false;
         return state_->table.prepareNativeRemoval(state_->read,state_->admit);
     }
@@ -26643,7 +26760,7 @@ public:
         // successful-removal proof; removed_ alone never authorizes release.
         using P=TglOwnedContextFrameVtable::Publication;
         const auto publication=state_->table.publication();
-        if(publication==P::Published || publication==P::Ambiguous || !state_->retainedIdentity() ||
+        if(publication==P::Published || publication==P::Ambiguous || state_->nativeOtherPending.pending() || !state_->retainedIdentity() ||
             !removed(state_->image,state_->physical,state_->generation,state_->context))return false;
         if(!state_->table.acknowledgeNativeDestruction())return false;
         state_->removed=true;return true;

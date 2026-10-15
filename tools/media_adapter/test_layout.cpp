@@ -16209,6 +16209,31 @@ static void testRetainedVeboxFrames() {
             put(contextBytes,8,physical+8);assert(!lineage.capture(physical,receipt,rd,admit));put(contextBytes,8,physical);
             put(physicalBytes,0x58,uintptr_t{0});assert(!lineage.capture(physical,receipt,rd,admit));put(physicalBytes,0x58,wrapper);
             assert(lineage.capture(physical,receipt,rd,admit));
+            fence.frameworkContext=0x1000;fence.mapping=0x2000;fence.bytes=512;
+            fence.expected.fill(UINT32_MAX);fence.expected[0]=uint64_t{7}<<32;
+            TglNativeFreshStampObservation::Snapshot fresh;
+            fresh.valid=true;fresh.device=0x3000;fresh.mapping=0x4000;fresh.table=0x5000;
+            fresh.channels=1;fresh.active[0]=true;fresh.observed[0]=6;
+            TglNativeOtherPendingFrames pending;
+            const auto ticket=pending.reserve(image,physical,1,context);
+            assert(ticket.serial && pending.pending() && pending.bind(ticket,lineage,fence,fresh));
+            NGVfTaskCompletion::Reply reply{};
+            reply.abiVersion=NGVfTaskCompletion::version;reply.bytes=sizeof(reply);reply.registryId=99;reply.recordCount=1;
+            std::memcpy(reply.familyUuid,NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid,16);
+            reply.records[0]={0,1,2,7,4};
+            assert(!pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh)); // Hardware stamp behind.
+            fresh.observed[0]=7;
+            assert(!pending.complete(ticket,image,physical,2,context,99,reply,fence,fresh));
+            assert(!pending.complete(ticket,image,physical,1,context,100,reply,fence,fresh));
+            ++fresh.mapping;assert(!pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh));--fresh.mapping;
+            ++reply.records[0].stamp;assert(!pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh));--reply.records[0].stamp;
+            assert(pending.pending() && pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh) && !pending.pending());
+            assert(!pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh));
+            const auto failed=pending.reserve(image,physical,1,context);
+            assert(failed.serial!=ticket.serial && pending.markAmbiguous(failed) && pending.pending());
+            assert(!pending.reserve(image,physical,1,context).serial);
+            assert(!pending.bind(failed,lineage,fence,fresh) &&
+                !pending.complete(failed,image,physical,1,context,99,reply,fence,fresh));
         }
         {
             for(const auto& schema:TglNativeOtherContextFrameBinding::schemas) {
@@ -16310,6 +16335,37 @@ static void testRetainedVeboxFrames() {
                 assert(retained->publishFrame(lease,hook,same,executableFamily));
                 assert(retained->frameTable().callbackCount()==schema.count);
                 assert(!retained->excludesPublishedContextWritableSpan(lease,0xa000,4));
+                struct FamilyScope {
+                    uintptr_t image;uint64_t generation=1;
+                    bool matches(uintptr_t i,uintptr_t p,uint64_t g) const noexcept {
+                        return i==image && p==0x9000 && g==generation;
+                    }
+                } scope{image};
+                const auto pendingFrame=retained->reserveNativeOtherFrame(lease,scope);
+                assert(pendingFrame.serial && !retained->reserveNativeOtherFrame(lease,scope).serial);
+                assert(!retained->prepareRemoval(same));
+                TglNativeOtherContextEventLineage outputLineage;
+                outputLineage.valid=true;outputLineage.context=0x8000;outputLineage.physical=0x9000;
+                outputLineage.wrapper=0xa000;outputLineage.event=0xb000;outputLineage.count=1;
+                TglNativeFenceBackingObservation::Snapshot expected;
+                expected.valid=true;expected.codec=0x8000;expected.wrapper=0xa000;expected.frameworkContext=0xc000;
+                expected.mapping=0xd000;expected.bytes=64;expected.event=0xb000;expected.count=1;
+                expected.expected.fill(UINT32_MAX);expected.expected[0]=uint64_t{1}<<32;
+                TglNativeFreshStampObservation::Snapshot current;
+                current.valid=true;current.device=0xe000;current.mapping=0xf000;current.table=0x10000;
+                current.channels=1;current.active[0]=true;current.observed[0]=1;
+                assert(retained->bindNativeOtherFrame(lease,scope,pendingFrame,outputLineage,expected,current));
+                NGVfTaskCompletion::Reply completed{};
+                completed.abiVersion=NGVfTaskCompletion::version;completed.bytes=sizeof(completed);
+                completed.registryId=99;completed.recordCount=1;completed.records[0]={0,1,2,1,4};
+                std::memcpy(completed.familyUuid,NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid,16);
+                scope.generation=2;
+                assert(!retained->completeNativeOtherFrame(lease,scope,pendingFrame,99,completed,expected,current));
+                scope.generation=1;assert(!retained->prepareRemoval(same));
+                current.observed[0]=0;
+                assert(!retained->completeNativeOtherFrame(lease,scope,pendingFrame,99,completed,expected,current));
+                current.observed[0]=1;
+                assert(retained->completeNativeOtherFrame(lease,scope,pendingFrame,99,completed,expected,current));
                 assert(!retained->confirmNativeRemoval(same));
                 assert(retained->prepareRemoval(same) && retained->confirmNativeRemoval(same));
                 assert(TglImplicitContextRelease<OtherOwner>::allowed(*retained));
