@@ -4199,6 +4199,16 @@ struct NativePhysicalBackend {
             return callbacks.physicalProperties(ticket,address,input,NativePhysicalCallbacks::PropertyOperation::Query);
         });
     }
+    template<class Admit>
+    static int captureExpectedFence(void* physical,typename NativePhysicalRegistry::FrameTicket frame,
+        uintptr_t wrapper,Admit admit,TglNativeFenceBackingObservation::Snapshot& output) noexcept {
+        TglNativePhysicalCallbackBinding native;TglNativeFenceBackingObservation fence;
+        if(!binding(native) || !fence.resolve(native.image,&readMemory,NativeTglImageAdmission{native.image},&executableMemory))return 5;
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.captureExpectedFence(ticket,address,frame,fence,wrapper,&readMemory,admit,output);
+        });
+    }
     static int reportFrameEvents(void* physical,const void* input) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
         return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
@@ -5339,6 +5349,10 @@ template class TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,
     decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory)>;
 template int NativePhysicalBackend::withScope<int(*)(NativePhysicalFrameScope&,uint64_t) noexcept>(
     uintptr_t,int(*)(NativePhysicalFrameScope&,uint64_t) noexcept) noexcept;
+using NativeFrameFenceOwnerProof=bool(*)(const NativeBorrowedFrontend&,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uint64_t,uint32_t) noexcept;
+template int NativePhysicalBackend::captureExpectedFence<NativeFrameFenceOwnerProof>(
+    void*,NativePhysicalRegistry::FrameTicket,uintptr_t,NativeFrameFenceOwnerProof,
+    TglNativeFenceBackingObservation::Snapshot&) noexcept;
 using NativeScopedContextCreate=int(*)(uintptr_t,uintptr_t,const void*,NativePhysicalRegistry::DependencyAdoptionScope&) noexcept;
 template int NativePhysicalBackend::createContexts<NativeScopedContextCreate>(
     uintptr_t,const void*,NativeScopedContextCreate) noexcept;

@@ -24596,6 +24596,18 @@ public:
         if(!slot.frame || slot.generation!=ticket.generation || !slot.pending || !slot.receipt.valid) return 5;
         return use(slot.receipt);
     }
+    // Caller already owns the enclosing physical generation gate. Borrow the
+    // matching retained object AND receipt atomically; no release/clear here.
+    template<class Use> int withRetainedFrameObservation(Ticket ticket,Use use) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<int,Use&,Frame&,const TglNativeFrameOutputReceipt&>);
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        if(gate_.test_and_set(std::memory_order_acquire))return 5;
+        Unlock unlock{gate_};
+        if(physicalTeardownStarted_ || ticket.pool!=this || ticket.index>=Capacity || !ticket.generation)return 5;
+        const auto& slot=slots_[ticket.index];
+        if(!slot.frame || slot.generation!=ticket.generation || !slot.pending || !slot.receipt.valid)return 5;
+        return use(*slot.frame,slot.receipt);
+    }
     // Snapshot only under the enclosing physical registry gate. All runtime
     // pool access must stay in that gate; this is not a standalone lease.
     bool emptyForNativeRequest() noexcept {
@@ -26810,6 +26822,17 @@ public:
             result.observed=true;result.itemStatus=itemStatus;return 0;
         });
         return result;
+    }
+    template<class FenceRead,class Admit>
+    int captureExpectedFence(typename Registry::Ticket ticket,uintptr_t physical,
+        typename Registry::FrameTicket frame,const TglNativeFenceBackingObservation& binding,
+        uintptr_t wrapper,FenceRead read,Admit admit,TglNativeFenceBackingObservation::Snapshot& output) noexcept {
+        if(binding.image()!=binding_.image)return 5;
+        return withFrame(ticket,physical,[&](auto& pool) noexcept -> int {
+            return pool.withRetainedFrameObservation(frame,[&](auto& retained,const auto& receipt) noexcept -> int {
+                return retained.captureExpectedFence(binding,receipt,wrapper,read,admit,output)?0:5;
+            });
+        });
     }
     struct DeviceFrameEventObservationResult {
         FrameEventObservationResult event;

@@ -14882,14 +14882,24 @@ static void testRetainedVeboxFrames() {
             assert(!pool.emptyForNativeRequest());return 31;
         };
         assert(pool.withOutputReceipt(ticket,observe)==31 && observed==1);
+        unsigned frameObserved=0;
+        auto observeFrame=[&](ReceiptFrame&,const TglNativeFrameOutputReceipt& value) noexcept -> int {
+            ++frameObserved;assert(value.context==receipt.context && value.index==7);
+            assert(pool.withOutputReceipt(ticket,observe)==5); // same pool gate, no recursive borrow
+            return 31;
+        };
+        assert(pool.withRetainedFrameObservation(ticket,observeFrame)==31 && frameObserved==1);
+        assert(foreign.withRetainedFrameObservation(ticket,observeFrame)==5 && frameObserved==1);
         auto stale=ticket;++stale.generation;
         assert(pool.withOutputReceipt(stale,observe)==5 && observed==1);
+        assert(pool.withRetainedFrameObservation(stale,observeFrame)==5 && frameObserved==1);
         assert(pool.retire(ticket,[](const auto&,bool pending,const auto&) noexcept -> int {
             assert(pending);return 31; // no real completion certificate
         })==31);
         assert(pool.withOutputReceipt(ticket,observe)==31 && observed==2);
         assert(pool.retire(ticket,[](const auto&,bool,const auto&) noexcept -> int {return 0;})==0); // CPU fixture cleanup only
         assert(pool.withOutputReceipt(ticket,observe)==5 && observed==2);
+        assert(pool.withRetainedFrameObservation(ticket,observeFrame)==5 && frameObserved==1);
     }
     {
         constexpr uintptr_t base=0x100000,context=0x20000;
