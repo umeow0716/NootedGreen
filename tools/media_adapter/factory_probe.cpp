@@ -91,7 +91,7 @@ int cscReference() {
 }
 
 // Read our own loaded, sealed Tahoe framework. Never invoke a GPU/resource API.
-int resourceReference(bool fenceOnly=false,bool releaseOnly=false,bool classOnly=false,bool eventOnly=false) {
+int resourceReference(bool fenceOnly=false,bool releaseOnly=false,bool classOnly=false,bool eventOnly=false,bool eventCallbackOnly=false) {
     constexpr const char *framework = "/System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator";
     void *library = dlopen(framework, RTLD_NOW | RTLD_LOCAL);
     if (!library) { std::fprintf(stderr, "reference dlopen: %s\n", dlerror()); return 1; }
@@ -115,6 +115,7 @@ int resourceReference(bool fenceOnly=false,bool releaseOnly=false,bool classOnly
             Reference{"IOAccelDeviceTestEvent","IOAccelDeviceTestEvent",0,false,true},
             Reference{"IOAccelDeviceCreateWithAPIProperty","IOAccelDeviceCreateWithAPIProperty",0,false,true}}) {
         if(reference.event!=eventOnly)continue;
+        if(eventCallbackOnly && std::strcmp(reference.name,"IOAccelDeviceCreateWithAPIProperty"))continue;
         if(classOnly && !reference.block) continue;
         if(fenceOnly && std::strcmp(reference.name,"IOAccelVideoContextFinishFenceEvent") &&
             std::strcmp(reference.name,"IOAccelVideoContextSubmitDataBuffers")) continue;
@@ -172,6 +173,20 @@ int resourceReference(bool fenceOnly=false,bool releaseOnly=false,bool classOnly
                 if(next<base || next-base>=textSize || next==address)goto done;
                 address=next;
             }
+        }
+        if(eventCallbackOnly) {
+            // Exact sealed-image constructor LEA and store captured in the
+            // event reference: this installs the actual device+0x18 callback.
+            constexpr uint8_t anchor[]={0x48,0x8d,0x05,0xce,0x1e,0x00,0x00,
+                0x48,0x89,0x43,0x18};
+            uint8_t actual[sizeof(anchor)]{};
+            if(textSize-(address-base)<0x1ae + sizeof(anchor) ||
+                !read(address+0x1ae,actual,sizeof(actual)) ||
+                std::memcmp(actual,anchor,sizeof(anchor)))goto done;
+            const uintptr_t next=address+0x1b5+0x1ece;
+            if(next<base || next-base>=textSize)goto done;
+            address=next;
+            name="device-installed-event-callback";
         }
         if (fenceOnly) {
             // Exact 25G229 bytes captured by the CPU-only fence reference.
@@ -287,7 +302,8 @@ int resourceReference(bool fenceOnly=false,bool releaseOnly=false,bool classOnly
             std::putchar('\n');
         }
     }
-    std::puts(eventOnly ? "EVENT_REFERENCE_OK no-resource-call no-GPU no-text-write" :
+    std::puts(eventCallbackOnly ? "EVENT_CALLBACK_REFERENCE_OK no-resource-call no-GPU no-text-write" :
+        eventOnly ? "EVENT_REFERENCE_OK no-resource-call no-GPU no-text-write" :
         classOnly ? "CLASS_REFERENCE_OK no-resource-call no-GPU no-text-write" :
         releaseOnly ? "RELEASE_REFERENCE_OK no-resource-call no-GPU no-text-write" :
         fenceOnly ? "FENCE_REFERENCE_OK no-resource-call no-GPU no-text-write" :
@@ -300,6 +316,7 @@ done:
 }
 int main(int argc, char **argv) {
     if(argc==2 && !std::strcmp(argv[1],"--event-reference"))return resourceReference(false,false,false,true);
+    if(argc==2 && !std::strcmp(argv[1],"--event-callback-reference"))return resourceReference(false,false,false,true,true);
     if(argc==2 && !std::strcmp(argv[1],"--resource-class-reference")) return resourceReference(false,false,true);
     if(argc==2 && !std::strcmp(argv[1],"--csc-reference")) return cscReference();
     if(argc==2 && !std::strcmp(argv[1],"--fence-reference")) return resourceReference(true);
