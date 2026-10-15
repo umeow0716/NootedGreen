@@ -15022,9 +15022,10 @@ public:
         if(invoked_) {repeated_=true;status_=native_.status?native_.status:5;return false;}
         invoked_=true;
         if constexpr(std::is_pointer_v<Render>)if(!render_)return false;
-        if(retention_())return false;
+        if(retention_.admissionPending())return false;
         auto finish=[&]() noexcept -> bool {
             if(entered_) {repeated_=true;return false;}
+            if(retention_.admissionPending())return false;
             entered_=true;native_=render_();
             retention_.observe(native_); // BEFORE any VP/DN/surface scope unwinds.
             return native_.nativeEntered && native_.status==0;
@@ -20999,11 +21000,12 @@ TglOwnedVeboxCommandTransactionResult tglWithOriginalFrontendOwners(
     TglOwnedVeboxFrameRetention& retention,Use use) noexcept {
     TglOwnedVeboxCommandTransactionResult result;
     const auto* input=source.storage();const auto* output=target.storage();
-    if(retention() || !input || !output || !roles.sourceMatches(sourceIndex,source,*input) ||
+    if(retention.admissionPending() || !input || !output || !roles.sourceMatches(sourceIndex,source,*input) ||
         !roles.targetMatches(targetIndex,target,*output))return result;
     const int status=source.withOriginalOwners({input,temporal[0],temporal[1]},
         [&](const auto& owners) noexcept -> int {
             return target.withOriginalOwner([&](auto& targetOwner) noexcept -> int {
+                if(retention.admissionPending())return 5;
                 static_assert(noexcept(use(*owners[0],targetOwner,owners[1],owners[2])) &&
                     std::is_same_v<decltype(use(*owners[0],targetOwner,owners[1],owners[2])),
                         TglOwnedVeboxCommandTransactionResult>);

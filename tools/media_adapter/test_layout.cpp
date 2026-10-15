@@ -18133,6 +18133,25 @@ int main() {
         TglOwnedVeboxAdmissionRenderContinuation blocked(denied,retention);
         assert(!blocked([](auto) noexcept -> bool {assert(false);return true;}) && !blocked.entered());
     }
+    for(bool expire:{false,true}) {
+        TglOwnedVeboxFrameRetention root;
+        TglOwnedVeboxFrameRetention local(TglOwnedVeboxFrameRetention::AggregateLink{},root);
+        TglOwnedVeboxCommandTransactionResult pending;pending.nativeEntered=true;root.observe(pending);
+        bool live=true;unsigned renders=0;
+        auto valid=[](const void* raw) noexcept {return *static_cast<const bool*>(raw);};
+        TglOwnedVeboxUnusedChildAdmission proof(root,local,&live,valid);
+        TglOwnedVeboxUnusedChildAdmission::Binding binding(&root,proof);assert(binding.bound());
+        auto render=[&]() noexcept {
+            ++renders;TglOwnedVeboxCommandTransactionResult result;result.status=0;result.nativeEntered=true;return result;
+        };
+        TglOwnedVeboxAdmissionRenderContinuation continuation(render,root);
+        const bool accepted=continuation([&](auto finish) noexcept {
+            if(expire)live=false;
+            return finish();
+        });
+        assert(accepted==!expire && renders==unsigned(!expire) && continuation.entered()==!expire);
+        assert(root() && !local()); // Admission/idle sibling never clears the earlier pass.
+    }
     {
         struct ModeFrame {
             bool lost=false,ready=true;
