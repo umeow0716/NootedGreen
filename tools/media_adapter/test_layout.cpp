@@ -17436,6 +17436,33 @@ int main() {
         nativeFailure.observe(pass);assert(nativeFailure.finish(59).status==59);
     }
     {
+        std::array<uint8_t,0x148> resource{};
+        auto put=[&](size_t at,uint32_t value) noexcept {std::memcpy(resource.data()+at,&value,4);};
+        uint32_t token=99;
+        assert(tglProjectNativeRelocationToken(resource,99,token) && token==0);
+        put(0x38,0x12345678);
+        assert(tglProjectNativeRelocationToken(resource,99,token) && token==0x12345678);
+        put(0x38,UINT32_MAX);token=99;
+        assert(!tglProjectNativeRelocationToken(resource,0,token) && token==99);
+        put(0x14,1);put(0x80,0x42);put(0xb8,3);put(0xf0,7);
+        for(uint32_t usage=0;usage<=6;++usage)
+            assert(tglProjectNativeRelocationToken(resource,usage,token) && token==((usage<=4?3u:7u)<<16|0x42u));
+        token=99;assert(!tglProjectNativeRelocationToken(resource,7,token) && token==99);
+        unsigned calls=0;
+        auto registration=+[](void* raw,const void*,uint32_t,uint32_t) noexcept -> int {++*static_cast<unsigned*>(raw);return 31;};
+        TglNativeDiIecpServices services;
+        services.registration={reinterpret_cast<uintptr_t>(&calls),reinterpret_cast<uintptr_t>(registration)};
+        services.control={1,1};
+        TglNativeDiIecpRegistration admit{services};
+        assert(admit(resource,true,true)==31 && calls==1);
+        put(0x80,0xffff);put(0xb8,0xffff);put(0xf0,0xffff);
+        assert(admit(resource,true,true)==5 && calls==1);
+        put(0xf0,0);assert(admit(resource,true,true)==31 && calls==2);
+        put(0x14,2);token=99;
+        assert(!tglProjectNativeRelocationToken(resource,0,token) && token==99);
+        assert(admit(resource,true,true)==5 && calls==2);
+    }
+    {
         struct Producer {
             unsigned calls=0;bool recurse=false;int status=0;
             TglOwnedLateLowerPassRequest* request=nullptr;

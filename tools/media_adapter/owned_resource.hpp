@@ -6784,6 +6784,21 @@ public:
 
 // Call native even though the exact TGL implementation is a success stub.
 // Registration does not establish resource backing or GPU completion.
+// Exact640e0 projection for the two supported owned resource kinds. Token0
+// is legal; ffffffff is native's failure sentinel. This proves no ownership.
+inline bool tglProjectNativeRelocationToken(const std::array<uint8_t,0x148>& resource,
+    uint32_t usage,uint32_t& output) noexcept {
+    uint32_t type=0,token=0,plane=0;
+    std::memcpy(&type,resource.data()+0x14,4);
+    if(type==0)std::memcpy(&token,resource.data()+0x38,4);
+    else if(type==1 && usage<=6) {
+        std::memcpy(&token,resource.data()+0x80,4);
+        std::memcpy(&plane,resource.data()+(usage<=4?0xb8:0xf0),4);
+        token|=plane<<16;
+    } else return false;
+    if(token==UINT32_MAX)return false;
+    output=token;return true;
+}
 struct TglNativeRegistrationInvoker {
     int operator()(uintptr_t entry, uintptr_t os, const void* resource,
                    bool write, bool read) const noexcept {
@@ -18775,6 +18790,11 @@ struct TglNativeDiIecpRegistration {
     const TglNativeDiIecpServices& services;
     template<class Resource> int operator()(const Resource& resource,bool write,bool read) const noexcept {
         if(!tglNativeDiIecpServicesReady(services)) return 5;
+        uint32_t token=0;
+        // Registration has no plane-usage argument. Refuse only if NEITHER
+        // native surface projection can yield a token; MHW chooses actual use.
+        if(!tglProjectNativeRelocationToken(resource,0,token) &&
+            !tglProjectNativeRelocationToken(resource,5,token))return 5;
         return TglNativeRegistrationInvoker{}(services.registration.entry,
             services.registration.context,&resource,write,read);
     }
