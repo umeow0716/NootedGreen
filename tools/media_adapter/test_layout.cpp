@@ -30448,6 +30448,30 @@ int main() {
                                 for(int nativeStatus:{-31,0}) assert(graph0.withView(false,[&](void* firstVp) noexcept {
                                     return graph1.withView(false,[&](void* secondVp) noexcept {
                                         assert(firstVp!=secondVp);
+                                        bool initialized=false;
+                                        assert(frame.children().withInitializationVpFactories(firstVp,secondVp,
+                                            [&](void* a,void* b) noexcept -> int {
+                                                initialized=true;
+                                                assert(frame.children().withInitializationVpFactories(firstVp,secondVp,
+                                                    [](void*,void*) noexcept -> int {assert(false);return 0;})==5);
+                                                for(size_t index=0;index<2;++index) {
+                                                    void* parent=index?b:a;uintptr_t vptr=0,entry=0;
+                                                    std::memcpy(&vptr,parent,8);
+                                                    std::memcpy(&entry,reinterpret_cast<void*>(vptr+0x1e0),8);
+                                                    void* vp=reinterpret_cast<void*(*)(void*) noexcept>(entry)(parent);
+                                                    assert(vp==(index?secondVp:firstVp));
+                                                    std::memcpy(static_cast<uint8_t*>(parent)+0x80,&vp,8);
+                                                    static_cast<uint8_t*>(vp)[8]=1;
+                                                }
+                                                return nativeStatus;
+                                            })==nativeStatus && initialized);
+                                        for(auto* owner:{&frame.children().first().owner(),&frame.children().second().owner()}) {
+                                            uintptr_t link=1;
+                                            std::memcpy(&link,static_cast<uint8_t*>(owner->constructedBase())+0x80,8);
+                                            assert(link==0);
+                                        }
+                                        assert(frame.children().withInitializationVpFactories(firstVp,firstVp,
+                                            [](void*,void*) noexcept -> int {assert(false);return 0;})==5);
                                         return frame.children().withPairedVpFactories(graph0,firstVp,table0,
                                             graph1,secondVp,table1,[&](void* firstParent,void* secondParent) noexcept -> int {
                                                 assert(firstParent!=secondParent);

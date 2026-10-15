@@ -6284,6 +6284,29 @@ public:
             });
         });
     }
+    // Initialization-only factory borrow: exact native126740 does not dispatch
+    // VP virtual commands, only factory-return and native126cb0's byte8 store.
+    // Both graph views must be pinned by the enclosing storage consumer.
+    template<class Use>
+    int withInitializationVpFactories(void* firstVp,void* secondVp,Use use) noexcept {
+        if(!firstVp || !secondVp || firstVp==secondVp)return 5;
+        return first_.owner().withPrivateChild([&](void* a) noexcept -> int {
+            return second_.owner().withPrivateChild([&](void* b) noexcept -> int {
+                auto admit=[&](void* parent,void* vp) noexcept {
+                    return (parent==a && vp==firstVp && first_.owner().hasPrivateChildLease(reinterpret_cast<uintptr_t>(a))) ||
+                        (parent==b && vp==secondVp && second_.owner().hasPrivateChildLease(reinterpret_cast<uintptr_t>(b)));
+                };
+                TglOwnedVpFactoryPairScope scope({a,b},{firstVp,secondVp},admit);
+                if(!scope.bound())return 5;
+                return first_.owner().withLeasedPairVpFactorySlot(scope,firstVp,[&](void*) noexcept -> int {
+                    return second_.owner().withLeasedPairVpFactorySlot(scope,secondVp,[&](void*) noexcept -> int {
+                        static_assert(noexcept(use(a,b)) && std::is_same_v<decltype(use(a,b)),int>);
+                        return use(a,b);
+                    });
+                });
+            });
+        });
+    }
     // Install both concrete catalogues before renderer publication. A later
     // install failure may leave the FIRST private table owned by this storage;
     // it does not publish either child or grant native teardown permission.
@@ -30385,6 +30408,19 @@ public:
             if(status)return status;
         }
         return 0;
+    }
+    template<class Use> int withInitializationVpFactories(Use use) noexcept {
+        if(backing_.retention()() || !backing_.vpBound(0) || !backing_.vpBound(1))return 5;
+        return backing_.withVpResources(0,[&](auto& first,auto& firstStorage,auto&) noexcept -> int {
+            return backing_.withVpResources(1,[&](auto& second,auto& secondStorage,auto&) noexcept -> int {
+                return first.withView(false,[&](void* a) noexcept -> int {
+                    return second.withView(false,[&](void* b) noexcept -> int {
+                        if(a!=firstStorage.bytes.data() || b!=secondStorage.bytes.data())return 5;
+                        return children_.withInitializationVpFactories(a,b,use);
+                    });
+                });
+            });
+        });
     }
     // Enclose BOTH resource owners and graph reservations before constructing
     // callable flat tables or entering children.withPairedVpFactories<true>.

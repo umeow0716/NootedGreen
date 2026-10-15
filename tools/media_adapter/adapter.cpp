@@ -4866,6 +4866,26 @@ struct NativeRendererConstructionSelection {
 static_assert(NativeRendererConstructionSelection{}.valid());
 static_assert(NativeRendererConstructionSelection{NativeRendererCallbackDomain::Temporary,true}.valid());
 static_assert(!NativeRendererConstructionSelection{static_cast<NativeRendererCallbackDomain>(2),true}.valid());
+struct NativeRendererInitializationScope {
+    using Invoke=int(*)(void*,void*,const void*) noexcept;
+    inline static thread_local NativeRendererInitializationScope* active=nullptr;
+    void* payload=nullptr;Invoke invoke=nullptr;uintptr_t caller=0;bool bound=false,busy=false;
+    NativeRendererInitializationScope(void* value,Invoke call,uintptr_t returnSite) noexcept
+        :payload(value),invoke(call),caller(returnSite) {
+        if(value && call && returnSite && !active){active=this;bound=true;}
+    }
+    ~NativeRendererInitializationScope(){if(bound)active=nullptr;}
+    NativeRendererInitializationScope(const NativeRendererInitializationScope&)=delete;
+    NativeRendererInitializationScope& operator=(const NativeRendererInitializationScope&)=delete;
+    static int initialize(void* renderer,const void* parameters) noexcept {
+        auto* self=active;
+        if(!self || !self->bound || self->busy || !renderer || !parameters ||
+            reinterpret_cast<uintptr_t>(__builtin_return_address(0))!=self->caller)return 5;
+        self->busy=true;
+        struct Reset {bool& busy;~Reset(){busy=false;}} reset{self->busy};
+        return self->invoke(self->payload,renderer,parameters);
+    }
+};
 struct NativeCreatorPreparation {
     struct Record {
         uintptr_t image=0,physical=0,creator=0,renderer=0;uint64_t generation=0;
@@ -4878,6 +4898,7 @@ struct NativeCreatorPreparation {
         bool used=false,adopted=false,lifetimePublished=false,childrenReady=false,removing=false;
         bool publicationAttempted=false,childrenPublished=false;
         bool mainPublicationAttempted=false,mainPublished=false;
+        bool mainInitializationAttempted=false;
         NativeRendererConstructionSelection selection;
     };
     struct Ledger {std::atomic_flag gate=ATOMIC_FLAG_INIT;std::array<Record,64> records{};};
@@ -5109,8 +5130,42 @@ struct NativeCreatorPreparation {
             record->mainPublicationAttempted=true;
             record->mainPublished=record->owner->publishRenderer(lease,
                 reinterpret_cast<uintptr_t>(&NativeRetainedTemporaryExecution::temporaryPass),
-                NativeTglImageAdmission{image},&executableMemory,&ownedExecutableMemory);
+                NativeTglImageAdmission{image},&executableMemory,&ownedExecutableMemory,
+                reinterpret_cast<uintptr_t>(&NativeRendererInitializationScope::initialize));
             return record->mainPublished?0:5;
+        });
+    }
+    template<class PhysicalScope>
+    static int initializeRenderer(PhysicalScope& physical,uintptr_t image,uintptr_t address,uint64_t generation,
+        void* renderer,const void* parameters) noexcept {
+        if(!parameters || !physical.matches(image,address,generation))return 5;
+        NativeVphalOwner* owner=nullptr;uintptr_t creator=0;
+        {
+            auto& state=ledger();if(state.gate.test_and_set(std::memory_order_acquire))return 5;
+            struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
+            for(auto& record:state.records) {
+                if(!record.used || record.removing || record.image!=image || record.physical!=address ||
+                    record.generation!=generation || record.renderer!=reinterpret_cast<uintptr_t>(renderer))continue;
+                if(!record.owner || !record.mainPublished || !record.childrenPublished || !record.lifetimePublished ||
+                    !record.adopted || record.mainInitializationAttempted)return 5;
+                record.mainInitializationAttempted=true;owner=record.owner;creator=record.creator;break;
+            }
+        }
+        if(!owner || !creator)return 5;
+        return tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
+            auto lease=NativeVphalRouter::pinForInitialization(creator);
+            if(lease.get()!=owner || !lease.exclusive())return 5;
+            return owner->withCreatorStorage(lease,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,
+                [&](NativeRendererCpuAssembly& assembly,const TglNativeCreatedVeboxRendererView& view) noexcept -> int {
+                    if(view.renderer!=reinterpret_cast<uintptr_t>(renderer) || !executableMemory(image+0x132510,1))return 5;
+                    const int status=assembly.cpu().withInitializationVpFactories([&](void* a,void* b) noexcept -> int {
+                        if(view.originalChildren[0]!=reinterpret_cast<uintptr_t>(a) ||
+                            view.originalChildren[1]!=reinterpret_cast<uintptr_t>(b))return 5;
+                        return reinterpret_cast<int(*)(void*,const void*)>(image+0x132510)(renderer,parameters);
+                    });
+                    os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_RENDERER_INITIALIZE status=%{public}d",status);
+                    return status;
+                });
         });
     }
     template<class PhysicalScope>
@@ -6014,6 +6069,14 @@ struct NativeCreatorScopedInvocation {
             {image+0x531550,reinterpret_cast<uintptr_t>(metadata.data()),metadata.size()},0,
             {creatorScope.table().source(),creatorScope.table().addressPoint(),1},0xcu);
         if(!observer.isArmed())return result;
+        struct InitializePayload {Scope* scope;uintptr_t image,physical;uint64_t generation;};
+        InitializePayload initialization{&physicalScope,image,physical,generation};
+        NativeRendererInitializationScope initializeScope(&initialization,
+            [](void* value,void* renderer,const void* parameters) noexcept -> int {
+                const auto& p=*static_cast<InitializePayload*>(value);
+                return NativeCreatorPreparation::initializeRenderer(*p.scope,p.image,p.physical,p.generation,renderer,parameters);
+            },image+0x133c39);
+        if(!initializeScope.bound){result.admission="renderer-initialize-scope";return result;}
         currentObserver=&observer;
         result.admission="native-return";
         result.nativeInvoked=true;
