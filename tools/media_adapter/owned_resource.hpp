@@ -14936,6 +14936,7 @@ public:
         return aggregate_==&aggregate;
     }
     bool aggregateRoot() const noexcept {return !aggregate_;}
+    bool admissionPending() const noexcept;
     void observe(const TglOwnedVeboxCommandTransactionResult& result) noexcept {
         retain(result.requiresRetention());
     }
@@ -14945,6 +14946,34 @@ public:
         retain(result.acquired || result.writtenBack);
     }
 };
+// CPU producer admission for an unused sibling within one authenticated native
+// request. Caller owns root/child and proof state through this synchronous TLS
+// scope. This never changes pending(), releases resources or certifies drain.
+class TglOwnedVeboxUnusedChildAdmission {
+    const TglOwnedVeboxFrameRetention& aggregate_;
+    const TglOwnedVeboxFrameRetention& child_;
+    const void* scope_;
+    bool(*valid_)(const void*) noexcept;
+public:
+    struct Domain;
+    using Binding=TglOwnedScopedContext<TglOwnedVeboxUnusedChildAdmission,Domain>;
+    TglOwnedVeboxUnusedChildAdmission(const TglOwnedVeboxFrameRetention& aggregate,
+        const TglOwnedVeboxFrameRetention& child,const void* scope,
+        bool(*valid)(const void*) noexcept) noexcept
+        :aggregate_(aggregate),child_(child),scope_(scope),valid_(valid) {}
+    TglOwnedVeboxUnusedChildAdmission(const TglOwnedVeboxUnusedChildAdmission&)=delete;
+    TglOwnedVeboxUnusedChildAdmission& operator=(const TglOwnedVeboxUnusedChildAdmission&)=delete;
+    bool permits(const TglOwnedVeboxFrameRetention& aggregate) const noexcept {
+        return &aggregate==&aggregate_ && aggregate_.aggregateRoot() && child_.linkedTo(aggregate_) &&
+            !child_() && scope_ && valid_ && valid_(scope_) && !child_();
+    }
+};
+inline bool TglOwnedVeboxFrameRetention::admissionPending() const noexcept {
+    if(!pending_)return false;
+    const auto* admission=TglOwnedVeboxUnusedChildAdmission::Binding::get(
+        const_cast<TglOwnedVeboxFrameRetention*>(this));
+    return !admission || !admission->permits(*this);
+}
 // Admission for mode-local reset of this owner's NEVER-submitted resources.
 // This is not a physical quiescence/completion certificate and cannot clear
 // retention, retire a frame, or authorize a new epoch after this backing has

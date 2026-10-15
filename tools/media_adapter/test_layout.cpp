@@ -17586,6 +17586,25 @@ int main() {
         assert(aggregate() && second() && !first() && !nested());
         first.observe(idle);assert(!first() && aggregate());
         nested.observe(work);assert(nested() && aggregate());
+        bool live=true;
+        auto valid=[](const void* scope) noexcept {return *static_cast<const bool*>(scope);};
+        TglOwnedVeboxUnusedChildAdmission admission(aggregate,first,&live,valid);
+        using AdmissionBinding=TglOwnedVeboxUnusedChildAdmission::Binding;
+        assert(aggregate.admissionPending());
+        {
+            AdmissionBinding binding(&aggregate,admission);assert(binding.bound());
+            assert(aggregate() && !aggregate.admissionPending() && !first());
+            AdmissionBinding reentrant(&aggregate,admission);assert(!reentrant.bound());
+            live=false;assert(aggregate.admissionPending());
+            live=true;assert(!aggregate.admissionPending());
+            first.observe(work);assert(first() && aggregate() && aggregate.admissionPending());
+        }
+        assert(aggregate() && aggregate.admissionPending());
+        TglOwnedVeboxFrameRetention foreign;foreign.observe(work);
+        {
+            AdmissionBinding wrongKey(&foreign,admission);assert(wrongKey.bound());
+            assert(foreign.admissionPending());
+        }
         // A child-only legacy acquisition must also retain the aggregate.
         TglOwnedVeboxFrameRetention legacyAggregate,legacyChild(Link{},legacyAggregate);
         struct Legacy {bool acquired=true,writtenBack=false;} legacy;
