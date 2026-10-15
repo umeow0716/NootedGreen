@@ -18077,6 +18077,27 @@ int main() {
             assert(captured==reinterpret_cast<uintptr_t>(frozen.scalarPayloads[i].data()) && frozen.scalarPayloads[i]==scalar);
         }
         scalar.fill(0);assert(frozen.scalarPayloads[0][0]==0x5a); // Caller drift no longer changes native input.
+        for(uint32_t operation=1;operation<=4;++operation) {
+            TglNativeContextPropertyBatch<2>::OwnedRecords modeFrozen;
+            assert(batch.freeze(read,modeFrozen));
+            for(auto& record:modeFrozen.records) {
+                std::memcpy(record.data(),&veboxKind,4);std::memcpy(record.data()+8,&queryType,8);
+                std::memcpy(record.data()+0x10,&queryProperty,4);
+                std::memcpy(record.data()+0x20,&operation,4);
+                std::memcpy(record.data()+0x28,&originalOutput,8);
+            }
+            const size_t extent=operation==1?16:operation==2?8:4;
+            unsigned copies=0;
+            auto fixedRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(at!=originalOutput)return read(at,out,bytes);
+                assert(bytes==extent);++copies;std::memset(out,0x36,bytes);return true;
+            };
+            assert(batch.freezeVeboxScalarPayloads(fixedRead,modeFrozen) && copies==4);
+            for(const auto& payload:modeFrozen.scalarPayloads) {
+                for(size_t i=0;i<extent;++i)assert(payload[i]==0x36);
+                assert(payload[extent]==0); // Exact read, no fabricated extra fields.
+            }
+        }
         contexts[1]=0x4000;assert(!batch.stable(read));contexts[1]=0x3000;
         contexts[1]=0x4000;assert(!batch.freeze(read,frozen) && !frozen.input());contexts[1]=0x3000;
         count=0;TglNativeContextPropertyBatch<2> empty;assert(!empty.capture(0x1000,read));

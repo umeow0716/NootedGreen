@@ -26778,19 +26778,24 @@ public:
         return true;
     }
     template<class Read> bool freezeVeboxScalarPayloads(Read read,OwnedRecords& owned) const noexcept {
-        // Exact234210 reads twelve DWORDs and copies them into context12f8
-        // BEFORE135410; no caller payload pointer escapes that copy.
-        // Other supported property families are unchanged, NOT certified here.
+        // Exact234210 reads12 DWORDs;2343d0 type800 ops1/2/3 read16/8/4
+        // bytes, op4/property1002 reads4 bytes into a local helper argument.
+        // Type200 LUT/gamma payloads are unchanged, NOT certified here.
         if(owned.scalarPayloadsFrozen || !admitsVeboxConfiguration(owned) || !stable(read))return false;
         std::array<bool,Capacity> captured{};
         for(size_t i=0;i<count_;++i) {
-            uint64_t type=0;uintptr_t payload=0;
+            uint64_t type=0;uintptr_t payload=0;uint32_t operation=0,property=0;
             std::memcpy(&type,owned.records[i].data()+8,8);
-            if(type!=0x10000)continue;
+            std::memcpy(&operation,owned.records[i].data()+0x20,4);
+            std::memcpy(&property,owned.records[i].data()+0x10,4);
+            size_t bytes=type==0x10000?0x30:0;
+            if(type==0x800)bytes=operation==1?16:operation==2?8:operation==3?4:
+                operation==4 && property==1002?4:0;
+            if(!bytes)continue;
             std::memcpy(&payload,owned.records[i].data()+0x28,8);
             std::array<uint8_t,0x30> first{},second{};
-            if(!payload || payload>UINTPTR_MAX-first.size() || !read(payload,first.data(),first.size()) ||
-                !read(payload,second.data(),second.size()) || first!=second)return false;
+            if(!payload || payload>UINTPTR_MAX-bytes || !read(payload,first.data(),bytes) ||
+                !read(payload,second.data(),bytes) || first!=second)return false;
             owned.scalarPayloads[i]=first;captured[i]=true;
         }
         if(!stable(read))return false;
