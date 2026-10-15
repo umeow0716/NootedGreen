@@ -26743,6 +26743,8 @@ public:
         alignas(8) std::array<std::array<uint8_t,0x30>,Capacity> records{};
         alignas(8) std::array<std::array<uint8_t,0x30>,Capacity> scalarPayloads{};
         bool scalarPayloadsFrozen=false;
+        alignas(8) std::array<std::array<uint8_t,0x2d0>,Capacity> conversionPayloads{};
+        bool conversionPayloadsFrozen=false;
         struct Header {uint32_t count=0,reserved=0;uintptr_t records=0;} header;
         OwnedRecords()=default;
         OwnedRecords(const OwnedRecords&)=delete;
@@ -26753,7 +26755,7 @@ public:
         // Publish self-referencing header only after every record is copied and
         // its context matches the identity that will be pinned. Payload pointers
         // remain original: this does not claim ownership of caller output buffers.
-        owned.header={};owned.scalarPayloadsFrozen=false;
+        owned.header={};owned.scalarPayloadsFrozen=false;owned.conversionPayloadsFrozen=false;
         if(!stable(read))return false;
         for(size_t i=0;i<count_;++i){uintptr_t context=0;
             if(!read(records_+i*0x30,owned.records[i].data(),0x30))return false;
@@ -26804,6 +26806,45 @@ public:
             std::memcpy(owned.records[i].data()+0x28,&payload,8);
         }
         owned.scalarPayloadsFrozen=true;return true;
+    }
+    template<class Read> bool freezeVeboxInlineConversionPayloads(Read read,OwnedRecords& owned) const noexcept {
+        if(owned.conversionPayloadsFrozen || !admitsVeboxConfiguration(owned) || !stable(read))return false;
+        std::array<bool,Capacity> captured{};
+        for(size_t i=0;i<count_;++i) {
+            uint64_t type=0;uintptr_t payload=0;uint32_t flags=0;
+            std::memcpy(&type,owned.records[i].data()+8,8);if(type!=0x200)continue;
+            std::memcpy(&payload,owned.records[i].data()+0x28,8);
+            if(!payload || payload>UINTPTR_MAX-4 || !read(payload,&flags,4))return false;
+            // Nested cube/float-LUT inputs retain original semantics until
+            // their dynamic backing capture is proved; NOT certified here.
+            if(flags&0x18)continue;
+            size_t bytes=4;
+            if(flags&2)bytes=0x38;
+            if(flags&0x104)bytes=0x6c;
+            std::array<uint8_t,0x2d0> first{},second{};
+            if(flags&0x80) {
+                bytes=0x25c;
+                if(payload>UINTPTR_MAX-bytes || !read(payload,first.data(),bytes))return false;
+                uint32_t selector=0,enabled=0;
+                std::memcpy(&selector,first.data()+0x254,4);std::memcpy(&enabled,first.data()+0x258,4);
+                if(!selector && enabled==1)bytes=0x2d0; // Inline236160 block290..2cf.
+            }
+            if(payload>UINTPTR_MAX-bytes || !read(payload,first.data(),bytes) ||
+                !read(payload,second.data(),bytes) || first!=second)return false;
+            uint32_t actual=0;std::memcpy(&actual,first.data(),4);if(actual!=flags)return false;
+            if(flags&0x80) {
+                uint32_t selector=0,enabled=0;
+                std::memcpy(&selector,first.data()+0x254,4);std::memcpy(&enabled,first.data()+0x258,4);
+                if((!selector && enabled==1)!=(bytes==0x2d0))return false;
+            }
+            owned.conversionPayloads[i]=first;captured[i]=true;
+        }
+        if(!stable(read))return false;
+        for(size_t i=0;i<count_;++i)if(captured[i]) {
+            const uintptr_t payload=reinterpret_cast<uintptr_t>(owned.conversionPayloads[i].data());
+            std::memcpy(owned.records[i].data()+0x28,&payload,8);
+        }
+        owned.conversionPayloadsFrozen=true;return true;
     }
     template<class Admit> bool admitVeboxQueryOutputs(const OwnedRecords& owned,Admit admit) const noexcept {
         if(!ready_ || owned.header.count!=count_ || owned.header.records!=reinterpret_cast<uintptr_t>(owned.records.data()))return false;

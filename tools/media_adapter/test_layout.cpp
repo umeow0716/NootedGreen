@@ -18099,6 +18099,32 @@ int main() {
             }
         }
         contexts[1]=0x4000;assert(!batch.stable(read));contexts[1]=0x3000;
+        for(uint32_t flags:{0u,2u,4u,0x100u,0x80u,0x180u,0x10u})for(bool gamma:{false,true}) {
+            TglNativeContextPropertyBatch<2>::OwnedRecords conversion;
+            assert(batch.freeze(read,conversion));
+            const uint64_t conversionType=0x200;const uint32_t operation=4;
+            for(auto& record:conversion.records) {
+                std::memcpy(record.data(),&veboxKind,4);std::memcpy(record.data()+8,&conversionType,8);
+                std::memcpy(record.data()+0x20,&operation,4);std::memcpy(record.data()+0x28,&originalOutput,8);
+            }
+            std::array<uint8_t,0x2d0> source{};std::memcpy(source.data(),&flags,4);
+            const uint32_t enabled=gamma?1:0;std::memcpy(source.data()+0x258,&enabled,4);
+            size_t extent=flags&0x80?(gamma?0x2d0:0x25c):flags&0x104?0x6c:flags&2?0x38:4;
+            auto conversionRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(at!=originalOutput)return read(at,out,bytes);
+                assert(bytes==4 || ((flags&0x80) && bytes==0x25c) || bytes==extent);
+                std::memcpy(out,source.data(),bytes);return true;
+            };
+            assert(batch.freezeVeboxInlineConversionPayloads(conversionRead,conversion));
+            assert(!batch.freezeVeboxInlineConversionPayloads(conversionRead,conversion));
+            uintptr_t captured=0;std::memcpy(&captured,conversion.records[0].data()+0x28,8);
+            if(flags&0x18)assert(captured==originalOutput); // Deep LUT still explicitly uncaptured.
+            else {
+                assert(captured==reinterpret_cast<uintptr_t>(conversion.conversionPayloads[0].data()));
+                assert(std::memcmp(conversion.conversionPayloads[0].data(),source.data(),extent)==0);
+                source.fill(0xff);assert(conversion.conversionPayloads[0][0]==uint8_t(flags));
+            }
+        }
         contexts[1]=0x4000;assert(!batch.freeze(read,frozen) && !frozen.input());contexts[1]=0x3000;
         count=0;TglNativeContextPropertyBatch<2> empty;assert(!empty.capture(0x1000,read));
         count=3;TglNativeContextPropertyBatch<2> oversized;assert(!oversized.capture(0x1000,read));

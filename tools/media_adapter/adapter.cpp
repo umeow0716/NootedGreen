@@ -5330,6 +5330,7 @@ struct NativeFactoryContextProperties {
                 if(!batch.freeze(&readMemory,frozen))return 5;
                 if(operation==Operation::Configure && !batch.admitsVeboxConfiguration(frozen))return 5;
                 if(operation==Operation::Configure && !batch.freezeVeboxScalarPayloads(&readMemory,frozen))return 5;
+                if(operation==Operation::Configure && !batch.freezeVeboxInlineConversionPayloads(&readMemory,frozen))return 5;
                 if(operation==Operation::Query && !batch.admitVeboxQueryOutputs(frozen,NativeDataAdmission{}))return 5;
                 using Lease=decltype(NativeCodecBackend::owners().pinExclusive(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{}));
                 std::array<Lease,16> leases;
