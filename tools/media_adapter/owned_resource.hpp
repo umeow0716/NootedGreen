@@ -26568,6 +26568,24 @@ public:
             excludes(reinterpret_cast<uintptr_t>(state_),sizeof(*state_)) &&
             excludes(reinterpret_cast<uintptr_t>(state_->storage),sizeof(*state_->storage));
     }
+    template<class ParentPin,class Qualify,class Executable>
+    bool excludesPropertyCreatorWritableSpan(const ParentPin& pin,uintptr_t address,size_t bytes,
+        Qualify qualify,Executable executable) noexcept {
+        if(!excludesPropertyPrivateWritableSpan(pin,address,bytes) || !qualify(state_->image) ||
+            state_->image>UINTPTR_MAX-0x1ca35b || state_->object>UINTPTR_MAX-0x78 ||
+            !state_->boundRenderer() || !state_->boundPhysicalOs())return false;
+        uintptr_t vptr=0;
+        if(!state_->read(state_->object,&vptr,8) || vptr!=state_->table.addressPoint())return false;
+        constexpr std::array<uint8_t,5> sizeAnchor{0xbf,0x78,0,0,0},ctorCall{0xe8,0xe5,0x0f,0,0};
+        constexpr std::array<uint8_t,7> ctorTable{0x48,0x8d,0x05,0xed,0x17,0x59,0};
+        auto matches=[&](uintptr_t offset,const auto& expected) noexcept {
+            auto actual=expected;
+            return executable(state_->image+offset,actual.size()) &&
+                state_->read(state_->image+offset,actual.data(),actual.size()) && actual==expected;
+        };
+        return matches(0x1c928b,sizeAnchor) && matches(0x1c92f6,ctorCall) && matches(0x1ca354,ctorTable) &&
+            (address>=state_->object+0x78 || state_->object>=address+bytes);
+    }
     const TglOwnedVphalLifetimeTable& lifetime() const noexcept {return state_->table;}
     // Retain BEFORE releasing the same frame pin, including native entry with
     // no lower/root callback. No CPU/native return can clear this obligation.

@@ -21084,6 +21084,7 @@ int main() {
                         auto* ownedStorage=new RendererStorage{children,backingReleased};
                         unsigned ownedNativeCalls=0;
                         uintptr_t actualRenderer=r;bool rendererReadable=true;
+                        bool creatorFactoryProof=true,creatorFactoryRx=true;
                         uintptr_t embeddedOs=0x91048;
                         const TglOwnedVphalLifetimeTable* activeOwnerTable=nullptr;
                         const TglOwnedPrimaryRendererTable* activeRendererTable=nullptr;
@@ -21091,6 +21092,15 @@ int main() {
                         rendererWords[1]=image+0x75bc00;rendererWords[14]=image+0x811e00;
                         for(size_t i=0;i<12;++i)rendererWords[i+2]=image+TglNativePrimaryRendererTable::offsets[i];
                         auto ownerRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                            if(address==image+0x1c928b && size==5) {
+                                constexpr uint8_t anchor[]={0xbf,0x78,0,0,0};std::memcpy(bytes,anchor,5);return creatorFactoryProof;
+                            }
+                            if(address==image+0x1c92f6 && size==5) {
+                                constexpr uint8_t anchor[]={0xe8,0xe5,0x0f,0,0};std::memcpy(bytes,anchor,5);return creatorFactoryProof;
+                            }
+                            if(address==image+0x1ca354 && size==7) {
+                                constexpr uint8_t anchor[]={0x48,0x8d,0x05,0xed,0x17,0x59,0};std::memcpy(bytes,anchor,7);return creatorFactoryProof;
+                            }
                             if(size==8 && (address==0xe0128 || address==0xe12f0 || address==0xe12e0 || address==0xe12e8 ||
                                 (address>=0xe2000 && address<0xe20d8))) {
                                 const uintptr_t value=address==0xe0128?0x90000:address==0xe12f0?0x93000:
@@ -21158,6 +21168,8 @@ int main() {
                         assert(owner->context()==creatorAddress && !owner->nativeDestructionComplete());
                         assert(!TglImplicitContextRelease<Owner>::allowed(*owner));
                         auto ownerExecutable=[&](uintptr_t address,size_t size) noexcept {
+                            if((size==5 && (address==image+0x1c928b || address==image+0x1c92f6)) ||
+                                (size==7 && address==image+0x1ca354))return creatorFactoryRx;
                             return execLifetime(address,size) || creatorExecutable(address,size);
                         };
                         actualRenderer+=8;
@@ -21390,6 +21402,15 @@ int main() {
                                     assert(!owner->excludesPropertyPrivateWritableSpan(framePin,reinterpret_cast<uintptr_t>(owner),1));
                                     assert(!owner->excludesPropertyPrivateWritableSpan(framePin,reinterpret_cast<uintptr_t>(&storage),1));
                                     assert(!owner->excludesPropertyPrivateWritableSpan(framePin,UINTPTR_MAX,1));
+                                    assert(owner->excludesPropertyCreatorWritableSpan(framePin,1,1,qualify,ownerExecutable));
+                                    assert(!owner->excludesPropertyCreatorWritableSpan(framePin,creatorAddress,1,qualify,ownerExecutable));
+                                    assert(!owner->excludesPropertyCreatorWritableSpan(framePin,creatorAddress+0x77,2,qualify,ownerExecutable));
+                                    creatorFactoryProof=false;
+                                    assert(!owner->excludesPropertyCreatorWritableSpan(framePin,1,1,qualify,ownerExecutable));
+                                    creatorFactoryProof=true;
+                                    creatorFactoryRx=false;
+                                    assert(!owner->excludesPropertyCreatorWritableSpan(framePin,1,1,qualify,ownerExecutable));
+                                    creatorFactoryRx=true;
                                     return 0;
                                 })==0);
                                 return -17;
