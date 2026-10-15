@@ -26758,6 +26758,21 @@ public:
             return native(binding_.image+0x1580c,physical,type);
         });
     }
+    // Slot7 releases pools at physical+80/+1090 via98b3, independently
+    // of slot10's backing groups. Never admit cleanup while frames retain data.
+    template<class Native=TglNativeBackingReleaseInvoker> int releasePool(typename Registry::Ticket ticket,
+        uintptr_t physical,uint32_t type,Native native=Native{}) noexcept {
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},uint32_t{})) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},uint32_t{})),int>);
+        return withBackingMutation(ticket,physical,[&]() noexcept -> int {
+            constexpr std::array<uint8_t,13> anchor{0x55,0x48,0x89,0xe5,0x85,0xf6,0x74,0x0c,0x83,0xfe,0x05,0x75,0x15};
+            std::array<uint8_t,13> actual{};
+            if(binding_.image>UINTPTR_MAX-0x154cf-anchor.size() ||
+                !executable_(binding_.image+0x154cf,anchor.size()) ||
+                !read_(binding_.image+0x154cf,actual.data(),actual.size()) || actual!=anchor)return 5;
+            return native(binding_.image+0x154cf,physical,type);
+        });
+    }
     // Slot15 sets physical+a858/shared-wrapper+130; slot16 queries can lazily
     // initialize physical+8/+10 and call external property callbacks. Neither
     // may run through pending-frame-safe event/query admission.

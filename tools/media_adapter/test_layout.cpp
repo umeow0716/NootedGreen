@@ -15718,6 +15718,7 @@ static void testRetainedVeboxFrames() {
         std::array<uint8_t,17> backingAllocateAnchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
             0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18};
         const std::array<uint8_t,11> backingReleaseAnchor{0x55,0x48,0x89,0xe5,0x53,0x50,0xff,0xce,0x83,0xfe,0x1a};
+        std::array<uint8_t,13> poolReleaseAnchor{0x55,0x48,0x89,0xe5,0x85,0xf6,0x74,0x0c,0x83,0xfe,0x05,0x75,0x15};
         auto removalAnchor=backingAllocateAnchor;
         std::array<uint8_t,17> eventAnchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
             0x41,0x55,0x41,0x54,0x53,0x50,0x83,0x3e,0};
@@ -15732,6 +15733,7 @@ static void testRetainedVeboxFrames() {
             else if(address==image+0x13c8c && size==free.size()) std::memcpy(bytes,free.data(),size);
             else if(address==image+0x155d1 && size==backingAllocateAnchor.size()) std::memcpy(bytes,backingAllocateAnchor.data(),size);
             else if(address==image+0x1580c && size==backingReleaseAnchor.size()) std::memcpy(bytes,backingReleaseAnchor.data(),size);
+            else if(address==image+0x154cf && size==poolReleaseAnchor.size()) std::memcpy(bytes,poolReleaseAnchor.data(),size);
             else if(address==image+0x13e43 && size==creationAnchor.size()) std::memcpy(bytes,creationAnchor.data(),size);
             else if(address==image+0x15128 && size==removalAnchor.size()) std::memcpy(bytes,removalAnchor.data(),size);
             else if(address==image+0x15b01 && size==eventAnchor.size()) std::memcpy(bytes,eventAnchor.data(),size);
@@ -15752,6 +15754,7 @@ static void testRetainedVeboxFrames() {
             return (address==image+0x135d9 && size==16) || (address==image+0x135f6 && size==7) ||
                 (address==image+0x13c8c && size==16) ||
                 (address==image+0x155d1 && size==17) || (address==image+0x1580c && size==11) ||
+                (address==image+0x154cf && size==13) ||
                 (address==image+0x15b01 && size==17) ||
                 (address==image+0x13e43 && size==20) || (address==image+0x15128 && size==17) ||
                 ((address==image+0x15f96 || address==image+0x161c3) && size==20) ||
@@ -17217,6 +17220,11 @@ static void testRetainedVeboxFrames() {
             ++typedBackingCalls;assert(entry==image+0x1580c && physical==0x8000 && type==25);return 31;};
         assert(callbacks.allocateBacking(success.ticket,0x8000,input,typedAllocate)==5);
         assert(callbacks.releaseBacking(success.ticket,0x8000,25,typedRelease)==5 && typedBackingCalls==0);
+        unsigned poolCalls=0;
+        auto poolRelease=[&](uintptr_t entry,uintptr_t physical,uint32_t type) noexcept -> int {
+            ++poolCalls;assert(entry==image+0x154cf && physical==0x8000 && type==5);return 31;
+        };
+        assert(callbacks.releasePool(success.ticket,0x8000,5,poolRelease)==5 && poolCalls==0);
         unsigned nativeReportCalls=0;
         auto report=[&](uintptr_t entry,uintptr_t physical,const void* original) noexcept -> int {
             ++nativeReportCalls;assert(entry==image+0x15b01 && physical==0x8000 && original==input);return 31;
@@ -17261,6 +17269,11 @@ static void testRetainedVeboxFrames() {
         assert(callbacks.physicalProperties(success.ticket,0x8000,input,static_cast<PropertyOperation>(99),nativeProperty)==5 && propertyCalls==2);
         assert(callbacks.allocateBacking(success.ticket,0x8000,input,typedAllocate)==31);
         assert(callbacks.releaseBacking(success.ticket,0x8000,25,typedRelease)==31 && typedBackingCalls==2);
+        assert(callbacks.releasePool(success.ticket,0x8000,5,poolRelease)==31 && poolCalls==1);
+        assert(callbacks.releasePool(success.ticket,0x8001,5,poolRelease)==5 && poolCalls==1);
+        poolReleaseAnchor[0]^=1;
+        assert(callbacks.releasePool(success.ticket,0x8000,5,poolRelease)==5 && poolCalls==1);
+        poolReleaseAnchor[0]^=1;
         backingAllocateAnchor[0]^=1;
         assert(callbacks.allocateBacking(success.ticket,0x8000,input,typedAllocate)==5 && typedBackingCalls==2);
         backingAllocateAnchor[0]^=1;
