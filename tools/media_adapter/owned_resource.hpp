@@ -3071,6 +3071,11 @@ std::array<uintptr_t,20> tglBindOwnedVeboxQueryHooks(
 }
 
 struct TglOwnedVeboxVtable {
+    // Disk fixtures contain zero bind placeholders. Loaded native tables must
+    // instead match the qualified libc++abi import, never arbitrary code.
+    template<class Qualify> static auto pureVirtualImport(Qualify qualify,int) noexcept
+        -> decltype(qualify.pureVirtual()) {return qualify.pureVirtual();}
+    template<class Qualify> static uintptr_t pureVirtualImport(Qualify,long) noexcept {return 0;}
     TglOwnedVeboxVtable()=default;
     // Native child stores addressPoint(), not a copy of the entries. Keep
     // the table address stable for the entire child/fence lifetime.
@@ -3127,10 +3132,18 @@ struct TglOwnedVeboxVtable {
         if (!read(image + 0x757c98, candidate.data(), sizeof(candidate))) {
             if(refusal)*refusal="table-read";return false;
         }
+        const uintptr_t pureVirtual=pureVirtualImport(qualify,0);
+        if(pureVirtual && !executable(pureVirtual,1)) {
+            if(refusal)*refusal="table-pure-virtual-executable";return false;
+        }
         for (size_t i = 0; i < count; ++i) {
-            bool mustBeNull = false;
-            for (size_t offset : missing) mustBeNull |= i * 8 == offset;
-            if (mustBeNull != (candidate[i] == 0)) {if(refusal)*refusal="table-null-topology";return false;}
+            bool imported = false;
+            for (size_t offset : missing) imported |= i * 8 == offset;
+            if(imported) {
+                if(candidate[i]!=pureVirtual) {if(refusal)*refusal="table-pure-virtual-identity";return false;}
+                continue; // Every imported slot is replaced by a typed owned hook below.
+            }
+            if(!candidate[i]) {if(refusal)*refusal="table-null-topology";return false;}
             if (candidate[i] && (candidate[i] < image+0x1160 ||
                 candidate[i] - image >= 0x23e03f || !executable(candidate[i], 1))) {
                 if(refusal)*refusal="table-native-executable";return false;

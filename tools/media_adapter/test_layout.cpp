@@ -3561,6 +3561,31 @@ static void testOwnedVeboxVtable() {
     assert(build());
     assert(table.addressPoint() == reinterpret_cast<uintptr_t>(table.entries.data()));
     assert(table.typeInfo == image+0x757ed0 && table.offsetToTop == 0);
+    // Exact dyld-loaded topology: the 17 disk-zero entries are binds to
+    // __cxa_pure_virtual, not NULL after relocation. None may survive copying.
+    struct LoadedImportAdmission {
+        uintptr_t image,import;
+        bool operator()(uintptr_t p) const noexcept {return p==image;}
+        uintptr_t pureVirtual() const noexcept {return import;}
+    };
+    constexpr uintptr_t pureVirtual=0x9000000;
+    const auto diskTable=original;
+    for(size_t offset:TglOwnedVeboxVtable::missing)original[offset/8]=pureVirtual;
+    const LoadedImportAdmission loaded{image,pureVirtual};
+    assert(table.build(image,hooks,read,loaded,executable));
+    for(size_t offset:TglOwnedVeboxVtable::missing)assert(table.entries[offset/8]!=pureVirtual);
+    for(size_t offset:TglOwnedVeboxVtable::missing) {
+        for(uintptr_t wrong:{uintptr_t{0},pureVirtual+8,image+0x2000}) {
+            original[offset/8]=wrong;
+            assert(!table.build(image,hooks,read,loaded,executable));
+        }
+        original[offset/8]=pureVirtual;
+    }
+    assert(!table.build(image,hooks,read,LoadedImportAdmission{image,0},executable));
+    original[0x18/8]=pureVirtual;
+    assert(!table.build(image,hooks,read,loaded,executable));
+    original=diskTable;
+    assert(build());
     // Invoke the actual owned callback through its installed ABI slot, not a
     // fake test address. The query must not mutate the private child bytes.
     std::array<uint8_t,32> childBytes{};

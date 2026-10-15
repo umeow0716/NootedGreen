@@ -90,6 +90,15 @@ struct NativeFrameDataRead {
 struct NativeTglImageAdmission {
     uintptr_t image=0;
     bool operator()(uintptr_t candidate) const noexcept {return image && candidate==image;}
+    uintptr_t pureVirtual() const noexcept {
+        void* entry=dlsym(RTLD_DEFAULT,"__cxa_pure_virtual");
+        Dl_info info{};
+        if(!entry || !dladdr(entry,&info) || info.dli_saddr!=entry || !info.dli_sname ||
+            !info.dli_fname || std::strcmp(info.dli_sname,"__cxa_pure_virtual") ||
+            std::strcmp(info.dli_fname,"/usr/lib/libc++abi.dylib") ||
+            !executableMemory(reinterpret_cast<uintptr_t>(entry),1))return 0;
+        return reinterpret_cast<uintptr_t>(entry);
+    }
 };
 using NativeCodecOwner=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,
     decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,
