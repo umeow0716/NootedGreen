@@ -5283,6 +5283,71 @@ struct NativeFactoryFrameBatch {
 int dispatchOwnedContextFrame(void* context,const void* input,void** output) noexcept {
     return NativeFactoryFrameBatch::frame(context,input,output);
 }
+struct NativeOtherFrameBackend {
+    using Lease=NativeFactoryFrameBatch::Lease;
+    static bool capture(NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,uint64_t generation,
+        const TglNativeFrameOutputReceipt& receipt,TglNativeOtherContextEventLineage& lineage,
+        TglNativeFenceBackingObservation::Snapshot& fence,TglNativeFreshStampObservation::Snapshot& fresh) noexcept {
+        const auto* source=NativeFactorySource::process().get();
+        if(!source || source->physical.image!=image || !scope.matches(image,physical,generation) ||
+           !lineage.capture(physical,receipt,&readMemory,NativeDataAdmission{}))return false;
+        TglNativeFenceBackingObservation binding;
+        if(!binding.resolve(image,&readMemory,NativeTglImageAdmission{image},&executableMemory))return false;
+        auto fenceAdmit=[&](uintptr_t codec,uintptr_t wrapper,uintptr_t framework,uintptr_t mapping,uint64_t bytes,uint32_t index) noexcept {
+            TglNativeOtherContextEventLineage current;
+            return scope.matches(image,physical,generation) && codec==receipt.context && wrapper==lineage.wrapper &&
+                index==receipt.index && current.capture(physical,receipt,&readMemory,NativeDataAdmission{}) &&
+                current.wrapper==wrapper && current.count==lineage.count && bytes<=SIZE_MAX &&
+                leafMemoryPermissions(framework,0x20,VM_PROT_READ,VM_PROT_EXECUTE) &&
+                leafMemoryPermissions(mapping,size_t(bytes),VM_PROT_READ,VM_PROT_EXECUTE);
+        };
+        if(!binding.capture(receipt,lineage.wrapper,&readMemory,fenceAdmit,fence) ||
+           !lineage.matchesFence(fence,&readMemory,NativeDataAdmission{}))return false;
+        uintptr_t device=0;uint32_t channels=0;
+        if(!readMemory(lineage.wrapper,&device,8) || !device || device>UINTPTR_MAX-0x34 ||
+           !readMemory(device+0x30,&channels,4) || !channels || channels>8)return false;
+        const uint64_t stampBytes=uint64_t(channels)*64;
+        auto stampAdmit=[&](const auto& expected,const auto& stamps,uint64_t bytes) noexcept {
+            uintptr_t currentDevice=0;
+            return scope.matches(image,physical,generation) && bytes==stampBytes && stamps.device==device && stamps.channels==channels &&
+                readMemory(expected.wrapper,&currentDevice,8) && currentDevice==device &&
+                lineage.matchesFence(expected,&readMemory,NativeDataAdmission{}) &&
+                leafMemoryPermissions(stamps.device,0x34,VM_PROT_READ,VM_PROT_EXECUTE) &&
+                leafMemoryPermissions(stamps.mapping,size_t(bytes),VM_PROT_READ,VM_PROT_EXECUTE) &&
+                leafMemoryPermissions(stamps.table,size_t(channels)*8,VM_PROT_READ,VM_PROT_EXECUTE);
+        };
+        if(!source->freshStamps.capture(device,stampBytes,fence,&readMemory,stampAdmit,fresh))return false;
+        TglNativeFenceBackingObservation::Snapshot after;
+        return binding.capture(receipt,lineage.wrapper,&readMemory,fenceAdmit,after) &&
+            after.expected==fence.expected && after.mapping==fence.mapping && after.bytes==fence.bytes &&
+            after.frameworkContext==fence.frameworkContext && after.count==fence.count &&
+            scope.matches(image,physical,generation);
+    }
+    static int dispatch(Lease& lease,NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,
+        uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
+        auto* owner=lease.get();
+        if(!owner || owner->family()!=TglNativeContextFamily::NativeOther ||
+           !scope.matches(image,physical,generation))return 5;
+        const auto reservation=owner->reserveNativeOtherFrame(lease,scope);
+        if(!reservation.serial)return 5;
+        TglNativeFrameOutputReceipt receipt;
+        const int result=owner->dispatchScopedFrameWithReceipt(lease,scope,input,output,
+            [&](uintptr_t entry,uintptr_t context,uintptr_t request,uintptr_t slot,NativePhysicalFrameScope& active) noexcept -> int {
+                if(!active.matches(image,physical,generation) || entry!=owner->frameTable().nativeFrame() || context!=owner->context())return 5;
+                return TglNativeContextFrameInvoker{}(entry,context,request,slot);
+            },receipt);
+        // Any invoked-native failure or missing evidence leaves Reserved/Bound
+        // retention in the owner. No synthetic cancellation or implicit free.
+        if(result)return result;
+        TglNativeOtherContextEventLineage lineage;
+        TglNativeFenceBackingObservation::Snapshot fence;
+        TglNativeFreshStampObservation::Snapshot fresh;
+        if(!capture(scope,image,physical,generation,receipt,lineage,fence,fresh) ||
+           !owner->bindNativeOtherFrame(lease,scope,reservation,lineage,fence,fresh))return 5;
+        return result;
+    }
+};
+
 struct NativeLateFactoryBatch {
     NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;
     void* renderArgument;bool busy=false;
@@ -5295,6 +5360,8 @@ struct NativeLateFactoryBatch {
     static int dispatch(void* raw,NativeFactoryFrameBatch::Lease& owner,NativePhysicalFrameScope& physical,
         uintptr_t image,uintptr_t address,uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
         if(!raw || !owner.get() || !physical.matches(image,address,generation))return 5;
+        if(owner.get()->family()==TglNativeContextFamily::NativeOther)
+            return NativeOtherFrameBackend::dispatch(owner,physical,image,address,generation,input,output);
         auto& self=*static_cast<NativeLateFactoryBatch*>(raw);
         if(self.busy || !self.serviceShapeValid())return 5;
         self.busy=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{self.busy};
