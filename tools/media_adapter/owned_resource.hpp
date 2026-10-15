@@ -19229,6 +19229,25 @@ public:
         std::array<std::array<uint32_t,5>,204> entries{};
         uint32_t channel=0,count=0;bool hasChannel=false;
     };
+    struct CommandChannelSnapshot {
+        uintptr_t database=0;uint32_t index=0,current=0,token=0;
+        bool same(const CommandChannelSnapshot& other) const noexcept {
+            return database==other.database && index==other.index && current==other.current && token==other.token;
+        }
+        bool matches(uint32_t channel) const noexcept {return channel==0 || channel==((token&0xffffU)<<1|1U);}
+    };
+    template<class Read> bool captureCommandChannel(Read read,CommandChannelSnapshot& output) const noexcept {
+        if constexpr(std::is_pointer_v<Read>)if(!read)return false;
+        CommandChannelSnapshot value;
+        if(!os_ || !entry_ || !read(os_,&value.database,8) || !value.database ||
+            !read(os_+8,&value.index,4) || value.index>=16)return false;
+        const uint64_t offset=8+uint64_t{value.index}*0x15c0;
+        if(value.database>UINTPTR_MAX-offset-0x15ac)return false;
+        const uintptr_t record=value.database+uintptr_t(offset);
+        if(!read(record+0x15a8,&value.current,4) || value.current>=16 ||
+            !read(record+0x60+uintptr_t{value.current}*0x158,&value.token,4))return false;
+        output=value;return true;
+    }
     // Kernel77a6e consumes one channel DWORD, then77b97/77d6c walks
     // bit0-marked0x14-byte records. Only the current authenticated page is
     // captured here; previous pages and token ownership are separate proofs.
@@ -19239,24 +19258,11 @@ public:
         //641e0 emits a canonical zero channel or the current context command
         // resource token(low16)<<1|1. Native selects among16 resources at
         // record28 + current15a8*158; never infer this token from a pointer.
-        struct ChannelSnapshot {
-            uintptr_t database=0;uint32_t index=0,current=0,token=0;
-            bool same(const ChannelSnapshot& other) const noexcept {
-                return database==other.database && index==other.index && current==other.current && token==other.token;
-            }
-        } beforeChannel;
-        auto channelMatches=[&](ChannelSnapshot& snapshot) noexcept {
+        CommandChannelSnapshot beforeChannel;
+        auto channelMatches=[&](CommandChannelSnapshot& snapshot) noexcept {
             if(!candidate.hasChannel)return true;
             if(!(candidate.channel&1))return candidate.channel==0;
-            auto& database=snapshot.database;auto& index=snapshot.index;
-            auto& current=snapshot.current;auto& token=snapshot.token;
-            if(!read(os_,&database,8) || !database || !read(os_+8,&index,4) || index>=16)return false;
-            const uint64_t offset=8+uint64_t{index}*0x15c0;
-            if(database>UINTPTR_MAX-offset-0x15ac)return false;
-            const uintptr_t record=database+uintptr_t(offset);
-            if(!read(record+0x15a8,&current,4) || current>=16 ||
-                !read(record+0x60+uintptr_t{current}*0x158,&token,4))return false;
-            return candidate.channel==((token&0xffffU)<<1|1U);
+            return captureCommandChannel(read,snapshot) && snapshot.matches(candidate.channel);
         };
         const uintptr_t payload=candidate.page.cursor-candidate.page.begin-8;
         if(payload) {
@@ -19273,9 +19279,41 @@ public:
             }
         }
         RelocationPage after;
-        ChannelSnapshot afterChannel;
+        CommandChannelSnapshot afterChannel;
         if(!captureRelocationPage(read,admit,after) || !candidate.page.same(after) ||
             !channelMatches(afterChannel) || !beforeChannel.same(afterChannel))return false;
+        output=candidate;return true;
+    }
+    struct RelocationSpanSummary {uint64_t pages=0,records=0;};
+    template<class Read,class Admit>
+    bool captureRelocationSpan(const RelocationPage& first,Read read,Admit admit,RelocationSpanSummary& output) const noexcept {
+        RelocationRecords last;
+        if(!captureRelocationRecords(read,admit,last) || !last.page.continuesAcquisition(first))return false;
+        CommandChannelSnapshot before,afterChannel;
+        if(!captureCommandChannel(read,before))return false;
+        RelocationSpanSummary candidate{1,last.count};
+        // No growing allocation: stream one bounded page/record at a time.
+        // Span is bounded by the SAME native shared allocation and origin.
+        for(uintptr_t begin=first.begin;begin<last.page.begin;begin+=0x1000) {
+            uint32_t header=0,channel=0;
+            if(!read(begin,&header,4) || header!=0x04008200 ||
+                !read(begin+8,&channel,4) || !before.matches(channel))return false;
+            bool terminated=false;
+            for(uintptr_t at=begin+12;at<=begin+0x1000-4;at+=0x14) {
+                uint32_t flags=0;
+                if(!read(at,&flags,4))return false;
+                if(!flags){terminated=true;break;}
+                std::array<uint32_t,5> record{};
+                if(!(flags&1) || begin+0x1000-at<sizeof(record) ||
+                    !read(at,record.data(),sizeof(record)) || record[0]!=flags)return false;
+                ++candidate.records;
+            }
+            if(!terminated)return false;
+            ++candidate.pages;
+        }
+        RelocationPage after;
+        if(!captureRelocationPage(read,admit,after) || !last.page.same(after) ||
+            !captureCommandChannel(read,afterChannel) || !before.same(afterChannel))return false;
         output=candidate;return true;
     }
     // Do not invent OS+15b0: that is a field of the DATABASE RECORD used
@@ -28577,6 +28615,18 @@ public:
         if(!busy_ || flushBusy_ || !renderer_ || retirementStarted_ || invalidated())return false;
         flushBusy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{flushBusy_};
         return binding.captureRelocationRecords(read,[&](uintptr_t os,uintptr_t wrapper,uintptr_t native) noexcept {
+            return admit(std::as_const(*renderer_),os,wrapper,native);
+        },output);
+    }
+    template<class Read,class Admit>
+    bool captureNativeRelocationSpan(const TglNativeOsCommandSubmitBinding& binding,
+        const TglNativeOsCommandSubmitBinding::RelocationPage& first,Read read,Admit admit,
+        TglNativeOsCommandSubmitBinding::RelocationSpanSummary& output) noexcept {
+        if constexpr(std::is_pointer_v<Read>)if(!read)return false;
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
+        if(!busy_ || flushBusy_ || !renderer_ || retirementStarted_ || invalidated())return false;
+        flushBusy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{flushBusy_};
+        return binding.captureRelocationSpan(first,read,[&](uintptr_t os,uintptr_t wrapper,uintptr_t native) noexcept {
             return admit(std::as_const(*renderer_),os,wrapper,native);
         },output);
     }

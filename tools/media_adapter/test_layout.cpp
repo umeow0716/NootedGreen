@@ -33724,6 +33724,8 @@ int main() {
         uint32_t currentCommand=0,commandToken=0x42;
         std::array<uint32_t,5> relocation{7,0,8,0,0};
         bool failRecord=false,driftRecord=false,driftCommand=false;
+        std::array<uint8_t,0x1000> closedPage{};
+        bool serveClosedPage=false,driftClosed=false;
         auto pageRead=[&](uintptr_t p,void* out,size_t n) noexcept {
             auto word=[&](const auto& value) noexcept {std::memcpy(out,&value,n);return true;};
             if(n==8) {
@@ -33735,14 +33737,20 @@ int main() {
                 if(p==wrapper+0x60)return word(reserved);
             }
             if(n==4 && p==base)return word(sharedSize);
-            if(n==4 && p==base+0x18)return word(pageHeader);
-            if(n==4 && p==base+0x20)return word(channel);
+            if(n==4 && p==end-0x1000)return word(pageHeader);
+            if(n==4 && p==end-0x1000+8)return word(channel);
             if(n==4 && p==database+8+uintptr_t{index}*0x15c0+0x15a8)return word(currentCommand);
             if(n==4 && p==database+8+uintptr_t{index}*0x15c0+0x60+uintptr_t{currentCommand}*0x158)return word(commandToken);
-            if(n==sizeof(relocation) && p==base+0x24 && !failRecord) {
+            if(n==sizeof(relocation) && p==end-0x1000+12 && !failRecord) {
                 std::memcpy(out,relocation.data(),n);
                 if(driftRecord)cursor+=0x14;
                 if(driftCommand)++currentCommand;
+                return true;
+            }
+            if(serveClosedPage && p>=base+0x18 && p-(base+0x18)<=closedPage.size() &&
+                n<=closedPage.size()-(p-(base+0x18))) {
+                std::memcpy(out,closedPage.data()+(p-(base+0x18)),n);
+                if(driftClosed && p==base+0x18)++currentCommand;
                 return true;
             }
             return observationRead(p,out,n);
@@ -33789,6 +33797,26 @@ int main() {
         driftRecord=true;assert(!binding.captureRelocationRecords(pageRead,admit,inventory));driftRecord=false;
         assert(inventory.page.cursor==originalCursor && inventory.count==1 && calls==3);
         cursor=base+0x20;
+        TglNativeOsCommandSubmitBinding::RelocationSpanSummary span;
+        assert(binding.captureRelocationSpan(original,pageRead,admit,span) && span.pages==1 && span.records==0);
+        auto resetClosed=[&]() noexcept {
+            closedPage.fill(0);uint32_t header=0x04008200,closedChannel=0x85;
+            std::memcpy(closedPage.data(),&header,4);
+            std::memcpy(closedPage.data()+8,&closedChannel,4);
+            std::memcpy(closedPage.data()+12,relocation.data(),sizeof(relocation));
+        };
+        resetClosed();serveClosedPage=true;
+        end+=0x1000;reserved+=0x1000;cursor=base+0x1038;
+        assert(binding.captureRelocationSpan(original,pageRead,admit,span) && span.pages==2 && span.records==2);
+        closedPage[1]=0;assert(!binding.captureRelocationSpan(original,pageRead,admit,span));resetClosed();
+        closedPage[8]=0x87;assert(!binding.captureRelocationSpan(original,pageRead,admit,span));resetClosed();
+        for(size_t at=12;at<=closedPage.size()-4;at+=0x14) {
+            uint32_t flags=1;std::memcpy(closedPage.data()+at,&flags,4);
+        }
+        assert(!binding.captureRelocationSpan(original,pageRead,admit,span));resetClosed();
+        driftClosed=true;assert(!binding.captureRelocationSpan(original,pageRead,admit,span));driftClosed=false;currentCommand=0;
+        assert(span.pages==2 && span.records==2 && calls==3);
+        serveClosedPage=false;end-=0x1000;reserved-=0x1000;cursor=base+0x20;
         auto observedInvoke=[&](uintptr_t p,uintptr_t o,void* buffer,uint32_t flags) noexcept {
             const int status=invoke(p,o,buffer,flags);rawFlags=0x40000000;
             if(failAfter)failFlags=true;
