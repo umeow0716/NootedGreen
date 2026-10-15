@@ -24,7 +24,7 @@ constexpr uint8_t expectedHash[32] = {
     0xcf,0x1c,0xb7,0x4a,0x1f,0xb3,0x60,0x69,0xbb,0x1b,0x35,0x62,0xb3,0x75,0x01,0x29};
 using Create = int (*)(void **, const void *, AvdMetadata *);
 using Destroy = int (*)(void *);
-struct Library { void *handle = nullptr; Create create = nullptr; Destroy destroy = nullptr; uintptr_t resourceShared=0,deviceCreate=0; };
+struct Library { void *handle = nullptr; Create create = nullptr; Destroy destroy = nullptr; uintptr_t resourceShared=0,deviceCreate=0,resourceCreate=0; };
 Library library;
 std::once_flag loadOnce;
 std::once_flag ownedImageOnce;
@@ -50,6 +50,7 @@ bool executableMemory(uintptr_t address,size_t length) noexcept;
 bool writableDataMemory(uintptr_t address,size_t length) noexcept;
 bool leafMemoryPermissions(uintptr_t address,size_t length,vm_prot_t required,vm_prot_t forbidden) noexcept;
 bool ownedExecutableMemory(uintptr_t address,size_t length) noexcept;
+uintptr_t qualifiedIoAcceleratorFramework(uintptr_t address) noexcept;
 int dispatchOwnedContextFrame(void*,const void*,void**) noexcept;
 struct NativeDataPointerWriter {
     bool operator()(uintptr_t address,uintptr_t value) const noexcept {
@@ -2816,6 +2817,46 @@ struct NativeRetainedStampOwnerAdmission {
         // exclude termination or CPU-synthesized stamps and grants no retire.
     }
 };
+struct NativeRetainedTaskCompletionQuery {
+    uintptr_t image=0,resourceCreate=0;
+    bool operator()(NativeBorrowedFrontend& frontend,const NGVfTaskCompletion::Request& request,
+        NGVfTaskCompletion::Reply& output) const noexcept {
+        const uintptr_t framework=qualifiedIoAcceleratorFramework(resourceCreate);
+        auto api=TglDarwinDeviceObservationApi::resolve();
+        if(!image || !framework || !api.valid() || !NGVfTaskCompletion::validRequest(request))return false;
+        NGVfTaskCompletion::Reply candidate{};bool published=false;
+        const int status=frontend.withRetainedInspection([&](const auto&,const TglNativeCreatedVeboxRendererView& pinned,
+            const auto&,const auto&,bool) noexcept -> int {
+            uintptr_t os=0,afterOs=0;TglNativeResourceBinding resources,after;
+            if(pinned.image!=image || !pinned.creator || pinned.creator>UINTPTR_MAX-0x48 ||
+                !pinned.matchesRendererTable(&readMemory) || !readMemory(pinned.creator+0x40,&os,8) ||
+                !resources.resolve(os,image,&readMemory,NativeTglImageAdmission{image},&executableMemory))return 5;
+            const auto qualifyFramework=[framework](uintptr_t address) noexcept {
+                return qualifiedIoAcceleratorFramework(address)==framework;
+            };
+            const auto connection=tglWithNativeSharedConnectionSnapshot(os,resourceCreate,&readMemory,qualifyFramework,
+                [&](uint32_t port) noexcept -> int {
+                    uint64_t registryId=0;
+                    const int identity=api.identity(port,registryId);if(identity)return identity;
+                    int nativeStatus=5;
+                    const bool valid=NGVfTaskCompletion::query(registryId,request,
+                        [&](uint32_t selector,const void* input,size_t bytes,void* out,size_t* outputBytes) noexcept {
+                            if(input!=&request || bytes!=sizeof(request))return 5;
+                            nativeStatus=api.readCompletion(port,selector,request,out,outputBytes);return nativeStatus;
+                        },candidate);
+                    return valid?0:nativeStatus?nativeStatus:5;
+                });
+            if(!connection.called || !connection.stable || connection.nativeStatus ||
+                !readMemory(pinned.creator+0x40,&afterOs,8) || afterOs!=os ||
+                !after.resolve(os,image,&readMemory,NativeTglImageAdmission{image},&executableMemory) ||
+                after.context!=resources.context || after.allocate!=resources.allocate || after.release!=resources.release ||
+                !pinned.matchesRendererTable(&readMemory))return 5;
+            published=true;return 0;
+        });
+        if(status || !published)return false;
+        output=candidate;return true;
+    }
+};
 struct NativeRendererHistoryInspection {
     static TglNativeHistoryCacheInspection run(NativeBorrowedFrontend& frontend) noexcept {
         TglNativeHistoryCacheInspection result;
@@ -4282,6 +4323,18 @@ struct NativePhysicalBackend {
                 NativeRetainedStampOwnerAdmission{native.image,address},expected,observed);
         });
     }
+    static int captureNativeTaskCompletion(void* physical,typename NativePhysicalRegistry::FrameTicket frame,
+        TglNativeFenceBackingObservation::Snapshot& expected,NGVfTaskCompletion::Reply& completion) noexcept {
+        TglNativePhysicalCallbackBinding native;TglNativeFenceBackingObservation fence;
+        if(!binding(native) || !library.resourceCreate || !fence.resolve(native.image,&readMemory,
+            NativeTglImageAdmission{native.image},&executableMemory))return 5;
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.captureTaskCompletion(ticket,address,frame,fence,&readMemory,
+                NativeRetainedFenceOwnerAdmission{native.image,address},
+                NativeRetainedTaskCompletionQuery{native.image,library.resourceCreate},expected,completion);
+        });
+    }
     using RemovedBatch=TglNativeRemovedContextBatch<16>;
     using RemovalScope=typename NativePhysicalRegistry::DependencyAdoptionScope;
     using PrepareRemoval=int(*)(void*,RemovalScope&,uintptr_t,uintptr_t,uint64_t,const RemovedBatch&) noexcept;
@@ -5369,6 +5422,7 @@ void load() {
     library.create = reinterpret_cast<Create>(dlsym(library.handle, "AVD_CreateAVDAccelerator"));
     library.destroy = reinterpret_cast<Destroy>(dlsym(library.handle, "AVD_DestroyAVDAccelerator"));
     library.resourceShared=reinterpret_cast<uintptr_t>(dlsym(library.handle,"IOAccelResourceGetClientShared"));
+    library.resourceCreate=reinterpret_cast<uintptr_t>(dlsym(library.handle,"IOAccelResourceCreate"));
     library.deviceCreate=reinterpret_cast<uintptr_t>(dlsym(library.handle,"IOAccelDeviceCreateWithAPIProperty"));
     // Keep the native image loaded for all forwarded callback lifetimes.
 }
