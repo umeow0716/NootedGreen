@@ -18548,6 +18548,17 @@ int main() {
             TglOwnedVeboxFrameRetention b(TglOwnedVeboxFrameRetention::AggregateLink{},root);
             TglOwnedVeboxCommandTransactionResult work,history;work.nativeEntered=true;history.nativeHistoryPublished=true;
             a.observe(work);b.observe(history);
+            assert(root.hasExactlyLinkedPair(a,b) && !root.hasExactlyLinkedPair(a,a));
+            {
+                TglOwnedVeboxFrameRetention extra(TglOwnedVeboxFrameRetention::AggregateLink{},root);
+                assert(!root.hasExactlyLinkedPair(a,b));
+            }
+            assert(root.hasExactlyLinkedPair(a,b));
+            {
+                TglOwnedVeboxFrameRetention lost(TglOwnedVeboxFrameRetention::AggregateLink{},root);
+                lost.observe(work);
+            }
+            assert(!root.hasExactlyLinkedPair(a,b)); // Lost pending origin remains quarantined.
             assert(a.mayHaveGpuWork() && !a.mayHaveNativeHistory());
             assert(!b.mayHaveGpuWork() && b.mayHaveNativeHistory());
             assert(root.mayHaveGpuWork() && root.mayHaveNativeHistory());

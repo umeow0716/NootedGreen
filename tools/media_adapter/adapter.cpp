@@ -238,6 +238,7 @@ class NativeRendererCpuAssembly {
     CommandStorage secondCommand_;
     NativeRendererCpu cpu_;
     std::array<NativeExecutionOwner,2> executions_;
+    std::array<const TglOwnedVeboxFrameRetention*,2> retentionMembers_{};
     bool cleanupBound_=false,basesAttempted_=false,basesReady_=false,vpAttempted_=false;
 public:
     NativeRendererCpuAssembly(uintptr_t image,
@@ -254,7 +255,10 @@ public:
             std::array<NativeRendererCleanup,2>{{{&firstCleanup_},{&secondCleanup_}}},
             std::array<TglNativeTrackedCpuInvoker,2>{},std::array<TglNativeSfcLifetimeInvoker,2>{},
             std::array<TglNativeVeboxDestructorInvoker,2>{}),
-         executions_{{NativeExecutionOwner(executionBackend_),NativeExecutionOwner(executionBackend_)}} {}
+         executions_{{NativeExecutionOwner(executionBackend_),NativeExecutionOwner(executionBackend_)}} {
+        retentionMembers_={&cpu_.backing().command().backing().auxiliary().retention(),
+            &secondCommand_.backing().auxiliary().retention()};
+    }
     NativeRendererCpuAssembly(const NativeRendererCpuAssembly&)=delete;
     NativeRendererCpuAssembly& operator=(const NativeRendererCpuAssembly&)=delete;
     auto& cpu() noexcept {return cpu_;}
@@ -263,13 +267,17 @@ public:
         return index==0?&cpu_.backing().command():index==1?&secondCommand_:nullptr;
     }
     auto& children() noexcept {return cpu_.children();}
+    bool completeRetentionMembership() const noexcept {
+        return retentionMembers_[0] && retentionMembers_[1] &&
+            retention_.hasExactlyLinkedPair(*retentionMembers_[0],*retentionMembers_[1]);
+    }
     bool producerPending(size_t index) noexcept {
         auto* command=commandForChild(index);if(!command)return true;
         TglOwnedVeboxAllocationRenderRetention keep{backing().retention(),command->backing().auxiliary().retention()};
         return keep();
     }
     bool readyForFrontend() noexcept {
-        if(!executionBackend_.bound() || !basesReady_ || !cleanupBound_ || backing().retention().admissionPending() ||
+        if(!completeRetentionMembership() || !executionBackend_.bound() || !basesReady_ || !cleanupBound_ || backing().retention().admissionPending() ||
             !backing().vpBound(0) || !backing().vpBound(1))return false;
         // Do not retain a frame pin before both private tables are admitted:
         // that pin would prevent the exclusive creator installation stage.
@@ -2779,11 +2787,11 @@ struct NativeRetainedFenceOwnerAdmission {
             !leafMemoryPermissions(mapping,size_t(bytes),VM_PROT_READ,VM_PROT_EXECUTE) ||
             !leafMemoryPermissions(framework,0x20,VM_PROT_READ,VM_PROT_EXECUTE))return false;
         bool proved=false;
-        const int status=frontend.withRetainedInspection([&](const auto&,const TglNativeCreatedVeboxRendererView& pinned,
+        const int status=frontend.withRetainedInspection([&](const auto& cpu,const TglNativeCreatedVeboxRendererView& pinned,
             const auto&,const auto&,bool) noexcept -> int {
             TglNativeVeboxParentView parent;uintptr_t creator=0,os=0,currentContext=0,currentMapping=0;
             uint64_t currentBytes=0;uint32_t count=0;
-            if(pinned.image!=image || !pinned.creator || !pinned.matchesRendererTable(&readMemory) ||
+            if(!cpu.completeRetentionMembership() || pinned.image!=image || !pinned.creator || !pinned.matchesRendererTable(&readMemory) ||
                 !parent.resolve(codec,&readMemory,NativeDataAdmission{}) || parent.physical!=physical || parent.wrapper!=wrapper ||
                 !readMemory(codec+0x12e0,&creator,8) || creator!=pinned.creator ||
                 !readMemory(creator+0x40,&os,8) || os!=parent.os ||
@@ -2825,10 +2833,10 @@ struct NativeRetainedTaskCompletionQuery {
         auto api=TglDarwinDeviceObservationApi::resolve();
         if(!image || !framework || !api.valid() || !NGVfTaskCompletion::validRequest(request))return false;
         NGVfTaskCompletion::Reply candidate{};bool published=false;
-        const int status=frontend.withRetainedInspection([&](const auto&,const TglNativeCreatedVeboxRendererView& pinned,
+        const int status=frontend.withRetainedInspection([&](const auto& cpu,const TglNativeCreatedVeboxRendererView& pinned,
             const auto&,const auto&,bool) noexcept -> int {
             uintptr_t os=0,afterOs=0;TglNativeResourceBinding resources,after;
-            if(pinned.image!=image || !pinned.creator || pinned.creator>UINTPTR_MAX-0x48 ||
+            if(!cpu.completeRetentionMembership() || pinned.image!=image || !pinned.creator || pinned.creator>UINTPTR_MAX-0x48 ||
                 !pinned.matchesRendererTable(&readMemory) || !readMemory(pinned.creator+0x40,&os,8) ||
                 !resources.resolve(os,image,&readMemory,NativeTglImageAdmission{image},&executableMemory))return 5;
             const auto qualifyFramework=[framework](uintptr_t address) noexcept {

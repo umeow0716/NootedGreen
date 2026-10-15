@@ -14992,6 +14992,8 @@ TglOwnedVeboxCommandTransactionResult tglRunLeasedVeboxSurfaceRender(
 class TglOwnedVeboxFrameRetention {
     bool pending_=false;
     bool workPending_=false,historyPending_=false;
+    uint32_t linkedMembers_=0;
+    bool membershipFault_=false,registered_=false;
     TglOwnedVeboxFrameRetention* const aggregate_=nullptr;
     void retain(bool work,bool history=false) noexcept {
         if(!work && !history)return;
@@ -15009,7 +15011,18 @@ public:
     // The aggregate must outlive every child latch. Flatten at construction:
     // publication is bounded, nonrecursive and never touches sibling latches.
     TglOwnedVeboxFrameRetention(AggregateLink,TglOwnedVeboxFrameRetention& aggregate) noexcept
-        :aggregate_(aggregate.aggregate_?aggregate.aggregate_:&aggregate) {}
+        :aggregate_(aggregate.aggregate_?aggregate.aggregate_:&aggregate) {
+        if(aggregate_->linkedMembers_==UINT32_MAX)aggregate_->membershipFault_=true;
+        else {++aggregate_->linkedMembers_;registered_=true;}
+    }
+    ~TglOwnedVeboxFrameRetention() noexcept {
+        // Existing ownership contract requires root to outlive all children.
+        // Dropping a pending member loses its origin, so closure stays faulted.
+        if(aggregate_ && registered_) {
+            if(pending_ || !aggregate_->linkedMembers_)aggregate_->membershipFault_=true;
+            if(aggregate_->linkedMembers_)--aggregate_->linkedMembers_;
+        }
+    }
     TglOwnedVeboxFrameRetention(const TglOwnedVeboxFrameRetention&)=delete;
     TglOwnedVeboxFrameRetention& operator=(const TglOwnedVeboxFrameRetention&)=delete;
     bool operator()() const noexcept {return pending_;}
@@ -15020,6 +15033,11 @@ public:
         return aggregate_==&aggregate;
     }
     bool aggregateRoot() const noexcept {return !aggregate_;}
+    bool hasExactlyLinkedPair(const TglOwnedVeboxFrameRetention& first,
+        const TglOwnedVeboxFrameRetention& second) const noexcept {
+        return aggregateRoot() && !membershipFault_ && linkedMembers_==2 &&
+            &first!=&second && first.linkedTo(*this) && second.linkedTo(*this);
+    }
     bool admissionPending() const noexcept;
     void observe(const TglOwnedVeboxCommandTransactionResult& result) noexcept {
         retain(result.acquired || result.writtenBack || result.nativeEntered,result.nativeHistoryPublished);
