@@ -74,4 +74,37 @@ template<class Call> bool query(uint64_t expectedRegistryId,Call call,Reply& out
     return true;
 }
 }
+// Separate task-bound request. A response is meaningful only when produced
+// under native SharedUserClient detach admission AND pinned context coverage;
+// these wire types alone do not authorize retirement.
+namespace NGVfTaskCompletion {
+constexpr uint32_t selector=0x4E470002U, version=1, channels=8;
+struct Request { uint32_t abiVersion,bytes; uint64_t expected[channels]; };
+struct Record { uint32_t channel,contextSlot; uint64_t publishedSerial; uint32_t stamp,head; };
+struct Reply {
+    uint32_t abiVersion,bytes;uint64_t registryId;
+    uint32_t recordCount,reserved;uint8_t familyUuid[16];Record records[channels];
+};
+static_assert(sizeof(Request)==72 && sizeof(Record)==24 && sizeof(Reply)==232,"task completion wire ABI");
+template<class Args> bool inlineShape(const Args* args,uint32_t currentVersion,
+    const void* dispatch,const void* target,const void* reference) noexcept {
+    return args && !dispatch && !target && !reference && args->version==currentVersion &&
+        args->selector==selector && !args->asyncWakePort && !args->asyncReference && !args->asyncReferenceCount &&
+        !args->scalarInput && !args->scalarInputCount && !args->scalarOutput && !args->scalarOutputCount &&
+        args->structureInput && args->structureInputSize==sizeof(Request) && !args->structureInputDescriptor &&
+        args->structureOutput && args->structureOutputSize==sizeof(Reply) &&
+        !args->structureOutputDescriptor && !args->structureOutputDescriptorSize && !args->structureVariableOutputData;
+}
+inline bool validRequest(const Request& request) noexcept {
+    if(request.abiVersion!=version || request.bytes!=sizeof(Request))return false;
+    uint32_t used=0;
+    for(unsigned i=0;i<channels;++i) {
+        const uint32_t channel=uint32_t(request.expected[i]);
+        if(channel==UINT32_MAX)continue;
+        if(channel>=channels || (used&(1U<<channel)))return false;
+        used|=1U<<channel;
+    }
+    return used!=0;
+}
+}
 #endif

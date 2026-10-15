@@ -2,10 +2,42 @@
 
 #include <array>
 #include <cassert>
+#include "../NootedGreen/kern_vf_device_observation.hpp"
 
 using NGVfContextShutdown::Action;
 
 int main() {
+    {
+        NGVfTaskCompletion::Request request{NGVfTaskCompletion::version,sizeof(NGVfTaskCompletion::Request),{}};
+        for(auto& event:request.expected)event=UINT64_MAX;
+        assert(!NGVfTaskCompletion::validRequest(request));
+        request.expected[0]=(uint64_t(7)<<32)|1;
+        assert(NGVfTaskCompletion::validRequest(request));
+        request.expected[1]=request.expected[0];
+        assert(!NGVfTaskCompletion::validRequest(request));request.expected[1]=UINT64_MAX;
+        request.expected[0]=(uint64_t(7)<<32)|8;
+        assert(!NGVfTaskCompletion::validRequest(request));request.expected[0]=1;
+        request.bytes=71;assert(!NGVfTaskCompletion::validRequest(request));request.bytes=72;
+        request.abiVersion=2;assert(!NGVfTaskCompletion::validRequest(request));request.abiVersion=1;
+        struct Args {
+            uint32_t version=0,selector=NGVfTaskCompletion::selector;
+            void *asyncWakePort=nullptr,*asyncReference=nullptr;uint32_t asyncReferenceCount=0;
+            void *scalarInput=nullptr,*scalarOutput=nullptr;uint32_t scalarInputCount=0,scalarOutputCount=0;
+            const void* structureInput=nullptr;size_t structureInputSize=0;void* structureInputDescriptor=nullptr;
+            void* structureOutput=nullptr;size_t structureOutputSize=0;
+            void* structureOutputDescriptor=nullptr;size_t structureOutputDescriptorSize=0;
+            void* structureVariableOutputData=nullptr;
+        } args;
+        NGVfTaskCompletion::Reply reply{};
+        args.structureInput=&request;args.structureInputSize=sizeof(request);
+        args.structureOutput=&reply;args.structureOutputSize=sizeof(reply);
+        auto shape=[&]() {return NGVfTaskCompletion::inlineShape(&args,0,nullptr,nullptr,nullptr);};
+        assert(shape());args.structureInputDescriptor=&request;assert(!shape());args.structureInputDescriptor=nullptr;
+        args.structureOutputSize--;assert(!shape());args.structureOutputSize++;
+        args.scalarInputCount=1;assert(!shape());args.scalarInputCount=0;
+        assert(!NGVfTaskCompletion::inlineShape(&args,0,&request,nullptr,nullptr));
+        args.selector=NGVfDeviceObservation::selector;assert(!shape());
+    }
     // Metadata coverage is not GPU completion. Enumerate accepted/rejected
     // transactions and interfering unknown writers against a simple oracle.
     for (unsigned marker = 0; marker < 2; ++marker)
