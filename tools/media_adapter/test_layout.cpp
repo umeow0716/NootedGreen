@@ -16166,15 +16166,16 @@ static void testRetainedVeboxFrames() {
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         {
-            assert(tglNativeContextFamilyFromVtable(image,image+0x75d028)==TglNativeContextFamily::VeboxVp);
+            assert(tglNativeContextFamilyFromVtable(image,image+0x75d018)==TglNativeContextFamily::VeboxVp);
+            assert(tglNativeContextFamilyFromVtable(image,image+0x75d028)==TglNativeContextFamily::Unknown);
             for(uintptr_t offset:{0x7541a0,0x7542c0,0x754350,0x754408,0x754550,0x754608,
                 0x754728,0x7547e0,0x7549b0,0x754a68,0x754af8,0x754bb0,0x755070,0x755130,
                 0x75cd98,0x75ce68,0x75cef8,0x75cf88,0x75d0a8}) {
                 assert(tglNativeContextFamilyFromVtable(image,image+offset)==TglNativeContextFamily::NativeOther);
                 assert(tglNativeContextFamilyFromVtable(image,image+offset+8)==TglNativeContextFamily::Unknown);
             }
-            assert(tglNativeContextFamilyFromVtable(0,0x75d028)==TglNativeContextFamily::Unknown);
-            assert(tglNativeContextFamilyFromVtable(UINTPTR_MAX,0x75d028)==TglNativeContextFamily::Unknown);
+            assert(tglNativeContextFamilyFromVtable(0,0x75d018)==TglNativeContextFamily::Unknown);
+            assert(tglNativeContextFamilyFromVtable(UINTPTR_MAX,0x75d018)==TglNativeContextFamily::Unknown);
         }
         {
             alignas(8) std::array<uint8_t,0x48> descriptor{};

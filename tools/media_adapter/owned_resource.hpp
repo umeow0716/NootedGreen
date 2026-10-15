@@ -25936,7 +25936,7 @@ enum class TglNativeContextFamily { Unknown,NativeOther,VeboxVp };
 constexpr TglNativeContextFamily tglNativeContextFamilyFromVtable(uintptr_t image,uintptr_t table) noexcept {
     if(!image || table<image)return TglNativeContextFamily::Unknown;
     switch(table-image) {
-        case 0x75d028:return TglNativeContextFamily::VeboxVp;
+        case 0x75d018:return TglNativeContextFamily::VeboxVp; // Raw23350c LEA/store, not an interior table label.
         case 0x7541a0:case 0x7542c0:case 0x754350:case 0x754408:
         case 0x754550:case 0x754608:case 0x754728:case 0x7547e0:
         case 0x7549b0:case 0x754a68:case 0x754af8:case 0x754bb0:
