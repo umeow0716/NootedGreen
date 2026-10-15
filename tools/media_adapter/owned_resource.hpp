@@ -4258,10 +4258,13 @@ struct TglVeboxHardwareBinding {
     // the owned retirement admission must exclude that device-state branch
     // and retain exact submission/channel/generation provenance. Do not
     // reproduce this kernel-private predicate against guessed user pointers.
-    // deviceTerminatedUnlocked319f4..31a3c independently copies each channel's
-    // submitted stamp at+104+24*i into its hardware stamp pointer, then sfence.
-    // Therefore even stamp equality after termination cannot distinguish real
-    // execution from teardown; a live device/generation gate is indispensable.
+    // Exact TGL start24453..2446f binds EventMachine380 via virtual130 to
+    // device task150->getStamps8248->task288 mapped buffer, NOT engine global
+    // HWS1408/1438. Other tasks clone that stamp buffer at7c40..7c88; they do
+    // not thereby acquire independent completion generations. Fast testStamp
+    // 30710/testAllStamps30756 may return true from cached f8 without reread.
+    // A fresh stamp read still needs same backing/reset/lifetime provenance;
+    // native success or cached equality cannot authorize owned retirement.
     // Further exact family reference UUID6C4A16B1-66DC-3A8B-9F0B-D3E027B16EB1:
     // reportGPURestart3d82e increments accelerator9dc at3d8ed. This is a
     // candidate restart report counter, NOT proved userspace generation ABI.
