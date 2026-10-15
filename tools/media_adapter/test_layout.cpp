@@ -33773,6 +33773,43 @@ int main() {
         auto admit=[&](uintptr_t o,uintptr_t w,uintptr_t c) noexcept {
             return o==address && w==0x60000 && c==native;
         };
+        {
+            TglOwnedVeboxBuilderScratch scratch;
+            uintptr_t commandBase=0x1000000,commandCursor=commandBase+0x40;
+            uintptr_t commandLimit=commandBase+0x1000,commandReserved=commandBase+0x100;
+            uintptr_t header=0x1100000;
+            int32_t commandOffset=0x40,commandRemaining=0xc0;
+            std::memcpy(scratch.command.data()+0x148,&commandBase,8);
+            std::memcpy(scratch.command.data()+0x150,&commandCursor,8);
+            std::memcpy(scratch.command.data()+0x158,&commandOffset,4);
+            std::memcpy(scratch.command.data()+0x15c,&commandRemaining,4);
+            std::array<uint8_t,16> written{};
+            std::memcpy(written.data(),scratch.command.data()+0x150,16);
+            bool rejectHeader=false,driftLimit=false;unsigned limitReads=0;
+            auto commandRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+                if(p==database+8+uintptr_t(index)*0x15c0+0x10 && n==8){std::memcpy(out,&header,8);return true;}
+                if(p==header+0x150 && n==16 && !rejectHeader){std::memcpy(out,written.data(),16);return true;}
+                if(p==wrapper+0x10 && n==8){std::memcpy(out,&commandBase,8);return true;}
+                if(p==wrapper+0x18 && n==8){
+                    const auto value=commandLimit+(driftLimit && ++limitReads>1?4:0);
+                    std::memcpy(out,&value,8);return true;
+                }
+                if(p==wrapper+0x20 && n==8){std::memcpy(out,&commandReserved,8);return true;}
+                return observationRead(p,out,n);
+            };
+            assert(binding.validateCommandWriteback(scratch,commandRead,admit));
+            rejectHeader=true;assert(!binding.validateCommandWriteback(scratch,commandRead,admit));rejectHeader=false;
+            written[0]^=4;assert(!binding.validateCommandWriteback(scratch,commandRead,admit));written[0]^=4;
+            commandReserved-=4;assert(!binding.validateCommandWriteback(scratch,commandRead,admit));commandReserved+=4;
+            commandLimit=commandReserved-4;assert(!binding.validateCommandWriteback(scratch,commandRead,admit));
+            commandLimit=commandBase+0x1000;
+            driftLimit=true;limitReads=0;assert(!binding.validateCommandWriteback(scratch,commandRead,admit));driftLimit=false;
+            commandRemaining=-1;std::memcpy(scratch.command.data()+0x15c,&commandRemaining,4);
+            assert(!binding.validateCommandWriteback(scratch,commandRead,admit));
+            commandRemaining=0xc0;std::memcpy(scratch.command.data()+0x15c,&commandRemaining,4);
+            commandOffset=0x41;std::memcpy(scratch.command.data()+0x158,&commandOffset,4);
+            assert(!binding.validateCommandWriteback(scratch,commandRead,admit));
+        }
         uintptr_t writer=0xd0000,base=0x80000,end=base+0x1018,cursor=base+0x20;
         uintptr_t reserved=end+12,limit=base+0x2030;
         uint32_t sharedSize=0x828,pageHeader=0x04008200;

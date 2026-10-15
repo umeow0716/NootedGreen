@@ -19336,6 +19336,44 @@ public:
             !captureCommandChannel(read,afterChannel) || !before.same(afterChannel))return false;
         output=candidate;return true;
     }
+    // After OS2c8 writeback, authenticate the actual header and reserved CPU
+    // span from646a0. Remaining15c excludes the native resource tail reserve;
+    // this checks CPU consistency only, never GPU drain or retirement.
+    template<class Read,class Admit>
+    bool validateCommandWriteback(const TglOwnedVeboxBuilderScratch& scratch,Read read,Admit admit) const noexcept {
+        if constexpr(std::is_pointer_v<Read>)if(!read)return false;
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
+        if(!os_ || !entry_)return false;
+        uintptr_t base=0,cursor=0;int32_t offset=0,remaining=0;
+        std::memcpy(&base,scratch.command.data()+0x148,8);
+        std::memcpy(&cursor,scratch.command.data()+0x150,8);
+        std::memcpy(&offset,scratch.command.data()+0x158,4);
+        std::memcpy(&remaining,scratch.command.data()+0x15c,4);
+        if(!base || (base&3) || offset<0 || (offset&3) || remaining<0 ||
+            uint64_t(uint32_t(offset))+uint32_t(remaining)>INT32_MAX ||
+            base>UINTPTR_MAX-uint32_t(offset)-uint32_t(remaining) || cursor!=base+uint32_t(offset))return false;
+        const uintptr_t reservationEnd=cursor+uint32_t(remaining);
+        std::array<uintptr_t,8> before{},after{};
+        auto capture=[&](auto& state) noexcept {
+            uintptr_t database=0,wrapper=0,native=0,header=0,start=0,limit=0,reserved=0;
+            uint32_t index=0;std::array<uint8_t,16> fields{};
+            if(os_>UINTPTR_MAX-12 || !read(os_,&database,8) || !database ||
+                !read(os_+8,&index,4) || index>=16)return false;
+            const uint64_t recordOffset=8+uint64_t(index)*0x15c0;
+            if(database>UINTPTR_MAX-recordOffset-0x18)return false;
+            const uintptr_t record=database+uintptr_t(recordOffset);
+            if(!read(record,&wrapper,8) || !wrapper || wrapper>UINTPTR_MAX-0x28 ||
+                !read(wrapper+8,&native,8) || !native || !admit(os_,wrapper,native) ||
+                !read(record+0x10,&header,8) || !header || header>UINTPTR_MAX-0x160 ||
+                !read(header+0x150,fields.data(),fields.size()) ||
+                std::memcmp(fields.data(),scratch.command.data()+0x150,fields.size()) ||
+                !read(wrapper+0x10,&start,8) || !read(wrapper+0x18,&limit,8) ||
+                !read(wrapper+0x20,&reserved,8) || !start || (start&3) ||
+                base<start || reservationEnd>reserved || reserved>limit)return false;
+            state={database,uintptr_t(index),wrapper,native,header,start,limit,reserved};return true;
+        };
+        return capture(before) && capture(after) && before==after;
+    }
     // Do not invent OS+15b0: that is a field of the DATABASE RECORD used
     // for the separate optional fence call. At most one a9dc occurs here,
     // but this raw flags snapshot does not assert that its branch ran.
@@ -28688,6 +28726,17 @@ public:
         return binding.captureRelocationSpan(first,read,[&](uintptr_t os,uintptr_t wrapper,uintptr_t native) noexcept {
             return admit(std::as_const(*renderer_),os,wrapper,native);
         },output);
+    }
+    template<class Read,class Admit>
+    bool validateNativeCommandWriteback(const TglNativeOsCommandSubmitBinding& binding,
+        const TglOwnedVeboxBuilderScratch& scratch,Read read,Admit admit) noexcept {
+        if constexpr(std::is_pointer_v<Read>)if(!read)return false;
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
+        if(!busy_ || flushBusy_ || !renderer_ || retirementStarted_ || invalidated())return false;
+        flushBusy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{flushBusy_};
+        return binding.validateCommandWriteback(scratch,read,[&](uintptr_t os,uintptr_t wrapper,uintptr_t native) noexcept {
+            return admit(std::as_const(*renderer_),os,wrapper,native);
+        });
     }
     template<class Read,class Admit,class Invoke=TglNativeOsCommandSubmitInvoker>
     TglNativeOsCommandSubmitBinding::Observation observeNativeOsSubmit(
