@@ -25170,6 +25170,13 @@ public:
     template<class OwnerLease,class Scope,class Invoke>
     int dispatchScopedFrameWithReceipt(const OwnerLease& lease,Scope& physicalScope,uintptr_t request,
         uintptr_t outputSlot,Invoke invoke,TglNativeFrameOutputReceipt& receipt) noexcept {
+        return dispatchScopedFrameWithReceipt(lease,physicalScope,request,outputSlot,invoke,receipt,
+            [](Scope&,const TglNativeFrameOutputReceipt&) noexcept -> int {return 0;});
+    }
+    template<class OwnerLease,class Scope,class Invoke,class ReceiptSink>
+    int dispatchScopedFrameWithReceipt(const OwnerLease& lease,Scope& physicalScope,uintptr_t request,
+        uintptr_t outputSlot,Invoke invoke,TglNativeFrameOutputReceipt& receipt,ReceiptSink sink) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<int,ReceiptSink&,Scope&,const TglNativeFrameOutputReceipt&>);
         // A live association is never overwritten, even on refused dispatch.
         if(receipt.valid)return 5;
         receipt={};
@@ -25180,6 +25187,9 @@ public:
                 if(result==0 && state_->read(output,&event,sizeof(event)) && event &&
                     event<=UINTPTR_MAX-8 && state_->read(event+4,&index,sizeof(index)))
                     receipt={context,event,index,true};
+                // Still inside dispatchScopedItem's native request guard.
+                // Binding after this callback would use an expired scope.
+                if(!result && receipt.valid)return sink(active,std::as_const(receipt));
                 // Keep native result and all ownership on missing lineage;
                 // an output event is NOT a GPU completion/quiescence proof.
                 return result;

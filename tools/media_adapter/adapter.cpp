@@ -3995,7 +3995,9 @@ struct NativePreparedCodecRequestDispatch {
                 result.nativeStatus=TglNativeContextFrameInvoker{}(entry,codec,input,output);
                 result.consumed=prepared.consumed();result.work=prepared.finish(result.nativeStatus);
                 return result.nativeStatus?result.nativeStatus:result.work.status;
-            },result.receipt);
+            },result.receipt,[](NativePhysicalFrameScope& active,const TglNativeFrameOutputReceipt& receipt) noexcept -> int {
+                return active.bindContextRootFrameOutput(receipt)?0:5;
+            });
         return result;
     }
 };

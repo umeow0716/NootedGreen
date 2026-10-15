@@ -15057,12 +15057,23 @@ static void testRetainedVeboxFrames() {
                     actualParent-=8;
                     assert(owner->dispatchScopedFrame(pin,active,0x55000,0x66000,invoke)==0);
                     TglNativeFrameOutputReceipt receipt;
-                    assert(owner->dispatchScopedFrameWithReceipt(pin,active,0x55000,0x66000,invoke,receipt)==0);
+                    unsigned sinkCalls=0;
+                    assert(owner->dispatchScopedFrameWithReceipt(pin,active,0x55000,0x66000,invoke,receipt,
+                        [&](auto& same,const TglNativeFrameOutputReceipt& created) noexcept -> int {
+                            ++sinkCalls;assert(&same==&active && same.matchesActiveContextRequest(context));
+                            assert(created.valid && created.event==0x77000 && created.index==9);return 0;
+                        })==0 && sinkCalls==1);
+                    assert(!active.matchesActiveContextRequest(context));
                     assert(receipt.valid && receipt.context==context && receipt.event==0x77000 && receipt.index==9);
                     assert(owner->dispatchScopedFrameWithReceipt(pin,active,0x55000,0x66000,invoke,receipt)==5);
                     assert(receipt.valid && receipt.event==0x77000 && receipt.index==9);
+                    TglNativeFrameOutputReceipt refused;
+                    assert(owner->dispatchScopedFrameWithReceipt(pin,active,0x55000,0x66000,invoke,refused,
+                        [&](auto& same,const auto&) noexcept -> int {
+                            assert(same.matchesActiveContextRequest(context));return 31;
+                        })==31 && refused.valid);
                     return 0;
-                })==0 && calls==2);
+                })==0 && calls==3);
                 TglOwnedVeboxRetainedFrames<ItemFrame>::Ticket rootTicket;
                 auto rootRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
                     if(bytes==8 && (address==context+0x12e8 || (address>=0x88000 && address<0x880d8))) {
