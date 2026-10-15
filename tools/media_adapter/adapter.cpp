@@ -5690,6 +5690,8 @@ struct NativeCreatorScopedInvocation {
     struct Result {
         int nativeResult=5,handoffResult=5;
         bool nativeInvoked=false,selected=false,metadataCopied=false,handoffCompleted=false,nativeOtherOnly=false,argumentsCommitted=false;
+        std::array<uintptr_t,16> creators{};
+        size_t selectedCount=0,metadataCount=0,completedCount=0;
     };
     using Scope=typename NativePhysicalRegistry::DependencyAdoptionScope;
     using AdmitFn=bool(*)(void*) noexcept;
@@ -5761,7 +5763,9 @@ struct NativeCreatorScopedInvocation {
         if(!scope.matches(image,physical,generation) || !batch.capture(request,&readMemory) ||
            !families.capture(batch,image,physical,&readMemory,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory) ||
            !after.capture(request,&readMemory) || after.count!=batch.count || after.contexts!=batch.contexts ||
-           !families.acceptsCreatorSuccess(result.selected,result.metadataCopied,result.handoffCompleted)) {
+           !families.matchesCreatorHandoffs(result.creators,result.completedCount,&readMemory) ||
+           result.selectedCount!=families.vpCount || result.metadataCount!=families.vpCount ||
+           (families.vpCount && (!result.selected || !result.metadataCopied || !result.handoffCompleted))) {
             result.handoffCompleted=false;return result;
         }
         result.nativeOtherOnly=families.vpCount==0;
@@ -5782,12 +5786,20 @@ struct NativeCreatorScopedInvocation {
         auto qualifiedCreator=[&](void* creator) noexcept -> bool {
             return physicalScope.matches(image,physical,generation) && admit(creator);
         };
+        NativeReturnObserver* currentObserver=nullptr;
         auto completeHandoff=[&](void* creator) noexcept -> int {
             if(!physicalScope.matches(image,physical,generation))return 5;
-            return handoff(creator); // Full handoff, NOT prepareOwner component status.
+            const int status=handoff(creator); // Full handoff, NOT prepareOwner component status.
+            if(status || !currentObserver)return status?status:5;
+            if(currentObserver->observedCount(0) && !currentObserver->observedAll(0,1))return 5;
+            if(currentObserver->observed(0,1) && currentObserver->observedCount(0)<16 &&
+                !currentObserver->rearmFromOwnedCallback(0))return 5;
+            if(!currentObserver->observed(1,1) || (currentObserver->observedCount(1)<16 &&
+                !currentObserver->rearmFromOwnedCallback(1)))return 5;
+            return 0;
         };
         TglNativeCreatorCallInvoker nativeCreate;
-        TglOwnedCreatorCallScope<decltype(nativeCreate),decltype(completeHandoff),decltype(qualifiedCreator)>
+        TglOwnedCreatorCallScope<decltype(nativeCreate),decltype(completeHandoff),decltype(qualifiedCreator),16>
             creatorScope(nativeCreate,completeHandoff,qualifiedCreator);
         if(!creatorScope.prepare(image,&readMemory,NativeTglImageAdmission{image},
             &executableMemory,&ownedExecutableMemory))return result;
@@ -5813,12 +5825,16 @@ struct NativeCreatorScopedInvocation {
             {image+0x531550,reinterpret_cast<uintptr_t>(metadata.data()),metadata.size()},0,
             {creatorScope.table().source(),creatorScope.table().addressPoint(),1});
         if(!observer.isArmed())return result;
+        currentObserver=&observer;
         result.nativeInvoked=true;
         result.nativeResult=reinterpret_cast<int(*)(void*,const void*)>(entry)(
             reinterpret_cast<void*>(physical),input);
         result.argumentsCommitted=true; // Original native arguments/output path.
-        result.selected=observer.observed(1,1) && creatorScope.consumed();
-        result.metadataCopied=observer.observed(0,1);
+        result.selectedCount=observer.observedCount(1);result.metadataCount=observer.observedCount(0);
+        result.completedCount=creatorScope.completedCount();
+        for(size_t i=0;i<result.completedCount;++i)result.creators[i]=reinterpret_cast<uintptr_t>(creatorScope.completedCreator(i));
+        result.selected=observer.observedAll(1,1) && creatorScope.consumedCount()==result.selectedCount;
+        result.metadataCopied=observer.observedAll(0,1);
         result.handoffResult=creatorScope.result();
         result.handoffCompleted=result.selected && result.metadataCopied && creatorScope.handoffCompleted() &&
             physicalScope.matches(image,physical,generation);

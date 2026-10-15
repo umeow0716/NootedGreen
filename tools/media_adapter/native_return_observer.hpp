@@ -44,6 +44,7 @@ class NativeReturnObserver {
     sig_atomic_t wanted = 0;
     volatile sig_atomic_t hitMask = 0;
     volatile sig_atomic_t hitCounts[4]{};
+    volatile sig_atomic_t mixedValuesMask=0;
     pthread_t owner = pthread_self();
     volatile sig_atomic_t values[4]{};
     unsigned booleanSites = 0;
@@ -127,8 +128,10 @@ class NativeReturnObserver {
         }
         if ((self->rdxImageSites | self->rcxImageSites) & (1u << site))
             self->record(4 + site, uint32_t(raw));
-        self->values[site] = self->booleanSites & (1u << site)
+        const auto captured=self->booleanSites & (1u << site)
             ? sig_atomic_t(raw != 0) : static_cast<sig_atomic_t>(raw);
+        if(self->hitCounts[site] && self->values[site]!=captured)self->mixedValuesMask|=1<<site;
+        self->values[site]=captured;
         self->hitMask |= 1 << site;
         ++self->hitCounts[site];
         auto next = self->programmed;
@@ -232,9 +235,13 @@ public:
     bool observed(int expected) const { return observed(0, expected); }
     bool isArmed() const { return armed; }
     unsigned observedCount(unsigned site) const noexcept {return site<4?unsigned(hitCounts[site]):0;}
+    bool observedAll(unsigned site,int expected) const noexcept {
+        return site<4 && armed && hitCounts[site]>0 && !(mixedValuesMask&(1<<site)) && values[site]==expected;
+    }
     // Normal stack ONLY, after execution has left the watched instruction.
     // No RF/TF/RIP changes. Never overwrite foreign debugger/signal state.
-    // Not used by production adapter until owned callback rearm is proven.
+    // Prepared adapter joins require owned rearm/count/identity proof before
+    // full factory publication; policy refusal is never bypassed.
     bool rearmFromOwnedCallback(unsigned site) noexcept {
         if(site>=4 || !armed || !installed || active.load()!=this || !pthread_equal(owner,pthread_self()) ||
             !(hitMask&(1<<site)) || !hitCounts[site] || hitCounts[site]>=16 || handlerRestore!=KERN_SUCCESS)return false;
