@@ -4588,6 +4588,9 @@ struct NativePhysicalBackend {
                             for(uint32_t i=0;i<batch.count;++i)if(batch.contexts[i]==context)return true;
                             return false;
                         });
+                },TglNativeBackingAllocateInvoker{},[&](RemovalScope& scope) noexcept -> bool {
+                    return NativeCodecBackend::withNativeOtherOwners(scope,native.image,address,ticket.generation,
+                        [](auto& lease) noexcept -> int {return lease.get()->nativeOtherWorkQuiescent()?0:5;})==0;
                 });
         });
     }

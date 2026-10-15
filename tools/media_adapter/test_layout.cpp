@@ -18459,6 +18459,17 @@ static void testRetainedVeboxFrames() {
             removalStage=3;return 0;
         };
         const void* activeRemovalScope=nullptr;
+        unsigned removalAdmissions=0;
+        assert(preparedCallbacks.removePreparedContextsAndReconcileBatchScoped<2>(preparedPhysical.ticket,0xf200,input,
+            [](auto&,uintptr_t,const auto&) noexcept -> int {assert(false);return 0;},
+            [](auto&,uintptr_t,const auto&) noexcept -> int {assert(false);return 0;},
+            preparedNative,[&](auto& scope) noexcept -> bool {
+                ++removalAdmissions;
+                assert(scope.matches(image,0xf200,preparedPhysical.ticket.generation));
+                return false;
+            })==5);
+        assert(removalAdmissions==1 && removalStage==0 && !activeRemovalScope);
+        assert(preparedRegistry.lookup(image,0xf200).generation==preparedPhysical.ticket.generation);
         assert(preparedCallbacks.removePreparedContextsAndReconcileBatchScoped<2>(preparedPhysical.ticket,0xf200,input,
             [&](auto& scope,uintptr_t physical,const auto& batch) noexcept -> int {
                 assert(scope.matches(image,physical,preparedPhysical.ticket.generation));

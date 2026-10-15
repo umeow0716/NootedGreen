@@ -28956,9 +28956,9 @@ public:
             return result?result:reconcile(physical,input);
         });
     }
-    template<size_t Capacity=16,class Prepare,class Reconcile,class Native=TglNativeBackingAllocateInvoker>
+    template<size_t Capacity=16,class Prepare,class Reconcile,class Native=TglNativeBackingAllocateInvoker,class Admit=TglNativeContextPreAdmission>
     int removePreparedContextsAndReconcileBatchScoped(typename Registry::Ticket ticket,uintptr_t physical,
-        const void* input,Prepare prepare,Reconcile reconcile,Native native=Native{}) noexcept {
+        const void* input,Prepare prepare,Reconcile reconcile,Native native=Native{},Admit admit=Admit{}) noexcept {
         using Batch=TglNativeRemovedContextBatch<Capacity>;
         using Scope=typename Registry::DependencyAdoptionScope;
         static_assert(noexcept(prepare(std::declval<Scope&>(),uintptr_t{},std::declval<const Batch&>())) &&
@@ -28973,7 +28973,7 @@ public:
         if(!input || !valid() || binding_.image>UINTPTR_MAX-0x15128-anchor.size() ||
             !executable_(binding_.image+0x15128,anchor.size()) ||
             !read_(binding_.image+0x15128,actual.data(),actual.size()) || actual!=anchor)return 5;
-        return registry_.withDependencyAdoption(ticket,binding_.image,physical,[&](Scope& scope) noexcept -> int {
+        return registry_.withDependencyAdoptionGuarded(ticket,binding_.image,physical,[&](Scope& scope) noexcept -> int {
             Batch snapshot;
             if(!scope.matches(binding_.image,physical,ticket.generation) ||
                 !snapshot.capture(reinterpret_cast<uintptr_t>(input),read_))return 5;
@@ -28983,7 +28983,7 @@ public:
             const int status=native(binding_.image+0x15128,physical,input);
             if(status)return status;
             return reconcile(scope,physical,static_cast<const Batch&>(snapshot));
-        });
+        },admit);
     }
     template<size_t Capacity=16,class Prepare,class Reconcile,class Native=TglNativeBackingAllocateInvoker>
     int removePreparedContextsAndReconcileBatch(typename Registry::Ticket ticket,uintptr_t physical,
