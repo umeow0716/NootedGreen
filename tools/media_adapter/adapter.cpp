@@ -6316,7 +6316,7 @@ template int NativePhysicalBackend::captureExpectedFence<NativeFrameFenceOwnerPr
     TglNativeFenceBackingObservation::Snapshot&) noexcept;
 using NativeScopedContextCreate=int(*)(uintptr_t,uintptr_t,const void*,NativePhysicalRegistry::DependencyAdoptionScope&) noexcept;
 template int NativePhysicalBackend::createContexts<NativeScopedContextCreate>(
-    uintptr_t,const void*,NativeScopedContextCreate) noexcept;
+    uintptr_t,const void*,NativeScopedContextCreate,const char**) noexcept;
 using NativeFrontendResolve=NativeContextSurfaceOwner*(*)(uintptr_t) noexcept;
 using NativeFrontendConsumer=TglOwnedVeboxCommandTransactionResult(*)(NativeRendererCpuAssembly&,
     NativeContextSurfaceOwner&,NativeContextSurfaceOwner&,NativeContextSurfaceOwner*,NativeContextSurfaceOwner*,
