@@ -2573,7 +2573,10 @@ template<class SurfaceOwner> struct NativeCompleteFrameConsumerFor {
         if(attempted || &capture.planner!=&render.planner || &capture.read!=&admission.read ||
             capture.parameters!=&parameters || &parameters!=&admission.feature.parameters ||
             &admission.reset.backing!=&assembly.backing() || view.renderer.image!=render.render.binding.image ||
-            assembly.backing().retention()())return result;
+            admission.reset.index>1 || !leases.child ||
+            leases.child!=reinterpret_cast<uintptr_t>(admission.reset.child) ||
+            leases.child!=view.renderer.originalChildren[admission.reset.index] ||
+            assembly.producerPending(admission.reset.index))return result;
         attempted=true;
         return NativeVeboxFrameCapabilityScopeFor<SurfaceOwner>::run(assembly,view,capture,leases,this,
             [](void* context,NativeVeboxLivePacketFrame& frame) noexcept -> typename NativeAdmissionStagesFor<SurfaceOwner>::Result {
