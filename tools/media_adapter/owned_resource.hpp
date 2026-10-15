@@ -26758,6 +26758,21 @@ public:
             return native(binding_.image+0x1580c,physical,type);
         });
     }
+    // Slot6 resets/allocates the same pools via960b/9710, before returning handles.
+    template<class Native=TglNativeBackingAllocateInvoker> int allocatePool(typename Registry::Ticket ticket,
+        uintptr_t physical,const void* input,Native native=Native{}) noexcept {
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+        if(!input)return 5;
+        return withBackingMutation(ticket,physical,[&]() noexcept -> int {
+            constexpr std::array<uint8_t,14> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x54,0x53,0x48,0x89,0xf3};
+            std::array<uint8_t,14> actual{};
+            if(binding_.image>UINTPTR_MAX-0x1541c-anchor.size() ||
+                !executable_(binding_.image+0x1541c,anchor.size()) ||
+                !read_(binding_.image+0x1541c,actual.data(),actual.size()) || actual!=anchor)return 5;
+            return native(binding_.image+0x1541c,physical,input);
+        });
+    }
     // Slot7 releases pools at physical+80/+1090 via98b3, independently
     // of slot10's backing groups. Never admit cleanup while frames retain data.
     template<class Native=TglNativeBackingReleaseInvoker> int releasePool(typename Registry::Ticket ticket,

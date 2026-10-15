@@ -4175,6 +4175,12 @@ struct NativePhysicalBackend {
             return callbacks.releaseBacking(ticket,address,type);
         });
     }
+    static int allocatePool(void* physical,const void* input) noexcept {
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.allocatePool(ticket,address,input);
+        });
+    }
     static int releasePool(void* physical,uint32_t type) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
         return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
