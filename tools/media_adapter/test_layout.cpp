@@ -16516,6 +16516,12 @@ static void testRetainedVeboxFrames() {
                     };
                     assert(!retained.captureFreshFence(fenceBacking,freshBinding,fenceReceipt,0xa0000,128,
                         readGraph,denyFenceOwner,denyFreshOwner,fenceSnapshot,freshSnapshot));
+                    NGVfTaskCompletion::Reply completion;
+                    auto denyTaskQuery=[](RendererFixture&,const NGVfTaskCompletion::Request&,NGVfTaskCompletion::Reply&) noexcept {
+                        assert(false);return false;
+                    };
+                    assert(!retained.captureTaskCompletion(fenceBacking,fenceReceipt,0xa0000,readGraph,
+                        denyFenceOwner,denyTaskQuery,fenceSnapshot,completion));
                     size_t sourceRole=0,targetRole=0;
                     assert(retained.retainedRoleIndices(selected.roles,sourceRole,targetRole) && sourceRole==5 && targetRole==0);
                     auto ambiguous=selected.roles;ambiguous.sources[6]=address;ambiguous.sourceCount=2;

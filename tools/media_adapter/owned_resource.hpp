@@ -26966,6 +26966,21 @@ public:
             });
         });
     }
+    template<class FenceRead,class Admit,class Query>
+    int captureTaskCompletion(typename Registry::Ticket ticket,uintptr_t physical,
+        typename Registry::FrameTicket frame,const TglNativeFenceBackingObservation& binding,
+        FenceRead read,Admit admit,Query query,TglNativeFenceBackingObservation::Snapshot& expected,
+        NGVfTaskCompletion::Reply& completion) noexcept {
+        if(binding.image()!=binding_.image || physical>UINTPTR_MAX-0x58)return 5;
+        if constexpr(std::is_pointer_v<FenceRead>)if(!read)return 5;
+        return withFrame(ticket,physical,[&](auto& pool) noexcept -> int {
+            uintptr_t wrapper=0;
+            if(!read(physical+0x50,&wrapper,8) || !wrapper)return 5;
+            return pool.withRetainedFrameObservation(frame,[&](auto& retained,const auto& receipt) noexcept -> int {
+                return retained.captureTaskCompletion(binding,receipt,wrapper,read,admit,query,expected,completion)?0:5;
+            });
+        });
+    }
     struct DeviceFrameEventObservationResult {
         FrameEventObservationResult event;
         NGVfDeviceObservation::Reply before{},after{};
@@ -29437,6 +29452,32 @@ public:
                     after.bytes!=expected.bytes || after.frameworkContext!=expected.frameworkContext ||
                     after.count!=expected.count)return false;
                 expectedOutput=expected;freshOutput=candidate;return true;
+            });
+    }
+    template<class Read,class ExpectedAdmit,class Query>
+    bool captureTaskCompletion(const TglNativeFenceBackingObservation& binding,
+        const TglNativeFrameOutputReceipt& receipt,uintptr_t wrapper,Read read,
+        ExpectedAdmit admit,Query query,TglNativeFenceBackingObservation::Snapshot& expectedOutput,
+        NGVfTaskCompletion::Reply& completionOutput) noexcept {
+        if constexpr(std::is_pointer_v<Query>)if(!query)return false;
+        return withExpectedFenceObservation(binding,receipt,wrapper,read,admit,
+            [&](Renderer& renderer,const auto& expected) noexcept {
+                NGVfTaskCompletion::Request request{NGVfTaskCompletion::version,sizeof(NGVfTaskCompletion::Request),{}};
+                for(size_t i=0;i<8;++i)request.expected[i]=expected.expected[i];
+                if(!NGVfTaskCompletion::validRequest(request))return false;
+                NGVfTaskCompletion::Reply candidate{};
+                if(!query(renderer,request,candidate) ||
+                    !NGVfTaskCompletion::validReply(candidate,candidate.registryId,request))return false;
+                // Query authenticates registry identity through its retained
+                // connection; this second check validates packet shape only.
+                TglNativeFenceBackingObservation::Snapshot after;
+                if(!binding.capture(receipt,wrapper,read,
+                    [&](uintptr_t codec,uintptr_t object,uintptr_t context,uintptr_t mapping,uint64_t bytes,uint32_t index) noexcept {
+                        return codec==codec_ && admit(renderer,codec,object,context,mapping,bytes,index);
+                    },after) || after.expected!=expected.expected || after.mapping!=expected.mapping ||
+                    after.bytes!=expected.bytes || after.frameworkContext!=expected.frameworkContext ||
+                    after.count!=expected.count)return false;
+                expectedOutput=expected;completionOutput=candidate;return true;
             });
     }
     bool requiresRetention() const noexcept {
