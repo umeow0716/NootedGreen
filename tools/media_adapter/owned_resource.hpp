@@ -4268,6 +4268,7 @@ struct TglVeboxHardwareBinding {
     // unchanged restart count or a sampled IOService-active bit is therefore
     // not established reset/termination exclusion. Do not infer equivalence.
     // Exact family relocation3d445 now resolves _OSIncrementAtomic on dc8.
+    // Its owning symbol3d434 is deviceTerminatedUnlocked, NOT a reset epoch.
     // Complete44-byte enableAccelerator42160/disableAccelerator4218c bodies
     // only toggle c78.bit1 and start/stop the progress timer; neither clears
     // dc8. This excludes those TWO reset candidates,not all initialization/
