@@ -5333,7 +5333,7 @@ struct NativePropertyParentMutation {
                 auto healthy=[&]() noexcept {
                     return pin.get()->withPinnedStorage(pin,NativeDataAdmission{},NativeTglImageAdmission{image},
                         &executableMemory,[&](auto& cpu,const auto&) noexcept -> int {
-                            return cpu.backing().retention().admissionPending()?5:admitOutputs(cpu);
+                            return cpu.backing().retention().admissionPending()?5:admitOutputs(cpu,*pin.get(),pin);
                         });
                 };
                 const int before=healthy();if(before)return before;
@@ -5409,13 +5409,14 @@ struct NativeFactoryContextProperties {
                         !batch.freezeVeboxCubePayloads(&readMemory,frozen,NativeCubeSnapshotBudget::available())))return 5;
                     return batch.stable(&readMemory)?TglNativeBackingAllocateInvoker{}(image+offset,address,frozen.input()):5;
                 };
-                auto admitOutputs=[&](auto& cpu) noexcept -> int {
+                auto admitOutputs=[&](auto& cpu,auto& owner,const auto& pin) noexcept -> int {
                     if(operation!=Operation::Query)return 0;
                     // Partial protected graph only: full codec/physical/resource
                     // coverage remains a prerequisite for table publication.
                     const uintptr_t storage=reinterpret_cast<uintptr_t>(&cpu);
                     if(storage>UINTPTR_MAX-sizeof(cpu))return 5;
                     return batch.admitVeboxQueryOutputs(frozen,[&](uintptr_t output,size_t bytes) noexcept {
+                        if(!owner.excludesPropertyPrivateWritableSpan(pin,output,bytes))return false;
                         for(size_t i=0;i<count;++i)
                             if(!leases[i].get()->excludesPublishedContextWritableSpan(leases[i],output,bytes))return false;
                         return output<=UINTPTR_MAX-bytes && NativeDataAdmission{}(output,bytes) &&

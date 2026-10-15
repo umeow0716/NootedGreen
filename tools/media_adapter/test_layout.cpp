@@ -21360,10 +21360,19 @@ int main() {
                             unsigned propertyCalls=0;
                             auto neverProperty=[]() noexcept -> int {assert(false);return 0;};
                             assert(owner->withNativePropertyMutation(emptyFramePin,neverProperty)==5);
+                            assert(!owner->excludesPropertyPrivateWritableSpan(framePin,1,1));
                             assert(owner->withNativePropertyMutation(framePin,[&]() noexcept -> int {
                                 ++propertyCalls;
                                 assert(owner->withNativePropertyMutation(siblingPin,neverProperty)==5);
                                 assert(access(siblingPin,useBorrowed)==31); // No storage lock held across native body.
+                                assert(access(siblingPin,[&](auto& storage,const auto&) noexcept -> int {
+                                    assert(owner->excludesPropertyPrivateWritableSpan(framePin,1,1));
+                                    assert(!owner->excludesPropertyPrivateWritableSpan(emptyFramePin,1,1));
+                                    assert(!owner->excludesPropertyPrivateWritableSpan(framePin,reinterpret_cast<uintptr_t>(owner),1));
+                                    assert(!owner->excludesPropertyPrivateWritableSpan(framePin,reinterpret_cast<uintptr_t>(&storage),1));
+                                    assert(!owner->excludesPropertyPrivateWritableSpan(framePin,UINTPTR_MAX,1));
+                                    return 0;
+                                })==0);
                                 return -17;
                             })==-17 && propertyCalls==1);
                             assert(owner->withNativePropertyMutation(framePin,[]() noexcept -> int {return 0;})==0);

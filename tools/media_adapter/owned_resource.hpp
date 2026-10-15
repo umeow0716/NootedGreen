@@ -26538,6 +26538,21 @@ public:
             !state_->storage) delete state_;
     }
     uintptr_t context() const noexcept {return state_?state_->object:0;}
+    template<class ParentPin>
+    bool excludesPropertyPrivateWritableSpan(const ParentPin& pin,uintptr_t address,size_t bytes) noexcept {
+        if(!state_ || pin.get()!=this || !state_->storage || !state_->frameBusy || !state_->storageBusy ||
+            state_->nativeRequestPending.pending() || !address || !bytes || address>UINTPTR_MAX-bytes ||
+            state_->table.publication()!=TglOwnedVphalLifetimeTable::Publication::Published ||
+            !state_->physicalLease.matches(state_->image,state_->physical,state_->generation))return false;
+        const auto excludes=[&](uintptr_t base,size_t extent) noexcept {
+            return base && base<=UINTPTR_MAX-extent && (address>=base+extent || base>=address+bytes);
+        };
+        // Owned private allocations only; native creator/renderer and heap
+        // members referenced by Storage require their own qualified ranges.
+        return excludes(reinterpret_cast<uintptr_t>(this),sizeof(*this)) &&
+            excludes(reinterpret_cast<uintptr_t>(state_),sizeof(*state_)) &&
+            excludes(reinterpret_cast<uintptr_t>(state_->storage),sizeof(*state_->storage));
+    }
     const TglOwnedVphalLifetimeTable& lifetime() const noexcept {return state_->table;}
     // Retain BEFORE releasing the same frame pin, including native entry with
     // no lower/root callback. No CPU/native return can clear this obligation.
