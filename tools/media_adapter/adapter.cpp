@@ -5835,9 +5835,10 @@ struct NativeCreatorScopedInvocation {
             return result;
         result.admission="physical-adoption-scope";
         result.status=NativePhysicalBackend::createContexts(physical,input,
-            [&](uintptr_t image,uintptr_t actual,const void* request,Scope& scope) noexcept -> int {
+            [&](uintptr_t actualEntry,uintptr_t actual,const void* request,Scope& scope) noexcept -> int {
                 result.admission="scope-identity";
-                if(actual!=physical || request!=input || scope.image()!=image)return 5;
+                if(!factory.physical.matchesCreatorInvocation(entry,physical,input,
+                    actualEntry,actual,request,scope.image()))return 5;
                 result.creator=runComplete(factory,entry,actual,request,scope,admit,selection);
                 result.admission=result.creator.admission;
                 if(!result.creator.nativeInvoked)return 5;

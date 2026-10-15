@@ -19775,6 +19775,17 @@ int main() {
         TglTrackedCpuBinding cpu{image,image+0x437e0,image+0x436d0};
         const uintptr_t entry=image+0x13e43;
         assert(physical.matchesCreatorInputs(cpu,entry));
+        int request=0,other=0;const uintptr_t object=0x900000;
+        assert(physical.matchesCreatorInvocation(entry,object,&request,entry,object,&request,image));
+        // Regression: passing the actual entry as scope image MUST refuse,
+        // while the coordinator's real entry/image pair MUST be accepted.
+        assert(!physical.matchesCreatorInvocation(entry,object,&request,entry,object,&request,entry));
+        assert(!physical.matchesCreatorInvocation(entry,object,&request,image,object,&request,image));
+        assert(!physical.matchesCreatorInvocation(entry+1,object,&request,entry,object,&request,image));
+        assert(!physical.matchesCreatorInvocation(entry,object,&request,entry,object+1,&request,image));
+        assert(!physical.matchesCreatorInvocation(entry,object,&request,entry,object,&other,image));
+        assert(!physical.matchesCreatorInvocation(entry,0,&request,entry,0,&request,image));
+        assert(!physical.matchesCreatorInvocation(entry,object,nullptr,entry,object,nullptr,image));
         for(auto field:{&cpu.image,&cpu.allocate,&cpu.release}) {
             const auto saved=*field;*field=saved+1;
             assert(!physical.matchesCreatorInputs(cpu,entry));*field=saved;

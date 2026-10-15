@@ -27802,6 +27802,14 @@ struct TglNativePhysicalCallbackBinding {
             initialize==image+0x135d9 && destroy==image+0x13c8c && entry==image+0x13e43 &&
             cpu.allocate==image+0x437e0 && cpu.release==image+0x436d0;
     }
+    // The coordinator callback's first argument is a FUNCTION ENTRY, not the
+    // image base. Keep the two identities separate at the scoped handoff.
+    bool matchesCreatorInvocation(uintptr_t entry,uintptr_t physical,const void* input,
+        uintptr_t actualEntry,uintptr_t actualPhysical,const void* actualInput,uintptr_t scopeImage) const noexcept {
+        return image && image<=UINTPTR_MAX-0x13e43 && entry==image+0x13e43 &&
+            actualEntry==entry && scopeImage==image && physical && actualPhysical==physical &&
+            input && actualInput==input;
+    }
     bool matchesFactoryTable(const std::array<uintptr_t,17>& table) const noexcept {
         // Exact factory2ba5a..2bb15 publishes all sixteen callbacks together.
         constexpr std::array<uintptr_t,16> offsets{0x135d9,0x13c8c,0x13e43,0x15128,
