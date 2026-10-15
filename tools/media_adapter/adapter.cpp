@@ -4939,9 +4939,8 @@ struct NativeLateFactoryBatch {
     }
 };
 struct NativeFactoryContextProperties {
-    // NOT PUBLISHED: all captured owners are pinned, but the native loop still
-    // rereads caller metadata. Per-item admission or proven caller serialization
-    // must close that race before this wrapper enters a factory table.
+    // NOT PUBLISHED: Query freezes its metadata; Configure still rereads caller
+    // metadata and requires per-item admission before factory publication.
     // Both operations retain every distinct codec. Configuration additionally
     // requires the physical empty-frame mutation gate; use that gate for this
     // initial bundle, never treat native return0 as retirement authority.
@@ -4956,6 +4955,8 @@ struct NativeFactoryContextProperties {
             return callbacks.withNewRequest(ticket,address,[&](auto&) noexcept -> int {
                 TglNativeContextPropertyBatch<16> batch;
                 if(!batch.capture(reinterpret_cast<uintptr_t>(input),&readMemory))return 5;
+                TglNativeContextPropertyBatch<16>::OwnedRecords frozen;
+                if(operation==Operation::Query && !batch.freeze(&readMemory,frozen))return 5;
                 using Lease=decltype(NativeCodecBackend::owners().pinExclusive(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{}));
                 std::array<Lease,16> leases;
                 std::array<uintptr_t,16> contexts{};size_t count=0;
@@ -4979,8 +4980,9 @@ struct NativeFactoryContextProperties {
                     !readMemory(image+offset,actual.data(),size) ||
                     std::memcmp(actual.data(),operation==Operation::Configure?configure.data():query.data(),size) ||
                     !batch.stable(&readMemory))return 5;
-                const int result=TglNativeBackingAllocateInvoker{}(image+offset,address,input);
-                return batch.stable(&readMemory)?result:5;
+                const auto* nativeInput=operation==Operation::Query?frozen.input():input;
+                const int result=TglNativeBackingAllocateInvoker{}(image+offset,address,nativeInput);
+                return operation==Operation::Query || batch.stable(&readMemory)?result:5;
             });
         });
     }

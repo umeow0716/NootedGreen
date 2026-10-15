@@ -17648,6 +17648,11 @@ int main() {
             if(address==0x1000 && size==4){++headerReads;auto value=count;
                 if(drift && headerReads>1)++value;std::memcpy(output,&value,4);return true;}
             if(address==0x1008 && size==8){std::memcpy(output,&records,8);return true;}
+            for(size_t i=0;i<2;++i)if(address==0x2000+i*0x30 && size==0x30){
+                if(unreadable)return false;std::memset(output,0,0x30);
+                std::memcpy(static_cast<uint8_t*>(output)+0x18,&contexts[i],8);
+                const uintptr_t payload=0x5000+i*0x100;
+                std::memcpy(static_cast<uint8_t*>(output)+0x28,&payload,8);return true;}
             for(size_t i=0;i<2;++i)if(address==0x2000+i*0x30+0x18 && size==8){
                 if(unreadable)return false;std::memcpy(output,&contexts[i],8);return true;}
             return false;
@@ -17655,7 +17660,14 @@ int main() {
         TglNativeContextPropertyBatch<2> batch;
         assert(batch.capture(0x1000,read) && batch.count()==2 && batch.context(1)==0x3000);
         assert(batch.request(1)==0x2030 && !batch.request(2) && !batch.capture(0x1000,read));
+        TglNativeContextPropertyBatch<2>::OwnedRecords frozen;
+        assert(batch.freeze(read,frozen) && frozen.input() && frozen.header.count==2);
+        uintptr_t frozenContext=0,payload=0;
+        std::memcpy(&frozenContext,frozen.records[1].data()+0x18,8);
+        std::memcpy(&payload,frozen.records[1].data()+0x28,8);
+        assert(frozenContext==0x3000 && payload==0x5100);
         contexts[1]=0x4000;assert(!batch.stable(read));contexts[1]=0x3000;
+        contexts[1]=0x4000;assert(!batch.freeze(read,frozen) && !frozen.input());contexts[1]=0x3000;
         count=0;TglNativeContextPropertyBatch<2> empty;assert(!empty.capture(0x1000,read));
         count=3;TglNativeContextPropertyBatch<2> oversized;assert(!oversized.capture(0x1000,read));
         count=2;records=UINTPTR_MAX-16;TglNativeContextPropertyBatch<2> overflow;

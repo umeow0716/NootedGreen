@@ -26006,6 +26006,28 @@ template<size_t Capacity=16> class TglNativeContextPropertyBatch {
     std::array<uintptr_t,Capacity> contexts_{};
     bool attempted_=false,ready_=false;
 public:
+    struct OwnedRecords {
+        alignas(8) std::array<std::array<uint8_t,0x30>,Capacity> records{};
+        struct Header {uint32_t count=0,reserved=0;uintptr_t records=0;} header;
+        OwnedRecords()=default;
+        OwnedRecords(const OwnedRecords&)=delete;
+        OwnedRecords& operator=(const OwnedRecords&)=delete;
+        const void* input() const noexcept{return header.count?&header:nullptr;}
+    };
+    template<class Read> bool freeze(Read read,OwnedRecords& owned) const noexcept {
+        // Publish self-referencing header only after every record is copied and
+        // its context matches the identity that will be pinned. Payload pointers
+        // remain original: this does not claim ownership of caller output buffers.
+        owned.header={};
+        if(!stable(read))return false;
+        for(size_t i=0;i<count_;++i){uintptr_t context=0;
+            if(!read(records_+i*0x30,owned.records[i].data(),0x30))return false;
+            std::memcpy(&context,owned.records[i].data()+0x18,8);
+            if(context!=contexts_[i])return false;
+        }
+        if(!stable(read))return false;
+        owned.header.count=count_;owned.header.records=reinterpret_cast<uintptr_t>(owned.records.data());return true;
+    }
     template<class Read> bool capture(uintptr_t input,Read read) noexcept {
         if(attempted_)return false;
         attempted_=true;
