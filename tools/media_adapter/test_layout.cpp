@@ -17552,6 +17552,25 @@ int main() {
         assert(retention.pending());
     }
     {
+        TglOwnedVeboxFrameRetention aggregate;
+        using Link=TglOwnedVeboxFrameRetention::AggregateLink;
+        TglOwnedVeboxFrameRetention first(Link{},aggregate),second(Link{},aggregate),nested(Link{},second);
+        static_assert(!std::is_constructible_v<TglOwnedVeboxFrameRetention,TglOwnedVeboxFrameRetention&>);
+        TglOwnedVeboxCommandTransactionResult idle;idle.status=0;
+        second.observe(idle);
+        assert(!aggregate() && !first() && !second());
+        TglOwnedVeboxCommandTransactionResult work;work.nativeEntered=true;
+        second.observe(work);
+        assert(aggregate() && second() && !first() && !nested());
+        first.observe(idle);assert(!first() && aggregate());
+        nested.observe(work);assert(nested() && aggregate());
+        // A child-only legacy acquisition must also retain the aggregate.
+        TglOwnedVeboxFrameRetention legacyAggregate,legacyChild(Link{},legacyAggregate);
+        struct Legacy {bool acquired=true,writtenBack=false;} legacy;
+        legacyChild.observe(legacy);assert(legacyChild() && legacyAggregate());
+        second.observe(idle);assert(second() && aggregate()); // no clear operation
+    }
+    {
         std::array<uint8_t,0x148> resource{};
         auto put=[&](size_t at,uint32_t value) noexcept {std::memcpy(resource.data()+at,&value,4);};
         uint32_t token=99;

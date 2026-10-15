@@ -14916,18 +14916,29 @@ TglOwnedVeboxCommandTransactionResult tglRunLeasedVeboxSurfaceRender(
 
 class TglOwnedVeboxFrameRetention {
     bool pending_=false;
+    TglOwnedVeboxFrameRetention* const aggregate_=nullptr;
+    void retain(bool value) noexcept {
+        if(!value)return;
+        pending_=true;
+        if(aggregate_)aggregate_->pending_=true;
+    }
 public:
+    struct AggregateLink {};
     TglOwnedVeboxFrameRetention()=default;
+    // The aggregate must outlive every child latch. Flatten at construction:
+    // publication is bounded, nonrecursive and never touches sibling latches.
+    TglOwnedVeboxFrameRetention(AggregateLink,TglOwnedVeboxFrameRetention& aggregate) noexcept
+        :aggregate_(aggregate.aggregate_?aggregate.aggregate_:&aggregate) {}
     TglOwnedVeboxFrameRetention(const TglOwnedVeboxFrameRetention&)=delete;
     TglOwnedVeboxFrameRetention& operator=(const TglOwnedVeboxFrameRetention&)=delete;
     bool operator()() const noexcept {return pending_;}
     void observe(const TglOwnedVeboxCommandTransactionResult& result) noexcept {
-        pending_=pending_ || result.requiresRetention();
+        retain(result.requiresRetention());
     }
     template<class Result> void observe(const Result& result) noexcept {
         // Legacy CPU producer results expose only acquisition/writeback.
         // Canonical whole-frame results always use the overload above.
-        pending_=pending_ || result.acquired || result.writtenBack;
+        retain(result.acquired || result.writtenBack);
     }
 };
 // Admission for mode-local reset of this owner's NEVER-submitted resources.
