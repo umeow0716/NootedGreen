@@ -2091,6 +2091,9 @@ public:
     }
     uintptr_t source() const noexcept {return source_;}
     uintptr_t object() const noexcept {return object_;}
+    uintptr_t initializeEntry() const noexcept {
+        return source_?entries_[2+TglNativePrimaryRendererTable::initializeSlot]:0;
+    }
     Publication publication() const noexcept {return publication_;}
     bool requiresRetention() const noexcept {
         return publication_==Publication::Published || publication_==Publication::Ambiguous;
@@ -2128,7 +2131,8 @@ private:
     uintptr_t admittedRendererTable_=0;
     template<class Read,class Admit,class Qualify,class Executable,class TableAdmit,class RendererAdmit>
     bool resolveTable(uintptr_t base,uintptr_t object,Read read,Admit admit,
-        Qualify qualify,Executable executable,TableAdmit tableAdmit,RendererAdmit rendererAdmit) noexcept {
+        Qualify qualify,Executable executable,TableAdmit tableAdmit,RendererAdmit rendererAdmit,
+        uintptr_t ownedInitialize=0) noexcept {
         *this={};
         uintptr_t creatorTable=0,create=0,result=0,rendererTable=0,init=0,frame=0;
         std::array<uintptr_t,3> children{};
@@ -2139,7 +2143,7 @@ private:
            !read(object+0x68,&result,8) || !result || (result&7) ||
            result>UINTPTR_MAX-0x2cb8 || !admit(result,0x2cb8) ||
            !read(result,&rendererTable,8) || !rendererAdmit(result,rendererTable) ||
-           !read(rendererTable+0x20,&init,8) || init!=base+0x132510 || !executable(init,1) ||
+           !read(rendererTable+0x20,&init,8) || init!=(ownedInitialize?ownedInitialize:base+0x132510) || !executable(init,1) ||
            !read(rendererTable+0x28,&frame,8) || frame!=base+0x131fa0 || !executable(frame,1) ||
            !read(result+0x910,children.data(),sizeof(children)) || !children[2]) return false;
         image=base;creator=object;renderer=result;configuration=result+0x2cb0;
@@ -2188,7 +2192,7 @@ public:
                 return rendererOwner.object()==renderer && rendererOwner.source()==base+0x75bba0 &&
                     rendererOwner.publication()==TglOwnedPrimaryRendererTable::Publication::Published &&
                     table==rendererOwner.addressPoint();
-            });
+            },rendererOwner.initializeEntry());
     }
 };
 

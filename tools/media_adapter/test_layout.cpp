@@ -21882,7 +21882,10 @@ int main() {
                         };
                         assert(rendererOwner.build(image,0xf200,mainRead,qualify,
                             [](uintptr_t,size_t) noexcept {return true;},
-                            [](uintptr_t at,size_t) noexcept {return at==0xf200;}));
+                            [](uintptr_t at,size_t) noexcept {return at==0xf200 || at==0xf210;},0xf210));
+                        auto mainExecutable=[&](uintptr_t at,size_t n) noexcept {
+                            return (at==0xf210 && n==1) || creatorExecutable(at,n);
+                        };
                         auto mainWrite=[&](uintptr_t at,uintptr_t value) noexcept {
                             if(at!=r) return false;put(r,0,value);return true;
                         };
@@ -21890,7 +21893,17 @@ int main() {
                         assert(!publishedView.resolveOwned(image,creatorAddress,lifetime,mainRead,
                             creatorAdmit,qualify,creatorExecutable));
                         assert(publishedView.resolveOwnedRenderer(image,creatorAddress,lifetime,rendererOwner,
-                            mainRead,creatorAdmit,qualify,creatorExecutable));
+                            mainRead,creatorAdmit,qualify,mainExecutable));
+                        auto wrongInitialize=[&](uintptr_t at,void* out,size_t n) noexcept {
+                            if(at==rendererOwner.addressPoint()+0x20 && n==8) {
+                                const uintptr_t forged=0xf218;std::memcpy(out,&forged,8);return true;
+                            }
+                            return mainRead(at,out,n);
+                        };
+                        assert(!publishedView.resolveOwnedRenderer(image,creatorAddress,lifetime,rendererOwner,
+                            wrongInitialize,creatorAdmit,qualify,[](uintptr_t,size_t) noexcept {return true;}));
+                        assert(publishedView.resolveOwnedRenderer(image,creatorAddress,lifetime,rendererOwner,
+                            mainRead,creatorAdmit,qualify,mainExecutable));
                         assert(publishedView.matchesRendererTable(mainRead));
                         const auto retainedView=publishedView;
                         put(r,0,image+0x75bba0);
