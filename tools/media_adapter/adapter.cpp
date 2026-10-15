@@ -4455,6 +4455,10 @@ struct NativeCreatorPreparation {
         TglOwnedVeboxCommandTransactionResult work{};
         bool consumed=false,running=false;
         static TglOwnedVeboxCommandTransactionResult produce(void* raw,uintptr_t actual,void* parameters,void* pass) noexcept {
+            // Native outer132389 rewrites the SAME stack parameter block for
+            // each pass, then132454 updates renderer9bc before lower131520.
+            // Pointer equality is not pass identity. Capture each packet anew;
+            // final callback132500 returns0 without draining retained work.
             if(!raw)return {};
             auto& self=*static_cast<LateRequest*>(raw);
             if(!self.running || actual!=self.renderer || !self.physical.matchesActiveContextRequest(self.context))return {};
