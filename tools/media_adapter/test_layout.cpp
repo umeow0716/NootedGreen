@@ -17704,7 +17704,15 @@ int main() {
         fence.expected.fill(UINT64_MAX);fence.expected[0]=(uint64_t(17)<<32)|1;
         uintptr_t mapping=0x2000,table=0x3000,pointer=0x2040;
         uint32_t channels=2,stamp=16;bool deny=false,drift=false;unsigned admissions=0;
+        uintptr_t callback=0x6083;bool codeBad=false;
         auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            if(address==0x41ae && size==11){
+                constexpr uint8_t lea[]={0x48,0x8d,0x05,0xce,0x1e,0,0,0x48,0x89,0x43,0x18};
+                std::memcpy(out,lea,size);return true;}
+            if(address==0x6083 && size==Fresh::callbackCode.size()){
+                auto code=Fresh::callbackCode;if(codeBad)code[0]^=1;
+                std::memcpy(out,code.data(),size);return true;}
+            if(address==0x1018 && size==8){std::memcpy(out,&callback,8);return true;}
             if(address==0x1020 && size==8){std::memcpy(out,&mapping,8);return true;}
             if(address==0x1028 && size==8){std::memcpy(out,&table,8);return true;}
             if(address==0x1030 && size==4){std::memcpy(out,&channels,4);return true;}
@@ -17716,15 +17724,23 @@ int main() {
             return !deny && !(drift && ++admissions>1);
         };
         Fresh::Snapshot result;
-        assert(Fresh::capture(0x1000,128,fence,read,admit,result));
+        Fresh fresh;
+        assert(!fresh.capture(0x1000,128,fence,read,admit,result));
+        auto qualify=[](uintptr_t address) noexcept{return address==0x4000 || address==0x6083;};
+        auto executable=[](uintptr_t,size_t) noexcept{return true;};
+        assert(fresh.resolve(0x4000,read,qualify,executable));
+        assert(fresh.capture(0x1000,128,fence,read,admit,result));
         assert(result.valid && result.active[0] && !result.active[1] && result.observed[0]==16);
         auto preserved=result;pointer=0x2044;
-        assert(!Fresh::capture(0x1000,128,fence,read,admit,result));pointer=0x2040;
+        assert(!fresh.capture(0x1000,128,fence,read,admit,result));pointer=0x2040;
         assert(result.observed==preserved.observed);
-        assert(!Fresh::capture(0x1000,64,fence,read,admit,result));
-        channels=1;assert(!Fresh::capture(0x1000,128,fence,read,admit,result));channels=2;
-        deny=true;assert(!Fresh::capture(0x1000,128,fence,read,admit,result));deny=false;
-        drift=true;admissions=0;assert(!Fresh::capture(0x1000,128,fence,read,admit,result));
+        assert(!fresh.capture(0x1000,64,fence,read,admit,result));
+        channels=1;assert(!fresh.capture(0x1000,128,fence,read,admit,result));channels=2;
+        deny=true;assert(!fresh.capture(0x1000,128,fence,read,admit,result));deny=false;
+        drift=true;admissions=0;assert(!fresh.capture(0x1000,128,fence,read,admit,result));drift=false;
+        callback=0x6084;assert(!fresh.capture(0x1000,128,fence,read,admit,result));callback=0x6083;
+        codeBad=true;assert(!fresh.resolve(0x4000,read,qualify,executable));
+        assert(!fresh.capture(0x1000,128,fence,read,admit,result));
     }
     {
         uint32_t count=2;uintptr_t records=0x2000;

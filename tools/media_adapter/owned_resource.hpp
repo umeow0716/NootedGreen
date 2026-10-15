@@ -24429,7 +24429,29 @@ public:
 // retirement authority: admission must hold backing leases; reset/termination
 // exclusion (including CPU-synthesized stamps) remains a separate obligation.
 class TglNativeFreshStampObservation {
+    uintptr_t callback_=0;
 public:
+    static constexpr std::array<uint8_t,84> callbackCode{
+        0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x28,0x31,0xc9,0x4c,0x8b,0x04,0xce,0x41,0x83,
+        0xf8,0xff,0x74,0x2a,0x4c,0x89,0xc2,0x48,0xc1,0xea,0x20,0x4d,0x63,0xc0,0x41,0x89,
+        0xd1,0x46,0x2b,0x4c,0x87,0x44,0x45,0x85,0xc9,0x7e,0x13,0x4e,0x8b,0x0c,0xc0,0x45,
+        0x8b,0x09,0x46,0x89,0x4c,0x87,0x44,0x44,0x29,0xca,0x85,0xd2,0x7f,0x10,0x48,0xff,
+        0xc1,0x48,0x83,0xf9,0x08,0x75,0xc3,0xb8,0x01,0x00,0x00,0x00,0xeb,0x02,0x31,0xc0,
+        0x5d,0xc3,0x00,0x00};
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t constructor,Read read,Qualify qualify,Executable executable) noexcept {
+        callback_=0;
+        constexpr std::array<uint8_t,11> lea{0x48,0x8d,0x05,0xce,0x1e,0,0,0x48,0x89,0x43,0x18};
+        if(!constructor || constructor>UINTPTR_MAX-0x2083-callbackCode.size() ||
+            !qualify(constructor))return false; // Exact UUID/image owner proof.
+        const uintptr_t callback=constructor+0x2083;
+        auto actualLea=lea;auto actualCode=callbackCode;
+        if(!qualify(callback) || !executable(constructor+0x1ae,lea.size()) ||
+            !executable(callback,callbackCode.size()) ||
+            !read(constructor+0x1ae,actualLea.data(),actualLea.size()) || actualLea!=lea ||
+            !read(callback,actualCode.data(),actualCode.size()) || actualCode!=callbackCode)return false;
+        callback_=callback;return true;
+    }
     struct Snapshot {
         uintptr_t device=0,mapping=0,table=0;
         uint32_t channels=0;
@@ -24438,14 +24460,16 @@ public:
         bool valid=false;
     };
     template<class Read,class Admit>
-    static bool capture(uintptr_t device,uint64_t mappingBytes,
+    bool capture(uintptr_t device,uint64_t mappingBytes,
         const TglNativeFenceBackingObservation::Snapshot& fence,
-        Read read,Admit admit,Snapshot& output) noexcept {
+        Read read,Admit admit,Snapshot& output) const noexcept {
         if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
-        if(!fence.valid || !device || device>UINTPTR_MAX-0x34 || !mappingBytes)return false;
+        if(!callback_ || !fence.valid || !device || device>UINTPTR_MAX-0x34 || !mappingBytes)return false;
         Snapshot candidate;candidate.device=device;
         auto metadata=[&](Snapshot& value) noexcept {
-            return read(device+0x20,&value.mapping,8) && value.mapping &&
+            uintptr_t callback=0;
+            return read(device+0x18,&callback,8) && callback==callback_ &&
+                read(device+0x20,&value.mapping,8) && value.mapping &&
                 value.mapping<=UINTPTR_MAX-mappingBytes &&
                 read(device+0x28,&value.table,8) && value.table &&
                 read(device+0x30,&value.channels,4) && value.channels &&
