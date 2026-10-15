@@ -15342,6 +15342,17 @@ static void testRetainedVeboxFrames() {
             bool allocationProof=true;
             auto ownerRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
                 assert(!nativeRemoved); // No native-object read after successful removal.
+                constexpr std::array<uintptr_t,4> sizeSites{0x233532,0x233554,0x233576,0x233598};
+                constexpr std::array<uintptr_t,4> storeSites{0x23354d,0x23356f,0x233591,0x2335b3};
+                constexpr std::array<std::array<uint8_t,5>,4> sizes{{
+                    {0xbf,0x70,0x64,1,0},{0xbf,0x40,1,0,0},{0xbf,0x34,0,0,0},{0xbf,0x34,0,0,0}}};
+                constexpr std::array<std::array<uint8_t,7>,4> stores{{
+                    {0x48,0x89,0x88,0xf0,0x12,0,0},{0x48,0x89,0x88,0xe8,0x12,0,0},
+                    {0x48,0x89,0x88,0xf8,0x12,0,0},{0x48,0x89,0x81,0,0x13,0,0}}};
+                for(size_t i=0;i<4;++i) {
+                    if(address==base+sizeSites[i] && bytes==5){std::memcpy(out,sizes[i].data(),5);return allocationProof;}
+                    if(address==base+storeSites[i] && bytes==7){std::memcpy(out,stores[i].data(),7);return allocationProof;}
+                }
                 if(address==base+0x14916 && bytes==5) {
                     constexpr uint8_t anchor[]={0xbf,0x70,0x13,0,0};std::memcpy(out,anchor,5);return allocationProof;
                 }
@@ -15357,6 +15368,9 @@ static void testRetainedVeboxFrames() {
                     uintptr_t value=0;
                     if(address==context+0x128)value=actualParent;
                     else if(address==context+0x12f0)value=os;
+                    else if(address==context+0x12e8)value=0x70000;
+                    else if(address==context+0x12f8)value=0x71000;
+                    else if(address==context+0x1300)value=0x72000;
                     else if(address==physical+0x50)value=wrapper;
                     else if(address==os+8)value=wrapper+0x48;
                     else return read(address,out,bytes);
@@ -15410,6 +15424,11 @@ static void testRetainedVeboxFrames() {
                 assert(!owner->excludesPublishedContextWritableSpan(exclusive,context+0x136f,2));
                 assert(!owner->excludesPublishedContextWritableSpan(exclusive,reinterpret_cast<uintptr_t>(owner),1));
                 assert(owner->excludesPublishedContextWritableSpan(exclusive,context+0x1370,1));
+                for(auto span:{std::pair<uintptr_t,size_t>{os,0x16470},{0x70000,0x140},{0x71000,0x34},{0x72000,0x34}}) {
+                    assert(!owner->excludesPublishedContextWritableSpan(exclusive,span.first,1));
+                    assert(!owner->excludesPublishedContextWritableSpan(exclusive,span.first+span.second-1,2));
+                    assert(owner->excludesPublishedContextWritableSpan(exclusive,span.first+span.second,1));
+                }
                 allocationProof=false;assert(!owner->excludesPublishedContextWritableSpan(exclusive,0x60000,1));allocationProof=true;
                 assert(!owner->excludesPublishedContextWritableSpan(exclusive,UINTPTR_MAX,1));
                 assert(!owner->confirmNativeRemoval([](auto...) noexcept {assert(false);return true;}));

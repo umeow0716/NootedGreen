@@ -26178,7 +26178,7 @@ public:
             address>UINTPTR_MAX-bytes || !enter())return false;
         Unlock unlock{state_->busy};
         if(state_->removed || !state_->retainedIdentity() || !state_->nativeParentMatches() ||
-            !state_->qualify(state_->image) || state_->image>UINTPTR_MAX-0x233513 ||
+            !state_->qualify(state_->image) || state_->image>UINTPTR_MAX-0x2335ba ||
             state_->table.publication()!=TglOwnedContextFrameVtable::Publication::Published)return false;
         uintptr_t vptr=0;
         if(!state_->read(state_->context,&vptr,8) || vptr!=reinterpret_cast<uintptr_t>(state_->table.addressPoint()))return false;
@@ -26193,10 +26193,25 @@ public:
         const auto excludes=[&](uintptr_t base,size_t extent) noexcept {
             return base && base<=UINTPTR_MAX-extent && (address>=base+extent || base>=address+bytes);
         };
-        // Exact native VP class root plus both owned C++ allocations/private table.
-        // Nested native context shells/creator/OS allocations remain separate.
-        return excludes(state_->context,0x1370) && excludes(reinterpret_cast<uintptr_t>(this),sizeof(*this)) &&
-            excludes(reinterpret_cast<uintptr_t>(state_),sizeof(*state_));
+        // Exact constructor-owned buffers, not size inferred from field access.
+        constexpr std::array<size_t,4> fields{0x12f0,0x12e8,0x12f8,0x1300};
+        constexpr std::array<size_t,4> extents{0x16470,0x140,0x34,0x34};
+        constexpr std::array<uintptr_t,4> sizeSites{0x233532,0x233554,0x233576,0x233598};
+        constexpr std::array<uintptr_t,4> storeSites{0x23354d,0x23356f,0x233591,0x2335b3};
+        constexpr std::array<std::array<uint8_t,5>,4> sizes{{
+            {0xbf,0x70,0x64,1,0},{0xbf,0x40,1,0,0},{0xbf,0x34,0,0,0},{0xbf,0x34,0,0,0}}};
+        constexpr std::array<std::array<uint8_t,7>,4> stores{{
+            {0x48,0x89,0x88,0xf0,0x12,0,0},{0x48,0x89,0x88,0xe8,0x12,0,0},
+            {0x48,0x89,0x88,0xf8,0x12,0,0},{0x48,0x89,0x81,0,0x13,0,0}}};
+        if(!excludes(state_->context,0x1370) || !excludes(reinterpret_cast<uintptr_t>(this),sizeof(*this)) ||
+            !excludes(reinterpret_cast<uintptr_t>(state_),sizeof(*state_)))return false;
+        for(size_t i=0;i<fields.size();++i) {
+            uintptr_t buffer=0;
+            if(!matches(sizeSites[i],sizes[i]) || !matches(storeSites[i],stores[i]) ||
+                !state_->read(state_->context+fields[i],&buffer,8) ||
+                (i==0 && buffer!=state_->os) || !excludes(buffer,extents[i]))return false;
+        }
+        return true; // Context-owned shells/creator/physical graph still separate.
     }
     const TglOwnedContextFrameVtable& frameTable() const noexcept {return state_->table;}
     bool nativeRemovalConfirmed() const noexcept {
