@@ -17438,9 +17438,11 @@ int main() {
     {
         struct Producer {
             unsigned calls=0;bool recurse=false;int status=0;
+            TglOwnedLateLowerPassRequest* request=nullptr;
             static TglOwnedVeboxCommandTransactionResult run(void* raw,uintptr_t renderer,void* parameters,void* packet) noexcept {
                 auto& self=*static_cast<Producer*>(raw);++self.calls;
                 assert(renderer==0x1234 && parameters && packet);
+                if(self.request)assert(self.request->finish(0,true).status==5);
                 if(self.recurse)assert(TglOwnedLateLowerPassRequest::callback(reinterpret_cast<void*>(renderer),parameters,packet)==5);
                 TglOwnedVeboxCommandTransactionResult result;result.status=self.status;return result;
             }
@@ -17450,7 +17452,10 @@ int main() {
         auto* packet=reinterpret_cast<void*>(0x9876);
         assert(TglOwnedLateLowerPassRequest::callback(renderer,parameter,packet)==5);
         TglOwnedLateLowerPassRequest request(0x1234,&producer,&Producer::run);
+        static_assert(!std::is_copy_constructible_v<TglOwnedLateLowerPassRequest>);
+        producer.request=&request;
         assert(request.finish(0,false).status==5);
+        assert(request.finish(59,true).status==59 && request.finish(59,true).nativeEntered);
         {
             TglOwnedLateLowerPassRequest::Binding binding(renderer,request);assert(binding.bound());
             assert(TglOwnedLateLowerPassRequest::callback(renderer,parameter,packet)==0 && producer.calls==1);
@@ -17468,6 +17473,14 @@ int main() {
             assert(TglOwnedLateLowerPassRequest::callback(renderer,parameter,packet)==5 && recursive.calls==1);
         }
         assert(nested.finish(0,true).status==5);
+        Producer malformed;
+        TglOwnedLateLowerPassRequest rejected(0x1234,&malformed,&Producer::run);
+        assert(rejected.run(0x4321,parameter,packet)==5 && !malformed.calls);
+        assert(rejected.run(0x1234,parameter,packet)==5 && !malformed.calls);
+        TglOwnedLateLowerPassRequest missing(0x1234,&malformed,&Producer::run);
+        assert(missing.run(0x1234,nullptr,packet)==5 && !malformed.calls);
+        assert(missing.finish(0,true).status==5 && missing.finish(0,true).nativeEntered);
+        assert(missing.finish(59,true).status==5);
     }
     {
         std::array<uint8_t,0x139> caller{};caller.fill(0xa5);

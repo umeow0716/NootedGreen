@@ -14690,14 +14690,17 @@ public:
 private:
     uintptr_t renderer_;void* context_;Produce produce_;
     TglOwnedVeboxCommandSequence sequence_;
-    bool active_=false;uint32_t calls_=0;
+    bool active_=false,rejected_=false;uint32_t calls_=0;
     int reject() noexcept {
+        rejected_=true;
         sequence_.observe(TglOwnedVeboxCommandTransactionResult{});
         return sequence_.finish(0).status;
     }
 public:
     TglOwnedLateLowerPassRequest(uintptr_t renderer,void* context,Produce produce) noexcept
         :renderer_(renderer),context_(context),produce_(produce) {}
+    TglOwnedLateLowerPassRequest(const TglOwnedLateLowerPassRequest&)=delete;
+    TglOwnedLateLowerPassRequest& operator=(const TglOwnedLateLowerPassRequest&)=delete;
     static int callback(void* renderer,void* parameters,void* pass) noexcept {
         auto* request=Binding::get(renderer);
         return request?request->run(reinterpret_cast<uintptr_t>(renderer),parameters,pass):5;
@@ -14713,7 +14716,8 @@ public:
     TglOwnedVeboxCommandTransactionResult finish(int nativeStatus,bool nativeEntered) const noexcept {
         auto result=sequence_.finish(nativeStatus);
         result.nativeEntered=result.nativeEntered || nativeEntered;
-        if(!calls_ && !nativeStatus)result.status=5;
+        if(!calls_ && !rejected_)result.status=nativeStatus?nativeStatus:5;
+        if((active_ || !calls_) && !result.status)result.status=5;
         return result;
     }
 };
