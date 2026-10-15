@@ -7323,6 +7323,32 @@ TglNativeSharedConnectionResult tglWithNativeSharedConnectionSnapshot(
     result.stable=capture(after) && first.same(after);
     return result;
 }
+// Native physical50 owns the primary wrapper; its+48 is the SAME embedded
+// resource-device root reached by the proven OS-data lookup. No fabricated
+// OS interface/database. Caller pins physical/context/native image and admits
+// this lineage for the whole callback; pointer stability is not a port retain.
+template<class Read,class QualifyFramework,class Admit,class Use>
+TglNativeSharedConnectionResult tglWithNativePhysicalSharedConnectionSnapshot(
+    uintptr_t physical,uintptr_t create,Read read,QualifyFramework qualifyFramework,Admit admit,Use use) {
+    TglNativeSharedConnectionResult result;
+    if(!physical || physical>UINTPTR_MAX-0x58 || !create || create>UINTPTR_MAX-0x60 || !qualifyFramework(create))return result;
+    std::array<uint8_t,4> anchor{};
+    if(!read(create+0x5c,anchor.data(),anchor.size()) || anchor!=std::array<uint8_t,4>{0x41,0x8b,0x7d,0x18})return result;
+    struct Snapshot {
+        uintptr_t root=0,device=0;uint32_t port=0;
+        bool same(const Snapshot& other) const noexcept {return root==other.root && device==other.device && port==other.port;}
+    };
+    auto capture=[&](Snapshot& value) {
+        return read(physical+0x50,&value.root,8) && value.root && value.root<=UINTPTR_MAX-0x50 &&
+            read(value.root+0x48,&value.device,8) && value.device && value.device<=UINTPTR_MAX-0x1c &&
+            read(value.device+0x18,&value.port,4) && value.port && admit(value.root,value.device,value.port);
+    };
+    Snapshot first,second,after;
+    if(!capture(first) || !capture(second) || !first.same(second))return result;
+    result.nativeStatus=use(first.port);result.called=true;
+    result.stable=capture(after) && first.same(after);return result;
+}
+
 // Production entry: derive OS only through the existing exact-image resource
 // binding and SAME retained physical parent lease, never an arbitrary port.
 template<class ParentLease,class Read,class Qualify,class Executable,class QualifyFramework,class Use>

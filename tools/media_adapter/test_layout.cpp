@@ -16175,6 +16175,34 @@ static void testRetainedVeboxFrames() {
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         {
+            uintptr_t root=0x2000,device=0x3000;uint32_t port=7;
+            bool admitted=true,framework=true,anchorValid=true;unsigned calls=0;
+            auto rd=[&](uintptr_t p,void* out,size_t n) noexcept {
+                if(p==0x405c && n==4) {
+                    std::array<uint8_t,4> anchor{0x41,0x8b,0x7d,0x18};if(!anchorValid)anchor[0]^=1;
+                    std::memcpy(out,anchor.data(),4);return true;
+                }
+                if(p==0x1050 && n==8){std::memcpy(out,&root,8);return true;}
+                if(p==0x2048 && n==8){std::memcpy(out,&device,8);return true;}
+                if(p==0x3018 && n==4){std::memcpy(out,&port,4);return true;}
+                return false;
+            };
+            auto qualified=[&](uintptr_t p) noexcept {return framework && p==0x4000;};
+            auto lineage=[&](uintptr_t r,uintptr_t d,uint32_t p) noexcept {return admitted && r==0x2000 && d==0x3000 && p;};
+            auto native=[&](uint32_t p) noexcept -> int {assert(p==7);++calls;return -31;};
+            auto result=tglWithNativePhysicalSharedConnectionSnapshot(0x1000,0x4000,rd,qualified,lineage,native);
+            assert(result.called && result.stable && result.nativeStatus==-31 && calls==1);
+            result=tglWithNativePhysicalSharedConnectionSnapshot(0x1000,0x4000,rd,qualified,lineage,
+                [&](uint32_t p) noexcept -> int {assert(p==7);++calls;port=8;return 0;});
+            assert(result.called && !result.stable && !result.nativeStatus && calls==2);port=7;
+            admitted=false;result=tglWithNativePhysicalSharedConnectionSnapshot(0x1000,0x4000,rd,qualified,lineage,native);
+            assert(!result.called && calls==2);admitted=true;
+            framework=false;assert(!tglWithNativePhysicalSharedConnectionSnapshot(0x1000,0x4000,rd,qualified,lineage,native).called);framework=true;
+            anchorValid=false;assert(!tglWithNativePhysicalSharedConnectionSnapshot(0x1000,0x4000,rd,qualified,lineage,native).called);anchorValid=true;
+            device=UINTPTR_MAX;assert(!tglWithNativePhysicalSharedConnectionSnapshot(0x1000,0x4000,rd,qualified,lineage,native).called);device=0x3000;
+            assert(!tglWithNativePhysicalSharedConnectionSnapshot(UINTPTR_MAX,0x4000,rd,qualified,lineage,native).called);
+        }
+        {
             alignas(8) std::array<uint8_t,0x128> contextBytes{};
             alignas(8) std::array<uint8_t,0x68> physicalBytes{};
             alignas(8) std::array<uint8_t,0x48> wrapperBytes{};

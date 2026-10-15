@@ -5285,6 +5285,43 @@ int dispatchOwnedContextFrame(void* context,const void* input,void** output) noe
 }
 struct NativeOtherFrameBackend {
     using Lease=NativeFactoryFrameBatch::Lease;
+    static bool queryCompletion(Lease& lease,NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,uint64_t generation,
+        const TglNativeFenceBackingObservation::Snapshot& expected,uint64_t& registryId,NGVfTaskCompletion::Reply& output) noexcept {
+        auto* owner=lease.get();auto api=TglDarwinDeviceObservationApi::resolve();
+        const auto framework=qualifiedIoAcceleratorFramework(library.resourceCreate);
+        if(!owner || owner->family()!=TglNativeContextFamily::NativeOther || owner->context()!=expected.codec ||
+           !expected.valid || !api.valid() || !framework || !scope.matches(image,physical,generation))return false;
+        NGVfTaskCompletion::Request request{NGVfTaskCompletion::version,sizeof(NGVfTaskCompletion::Request),{}};
+        for(size_t i=0;i<8;++i)request.expected[i]=expected.expected[i];
+        if(!NGVfTaskCompletion::validRequest(request))return false;
+        const auto qualifyFramework=[framework](uintptr_t address) noexcept {
+            return qualifiedIoAcceleratorFramework(address)==framework;
+        };
+        auto admit=[&](uintptr_t root,uintptr_t device,uint32_t) noexcept {
+            TglNativeOtherContextEventLineage lineage;uintptr_t current=0;
+            return scope.matches(image,physical,generation) &&
+                owner->frameTable().publication()==TglContextFramePublication::Published &&
+                readMemory(owner->context(),&current,8) && current==reinterpret_cast<uintptr_t>(owner->frameTable().addressPoint()) &&
+                lineage.capture(physical,{expected.codec,expected.event,expected.index,true},&readMemory,NativeDataAdmission{}) &&
+                lineage.wrapper==expected.wrapper && lineage.count==expected.count &&
+                leafMemoryPermissions(root,0x50,VM_PROT_READ,VM_PROT_EXECUTE) &&
+                leafMemoryPermissions(device,0x1c,VM_PROT_READ,VM_PROT_EXECUTE);
+        };
+        uint64_t identity=0;NGVfTaskCompletion::Reply candidate{};
+        const auto connection=tglWithNativePhysicalSharedConnectionSnapshot(physical,library.resourceCreate,&readMemory,qualifyFramework,admit,
+            [&](uint32_t port) noexcept -> int {
+                if(api.identity(port,identity))return 5;
+                const bool queried=NGVfTaskCompletion::query(identity,request,
+                    [&](uint32_t selector,const void* input,size_t bytes,void* out,size_t* outputBytes) noexcept {
+                        if(input!=&request || bytes!=sizeof(request))return 5;
+                        return api.readCompletion(port,selector,request,out,outputBytes);
+                    },candidate);
+                uint64_t after=0;
+                return queried && !api.identity(port,after) && after==identity?0:5;
+            });
+        if(!connection.called || !connection.stable || connection.nativeStatus || !scope.matches(image,physical,generation))return false;
+        registryId=identity;output=candidate;return true;
+    }
     static bool capture(NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,uint64_t generation,
         const TglNativeFrameOutputReceipt& receipt,TglNativeOtherContextEventLineage& lineage,
         TglNativeFenceBackingObservation::Snapshot& fence,TglNativeFreshStampObservation::Snapshot& fresh) noexcept {
