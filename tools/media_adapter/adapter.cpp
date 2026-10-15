@@ -2809,7 +2809,7 @@ struct NativeVeboxSendSubmissionStage {
         NativeContextRendererFrame& frame;TglOwnedVeboxProducerPass& pass;
         TglNativeVeboxSendTailBinding& tail;const TglNativeOsCommandSubmitBinding& binding;
         TglOwnedVeboxBuilderScratch& scratch;TglOwnedVeboxCommandTransactionResult& command;
-        TglOwnedVeboxFrameRetention& retention;uintptr_t image;
+        TglOwnedVeboxFrameRetention& retention;TglOwnedVeboxFrameRetention& commandRetention;uintptr_t image;
         Admit admit;AdmitChild admitChild;bool entered=false;int result=5;
         void* buildContext=nullptr;BuildCommand build=nullptr;bool buildAttempted=false;
         TglNativeOsCommandSubmitBinding::RelocationPage firstPage{};bool firstPageCaptured=false;
@@ -2845,6 +2845,7 @@ struct NativeVeboxSendSubmissionStage {
             sourceOwner,childOwner,executionOwner,child,execution,source,packets,setup,builder,
             context.image,os,context.scratch,&readMemory,NativeTglImageAdmission{context.image},&executableMemory,
             setupWithOrigin,TglNativeVeboxBuilderInvoker{},TglNativeCommandHeaderWritebackInvoker{},true);
+        context.commandRetention.observe(context.command); // Selected child is no longer unused.
         context.retention.observe(context.command);
         if(context.command.status) {
             (void)context.pass.record(context.command.status);
@@ -3045,12 +3046,14 @@ template<class SurfaceOwner> struct NativeVeboxRenderSendRequestFor {
         typename Scope::Result result;
         if(!raw)return result;
         auto& request=*static_cast<NativeVeboxRenderSendRequestFor*>(raw);
+        auto& commandRetention=render.planner.storage.auxiliary().retention();
         if(request.attempted || request.image!=render.render.binding.image ||
-            &request.retention!=&render.render.admission.reset.backing.retention())return result;
+            &request.retention!=&render.render.admission.reset.backing.retention() ||
+            !commandRetention.linkedTo(request.retention) || commandRetention())return result;
         request.attempted=true;
         TglOwnedVeboxCommandTransactionResult command;
         Stage::SendContext context{request.frame,producer.pass,request.tail,request.submit,
-            request.scratch,command,request.retention,request.image,request.admit,request.admitChild};
+            request.scratch,command,request.retention,commandRetention,request.image,request.admit,request.admitChild};
         typename Stage::template ProducerRequest<SurfaceOwner> preparation{context,
             render.render.admission.feature.sourceOwner,render.render.admission.feature.targetOwner,
             producer,request.setup,request.builder,request.os};
@@ -3062,7 +3065,7 @@ template<class SurfaceOwner> struct NativeVeboxRenderSendRequestFor {
         } call{render,result};
         const int status=preparation.withNativeCall(&call,&Call::invoke);
         TglOwnedVeboxCommandSequence sequence;sequence.observe(result.native);sequence.observe(command);
-        result.native=sequence.finish(status);request.retention.observe(result.native);
+        result.native=sequence.finish(status);commandRetention.observe(result.native);request.retention.observe(result.native);
         result.status=status?status:result.native.status;
         result.admitted=result.admitted && !result.status;
         return result;

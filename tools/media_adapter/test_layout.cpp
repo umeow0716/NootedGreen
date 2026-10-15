@@ -18151,6 +18151,13 @@ int main() {
         });
         assert(accepted==!expire && renders==unsigned(!expire) && continuation.entered()==!expire);
         assert(root() && !local()); // Admission/idle sibling never clears the earlier pass.
+        if(!expire) {
+            local.observe(continuation.nativeResult());
+            assert(root() && local() && root.admissionPending());
+            TglOwnedVeboxAdmissionRenderContinuation reused(render,root);
+            assert(!reused([](auto) noexcept -> bool {assert(false);return true;}));
+            assert(renders==1); // A used command cannot reuse the unused-child proof.
+        }
     }
     {
         struct ModeFrame {
