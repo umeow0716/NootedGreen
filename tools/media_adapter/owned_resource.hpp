@@ -14680,6 +14680,44 @@ public:
     }
 };
 
+// Late lower callback has no root frame until its actual native packet arrives.
+// The producer must establish that authority; this router grants none itself.
+class TglOwnedLateLowerPassRequest {
+public:
+    using Produce=TglOwnedVeboxCommandTransactionResult(*)(void*,uintptr_t,void*,void*) noexcept;
+    struct Domain;
+    using Binding=TglOwnedScopedContext<TglOwnedLateLowerPassRequest,Domain>;
+private:
+    uintptr_t renderer_;void* context_;Produce produce_;
+    TglOwnedVeboxCommandSequence sequence_;
+    bool active_=false;uint32_t calls_=0;
+    int reject() noexcept {
+        sequence_.observe(TglOwnedVeboxCommandTransactionResult{});
+        return sequence_.finish(0).status;
+    }
+public:
+    TglOwnedLateLowerPassRequest(uintptr_t renderer,void* context,Produce produce) noexcept
+        :renderer_(renderer),context_(context),produce_(produce) {}
+    static int callback(void* renderer,void* parameters,void* pass) noexcept {
+        auto* request=Binding::get(renderer);
+        return request?request->run(reinterpret_cast<uintptr_t>(renderer),parameters,pass):5;
+    }
+    int run(uintptr_t renderer,void* parameters,void* pass) noexcept {
+        if(!renderer_ || renderer!=renderer_ || !context_ || !produce_ || !parameters || !pass ||
+            active_ || !sequence_.acceptsPass() || calls_==UINT32_MAX)return reject();
+        active_=true;++calls_;
+        const auto result=produce_(context_,renderer,parameters,pass);
+        active_=false;sequence_.observe(result);
+        return sequence_.finish(0).status;
+    }
+    TglOwnedVeboxCommandTransactionResult finish(int nativeStatus,bool nativeEntered) const noexcept {
+        auto result=sequence_.finish(nativeStatus);
+        result.nativeEntered=result.nativeEntered || nativeEntered;
+        if(!calls_ && !nativeStatus)result.status=5;
+        return result;
+    }
+};
+
 struct TglNativePerPassCommandResult {
     TglOwnedVeboxCommandTransactionResult native{};
     bool entered=false,copiedBack=false;

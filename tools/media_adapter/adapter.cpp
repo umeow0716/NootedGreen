@@ -3677,7 +3677,7 @@ struct NativeRetainedTemporaryExecution {
     using MultiCallbackScope=TglOwnedScopedContext<MultiCallbackContext,MultiCallbackDomain>;
     static int temporaryPassMulti(void* renderer,void* parameters,void* pass) noexcept {
         auto* context=MultiCallbackScope::get(renderer);
-        if(!context)return 5;
+        if(!context)return TglOwnedLateLowerPassRequest::callback(renderer,parameters,pass);
         auto reject=[&]() noexcept -> int {
             TglOwnedVeboxCommandTransactionResult failure;context->sequence.observe(failure);
             return context->sequence.finish(0).status;
@@ -3909,6 +3909,38 @@ struct NativePreparedVphalFrameDispatch {
         result.nativeEntered=result.nativeEntered || call.invoked;
         if(!result.status && (!call.invoked || provider.failure))result.status=provider.failure?provider.failure:5;
         return result; // Codec caller binds its output receipt AFTER235b00 returns.
+    }
+};
+//235b00 has prepared12e8, but native133cb0 has not emitted a lower packet.
+// Install only the request-qualified router; the producer builds actual roots
+// from each packet. No whole-frame native return is a completion receipt.
+struct NativeLateLowerRequestDispatch {
+    static TglOwnedVeboxCommandTransactionResult run(NativeVphalFramePin& parent,
+        NativePhysicalFrameScope& physical,uintptr_t context,uintptr_t parameters,
+        uintptr_t renderer,void* producerContext,TglOwnedLateLowerPassRequest::Produce produce) noexcept {
+        auto* owner=parent.get();
+        auto* key=reinterpret_cast<void*>(renderer);
+        uintptr_t actualRenderer=0;
+        if(!owner || !renderer || !producerContext || !produce ||
+            !owner->context() || owner->context()>UINTPTR_MAX-0x70 ||
+            !readMemory(owner->context()+0x68,&actualRenderer,8) || actualRenderer!=renderer ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(produce),1) ||
+            !physical.matchesActiveContextRequest(context) ||
+            NativeRetainedTemporaryExecution::CallbackScope::get(key) ||
+            NativeRetainedTemporaryExecution::MultiCallbackScope::get(key) ||
+            TglOwnedLateLowerPassRequest::Binding::get(key))return {};
+        TglOwnedLateLowerPassRequest request(renderer,producerContext,produce);
+        TglOwnedLateLowerPassRequest::Binding binding(key,request);
+        if(!binding.bound())return {};
+        bool entered=false;
+        const int status=owner->dispatchPreparedRequest(parent,physical,context,parameters,&executableMemory,
+            [&](uintptr_t entry,uintptr_t creator,uintptr_t input) noexcept -> int {
+                if(entered)return 5;
+                entered=true;
+                return reinterpret_cast<int(*)(void*,void*)>(entry)(
+                    reinterpret_cast<void*>(creator),reinterpret_cast<void*>(input));
+            });
+        return request.finish(status,entered);
     }
 };
 struct NativePreparedCodecRequestDispatch {

@@ -17436,6 +17436,40 @@ int main() {
         nativeFailure.observe(pass);assert(nativeFailure.finish(59).status==59);
     }
     {
+        struct Producer {
+            unsigned calls=0;bool recurse=false;int status=0;
+            static TglOwnedVeboxCommandTransactionResult run(void* raw,uintptr_t renderer,void* parameters,void* packet) noexcept {
+                auto& self=*static_cast<Producer*>(raw);++self.calls;
+                assert(renderer==0x1234 && parameters && packet);
+                if(self.recurse)assert(TglOwnedLateLowerPassRequest::callback(reinterpret_cast<void*>(renderer),parameters,packet)==5);
+                TglOwnedVeboxCommandTransactionResult result;result.status=self.status;return result;
+            }
+        } producer;
+        auto* renderer=reinterpret_cast<void*>(0x1234);
+        auto* parameter=reinterpret_cast<void*>(0x5678);
+        auto* packet=reinterpret_cast<void*>(0x9876);
+        assert(TglOwnedLateLowerPassRequest::callback(renderer,parameter,packet)==5);
+        TglOwnedLateLowerPassRequest request(0x1234,&producer,&Producer::run);
+        assert(request.finish(0,false).status==5);
+        {
+            TglOwnedLateLowerPassRequest::Binding binding(renderer,request);assert(binding.bound());
+            assert(TglOwnedLateLowerPassRequest::callback(renderer,parameter,packet)==0 && producer.calls==1);
+            producer.status=31;
+            assert(TglOwnedLateLowerPassRequest::callback(renderer,parameter,packet)==31 && producer.calls==2);
+            producer.status=0;
+            assert(TglOwnedLateLowerPassRequest::callback(renderer,parameter,packet)==31 && producer.calls==2);
+            const auto result=request.finish(59,true);assert(result.status==31 && result.nativeEntered);
+        }
+        assert(TglOwnedLateLowerPassRequest::callback(renderer,parameter,packet)==5);
+        Producer recursive;recursive.recurse=true;
+        TglOwnedLateLowerPassRequest nested(0x1234,&recursive,&Producer::run);
+        {
+            TglOwnedLateLowerPassRequest::Binding binding(renderer,nested);assert(binding.bound());
+            assert(TglOwnedLateLowerPassRequest::callback(renderer,parameter,packet)==5 && recursive.calls==1);
+        }
+        assert(nested.finish(0,true).status==5);
+    }
+    {
         std::array<uint8_t,0x139> caller{};caller.fill(0xa5);
         std::array<uint8_t,0x60> packet{};packet.fill(0x5a);
         const auto p=reinterpret_cast<uintptr_t>(caller.data()),q=reinterpret_cast<uintptr_t>(packet.data());
