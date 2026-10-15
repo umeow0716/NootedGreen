@@ -5416,7 +5416,7 @@ struct NativeFactoryContextProperties {
                     const uintptr_t storage=reinterpret_cast<uintptr_t>(&cpu);
                     if(storage>UINTPTR_MAX-sizeof(cpu))return 5;
                     return batch.admitVeboxQueryOutputs(frozen,[&](uintptr_t output,size_t bytes) noexcept {
-                        if(!owner.excludesPropertyCreatorWritableSpan(pin,output,bytes,
+                        if(!owner.excludesPropertyRendererWritableSpan(pin,output,bytes,
                             NativeTglImageAdmission{image},&executableMemory))return false;
                         for(size_t i=0;i<count;++i)
                             if(!leases[i].get()->excludesPublishedContextWritableSpan(leases[i],output,bytes))return false;

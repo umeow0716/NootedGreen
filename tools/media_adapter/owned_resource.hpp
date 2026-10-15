@@ -26586,6 +26586,28 @@ public:
         return matches(0x1c928b,sizeAnchor) && matches(0x1c92f6,ctorCall) && matches(0x1ca354,ctorTable) &&
             (address>=state_->object+0x78 || state_->object>=address+bytes);
     }
+    template<class ParentPin,class Qualify,class Executable>
+    bool excludesPropertyRendererWritableSpan(const ParentPin& pin,uintptr_t address,size_t bytes,
+        Qualify qualify,Executable executable) noexcept {
+        if(!excludesPropertyCreatorWritableSpan(pin,address,bytes,qualify,executable) ||
+            state_->image>UINTPTR_MAX-0x75bba8 || !state_->renderer || state_->renderer>UINTPTR_MAX-0x2d50)return false;
+        using Publication=TglOwnedPrimaryRendererTable::Publication;
+        const auto publication=state_->rendererTable.publication();
+        if(publication!=Publication::Published && publication!=Publication::Unpublished)return false;
+        const uintptr_t expected=publication==Publication::Published?
+            state_->rendererTable.addressPoint():state_->image+0x75bba0;
+        uintptr_t vptr=0;
+        if(!expected || !state_->read(state_->renderer,&vptr,8) || vptr!=expected)return false;
+        constexpr std::array<uint8_t,5> sizeAnchor{0xbf,0x50,0x2d,0,0},ctorCall{0xe8,0x7d,0,0,0};
+        constexpr std::array<uint8_t,7> ctorTable{0x48,0x8d,0x05,0x1a,0x53,0x57,0};
+        auto matches=[&](uintptr_t offset,const auto& wanted) noexcept {
+            auto actual=wanted;
+            return executable(state_->image+offset,actual.size()) &&
+                state_->read(state_->image+offset,actual.data(),actual.size()) && actual==wanted;
+        };
+        return matches(0x1e6737,sizeAnchor) && matches(0x1e678e,ctorCall) && matches(0x1e686f,ctorTable) &&
+            (address>=state_->renderer+0x2d50 || state_->renderer>=address+bytes);
+    }
     const TglOwnedVphalLifetimeTable& lifetime() const noexcept {return state_->table;}
     // Retain BEFORE releasing the same frame pin, including native entry with
     // no lower/root callback. No CPU/native return can clear this obligation.

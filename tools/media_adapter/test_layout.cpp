@@ -21085,6 +21085,7 @@ int main() {
                         unsigned ownedNativeCalls=0;
                         uintptr_t actualRenderer=r;bool rendererReadable=true;
                         bool creatorFactoryProof=true,creatorFactoryRx=true;
+                        bool rendererFactoryProof=true,rendererFactoryRx=true;
                         uintptr_t embeddedOs=0x91048;
                         const TglOwnedVphalLifetimeTable* activeOwnerTable=nullptr;
                         const TglOwnedPrimaryRendererTable* activeRendererTable=nullptr;
@@ -21092,6 +21093,15 @@ int main() {
                         rendererWords[1]=image+0x75bc00;rendererWords[14]=image+0x811e00;
                         for(size_t i=0;i<12;++i)rendererWords[i+2]=image+TglNativePrimaryRendererTable::offsets[i];
                         auto ownerRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                            if(address==image+0x1e6737 && size==5) {
+                                constexpr uint8_t anchor[]={0xbf,0x50,0x2d,0,0};std::memcpy(bytes,anchor,5);return rendererFactoryProof;
+                            }
+                            if(address==image+0x1e678e && size==5) {
+                                constexpr uint8_t anchor[]={0xe8,0x7d,0,0,0};std::memcpy(bytes,anchor,5);return rendererFactoryProof;
+                            }
+                            if(address==image+0x1e686f && size==7) {
+                                constexpr uint8_t anchor[]={0x48,0x8d,0x05,0x1a,0x53,0x57,0};std::memcpy(bytes,anchor,7);return rendererFactoryProof;
+                            }
                             if(address==image+0x1c928b && size==5) {
                                 constexpr uint8_t anchor[]={0xbf,0x78,0,0,0};std::memcpy(bytes,anchor,5);return creatorFactoryProof;
                             }
@@ -21168,6 +21178,8 @@ int main() {
                         assert(owner->context()==creatorAddress && !owner->nativeDestructionComplete());
                         assert(!TglImplicitContextRelease<Owner>::allowed(*owner));
                         auto ownerExecutable=[&](uintptr_t address,size_t size) noexcept {
+                            if((size==5 && (address==image+0x1e6737 || address==image+0x1e678e)) ||
+                                (size==7 && address==image+0x1e686f))return rendererFactoryRx;
                             if((size==5 && (address==image+0x1c928b || address==image+0x1c92f6)) ||
                                 (size==7 && address==image+0x1ca354))return creatorFactoryRx;
                             return execLifetime(address,size) || creatorExecutable(address,size);
@@ -21411,6 +21423,13 @@ int main() {
                                     creatorFactoryRx=false;
                                     assert(!owner->excludesPropertyCreatorWritableSpan(framePin,1,1,qualify,ownerExecutable));
                                     creatorFactoryRx=true;
+                                    assert(owner->excludesPropertyRendererWritableSpan(framePin,1,1,qualify,ownerExecutable));
+                                    assert(!owner->excludesPropertyRendererWritableSpan(framePin,r,1,qualify,ownerExecutable));
+                                    assert(!owner->excludesPropertyRendererWritableSpan(framePin,r+0x2d4f,2,qualify,ownerExecutable));
+                                    rendererFactoryProof=false;
+                                    assert(!owner->excludesPropertyRendererWritableSpan(framePin,1,1,qualify,ownerExecutable));rendererFactoryProof=true;
+                                    rendererFactoryRx=false;
+                                    assert(!owner->excludesPropertyRendererWritableSpan(framePin,1,1,qualify,ownerExecutable));rendererFactoryRx=true;
                                     return 0;
                                 })==0);
                                 return -17;
