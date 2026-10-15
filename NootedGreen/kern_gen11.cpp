@@ -170,6 +170,7 @@ void *gVfGlobalPageTable = nullptr;
 void *gVfHardwareGuc = nullptr;
 void *gVfAccelerator = nullptr;
 bool gVfDeviceObservationAbiVerified = false;
+bool gVfTaskCompletionAbiVerified = false;
 // Tahoe's IntelAccelerator::stop releases and clears +0x1260 before invoking
 // the inherited IOGraphicsAccelerator2::stop.  That inherited body then drops
 // the kernel task, whose stamp/scratch mappings can still enter release_pte and
@@ -2533,6 +2534,23 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			containsAnchor(terminated, 9, sizeof(terminatedField)) &&
 			anchorMatches(reportRestart + 0xBF, reportField, sizeof(reportField)) &&
 			anchorMatches(terminated + 9, terminatedField, sizeof(terminatedField));
+		const auto sharedStart = patcher.solveSymbol(index,
+			"__ZN24IOAccelSharedUserClient211sharedStartEv", address, size);
+		const auto sharedInit = patcher.solveSymbol(index,
+			"__ZN14IOAccelShared24initEP22IOGraphicsAccelerator2P4task", address, size);
+		const auto sharedMethod = patcher.solveSymbol(index,
+			"__ZN24IOAccelSharedUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv", address, size);
+		constexpr uint8_t sharedOwner[] = {0x48,0x8b,0xb7,0xe0,0,0,0,0x48,0x8b,0xbf,0xf8,0,0,0};
+		constexpr uint8_t sharedPublish[] = {0x48,0x89,0x83,0,0x01,0,0};
+		constexpr uint8_t gpuTask[] = {0xff,0x90,0x98,0x09,0,0,0x48,0x89,0x83,0x88,0,0,0};
+		constexpr uint8_t methodLease[] = {0x4c,0x8d,0xa3,0x60,0x01,0,0,0x4c,0x89,0xe7};
+		constexpr uint8_t methodClosing[] = {0xf6,0x83,0x0d,0x01,0,0,0x01};
+		gVfTaskCompletionAbiVerified = gVfDeviceObservationAbiVerified && sharedStart && sharedInit && sharedMethod &&
+			containsAnchor(sharedStart,0x15,sizeof(sharedOwner)) && anchorMatches(sharedStart+0x15,sharedOwner,sizeof(sharedOwner)) &&
+			containsAnchor(sharedStart,0x2f,sizeof(sharedPublish)) && anchorMatches(sharedStart+0x2f,sharedPublish,sizeof(sharedPublish)) &&
+			containsAnchor(sharedInit,0x31,sizeof(gpuTask)) && anchorMatches(sharedInit+0x31,gpuTask,sizeof(gpuTask)) &&
+			containsAnchor(sharedMethod,0x44,sizeof(methodLease)) && anchorMatches(sharedMethod+0x44,methodLease,sizeof(methodLease)) &&
+			containsAnchor(sharedMethod,0x58,sizeof(methodClosing)) && anchorMatches(sharedMethod+0x58,methodClosing,sizeof(methodClosing));
 		patcher.clearError();
 		KernelPatcher::SolveRequest lifecycle[] = {
 			{"__ZN22IOGraphicsAccelerator217enableAcceleratorEv",
@@ -5710,6 +5728,8 @@ static IOReturn vfReadOwnedDeviceObservation(void *accelerator, uint32_t selecto
 
 }
 
+static IOReturn vfReadOwnedTaskCompletion(OSObject *target, void *reference, IOExternalMethodArguments *args);
+
 IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	                                  void *arguments, void *dispatch,
 	                                  void *target, void *reference)
@@ -5718,6 +5738,22 @@ IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	VfExternalProducerGuard guard(accelerator);
 	if (!guard)
 		return kIOReturnOffline;
+	if (selector == NGVfTaskCompletion::selector && gVfIdentity == VfIdentity::Virtual &&
+	    accelerator && accelerator == gVfAccelerator && checkKernelArgument("-ngreenmediaadapter")) {
+		if (!gVfTaskCompletionAbiVerified || !callback || !callback->oVfSharedExternalMethod)
+			return kIOReturnUnsupported;
+		if (!NGVfTaskCompletion::inlineShape(static_cast<IOExternalMethodArguments *>(arguments),
+		    kIOExternalMethodArgumentsCurrentVersion,dispatch,target,reference))return kIOReturnBadArgument;
+		static const IOExternalMethodDispatch ownedDispatch = {
+			&vfReadOwnedTaskCompletion,0,sizeof(NGVfTaskCompletion::Request),0,sizeof(NGVfTaskCompletion::Reply)};
+		const mach_vm_address_t mappedBufferGetter=callback->vfSharedMappedBufferGetVirtualAddress;
+		if (!mappedBufferGetter)return kIOReturnUnsupported;
+		// Native wrapper owns client160 admission, closing checks and deferred
+		// detach unwind. Never emulate that lifecycle or read Shared100 here.
+		return FunctionCast(vfSharedExternalMethod,callback->oVfSharedExternalMethod)(
+			that,selector,arguments,const_cast<IOExternalMethodDispatch *>(&ownedDispatch),that,
+			const_cast<mach_vm_address_t *>(&mappedBufferGetter));
+	}
 	if (selector == NGVfDeviceObservation::selector &&
 	    gVfIdentity == VfIdentity::Virtual && accelerator && accelerator == gVfAccelerator &&
 	    checkKernelArgument("-ngreenmediaadapter"))
@@ -8005,6 +8041,81 @@ static bool vfKnownIdleSnapshot(mach_vm_address_t mappedBufferGetter,
 		getMember<volatile UInt32>(gVfAccelerator, 0xDC8) != 0;
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
 	return idle && !terminationRaced;
+}
+
+static IOReturn vfReadOwnedTaskCompletion(OSObject *target, void *reference, IOExternalMethodArguments *args)
+{
+	if (!gVfTaskCompletionAbiVerified || !reference || !target ||
+	    !NGVfTaskCompletion::inlineShape(args,kIOExternalMethodArgumentsCurrentVersion,nullptr,nullptr,nullptr))
+		return kIOReturnBadArgument;
+	// Only the owned wrapper supplies this synchronous kernel-stack reference;
+	// incoming caller dispatch/target/reference were rejected before native entry.
+	const mach_vm_address_t mappedBufferGetter=*static_cast<const mach_vm_address_t *>(reference);
+	if (!mappedBufferGetter)return kIOReturnUnsupported;
+	// IOUserClient has validated/copied this fixed inline packet through the
+	// original native dispatch; no userspace address or descriptor is followed.
+	NGVfTaskCompletion::Request request{};
+	const auto *packet=static_cast<const volatile uint8_t *>(args->structureInput);
+	auto *requestBytes=reinterpret_cast<uint8_t *>(&request);
+	for (size_t n=0;n<sizeof(request);++n)requestBytes[n]=packet[n];
+	if (!NGVfTaskCompletion::validRequest(request))return kIOReturnBadArgument;
+	void *client=target;
+	void *accelerator=getMember<void *>(client,0xF8);
+	void *shared=getMember<void *>(client,0x100);
+	if (!shared || getMember<void *>(shared,0x78)!=accelerator ||
+	    getMember<void *>(shared,0x110)!=client ||
+	    getMember<void *>(shared,0x80)!=getMember<void *>(client,0xE0))return kIOReturnOffline;
+	void *task=getMember<void *>(shared,0x88);
+	VfContextOperationGuard operation;
+	const auto live=[&]() {
+		OSSynchronizeIO();
+		return operation && task && gVfIdentity==VfIdentity::Virtual && accelerator==gVfAccelerator &&
+			gVfContexts && gVfContextLock && gVfContextCapacity &&
+			gVfCtbEnabled && !gVfCtbStopped && !gVfSubmissionStopped && !gVfProtocolFault &&
+			!gVfDeviceStopping && !gVfContextShutdownStarted &&
+			getMember<volatile UInt32>(accelerator,0xDC8)==0;
+	};
+	if (!live())return kIOReturnOffline;
+	NGVfTaskCompletion::Reply reply{};
+	reply.abiVersion=NGVfTaskCompletion::version;reply.bytes=sizeof(reply);
+	reply.registryId=static_cast<IORegistryEntry *>(accelerator)->getRegistryEntryID();
+	if (!reply.registryId)return kIOReturnOffline;
+	for (unsigned n=0;n<16;++n)reply.familyUuid[n]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[n];
+	uint32_t required=0,seen=0;
+	for (unsigned n=0;n<8;++n)if (uint32_t(request.expected[n])!=UINT32_MAX)required|=1U<<uint32_t(request.expected[n]);
+	const uint32_t capacity=gVfContextCapacity;
+	// Bound EACH IRQ-disabled section, not just output size. The task/frame
+	// lease is held throughout; each selected entry is sampled under its lock.
+	for (uint32_t first=0;first<capacity;first+=16) {
+		if (!live())return kIOReturnOffline;
+		bool valid=true;
+		const auto interruptState=IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		for (uint32_t slot=first;slot<capacity && slot-first<16 && valid;++slot) {
+			const auto& entry=gVfContexts[slot];
+			if (entry.task!=task || entry.stampIndex>=8 || !(required&(1U<<entry.stampIndex)))continue;
+			const uint32_t bit=1U<<entry.stampIndex;
+			if (seen&bit) {valid=false;break;} // Ambiguous same-task channel.
+			uint32_t expected=0;
+			for (unsigned n=0;n<8;++n)if (uint32_t(request.expected[n])==entry.stampIndex)expected=uint32_t(request.expected[n]>>32);
+			NGVfSubmissionCoverage::Tracker::CompletionEvidence evidence{};
+			if (entry.submissionCoverage.coveredStamp!=expected ||
+			    !vfContextKnownIdle(entry,false,mappedBufferGetter) ||
+			    !entry.submissionCoverage.completionEvidence(entry.submissionCoverage.coveredSerial,
+			        expected,entry.submissionCoverage.coveredHead,false,evidence)) {valid=false;break;}
+			reply.records[reply.recordCount++]={entry.stampIndex,slot,evidence.observationSerial,evidence.stamp,evidence.head};
+			seen|=bit;
+		}
+		OSSynchronizeIO();
+		valid=valid && getMember<volatile UInt32>(accelerator,0xDC8)==0 && !gVfProtocolFault;
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock,interruptState);
+		if (!valid)return kIOReturnBusy;
+	}
+	if (seen!=required || !live() || getMember<void *>(client,0x100)!=shared ||
+	    getMember<void *>(shared,0x88)!=task)return kIOReturnBusy;
+	const auto *wire=reinterpret_cast<const uint8_t *>(&reply);
+	auto *output=static_cast<volatile uint8_t *>(args->structureOutput);
+	for (size_t n=0;n<sizeof(reply);++n)output[n]=wire[n];
+	return kIOReturnSuccess;
 }
 
 bool Gen11::vfSchedulerPush(void *that, void *hardwareContext,

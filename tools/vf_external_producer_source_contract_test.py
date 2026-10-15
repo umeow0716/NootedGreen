@@ -82,11 +82,13 @@ def contract(source, path="<source>"):
 
     shared = function_body(source, "IOReturn Gen11::vfSharedExternalMethod(")
     owned = function_body(source, "static IOReturn vfReadOwnedDeviceObservation(")
+    diagnostic_branch = shared[shared.index("if (selector == NGVfDeviceObservation::selector"):
+                               shared.index("// Observe the resource-create boundary")]
     for token in ("selector == NGVfDeviceObservation::selector",
                   "gVfIdentity == VfIdentity::Virtual", "accelerator == gVfAccelerator",
                   'checkKernelArgument("-ngreenmediaadapter")',
                   "return vfReadOwnedDeviceObservation(accelerator, selector, arguments, dispatch, target, reference);"):
-        assert token in shared, f"{path}: lost owned selector admission: {token}"
+        assert token in diagnostic_branch, f"{path}: lost owned selector admission: {token}"
     assert shared.index("VfExternalProducerGuard guard") < shared.index("return vfReadOwnedDeviceObservation"), \
         f"{path}: owned query must hold native instance lease"
     for token in ("!gVfDeviceObservationAbiVerified", "return kIOReturnUnsupported;",
@@ -101,8 +103,31 @@ def contract(source, path="<source>"):
                   "const IOReturn result = FunctionCast(vfSharedExternalMethod,",
                   "return result;"):
         assert token in shared, f"{path}: lost bounded native resource observation: {token}"
-    assert shared.count("callback->oVfSharedExternalMethod") == 1, \
+    task_branch, resource_branch = shared.split("// Observe the resource-create boundary", 1)
+    native_task_branch = task_branch[task_branch.index("if (selector == NGVfTaskCompletion::selector"):
+                                   task_branch.index("if (selector == NGVfDeviceObservation::selector")]
+    for token in ("gVfIdentity == VfIdentity::Virtual", "accelerator && accelerator == gVfAccelerator",
+                  'checkKernelArgument("-ngreenmediaadapter")'):
+        assert token in native_task_branch, f"{path}: task branch lost exact VF admission: {token}"
+    assert resource_branch.count("callback->oVfSharedExternalMethod") == 1, \
         f"{path}: resource observation must call native exactly once"
+    assert task_branch.count("FunctionCast(vfSharedExternalMethod,") == 1 and \
+        "return FunctionCast(vfSharedExternalMethod," in task_branch, \
+        f"{path}: task query must return directly through one native lease"
+    for token in ("NGVfTaskCompletion::inlineShape(", "!gVfTaskCompletionAbiVerified",
+                  "static const IOExternalMethodDispatch ownedDispatch", "&vfReadOwnedTaskCompletion",
+                  "sizeof(NGVfTaskCompletion::Request)", "sizeof(NGVfTaskCompletion::Reply)",
+                  "const mach_vm_address_t mappedBufferGetter=callback->vfSharedMappedBufferGetVirtualAddress;"):
+        assert token in task_branch, f"{path}: task-query dispatch lost {token}"
+    task = function_body(source, "static IOReturn vfReadOwnedTaskCompletion(OSObject *target, void *reference, IOExternalMethodArguments *args)\n{")
+    for token in ("NGVfTaskCompletion::validRequest(request)", "VfContextOperationGuard operation;",
+                  "getMember<void *>(client,0x100)", "void *task=getMember<void *>(shared,0x88);",
+                  "entry.task!=task", "entry.submissionCoverage.coveredStamp!=expected",
+                  "vfContextKnownIdle(entry,false,mappedBufferGetter)",
+                  "entry.submissionCoverage.completionEvidence(", "entry.submissionCoverage.coveredSerial",
+                  "IOSimpleLockLockDisableInterrupt", "IOSimpleLockUnlockEnableInterrupt",
+                  "slot-first<16", "seen!=required || !live()", "!gVfProtocolFault", "0xDC8"):
+        assert token in task, f"{path}: task-query evidence lost {token}"
     assert shared.count("if (ticket)") == 3, \
         f"{path}: both resource observation markers must be bounded"
     assert shared.count("while (used < 8)") == 3, \
@@ -121,7 +146,7 @@ def contract(source, path="<source>"):
                   "OSCompareAndSwap(used, used + 1, &observedFailures)",
                   "V358: shared resource create failed"):
         assert token in shared, f"{path}: lost independent bounded failure observation: {token}"
-    assert "static_cast" not in shared.split("const IOReturn result")[0], \
+    assert "static_cast" not in resource_branch.split("const IOReturn result")[0], \
         f"{path}: resource observation must not interpret user arguments"
     for token in ("if (selector == 0 && result == kIOReturnSuccess && arguments)",
                   "args->structureOutput && !args->structureOutputDescriptor",
@@ -322,6 +347,14 @@ def mutation_contract(source, path):
          "NGVfAcceleratorStop::ownerReturnAction(phase, false)", 1),
         ("NGVfAcceleratorStop::Phase::NativeStopComplete",
          "NGVfAcceleratorStop::Phase::Finalized", 1),
+        ("entry.task!=task", "false", 1),
+        ("entry.submissionCoverage.coveredStamp!=expected", "false", 1),
+        ("slot-first<16", "true", 1),
+        ("seen!=required || !live()", "false", 1),
+        ("NGVfTaskCompletion::validRequest(request)", "true", 1),
+        ("getMember<void *>(shared,0x88)", "getMember<void *>(shared,0x80)", 1),
+        ("!gVfTaskCompletionAbiVerified", "false", 1),
+        ("entry.submissionCoverage.coveredSerial", "entry.submissionCoverage.serial", 1),
     )
     for mutation in mutations:
         old, new = mutation[:2]

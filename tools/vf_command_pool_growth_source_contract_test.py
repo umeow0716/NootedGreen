@@ -45,6 +45,8 @@ def accepts(source: str) -> bool:
     io_start = source.index("if (index == kextIOAcceleratorFamily2.loadIndex)")
     io_end = source.index("const bool physicalFramebuffer", io_start)
     io = source[io_start:io_end]
+    if "NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid" not in io:
+        return False
     command_pool_routes = io.index("commandPoolRoutes")
     if not (io.index("ioAcceleratorTahoe25G229Uuid") <
             io.index("hasReviewedGrowthContract") <
@@ -97,7 +99,8 @@ def main() -> None:
     source = Path(sys.argv[1]).read_text(encoding="utf-8")
     assert accepts(source), "missing or reordered VF command-pool contract"
     for fragment in REQUIRED:
-        assert source.count(fragment) == 1, f"ambiguous source contract: {fragment}"
+        scope = source[source.index("if (index == kextIOAcceleratorFamily2.loadIndex)"):source.index("const bool physicalFramebuffer")] if fragment == "NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid" else source
+        assert scope.count(fragment) == 1, f"ambiguous source contract: {fragment}"
         assert not accepts(source.replace(fragment, "MUTATED", 1)), \
             f"mutation escaped source contract: {fragment}"
     for fragment in OWNER:
