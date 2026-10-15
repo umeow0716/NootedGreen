@@ -51,6 +51,7 @@ bool writableDataMemory(uintptr_t address,size_t length) noexcept;
 bool leafMemoryPermissions(uintptr_t address,size_t length,vm_prot_t required,vm_prot_t forbidden) noexcept;
 bool ownedExecutableMemory(uintptr_t address,size_t length) noexcept;
 uintptr_t qualifiedIoAcceleratorFramework(uintptr_t address) noexcept;
+uintptr_t qualifiedAppleGvaFramework(uintptr_t address) noexcept;
 int dispatchOwnedContextFrame(void*,const void*,void**) noexcept;
 struct NativeDataPointerWriter {
     bool operator()(uintptr_t address,uintptr_t value) const noexcept {
@@ -5563,14 +5564,47 @@ struct NativePropertyParentMutation {
         });
     }
 };
+struct NativeGvaQueryCaller {
+    uintptr_t caller=0,stackFloor=0,query=0;
+    bool admits(uintptr_t output,size_t bytes,uintptr_t physical,uintptr_t context) const noexcept {
+        const uintptr_t image=qualifiedAppleGvaFramework(caller);
+        if(!image || !caller || !executableMemory(caller-1,1) || !query || !ownedExecutableMemory(query,1)) {
+            static std::atomic_flag denied=ATOMIC_FLAG_INIT;
+            if(!denied.test_and_set(std::memory_order_relaxed))os_log_info(OS_LOG_DEFAULT,"NGRN_QUERY_CALLER_REFUSED reason=image-or-entry");
+            return false;
+        }
+        if(stackFloor && output>=stackFloor && NativeStackPacketAdmission{}(output,bytes)) {
+            static std::atomic_flag seen=ATOMIC_FLAG_INIT;
+            if(!seen.test_and_set(std::memory_order_relaxed))os_log_info(OS_LOG_DEFAULT,"NGRN_QUERY_OUTPUT_DOMAIN stack bytes=%{public}u",unsigned(bytes));
+            return true;
+        }
+        TglNativeGvaQueryRecordOutput destination;
+        const bool admitted=destination.capture(image,caller,output,bytes,physical,context,query,&readMemory,
+            &qualifiedAppleGvaFramework,NativeDataAdmission{},
+            [](uintptr_t entry) noexcept {return ownedExecutableMemory(entry,1);}) &&
+            destination.unchanged(&readMemory,&qualifiedAppleGvaFramework,NativeDataAdmission{},
+                [](uintptr_t entry) noexcept {return ownedExecutableMemory(entry,1);});
+        if(admitted) {
+            static std::atomic_flag seen=ATOMIC_FLAG_INIT;
+            if(!seen.test_and_set(std::memory_order_relaxed))os_log_info(OS_LOG_DEFAULT,"NGRN_QUERY_OUTPUT_DOMAIN gva-record4 bytes=%{public}u",unsigned(bytes));
+        } else {
+            static std::atomic_flag denied=ATOMIC_FLAG_INIT;
+            if(!denied.test_and_set(std::memory_order_relaxed))os_log_info(OS_LOG_DEFAULT,
+                "NGRN_QUERY_CALLER_REFUSED reason=output-lineage caller-offset=%{public}llx bytes=%{public}u",
+                static_cast<unsigned long long>(caller-image),unsigned(bytes));
+        }
+        return admitted;
+    }
+};
 struct NativeFactoryContextProperties {
     // NOT PUBLISHED: VP payloads use owned snapshots; qualified native-other
-    // Configure preserves native payload lifetime. Query is still VP-only.
+    // Configure preserves native payload lifetime; native-other Query requires
+    // qualified caller-owned output. Unknown heap layouts remain refused.
     // Both operations retain every distinct codec. Configuration additionally
     // requires the physical empty-frame mutation gate; use that gate for this
     // initial bundle, never treat native return0 as retirement authority.
     enum class Operation { Configure,Query };
-    static int run(void* physical,const void* input,Operation operation) noexcept {
+    static int run(void* physical,const void* input,Operation operation,NativeGvaQueryCaller caller={}) noexcept {
         if(!input || (operation!=Operation::Configure && operation!=Operation::Query))return 5;
         TglNativePhysicalCallbackBinding native;
         if(!NativePhysicalBackend::binding(native))return 5;
@@ -5583,10 +5617,10 @@ struct NativeFactoryContextProperties {
                 if(!batch.capture(reinterpret_cast<uintptr_t>(input),&readMemory))return 5;
                 TglNativeContextPropertyBatch<16>::OwnedRecords frozen;
                 if(!batch.freeze(&readMemory,frozen))return 5;
-                if(operation==Operation::Query && !batch.admitVeboxQueryOutputs(frozen,NativeDataAdmission{}))return 5;
                 using Lease=decltype(NativeCodecBackend::owners().pinExclusive(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{}));
                 std::array<Lease,16> leases;
                 std::array<uintptr_t,16> contexts{};size_t count=0;
+                bool hasNativeOther=false;
                 for(size_t i=0;i<batch.count();++i){
                     const auto context=batch.context(i);size_t found=0;
                     while(found<count && contexts[found]!=context)++found;
@@ -5597,7 +5631,31 @@ struct NativeFactoryContextProperties {
                     if(table.publication()!=TglOwnedContextFrameVtable::Publication::Published || !table.addressPoint() ||
                         !readMemory(context,&vptr,8) || vptr!=reinterpret_cast<uintptr_t>(table.addressPoint()))return 5;
                     contexts[count++]=context;
+                    hasNativeOther=hasNativeOther || leases[count-1].get()->family()==TglNativeContextFamily::NativeOther;
                 }
+                uintptr_t resolvedContext=0;
+                auto resolveQuery=[&](uintptr_t context,TglNativeContextFamily& family,uintptr_t& callback) noexcept -> bool {
+                    resolvedContext=context;
+                    for(size_t i=0;i<count;++i)if(contexts[i]==context) {
+                        const auto* table=leases[i].get()->frameTable().addressPoint();
+                        if(!table || table[0x20/8]<image)return false;
+                        family=leases[i].get()->family();callback=table[0x20/8]-image;return true;
+                    }
+                    return false;
+                };
+                auto admitQuery=[&](auto extra) noexcept -> bool {
+                    return batch.admitQueryOutputs(frozen,resolveQuery,[&](uintptr_t output,size_t bytes) noexcept -> bool {
+                        if(!NativeDataAdmission{}(output,bytes) ||
+                            (hasNativeOther && !caller.admits(output,bytes,address,resolvedContext)) ||
+                            !native.excludesPhysicalAllocationSpan(address,output,bytes,&readMemory,
+                                NativeTglImageAdmission{image},&executableMemory))return false;
+                        for(size_t i=0;i<count;++i)if(leases[i].get()->family()==TglNativeContextFamily::VeboxVp &&
+                            !leases[i].get()->excludesPublishedContextWritableSpan(leases[i],output,bytes))return false;
+                        return extra(output,bytes);
+                    });
+                };
+                auto noExtra=[](uintptr_t,size_t) noexcept -> bool {return true;};
+                if(operation==Operation::Query && !admitQuery(noExtra))return 5;
                 if(operation==Operation::Configure && !batch.admitMixedConfiguration(frozen,
                     [&](uintptr_t context,TglNativeContextFamily& family,uintptr_t& callback) noexcept -> bool {
                         for(size_t i=0;i<count;++i)if(contexts[i]==context) {
@@ -5614,7 +5672,7 @@ struct NativeFactoryContextProperties {
                 std::array<uintptr_t,16> creators{};size_t parentCount=0;
                 for(size_t i=0;i<count;++i) {
                     if(leases[i].get()->family()==TglNativeContextFamily::NativeOther) {
-                        if(operation==Operation::Query || !leases[i].get()->nativeOtherWorkQuiescent())return 5;
+                        if(!leases[i].get()->nativeOtherWorkQuiescent())return 5;
                         continue;
                     }
                     if(leases[i].get()->family()!=TglNativeContextFamily::VeboxVp)return 5;
@@ -5642,6 +5700,7 @@ struct NativeFactoryContextProperties {
                     if(operation==Operation::Configure && (!batch.freezeVeboxScalarPayloads(&readMemory,frozen) ||
                         !batch.freezeVeboxInlineConversionPayloads(&readMemory,frozen) ||
                         !batch.freezeVeboxCubePayloads(&readMemory,frozen,NativeCubeSnapshotBudget::available())))return 5;
+                    if(operation==Operation::Query && !admitQuery(noExtra))return 5;
                     return batch.stable(&readMemory)?TglNativeBackingAllocateInvoker{}(image+offset,address,frozen.input()):5;
                 };
                 auto admitOutputs=[&](auto& cpu,auto& owner,const auto& pin) noexcept -> int {
@@ -5650,14 +5709,10 @@ struct NativeFactoryContextProperties {
                     // coverage remains a prerequisite for table publication.
                     const uintptr_t storage=reinterpret_cast<uintptr_t>(&cpu);
                     if(storage>UINTPTR_MAX-sizeof(cpu))return 5;
-                    return batch.admitVeboxQueryOutputs(frozen,[&](uintptr_t output,size_t bytes) noexcept {
-                        if(!native.excludesPhysicalAllocationSpan(address,output,bytes,&readMemory,
-                            NativeTglImageAdmission{image},&executableMemory))return false;
+                    return admitQuery([&](uintptr_t output,size_t bytes) noexcept {
                         if(!owner.excludesPropertyRendererWritableSpan(pin,output,bytes,
                             NativeTglImageAdmission{image},&executableMemory))return false;
                         if(!cpu.backing().excludesPrivateVpWritableSpan(output,bytes))return false;
-                        for(size_t i=0;i<count;++i)
-                            if(!leases[i].get()->excludesPublishedContextWritableSpan(leases[i],output,bytes))return false;
                         return output<=UINTPTR_MAX-bytes && NativeDataAdmission{}(output,bytes) &&
                             (output>=storage+sizeof(cpu) || storage>=output+bytes) &&
                             cpu.children().first().owner().excludesBaseShellHelperAndReportWritableSpan(output,bytes,
@@ -5974,8 +6029,11 @@ struct NativeFactoryLifecycle {
             physical,input,NativeFactoryContextProperties::Operation::Configure):5;
     }
     static int queryContexts(void* physical,const void* input) noexcept {
+        const auto frame=reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+        const NativeGvaQueryCaller caller{reinterpret_cast<uintptr_t>(__builtin_return_address(0)),
+            frame && frame<=UINTPTR_MAX-16?frame+16:0,reinterpret_cast<uintptr_t>(&queryContexts)};
         return NativeFactorySource::process().get()?NativeFactoryContextProperties::run(
-            physical,input,NativeFactoryContextProperties::Operation::Query):5;
+            physical,input,NativeFactoryContextProperties::Operation::Query,caller):5;
     }
     static int setPhysicalProperties(void* physical,const void* input) noexcept {
         return NativeFactorySource::process().get()?NativePhysicalBackend::setProperties(physical,input):5;
@@ -6104,6 +6162,34 @@ uintptr_t qualifiedIoAcceleratorFramework(uintptr_t address) noexcept {
             if(found || command.cmdsize!=sizeof(identity) ||
                !readMemory(base+sizeof(header)+offset,&identity,sizeof(identity)) ||
                std::memcmp(identity.uuid,uuid,sizeof(uuid)))return 0;
+            found=true;
+        }
+        offset+=command.cmdsize;
+    }
+    return found && offset==header.sizeofcmds?base:0;
+}
+uintptr_t qualifiedAppleGvaFramework(uintptr_t address) noexcept {
+    Dl_info info{};
+    constexpr char path[]="/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/A/AppleGVA";
+    constexpr uint8_t uuid[16]={0xca,0x54,0x14,0xf3,0x69,0x37,0x3c,0x05,0x9e,0xa2,0xd8,0x2b,0x35,0xaf,0xd4,0xf0};
+    if(!address || !dladdr(reinterpret_cast<void*>(address),&info) || !info.dli_fbase || !info.dli_fname)return 0;
+    const size_t length=strnlen(info.dli_fname,4096);
+    if(length>=4096 || length<sizeof(path)-1 || std::strcmp(info.dli_fname+length-(sizeof(path)-1),path))return 0;
+    const uintptr_t base=reinterpret_cast<uintptr_t>(info.dli_fbase);
+    mach_header_64 header{};
+    if(!readMemory(base,&header,sizeof(header)) || header.magic!=MH_MAGIC_64 || header.filetype!=MH_DYLIB ||
+        header.cputype!=CPU_TYPE_X86_64 || !header.ncmds || header.ncmds>256 ||
+        header.sizeofcmds>65536 || header.ncmds>header.sizeofcmds/8 ||
+        base>UINTPTR_MAX-sizeof(header)-header.sizeofcmds)return 0;
+    size_t offset=0;bool found=false;
+    for(uint32_t i=0;i<header.ncmds;++i) {
+        load_command command{};
+        if(header.sizeofcmds-offset<sizeof(command) || !readMemory(base+sizeof(header)+offset,&command,sizeof(command)) ||
+            command.cmdsize<sizeof(command) || (command.cmdsize&7) || command.cmdsize>header.sizeofcmds-offset)return 0;
+        if(command.cmd==LC_UUID) {
+            uuid_command identity{};
+            if(found || command.cmdsize!=sizeof(identity) || !readMemory(base+sizeof(header)+offset,&identity,sizeof(identity)) ||
+                std::memcmp(identity.uuid,uuid,sizeof(uuid)))return 0;
             found=true;
         }
         offset+=command.cmdsize;
