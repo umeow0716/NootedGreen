@@ -7201,6 +7201,33 @@ TglNativeDeviceObservationResult tglReadBorrowedVphalDeviceObservation(
     return result;
 }
 
+template<class ParentLease,class Read,class Qualify,class Executable,class QualifyFramework,class Api>
+TglNativeDeviceObservationResult tglReadBorrowedVphalTaskCompletion(
+    const TglNativeBorrowedVphalMhwLease<ParentLease>& lease,uintptr_t create,
+    const NGVfTaskCompletion::Request& request,Read read,Qualify qualify,Executable executable,
+    QualifyFramework qualifyFramework,Api& api,NGVfTaskCompletion::Reply& output) {
+    TglNativeDeviceObservationResult result;
+    if(!NGVfTaskCompletion::validRequest(request))return result;
+    NGVfTaskCompletion::Reply candidate{};
+    result.connection=tglWithBorrowedVphalSharedConnection(lease,create,read,qualify,executable,
+        qualifyFramework,[&](uint32_t port) noexcept {
+            uint64_t registryId=0;
+            const int identityStatus=api.identity(port,registryId);
+            if(identityStatus)return identityStatus;
+            int nativeStatus=5;
+            const bool valid=NGVfTaskCompletion::query(registryId,request,
+                [&](uint32_t selector,const void* input,size_t inputBytes,void* wire,size_t* bytes) noexcept {
+                    if(input!=&request || inputBytes!=sizeof(request))return 5;
+                    result.transportCalled=true;
+                    nativeStatus=api.readCompletion(port,selector,request,wire,bytes);return nativeStatus;
+                },candidate);
+            return !valid && !nativeStatus?5:nativeStatus;
+        });
+    if(result.connection.called && result.connection.stable && result.transportCalled &&
+        !result.connection.nativeStatus) {output=candidate;result.published=true;}
+    return result;
+}
+
 // Exact allocator637b9/638f0 reads the image's imported page-size pointer
 // at754130. Read the same 64-bit value used by type0; type1 uses its low DWORD.
 // No host-page-size assumption, guessed symbol lookup, or output on failure.

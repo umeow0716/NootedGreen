@@ -20825,6 +20825,31 @@ int main() {
                             if(mode==1 || mode==2 || mode==5 || mode==6)assert(observation.connection.nativeStatus==31);
                             if(mode==4)assert(observation.transportCalled && !observation.connection.stable);
                         }
+                        api.structMethod=+[](uint32_t p,uint32_t selector,const void* input,size_t inputSize,void* out,size_t* size) {
+                            assert(p==42 && selector==NGVfTaskCompletion::selector && input && inputSize==72);
+                            assert(*size==sizeof(NGVfTaskCompletion::Reply));++methods;
+                            auto& reply=*static_cast<NGVfTaskCompletion::Reply*>(out);
+                            reply={};reply.abiVersion=1;reply.bytes=sizeof(reply);reply.registryId=0xabc;reply.recordCount=1;
+                            reply.records[0]={1,4,9,7,4};
+                            for(unsigned i=0;i<16;++i)reply.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
+                            if(mode==3)reply.familyUuid[0]^=1;
+                            if(mode==4)++*sharedPort;
+                            return mode==2?31:0;
+                        };
+                        NGVfTaskCompletion::Request completionRequest{1,72,{}};
+                        for(auto& event:completionRequest.expected)event=UINT64_MAX;
+                        completionRequest.expected[0]=(uint64_t(7)<<32)|1;
+                        for(mode=0;mode<7;++mode) {
+                            port=42;releases=methods=0;
+                            NGVfTaskCompletion::Reply observed{};observed.registryId=999;
+                            const auto observation=tglReadBorrowedVphalTaskCompletion(lease,create,completionRequest,queryRead,
+                                qualify,queryExec,[](uintptr_t value) noexcept {return value==create;},api,observed);
+                            assert(observation.published==(mode==0));
+                            assert(observed.registryId==(mode==0?0xabcU:999U));
+                            assert(releases==(mode==5?0U:1U));
+                            assert(methods==((mode==1 || mode==5 || mode==6)?0U:1U));
+                            if(mode==4)assert(observation.transportCalled && !observation.connection.stable);
+                        }
                         port=42;sharedPort=nullptr;
                     }
                     assert(!lease.acquire(std::move(pin),image,parent,creatorAddress,borrowedRead,
