@@ -2522,13 +2522,18 @@ struct TglNativeOuterSurfaceRoles {
 
 struct TglNativeContextPassRootSelection {
     TglNativeOuterSurfaceRoles roles{};
-    uint32_t sourceIndex=0,targetIndex=0;
+    size_t sourceIndex=0,targetIndex=0; // retained frontend's original source/final output roles
+    uint32_t passSourceIndex=0,passTargetSourceIndex=0; // BOTH index the native17-source array
     uintptr_t source=0,target=0;
     template<class Read> bool capture(const TglNativeContextInputRoots& roots,
-        uintptr_t parameters,uintptr_t pass,Read read) noexcept {
+        uintptr_t parameters,uintptr_t pass,size_t sourceRole,size_t finalTargetRole,Read read) noexcept {
         *this={};TglNativeContextPassRootSelection candidate;
         if(!pass || pass>UINTPTR_MAX-0x34 || !candidate.roles.capture(parameters,read) ||
-            !read(pass+0xc,&candidate.sourceIndex,4) || !read(pass+0x30,&candidate.targetIndex,4) ||
+            !read(pass+0xc,&candidate.passSourceIndex,4) || !read(pass+0x30,&candidate.passTargetSourceIndex,4) ||
+            candidate.passSourceIndex>=candidate.roles.sources.size() || candidate.passTargetSourceIndex>=candidate.roles.sources.size() ||
+            !candidate.roles.sources[candidate.passSourceIndex] || !candidate.roles.sources[candidate.passTargetSourceIndex])return false;
+        candidate.sourceIndex=sourceRole;candidate.targetIndex=finalTargetRole;
+        if(
             !candidate.roles.selectContextRoots(roots,candidate.sourceIndex,candidate.targetIndex,
                 candidate.source,candidate.target))return false;
         *this=candidate;return true;
@@ -28181,6 +28186,7 @@ class TglNativeContextRendererFrameStorage {
         std::is_same_v<typename Renderer::TargetOwnerType,Owner>,"original context-pinned renderer owners");
     Sidecars* sidecars_=nullptr;
     Renderer* renderer_=nullptr;
+    uintptr_t sourceRoot_=0,targetRoot_=0;
     bool busy_=false,retirementStarted_=false,retirementFailed_=false,retired_=false;
     bool flushBusy_=false,flushEntered_=false,flushUncertain_=false;
     bool nativeFrameEntered_=false;
@@ -28217,6 +28223,7 @@ public:
         for(auto p:roots.sources) sourceRoot=sourceRoot || (p && p==source);
         for(auto p:roots.targets) targetRoot=targetRoot || (p && p==target);
         if(!sourceRoot || !targetRoot) return;
+        sourceRoot_=source;targetRoot_=target;
         sidecars_=new(std::nothrow) Sidecars;
         if(!sidecars_ || !sidecars_->initialize(registry,image,physical,generation,roots,read,admit,writable)) return;
         auto* sourceOwner=sidecars_->resolve(source);auto* targetOwner=sidecars_->resolve(target);
@@ -28235,6 +28242,21 @@ public:
         (void)clear();
     }
     bool surfacesReady() const noexcept {return renderer_ && renderer_->surfacesReady();}
+    bool retainedRoleIndices(const TglNativeOuterSurfaceRoles& roles,size_t& source,size_t& target) const noexcept {
+        source=SIZE_MAX;target=SIZE_MAX;
+        if(!surfacesReady() || invalidated() || retirementStarted_ || !sourceRoot_ || !targetRoot_)return false;
+        size_t selectedSource=SIZE_MAX,selectedTarget=SIZE_MAX;
+        for(size_t i=0;i<roles.sources.size();++i)if(roles.sourceSlot(i)==sourceRoot_) {
+            if(selectedSource!=SIZE_MAX)return false;
+            selectedSource=i;
+        }
+        for(size_t i=0;i<roles.targets.size();++i)if(roles.targetSlot(i)==targetRoot_) {
+            if(selectedTarget!=SIZE_MAX)return false;
+            selectedTarget=i;
+        }
+        if(selectedSource==SIZE_MAX || selectedTarget==SIZE_MAX)return false;
+        source=selectedSource;target=selectedTarget;return true;
+    }
     // Identity check for an ALREADY active frame borrow; never reenter the
     // frontend's inspection/access machinery from a native submit callback.
     bool ownsActiveRenderer(const Renderer& renderer) const noexcept {

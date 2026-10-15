@@ -3592,6 +3592,7 @@ struct NativeRetainedTemporaryExecution {
         NativeVeboxSendSubmissionStage::Admit submitAdmit=nullptr;
         NativeVeboxSendSubmissionStage::AdmitChild childAdmit=nullptr;
         bool ownedSend=false;
+        uint32_t nativePassSourceIndex=UINT32_MAX,nativePassTargetSourceIndex=UINT32_MAX;
     };
     static TglOwnedVeboxCommandTransactionResult consume(void* context,NativeRendererCpuAssembly& cpu,
         const TglNativeCreatedVeboxRendererView& pinned,NativeSourceGraph& graph,
@@ -3672,7 +3673,7 @@ struct NativeRetainedTemporaryExecution {
             if(!captured.capture(reinterpret_cast<uintptr_t>(caller.parameters().data()),readOwned) ||
                 captured.sourceCount!=request.roles.sourceCount || captured.targetCount!=request.roles.targetCount ||
                 captured.sources!=request.roles.sources || captured.targets!=request.roles.targets ||
-                source!=request.sourceIndex || target!=request.targetIndex)return result;
+                source!=request.nativePassSourceIndex || target!=request.nativePassTargetSourceIndex)return result;
             request.parameters=caller.parameters();request.pass=caller.pass();
         }
         result=runRetained(frame,request);
@@ -3743,12 +3744,16 @@ struct NativeRetainedTemporaryExecution {
             if(input>UINTPTR_MAX-0x139 || packet>UINTPTR_MAX-0x40 ||
                 !writableDataMemory(input,0x130) || !writableDataMemory(packet,0x40) ||
                 !roles.capture(input,&readMemory) || !readMemory(packet+0xc,&source,4) ||
-                !readMemory(packet+0x30,&target,4) || !roles.sourceSlot(source) || !roles.targetSlot(target))return reject();
+                !readMemory(packet+0x30,&target,4) || source>=roles.sources.size() || target>=roles.sources.size() ||
+                !roles.sources[source] || !roles.sources[target])return reject();
+            size_t sourceRole=0,targetRole=0;
+            if(!active.retainedRoleIndices(roles,sourceRole,targetRole))return reject();
             std::array<uint8_t,0x139> ownedParameters{};std::array<uint8_t,0x60> ownedPass{};
-            Request request{self.backend,ownedParameters,ownedPass,roles,source,target,self.childIndex,self.temporal,
+            Request request{self.backend,ownedParameters,ownedPass,roles,sourceRole,targetRole,self.childIndex,self.temporal,
                 self.interfaces,self.catalogue,self.retirement,self.view,self.acquisition,self.decompressionStatus,
                 self.decompression,self.argument};
             request.ownedSend=true;
+            request.nativePassSourceIndex=source;request.nativePassTargetSourceIndex=target;
             result=runCapturedPass(active,request,renderer,parameters,pass);
             if(!self.failure && result.status)self.failure=result.status;
             if(self.failure)result.status=self.failure;

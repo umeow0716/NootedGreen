@@ -16326,6 +16326,12 @@ static void testRetainedVeboxFrames() {
                     Storage retained(renderRoots,owners,image,0x8000,success.ticket.generation,selected,
                         readGraph,admitGraph,admitGraph,construct);
                     assert(retained.surfacesReady() && retained.canDestroy() && constructed==1);
+                    size_t sourceRole=0,targetRole=0;
+                    assert(retained.retainedRoleIndices(selected.roles,sourceRole,targetRole) && sourceRole==5 && targetRole==0);
+                    auto ambiguous=selected.roles;ambiguous.sources[6]=address;ambiguous.sourceCount=2;
+                    assert(!retained.retainedRoleIndices(ambiguous,sourceRole,targetRole) && sourceRole==SIZE_MAX && targetRole==SIZE_MAX);
+                    auto foreign=selected.roles;foreign.targets[0]=address;
+                    assert(!retained.retainedRoleIndices(foreign,sourceRole,targetRole));
                     assert(retained.recordRenderPassResult(-99)==5 && !retained.renderPassFailure());
                     RendererFixture* live=nullptr;
                     assert(retained.withRenderPass([&](auto& frame) noexcept -> int {
@@ -18401,7 +18407,7 @@ int main() {
         uintptr_t selectedSource=1,selectedTarget=1;
         assert(roles.selectContextRoots(roots,5,0,selectedSource,selectedTarget) && selectedSource==sp && selectedTarget==tp);
         {
-            uint32_t sourceIndex=5,targetIndex=0;
+            uint32_t sourceIndex=5,targetIndex=6; // BOTH native fields index source[17], not target[8].
             auto passRead=[&](uintptr_t p,void* out,size_t n) noexcept {
                 if(n==4 && (p==0x200c || p==0x2030)) {
                     const auto value=p==0x200c?sourceIndex:targetIndex;std::memcpy(out,&value,4);return true;
@@ -18409,12 +18415,13 @@ int main() {
                 return read(p,out,n);
             };
             TglNativeContextPassRootSelection selected;
-            assert(selected.capture(roots,0x1000,0x2000,passRead) && selected.source==sp && selected.target==tp && selected.sourceIndex==5);
-            sourceIndex=6;
-            assert(!selected.capture(roots,0x1000,0x2000,passRead) && !selected.source && !selected.target && !selected.roles.sourceCount);
-            sourceIndex=5;targetIndex=1;
-            assert(!selected.capture(roots,0x1000,0x2000,passRead));
-            assert(!selected.capture(roots,0x1000,UINTPTR_MAX,passRead));
+            assert(selected.capture(roots,0x1000,0x2000,5,0,passRead) && selected.source==sp && selected.target==tp &&
+                selected.sourceIndex==5 && selected.targetIndex==0 && selected.passSourceIndex==5 && selected.passTargetSourceIndex==6);
+            sourceIndex=17;
+            assert(!selected.capture(roots,0x1000,0x2000,5,0,passRead) && !selected.source && !selected.target && !selected.roles.sourceCount);
+            sourceIndex=5;targetIndex=0; // Empty native source slot; target[0] is irrelevant here.
+            assert(!selected.capture(roots,0x1000,0x2000,5,0,passRead));
+            assert(!selected.capture(roots,0x1000,UINTPTR_MAX,5,0,passRead));
         }
         assert(!roles.selectContextRoots(roots,6,0,selectedSource,selectedTarget) && !selectedSource && !selectedTarget);
         roots.sources.fill(0);roots.targets[1]=sp;
