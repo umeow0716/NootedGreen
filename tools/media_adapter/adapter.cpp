@@ -4828,7 +4828,7 @@ struct NativeCreatorPreparation {
 };
 struct NativeFactoryFrameBatch {
     using Lease=NativeRetainedContextFrameDispatch::Lease;
-    using Dispatch=int(*)(void*,Lease&,NativePhysicalFrameScope&,uintptr_t,uintptr_t) noexcept;
+    using Dispatch=int(*)(void*,Lease&,NativePhysicalFrameScope&,uintptr_t,uintptr_t,uint64_t,uintptr_t,uintptr_t) noexcept;
     struct Request {void* context;Dispatch dispatch;};
     NativePhysicalFrameScope& physical;uintptr_t image,address;uint64_t generation;
     Request& request;TglNativeFrameBatchRequests<16> items;
@@ -4842,6 +4842,7 @@ struct NativeFactoryFrameBatch {
                 if(index>=current->owners.size() || !current->owners[index].get() ||
                     current->owners[index].get()->context()!=reinterpret_cast<uintptr_t>(codec))return 5;
                 return current->request.dispatch(current->request.context,current->owners[index],current->physical,
+                    current->image,current->address,current->generation,
                     reinterpret_cast<uintptr_t>(input),reinterpret_cast<uintptr_t>(output));
             });
     }
@@ -4875,6 +4876,35 @@ struct NativeFactoryFrameBatch {
 int dispatchOwnedContextFrame(void* context,const void* input,void** output) noexcept {
     return NativeFactoryFrameBatch::frame(context,input,output);
 }
+struct NativeLateFactoryBatch {
+    NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;
+    void* renderArgument;bool busy=false;
+    bool serviceShapeValid() const noexcept {
+        // Absence is explicit and legal until the real conditional fast-fill
+        // path requests decompression; that call-site still refuses absence.
+        return bool(decompression.scope)==bool(decompression.invoke) &&
+            (!decompression.invoke || ownedExecutableMemory(reinterpret_cast<uintptr_t>(decompression.invoke),1));
+    }
+    static int dispatch(void* raw,NativeFactoryFrameBatch::Lease& owner,NativePhysicalFrameScope& physical,
+        uintptr_t image,uintptr_t address,uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
+        if(!raw || !owner.get() || !physical.matches(image,address,generation))return 5;
+        auto& self=*static_cast<NativeLateFactoryBatch*>(raw);
+        if(self.busy || !self.serviceShapeValid())return 5;
+        self.busy=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{self.busy};
+        const auto result=NativeCreatorPreparation::dispatchLateOwnedFrame(owner,physical,image,address,generation,
+            self.decompression,self.renderArgument,input,output);
+        os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_BATCH_FRAME_RESULT native-called=%{public}d consumed=%{public}d frames=%{public}u native=%{public}d status=%{public}d",
+            int(result.request.nativeInvoked),int(result.request.consumed),unsigned(result.frameCount),
+            result.request.nativeStatus,result.request.status);
+        return result.request.status;
+    }
+    static int run(void* physical,const void* input,void* output,
+        NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,void* renderArgument) noexcept {
+        NativeLateFactoryBatch request{decompression,renderArgument};
+        if(!request.serviceShapeValid())return 5;
+        return NativeFactoryFrameBatch::run(physical,input,output,&request,&dispatch);
+    }
+};
 struct NativeCompositeContextRemoval {
     using Scope=NativePhysicalBackend::RemovalScope;
     using Batch=NativePhysicalBackend::RemovedBatch;
