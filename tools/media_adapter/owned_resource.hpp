@@ -26904,6 +26904,23 @@ bool tglDispatchOwnedVphalDestruction(TglOwnedVphalLifetimeTable& table,
 
 struct TglNativePhysicalCallbackBinding {
     uintptr_t image=0,initialize=0,destroy=0;
+    // Caller retains the registered SAME physical generation/empty-frame scope.
+    // Root POD allocation only, not allocations referenced by its pointer fields.
+    template<class Read,class Qualify,class Executable>
+    bool excludesPhysicalAllocationSpan(uintptr_t physical,uintptr_t address,size_t bytes,
+        Read read,Qualify qualify,Executable executable) const noexcept {
+        if(!physical || physical>UINTPTR_MAX-0xaac0 || !address || !bytes || address>UINTPTR_MAX-bytes)return false;
+        TglNativePhysicalCallbackBinding current;
+        if(!current.resolve(image,read,qualify,executable) || current.initialize!=initialize || current.destroy!=destroy)return false;
+        constexpr std::array<uintptr_t,3> sites{0x135fd,0x13602,0x13607};
+        constexpr std::array<std::array<uint8_t,5>,3> anchors{{
+            {0xbf,1,0,0,0},{0xbe,0xc0,0xaa,0,0},{0xe8,0x5c,0xad,0x22,0}}};
+        for(size_t i=0;i<sites.size();++i) {
+            std::array<uint8_t,5> actual{};
+            if(!executable(image+sites[i],5) || !read(image+sites[i],actual.data(),5) || actual!=anchors[i])return false;
+        }
+        return address>=physical+0xaac0 || physical>=address+bytes;
+    }
     // Field identity only, not executable-image authentication. Caller retains
     // qualified image bindings and revalidates its actual physical scope.
     bool matchesCreatorInputs(const TglTrackedCpuBinding& cpu,uintptr_t entry) const noexcept {

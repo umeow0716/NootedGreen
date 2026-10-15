@@ -16123,6 +16123,31 @@ static void testRetainedVeboxFrames() {
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         {
+            constexpr std::array<uintptr_t,3> sites{0x135fd,0x13602,0x13607};
+            std::array<std::array<uint8_t,5>,3> anchors{{
+                {0xbf,1,0,0,0},{0xbe,0xc0,0xaa,0,0},{0xe8,0x5c,0xad,0x22,0}}};
+            bool extraRx=true;
+            auto proofRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+                for(size_t i=0;i<sites.size();++i)if(p==image+sites[i] && n==5){std::memcpy(out,anchors[i].data(),5);return true;}
+                return read(p,out,n);
+            };
+            auto proofRx=[&](uintptr_t p,size_t n) noexcept {
+                for(auto site:sites)if(p==image+site && n==5)return extraRx;
+                return executable(p,n);
+            };
+            auto excludes=[&](uintptr_t root,uintptr_t p,size_t n) noexcept {
+                return binding.excludesPhysicalAllocationSpan(root,p,n,proofRead,qualify,proofRx);
+            };
+            assert(!excludes(0x30000,0x30000,1) && !excludes(0x30000,0x3aabf,2));
+            assert(excludes(0x30000,0x3aac0,1) && excludes(0x30000,0x2ffff,1));
+            assert(!excludes(UINTPTR_MAX,1,1) && !excludes(0x30000,UINTPTR_MAX,1));
+            for(auto& anchor:anchors){anchor[1]^=1;assert(!excludes(0x30000,1,1));anchor[1]^=1;}
+            extraRx=false;assert(!excludes(0x30000,1,1));extraRx=true;
+            qualified=false;assert(!excludes(0x30000,1,1));qualified=true;
+            auto wrong=binding;++wrong.initialize;
+            assert(!wrong.excludesPhysicalAllocationSpan(0x30000,1,1,proofRead,qualify,proofRx));
+        }
+        {
             std::array<uintptr_t,17> table{};
             table[0]=0x90000;
             table[1]=image+0x135d9;table[2]=image+0x13c8c;table[3]=image+0x13e43;
