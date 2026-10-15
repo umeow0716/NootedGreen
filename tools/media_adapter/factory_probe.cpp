@@ -91,12 +91,12 @@ int cscReference() {
 }
 
 // Read our own loaded, sealed Tahoe framework. Never invoke a GPU/resource API.
-int resourceReference(bool fenceOnly=false,bool releaseOnly=false,bool classOnly=false) {
+int resourceReference(bool fenceOnly=false,bool releaseOnly=false,bool classOnly=false,bool eventOnly=false) {
     constexpr const char *framework = "/System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator";
     void *library = dlopen(framework, RTLD_NOW | RTLD_LOCAL);
     if (!library) { std::fprintf(stderr, "reference dlopen: %s\n", dlerror()); return 1; }
     int status = 1;
-    struct Reference { const char *name; const char *symbol; size_t callOffset; bool block = false; };
+    struct Reference { const char *name; const char *symbol; size_t callOffset; bool block = false; bool event = false; };
     for (const auto &reference : {
             Reference{"IOAccelResourceCreate", "IOAccelResourceCreate", 0},
             Reference{"IOAccelResourceRelease", "IOAccelResourceRelease", 0},
@@ -108,7 +108,13 @@ int resourceReference(bool fenceOnly=false,bool releaseOnly=false,bool classOnly
             Reference{"IOAccelVideoContextSubmitDataBuffers", "IOAccelVideoContextSubmitDataBuffers", 0},
             Reference{"client-shared-generation", "IOAccelResourceGetClientShared", 0x15},
             Reference{"client-shared-map-setup", "IOAccelResourceGetClientShared", 0x5b},
-            Reference{"client-shared-once-invoke", "IOAccelResourceGetClientShared", 0x5b, true}}) {
+            Reference{"client-shared-once-invoke", "IOAccelResourceGetClientShared", 0x5b, true},
+            // All three are actual imports of the exact signed TGL VADriver.
+            // Inspect code only; never map/create/test an event or device here.
+            Reference{"IOAccelVideoContextGetFenceBuffer","IOAccelVideoContextGetFenceBuffer",0,false,true},
+            Reference{"IOAccelDeviceTestEvent","IOAccelDeviceTestEvent",0,false,true},
+            Reference{"IOAccelDeviceCreateWithAPIProperty","IOAccelDeviceCreateWithAPIProperty",0,false,true}}) {
+        if(reference.event!=eventOnly)continue;
         if(classOnly && !reference.block) continue;
         if(fenceOnly && std::strcmp(reference.name,"IOAccelVideoContextFinishFenceEvent") &&
             std::strcmp(reference.name,"IOAccelVideoContextSubmitDataBuffers")) continue;
@@ -154,6 +160,19 @@ int resourceReference(bool fenceOnly=false,bool releaseOnly=false,bool classOnly
         constexpr uint8_t expectedUuid[16] = {0x19,0x8a,0x77,0x6a,0xfe,0x03,0x35,0xee,
             0x8e,0x53,0x7b,0x9f,0x14,0xca,0xab,0xaa};
         if (std::memcmp(uuid.uuid, expectedUuid, sizeof(expectedUuid))) goto done;
+        if(eventOnly) {
+            // Bounded same-image export thunks only, no speculative E8 follow.
+            constexpr uint8_t prefix[6]={0x55,0x48,0x89,0xe5,0x5d,0xe9};
+            for(unsigned hop=0;hop<2;++hop) {
+                uint8_t code[10]{};
+                if(textSize-(address-base)<sizeof(code) || !read(address,code,sizeof(code)))goto done;
+                if(std::memcmp(code,prefix,sizeof(prefix)))break;
+                int32_t relative=0;std::memcpy(&relative,code+6,4);
+                const uintptr_t next=address+sizeof(code)+relative;
+                if(next<base || next-base>=textSize || next==address)goto done;
+                address=next;
+            }
+        }
         if (fenceOnly) {
             // Exact 25G229 bytes captured by the CPU-only fence reference.
             // Both exports are prologue+jump thunks, not fence implementations.
@@ -268,7 +287,8 @@ int resourceReference(bool fenceOnly=false,bool releaseOnly=false,bool classOnly
             std::putchar('\n');
         }
     }
-    std::puts(classOnly ? "CLASS_REFERENCE_OK no-resource-call no-GPU no-text-write" :
+    std::puts(eventOnly ? "EVENT_REFERENCE_OK no-resource-call no-GPU no-text-write" :
+        classOnly ? "CLASS_REFERENCE_OK no-resource-call no-GPU no-text-write" :
         releaseOnly ? "RELEASE_REFERENCE_OK no-resource-call no-GPU no-text-write" :
         fenceOnly ? "FENCE_REFERENCE_OK no-resource-call no-GPU no-text-write" :
         "RESOURCE_REFERENCE_OK no-resource-call no-GPU no-text-write");
@@ -279,6 +299,7 @@ done:
 }
 }
 int main(int argc, char **argv) {
+    if(argc==2 && !std::strcmp(argv[1],"--event-reference"))return resourceReference(false,false,false,true);
     if(argc==2 && !std::strcmp(argv[1],"--resource-class-reference")) return resourceReference(false,false,true);
     if(argc==2 && !std::strcmp(argv[1],"--csc-reference")) return cscReference();
     if(argc==2 && !std::strcmp(argv[1],"--fence-reference")) return resourceReference(true);
