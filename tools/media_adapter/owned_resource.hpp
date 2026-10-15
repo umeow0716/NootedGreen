@@ -24322,6 +24322,7 @@ template<class Frame,size_t Capacity=2> class TglOwnedVeboxRetainedFrames {
     bool nativeRequestItemActive_=false; // protected by enclosing registry gate
     struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}};
 public:
+    static constexpr size_t frameCapacity=Capacity;
     bool workFaulted() const noexcept {return workFaulted_.load(std::memory_order_acquire);}
     // Embed in a stable-address per-physical registry entry. Keep that entry
     // until all frames retire; unresolved frames are not destructor-cleaned.
@@ -24613,9 +24614,25 @@ public:
         friend class TglOwnedVeboxPhysicalFrameRegistry;
         Pool& frames_;uintptr_t physical_,context_=0;Entry& entry_;
         FrameTicket requestFrame_{};
+        std::array<FrameTicket,Pool::frameCapacity> requestFrames_{};
+        size_t requestFrameCount_=0;
+        bool creatingPass_=false,requestOutputBound_=false;
         Frame* activeRequestFrame_=nullptr;
         explicit Scope(Entry& entry) noexcept
             :frames_(entry.frames),physical_(entry.physical),entry_(entry) {}
+        template<class Read,class Admit,class... Args>
+        FrameTicket createRequestPass(Read read,Admit admit,Args&&... args) noexcept {
+            if(!context_ || creatingPass_ || activeRequestFrame_ || requestOutputBound_ ||
+                requestFrameCount_==requestFrames_.size() || !matchesActiveContextRequest(context_))return {};
+            creatingPass_=true;
+            struct Reset {bool& value;~Reset(){value=false;}} reset{creatingPass_};
+            TglNativeContextInputRoots roots;
+            if(!roots.resolve(context_,read,admit) || roots.parent.physical!=physical_)return {};
+            const auto frame=frames_.create(static_cast<const TglNativeContextInputRoots&>(roots),std::forward<Args>(args)...);
+            if(!frame.generation)return {};
+            requestFrames_[requestFrameCount_++]=frame;
+            requestFrame_=frame;return frame;
+        }
     public:
         Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
         bool matches(uintptr_t image,uintptr_t physical,uint64_t generation) const noexcept {
@@ -24634,17 +24651,24 @@ public:
             if(!context || context_) return 5;
             return frames_.withNativeRequestItem([&]() noexcept -> int {
                 context_=context;
-                struct Reset {uintptr_t& value;FrameTicket& frame;~Reset(){value=0;frame={};}} reset{context_,requestFrame_};
+                struct Reset {Scope& scope;~Reset(){
+                    scope.context_=0;scope.requestFrame_={};scope.requestFrames_={};
+                    scope.requestFrameCount_=0;scope.requestOutputBound_=false;
+                }} reset{*this};
                 return invoke(*this);
             });
         }
         template<class Read,class Admit,class... Args>
         FrameTicket createContextRootFrame(Read read,Admit admit,Args&&... args) noexcept {
-            if(!context_ || !frames_.emptyForNativeRequest()) return {};
-            TglNativeContextInputRoots roots;
-            if(!roots.resolve(context_,read,admit) || roots.parent.physical!=physical_) return {};
-            requestFrame_=frames_.create(static_cast<const TglNativeContextInputRoots&>(roots),std::forward<Args>(args)...);
-            return requestFrame_;
+            if(!context_ || requestFrameCount_ || !frames_.emptyForNativeRequest()) return {};
+            return createRequestPass(read,admit,std::forward<Args>(args)...);
+        }
+        // Explicit same-request continuation, not a new request or frame rearm.
+        // Earlier frames stay pending; every pass gets freshly captured roots.
+        template<class Read,class Admit,class... Args>
+        FrameTicket createNextContextPassFrame(Read read,Admit admit,Args&&... args) noexcept {
+            if(!requestFrameCount_)return {};
+            return createRequestPass(read,admit,std::forward<Args>(args)...);
         }
         // Execute only the frame created by this active native request. Never
         // reenter physical registry or accept an independently supplied ticket.
@@ -24664,8 +24688,13 @@ public:
             return matchesActiveContextRequest(context) && requestFrame_.generation && frame && frame==activeRequestFrame_;
         }
         bool bindContextRootFrameOutput(const TglNativeFrameOutputReceipt& receipt) noexcept {
-            return context_ && requestFrame_.generation && receipt.context==context_ &&
-                frames_.bindOutputReceipt(requestFrame_,receipt);
+            if(!context_ || activeRequestFrame_ || creatingPass_ || requestOutputBound_ ||
+                !requestFrameCount_ || receipt.context!=context_)return false;
+            bool bound=false;
+            if(requestFrameCount_==1)bound=frames_.bindOutputReceipt(requestFrames_[0],receipt);
+            if constexpr(Pool::frameCapacity==2)
+                if(requestFrameCount_==2)bound=frames_.bindOutputReceipts(requestFrames_,receipt);
+            requestOutputBound_=bound;return bound;
         }
     };
 private:
