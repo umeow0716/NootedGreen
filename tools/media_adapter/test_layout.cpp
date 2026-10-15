@@ -16959,12 +16959,15 @@ static void testRetainedVeboxFrames() {
         // frame or its receipt. This is retention coverage, not multipass support.
         decltype(synchronousRootFrame) nextPassFrame;
         assert(callbacks.withFrameScope(success.ticket,0x8000,[&](auto& scope) noexcept -> int {
+            assert(!scope.matchesContinuationConstruction(0x20000));
+            assert(!scope.matchesContinuationFrame(0x20000,nullptr));
             assert(!scope.createNextContextPassFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
             return scope.withNativeRequestItem(0x20000,[&](auto& active) noexcept -> int {
                 synchronousRootFrame=active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
                 assert(synchronousRootFrame.generation);
                 assert(!active.createNextContextPassFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
-                assert(active.runContextRootFrame([](Frame&) noexcept {
+                assert(active.runContextRootFrame([&](Frame& frame) noexcept {
+                    assert(!active.matchesContinuationFrame(0x20000,&frame));
                     return TglOwnedVeboxCommandTransactionResult{0,0,true,true};
                 }).writtenBack);
                 assert(!active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
@@ -16973,12 +16976,24 @@ static void testRetainedVeboxFrames() {
                     ++reentered;return TglOwnedVeboxCommandTransactionResult{};
                 });
                 assert(!reentered && !refused.acquired);
-                nextPassFrame=active.createNextContextPassFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
+                unsigned constructionProofs=0;
+                auto continuationRead=[&](uintptr_t p,void* out,size_t size) noexcept {
+                    assert(active.matchesContinuationConstruction(0x20000));
+                    assert(!active.matchesContinuationConstruction(0x20008));
+                    ++constructionProofs;return rootRead(p,out,size);
+                };
+                nextPassFrame=active.createNextContextPassFrame(continuationRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
                 assert(nextPassFrame.generation && nextPassFrame.generation!=synchronousRootFrame.generation);
+                assert(constructionProofs && !active.matchesContinuationConstruction(0x20000));
                 assert(!active.bindContextRootFrameOutput({0x20000,0x62000,7,true})); // second pass not submitted
-                assert(active.runContextRootFrame([](Frame&) noexcept {
+                Frame* continuationFrame=nullptr;
+                assert(active.runContextRootFrame([&](Frame& frame) noexcept {
+                    continuationFrame=&frame;
+                    assert(active.matchesContinuationFrame(0x20000,&frame));
+                    assert(!active.matchesContinuationFrame(0x20008,&frame));
                     return TglOwnedVeboxCommandTransactionResult{0,0,true,true};
                 }).writtenBack);
+                assert(continuationFrame && !active.matchesContinuationFrame(0x20000,continuationFrame));
                 assert(!active.createNextContextPassFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
                 assert(active.bindContextRootFrameOutput({0x20000,0x62000,7,true}));
                 assert(!active.bindContextRootFrameOutput({0x20000,0x62008,8,true}));

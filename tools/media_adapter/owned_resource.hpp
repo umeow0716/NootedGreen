@@ -24760,6 +24760,17 @@ public:
         bool matchesActiveContextFrame(uintptr_t context,const Frame* frame) const noexcept {
             return matchesActiveContextRequest(context) && requestFrame_.generation && frame && frame==activeRequestFrame_;
         }
+        // Narrow proof predicates for synchronous unused-child admission.
+        // Neither predicate permits frame retirement or survives its callback.
+        bool matchesContinuationConstruction(uintptr_t context) const noexcept {
+            return matchesActiveContextRequest(context) && creatingPass_ && !activeRequestFrame_ &&
+                requestFrameCount_==1 && requestPassExecuted_ && !requestPassResult_.status &&
+                !requestPassFailure_ && !requestOutputBound_;
+        }
+        bool matchesContinuationFrame(uintptr_t context,const Frame* frame) const noexcept {
+            return requestFrameCount_>1 && !creatingPass_ && !requestPassFailure_ && !requestOutputBound_ &&
+                matchesActiveContextFrame(context,frame) && !TglRetainedFrameNativeState<Frame>::invalidated(*frame);
+        }
         bool bindContextRootFrameOutput(const TglNativeFrameOutputReceipt& receipt) noexcept {
             if(!context_ || activeRequestFrame_ || creatingPass_ || requestOutputBound_ ||
                 !requestFrameCount_ || receipt.context!=context_)return false;
