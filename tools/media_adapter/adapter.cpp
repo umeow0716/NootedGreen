@@ -4157,7 +4157,8 @@ struct Entry {
         return status?nullptr:result;
     }
     NativePhysicalRegistry::FrameTicket createContextPassRootFrame(NativePhysicalFrameScope& physical,
-        uintptr_t address,uint64_t generation,uintptr_t creator,const TglNativeContextPassRootSelection& selected) const noexcept {
+        uintptr_t address,uint64_t generation,uintptr_t creator,const TglNativeContextPassRootSelection& selected,
+        bool continuation=false) const noexcept {
         const uintptr_t image=nativeCpu.image;
         if(!image || !creator || !selected.source || !selected.target || !physical.matches(image,address,generation))return {};
         auto construct=[&](uintptr_t source,auto resolve,NativeContextSurfaceOwner& target) noexcept -> NativeBorrowedFrontend* {
@@ -4171,6 +4172,8 @@ struct Entry {
                         !cpu.backing().retention()();
                 });
         };
+        if(continuation)return physical.createNextContextPassFrame(&readMemory,NativeDataAdmission{},NativeCodecBackend::owners(),
+            image,address,generation,selected,&readMemory,NativeDataAdmission{},&writableDataMemory,construct);
         return physical.createContextRootFrame(&readMemory,NativeDataAdmission{},NativeCodecBackend::owners(),
             image,address,generation,selected,&readMemory,NativeDataAdmission{},&writableDataMemory,construct);
     }
@@ -4427,10 +4430,10 @@ struct NativeCreatorPreparation {
         TglOwnedVeboxCommandTransactionResult work{};
         NativePhysicalRegistry::FrameTicket frame{};
     };
-    static LowerBootstrapResult bootstrapFirstLower(NativePhysicalFrameScope& physical,uintptr_t image,
+    static LowerBootstrapResult bootstrapLowerPass(NativePhysicalFrameScope& physical,uintptr_t image,
         uintptr_t address,uint64_t generation,uintptr_t context,uintptr_t creator,uintptr_t renderer,
         uintptr_t parameters,uintptr_t pass,NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,
-        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument) noexcept {
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument,bool continuation) noexcept {
         LowerBootstrapResult result;
         if(!physical.matchesActiveContextRequest(context))return result;
         RuntimeView parent;
@@ -4443,7 +4446,7 @@ struct NativeCreatorPreparation {
         if(!roots.resolve(context,&readMemory,NativeDataAdmission{}) || roots.parent.physical!=address ||
             !readMemory(context+0x12e0,&actualCreator,8) || actualCreator!=creator ||
             !input.capture(roots,renderer,parameters,pass,&readMemory))return result;
-        result.frame=factory.createContextPassRootFrame(physical,address,generation,creator,input.selected);
+        result.frame=factory.createContextPassRootFrame(physical,address,generation,creator,input.selected,continuation);
         if(!result.frame.generation)return result;
         result.work=physical.runContextRootFrame([&](NativeContextRendererFrame& frame) noexcept {
             if(!frame.beginNativeFrame())return TglOwnedVeboxCommandTransactionResult{};
@@ -4462,7 +4465,8 @@ struct NativeCreatorPreparation {
         uintptr_t image,address,context,creator,renderer;uint64_t generation;
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal;void* argument;
-        NativePhysicalRegistry::FrameTicket frame{};
+        std::array<NativePhysicalRegistry::FrameTicket,2> frames{};
+        size_t frameCount=0;
         TglOwnedVeboxCommandTransactionResult work{};
         bool consumed=false,running=false;
         static TglOwnedVeboxCommandTransactionResult produce(void* raw,uintptr_t actual,void* parameters,void* pass) noexcept {
@@ -4472,13 +4476,13 @@ struct NativeCreatorPreparation {
             // final callback132500 returns0 without draining retained work.
             if(!raw)return {};
             auto& self=*static_cast<LateRequest*>(raw);
-            if(!self.running || actual!=self.renderer || !self.physical.matchesActiveContextRequest(self.context))return {};
-            auto result=bootstrapFirstLower(self.physical,self.image,self.address,self.generation,
+            if(!self.running || actual!=self.renderer || self.frameCount==self.frames.size() ||
+                !self.physical.matchesActiveContextRequest(self.context))return {};
+            auto result=bootstrapLowerPass(self.physical,self.image,self.address,self.generation,
                 self.context,self.creator,self.renderer,reinterpret_cast<uintptr_t>(parameters),
-                reinterpret_cast<uintptr_t>(pass),self.decompression,self.temporal,self.argument);
+                reinterpret_cast<uintptr_t>(pass),self.decompression,self.temporal,self.argument,self.frameCount!=0);
             if(result.frame.generation) {
-                if(self.frame.generation) {if(!result.work.status)result.work.status=5;}
-                else self.frame=result.frame;
+                self.frames[self.frameCount++]=result.frame;
             }
             return result.work;
         }
@@ -4506,7 +4510,8 @@ struct NativeCreatorPreparation {
     };
     struct LateDispatchResult {
         NativePreparedCodecRequestDispatch::Result request{};
-        NativePhysicalRegistry::FrameTicket frame{};
+        std::array<NativePhysicalRegistry::FrameTicket,2> frames{};
+        size_t frameCount=0;
     };
     static LateDispatchResult dispatchLateOwnedFrame(NativeRetainedContextFrameDispatch::Lease& lease,
         NativePhysicalFrameScope& physical,uintptr_t image,uintptr_t address,uint64_t generation,
@@ -4522,7 +4527,7 @@ struct NativeCreatorPreparation {
             !passBackendFor(physical,image,address,generation,creator,renderer))return result;
         LateRequest state{physical,image,address,context,creator,renderer,generation,decompression,temporal,argument};
         result.request=NativePreparedCodecRequestDispatch::run(lease,physical,input,output,&state,&LateRequest::consume);
-        result.frame=state.frame;
+        result.frames=state.frames;result.frameCount=state.frameCount;
         return result; // Pending native work remains retained; never infer retirement here.
     }
     // Full synchronous construction handoff, not a component-success alias.
