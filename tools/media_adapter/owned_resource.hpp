@@ -4252,6 +4252,9 @@ struct TglVeboxHardwareBinding {
     // hardware stamp pointer array+28 when needed. Critically30461..3046c
     // ALSO accepts a still-pending stamp when device+dc8 is nonzero. Thus
     // native testEvent=true is not alone a reset-free completion certificate;
+    // Fast2 deviceTerminatedUnlocked319f4 also writes software stamp104+18*i
+    // into hardware pointer28[i] at31a1c, then sfence31a31. Even a direct
+    // hardware-stamp equality read needs exclusion of this CPU synthesis.
     // the owned retirement admission must exclude that device-state branch
     // and retain exact submission/channel/generation provenance. Do not
     // reproduce this kernel-private predicate against guessed user pointers.
