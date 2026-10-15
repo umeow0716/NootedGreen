@@ -4631,7 +4631,10 @@ struct NativePhysicalBackend {
         return callbacks.createContextsAndAdoptBatchScoped(ticket,physical,input,
             [](AdoptionScope& scope,uintptr_t address,const NativeCodecBackend::Batch& batch) noexcept -> int {
                 return NativeCodecBackend::adopt(scope,address,batch);
-            },nativeCreate);
+            },nativeCreate,[&](auto& scope) noexcept -> bool {
+                return NativeCodecBackend::withNativeOtherOwners(scope,native.image,physical,ticket.generation,
+                    [](auto& lease) noexcept -> int {return lease.get()->nativeOtherWorkQuiescent()?0:5;})==0;
+            });
     }
 };
 using NativeVphalRemovalLease=decltype(NativeVphalRouter::pin(uintptr_t{}));

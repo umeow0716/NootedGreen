@@ -18365,7 +18365,19 @@ static void testRetainedVeboxFrames() {
                 codecPin=scope.retainPhysicalDependency();assert(codecPin.matches(image,address,physical.ticket.generation));
                 return 0;
             };
-            assert(scoped.createContextsAndAdoptBatchScoped<2>(physical.ticket,0x11000,input,adoptScoped,nativeScoped)==0);
+            bool ready=false;unsigned admissions=0;
+            auto preadmit=[&](auto& scope) noexcept -> bool {
+                ++admissions;assert(scope.matches(image,0x11000,physical.ticket.generation));
+                assert(scopedRegistry.withDependencyAdoption(physical.ticket,image,0x11000,
+                    [](auto&) noexcept -> int {assert(false);return 0;})==5);
+                return ready;
+            };
+            assert(scoped.createContextsAndAdoptBatchScoped<2>(physical.ticket,0x11000,input,adoptScoped,nativeScoped,preadmit)==5);
+            assert(!calls && !adoptions && admissions==1 && !creatorPin.live() && !codecPin.live());
+            assert(scopedRegistry.lookup(image,0x11000).generation==physical.ticket.generation);
+            ready=true;
+            assert(scoped.createContextsAndAdoptBatchScoped<2>(physical.ticket,0x11000,input,adoptScoped,nativeScoped,preadmit)==0);
+            assert(admissions==2);
             assert(calls==1 && adoptions==1);
             assert(scopedRegistry.destroy(physical.ticket,image,0x11000,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
             creatorPin.reset();

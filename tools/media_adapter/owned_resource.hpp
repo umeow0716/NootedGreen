@@ -25977,11 +25977,21 @@ public:
     }
     template<class Invoke> int withDependencyAdoption(Ticket ticket,uintptr_t image,
         uintptr_t physical,Invoke invoke) noexcept {
+        return withDependencyAdoptionGuarded(ticket,image,physical,invoke,
+            [](DependencyAdoptionScope&) noexcept -> bool {return true;});
+    }
+    template<class Invoke,class Admit> int withDependencyAdoptionGuarded(Ticket ticket,uintptr_t image,
+        uintptr_t physical,Invoke invoke,Admit admit) noexcept {
         static_assert(noexcept(invoke(std::declval<DependencyAdoptionScope&>())) &&
             std::is_same_v<decltype(invoke(std::declval<DependencyAdoptionScope&>())),int>);
+        static_assert(noexcept(admit(std::declval<DependencyAdoptionScope&>())) &&
+            std::is_same_v<decltype(admit(std::declval<DependencyAdoptionScope&>())),bool>);
         return withLive(ticket,image,physical,[&](Pool& frames) noexcept -> int {
             if(!frames.emptyForNativeRequest())return 5;
             auto* entry=resolve(ticket);DependencyAdoptionScope scope(*entry);
+            // Refusal precedes ALL native/adoption effects. Keep Live so a
+            // normal pending-frame wait can be retried after real completion.
+            if(!admit(scope))return 5;
             const int result=invoke(scope);
             if(result)entry->state=State::Quarantined;
             return result;
@@ -28006,6 +28016,9 @@ struct TglNativeBackingAllocateInvoker {
         return reinterpret_cast<int(*)(void*,const void*)>(entry)(reinterpret_cast<void*>(physical),input);
     }
 };
+struct TglNativeContextPreAdmission {
+    template<class Scope> bool operator()(Scope&) const noexcept {return true;}
+};
 struct TglNativeBackingReleaseInvoker {
     int operator()(uintptr_t entry,uintptr_t physical,uint32_t type) const noexcept {
         return reinterpret_cast<int(*)(void*,uint32_t)>(entry)(reinterpret_cast<void*>(physical),type);
@@ -28842,8 +28855,8 @@ public:
     // not prove the earlier published entries unchanged. Creation must use the
     // same empty-frame/exclusive admission and ambiguous-failure quarantine as
     // removal; never adopt output contexts only from aggregate success alone.
-    template<class Native=TglNativeBackingAllocateInvoker> int createContexts(
-        typename Registry::Ticket ticket,uintptr_t physical,const void* input,Native native=Native{}) noexcept {
+    template<class Native=TglNativeBackingAllocateInvoker,class Admit=TglNativeContextPreAdmission> int createContexts(
+        typename Registry::Ticket ticket,uintptr_t physical,const void* input,Native native=Native{},Admit admit=Admit{}) noexcept {
         using AdoptionScope=typename Registry::DependencyAdoptionScope;
         static_assert(std::is_nothrow_invocable_v<Native,uintptr_t,uintptr_t,const void*,AdoptionScope&> ||
             std::is_nothrow_invocable_v<Native,uintptr_t,uintptr_t,const void*>);
@@ -28855,7 +28868,7 @@ public:
         if(!input || !valid() || binding_.image>UINTPTR_MAX-0x13e43-anchor.size() ||
             !executable_(binding_.image+0x13e43,anchor.size()) ||
             !read_(binding_.image+0x13e43,actual.data(),actual.size()) || actual!=anchor) return 5;
-        return registry_.withDependencyAdoption(ticket,binding_.image,physical,[&](AdoptionScope& scope) noexcept -> int {
+        return registry_.withDependencyAdoptionGuarded(ticket,binding_.image,physical,[&](AdoptionScope& scope) noexcept -> int {
             if constexpr(std::is_nothrow_invocable_v<Native,uintptr_t,uintptr_t,const void*,AdoptionScope&>) {
                 static_assert(std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input,scope)),int>);
                 return native(binding_.image+0x13e43,physical,input,scope);
@@ -28863,13 +28876,13 @@ public:
                 static_assert(std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
                 return native(binding_.image+0x13e43,physical,input);
             }
-        });
+        },admit);
     }
     // Native creator callbacks AND post-create batch adoption can retain
     // dependencies without recursively acquiring the already-held registry gate.
-    template<size_t Capacity=16,class Adopt,class Native=TglNativeBackingAllocateInvoker>
+    template<size_t Capacity=16,class Adopt,class Native=TglNativeBackingAllocateInvoker,class Admit=TglNativeContextPreAdmission>
     int createContextsAndAdoptBatchScoped(typename Registry::Ticket ticket,uintptr_t physical,
-        const void* input,Adopt adopt,Native native=Native{}) noexcept {
+        const void* input,Adopt adopt,Native native=Native{},Admit admit=Admit{}) noexcept {
         using Scope=typename Registry::DependencyAdoptionScope;
         using Batch=TglNativeCreatedContextBatch<Capacity>;
         static_assert(noexcept(adopt(std::declval<Scope&>(),uintptr_t{},std::declval<const Batch&>())) &&
@@ -28887,7 +28900,7 @@ public:
             if(result)return result;
             Batch batch;if(!batch.capture(reinterpret_cast<uintptr_t>(original),read_))return 5;
             return adopt(scope,address,static_cast<const Batch&>(batch));
-        });
+        },admit);
     }
     // Adoption runs before releasing the SAME physical-generation gate. It
     // must validate all outputs and retain any partially published owned state
