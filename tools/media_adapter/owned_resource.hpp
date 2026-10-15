@@ -27726,6 +27726,31 @@ public:
         bytes_=geometry.sourceBytes;storage_=std::move(candidate);return true;
     }
 };
+// Exact native-other vtable+20 implementations. Zero bytes means the native
+// branch does not touch caller output, NOT that its result is success. Caller
+// must authenticate the saved original callback and retain context/physical
+// leases, then exclude every owned allocation from a nonzero output span.
+inline bool tglNativeOtherQueryWriteExtent(uintptr_t callbackOffset,uint32_t operation,size_t& bytes) noexcept {
+    bytes=0;
+    switch(callbackOffset) {
+        case 0x2283e0:
+            if(operation==5)bytes=0x4a;
+            else if(operation==11)bytes=0x1c;
+            return true;
+        case 0x22ae00:case 0x10966:
+            if(operation==11)bytes=0x1c;
+            return true;
+        case 0x23c0a0:
+            if(operation==8)bytes=0x4c;
+            return true;
+        case 0x1d1d0:
+            if(operation==13)bytes=1;
+            return true;
+        case 0x8af0:case 0x741c:case 0x27324:case 0x22f820:case 0x2317d0:
+            return true;
+        default:return false;
+    }
+}
 template<size_t Capacity=16> class TglNativeContextPropertyBatch {
     static_assert(Capacity>0 && Capacity<=128);
     uintptr_t input_=0,records_=0;

@@ -18532,6 +18532,22 @@ static void testRetainedVeboxFrames() {
 }
 
 static void testActualNv12LayoutSnapshot() {
+    // Exact native-other query callbacks; no synthetic native result and no
+    // success inferred from the zero-write branches.
+    for(auto callback:{uintptr_t{0x2283e0},uintptr_t{0x22ae00},uintptr_t{0x10966},uintptr_t{0x23c0a0},
+        uintptr_t{0x1d1d0},uintptr_t{0x8af0},uintptr_t{0x741c},uintptr_t{0x27324},uintptr_t{0x22f820},uintptr_t{0x2317d0}}) {
+        for(uint32_t operation=0;operation<16;++operation) {
+            size_t bytes=999;
+            assert(tglNativeOtherQueryWriteExtent(callback,operation,bytes));
+            const size_t expected=callback==0x2283e0 && operation==5?0x4a:
+                (callback==0x2283e0 || callback==0x22ae00 || callback==0x10966) && operation==11?0x1c:
+                callback==0x23c0a0 && operation==8?0x4c:callback==0x1d1d0 && operation==13?1:0;
+            assert(bytes==expected);
+        }
+    }
+    size_t rejectedBytes=999;
+    assert(!tglNativeOtherQueryWriteExtent(0x235890,5,rejectedBytes) && !rejectedBytes);
+    rejectedBytes=999;assert(!tglNativeOtherQueryWriteExtent(0,11,rejectedBytes) && !rejectedBytes);
     TglOwnedNv12Layout layout;
     constexpr uintptr_t base=0x10000;
     assert(tglCaptureOwnedNv12Layout(layout,base,4096,{base+128,base+2176},
