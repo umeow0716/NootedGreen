@@ -28586,6 +28586,20 @@ int main() {
                                         }
                                         return false;
                                     };
+                                    if(fixtureDependencies) {
+                                        TglVeboxAdmissionBorrowedInterfaces captured;
+                                        assert(tglCaptureLeasedVeboxInterfaces(owner,reinterpret_cast<uintptr_t>(child),
+                                            owner.allocationGeneration(),reinterpret_cast<uintptr_t>(params.data()),
+                                            interfaces.os,interfaces.renderHal,readInput,captured));
+                                        assert(captured.os==interfaces.os && captured.renderHal==interfaces.renderHal &&
+                                            captured.sku==interfaces.sku && captured.paramsE0==interfaces.paramsE0 && !captured.paramsF0);
+                                        assert(!tglCaptureLeasedVeboxInterfaces(owner,reinterpret_cast<uintptr_t>(child),
+                                            owner.allocationGeneration()+1,reinterpret_cast<uintptr_t>(params.data()),
+                                            interfaces.os,interfaces.renderHal,readInput,captured) && !captured.os && !captured.sku);
+                                        assert(!tglCaptureLeasedVeboxInterfaces(owner,reinterpret_cast<uintptr_t>(child),
+                                            owner.allocationGeneration(),reinterpret_cast<uintptr_t>(params.data()),
+                                            interfaces.os+8,interfaces.renderHal,readInput,captured));
+                                    }
                                     auto resetVp=[&]() noexcept -> bool {
                                         ++admissionResets;void* vp=nullptr;
                                         if(backing.withVpResources(0,[&](auto&,auto& storage,auto&) noexcept {

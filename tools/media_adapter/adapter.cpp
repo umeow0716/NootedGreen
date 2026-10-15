@@ -245,6 +245,18 @@ public:
             return children().second().owner().withPrivateChild([](void*) noexcept -> int {return 0;});
         })==0;
     }
+    int captureChildInterfaces(size_t index,uintptr_t parameters,const TglNativeVphalMhwView& view,
+        TglVeboxAdmissionBorrowedInterfaces& output) noexcept {
+        output={};
+        if(index>1 || !parameters || view.renderer.image!=image_ || !readyForFrontend() ||
+            !writableDataMemory(parameters,0x139))return 5;
+        auto& owner=index?children().second().owner():children().first().owner();
+        return owner.withPrivateChild([&](void* child) noexcept -> int {
+            if(reinterpret_cast<uintptr_t>(child)!=view.renderer.originalChildren[index])return 5;
+            return tglCaptureLeasedVeboxInterfaces(owner,reinterpret_cast<uintptr_t>(child),owner.allocationGeneration(),
+                parameters,view.os,view.renderHal,&readMemory,output)?0:5;
+        });
+    }
     template<class Use> int withChildExecution(size_t index,Use use) noexcept {
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         if(index>1 || !readyForFrontend())return 5;

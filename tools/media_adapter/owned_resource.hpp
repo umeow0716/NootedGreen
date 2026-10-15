@@ -13631,6 +13631,26 @@ struct TglVeboxAdmissionStagesInput {
 struct TglVeboxAdmissionBorrowedInterfaces {
     uintptr_t os=0,renderHal=0,sku=0,paramsF0=0,paramsE0=0;
 };
+template<class Owner,class Read>
+bool tglCaptureLeasedVeboxInterfaces(Owner& owner,uintptr_t child,uint64_t generation,
+    uintptr_t parameters,uintptr_t expectedOs,uintptr_t expectedHal,Read read,
+    TglVeboxAdmissionBorrowedInterfaces& output) noexcept {
+    output={};
+    if(!child || child>UINTPTR_MAX-0x28 || !generation || !parameters || parameters>UINTPTR_MAX-0xf8 ||
+        !expectedOs || !expectedHal)return false;
+    if constexpr(std::is_pointer_v<Read>)if(!read)return false;
+    TglVeboxAdmissionBorrowedInterfaces candidate;
+    auto dependencies=[&](TglVeboxAdmissionBorrowedInterfaces& values) noexcept {
+        return owner.readLeasedStorage(child,generation,child+0x10,&values.os,8) &&
+            owner.readLeasedStorage(child,generation,child+0x18,&values.renderHal,8) &&
+            owner.readLeasedStorage(child,generation,child+0x20,&values.sku,8);
+    };
+    if(!dependencies(candidate) || candidate.os!=expectedOs || candidate.renderHal!=expectedHal || !candidate.sku ||
+        !read(parameters+0xe0,&candidate.paramsE0,8) || !read(parameters+0xf0,&candidate.paramsF0,8))return false;
+    TglVeboxAdmissionBorrowedInterfaces after;
+    if(!dependencies(after) || after.os!=candidate.os || after.renderHal!=candidate.renderHal || after.sku!=candidate.sku)return false;
+    output=candidate;return true;
+}
 // Native VP setup40 precedes builder129ca0: it must not require an active
 // builder producer pass. Borrow the SAME private child generation, original
 // surface leases, native report and OS/image instead. This acquires nothing
