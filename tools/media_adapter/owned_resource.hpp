@@ -19555,6 +19555,11 @@ struct TglVeboxCompletionWriteSnapshot {
 // Exact129ca0 calls10fae0 AFTER MI+48; when its1a4 bit0 is set, that tail
 // invokes10f3e0/10f460/10f500 to append further native recording commands.
 // Reached VEBOX tag is therefore not an end-of-whole-submission drain proof.
+// The real batch closure is kernel-owned: TGL submitBuffer4c72a checks
+// descriptor68, then4c731/4c73e writes05000000 and zero at CPU20+4*count30.
+// IGAccelCommandDescriptor::init2e765 initializes68/69 to1/1. Do NOT append
+// a second end in the owned builder; verify the actual descriptor lineage
+// and the later post-batch ring stamp before granting retirement authority.
 template<class Read>
 bool tglReadVeboxCompletionWrite(const TglOwnedVeboxBuilderScratch& scratch,
     const TglVeboxHardwareBinding& binding,Read read,TglVeboxCompletionWriteSnapshot& out) {
