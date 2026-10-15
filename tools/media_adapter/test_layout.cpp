@@ -20117,6 +20117,7 @@ int main() {
                     TglNativeBorrowedVphalMhwLease<decltype(parents)::ContextLease> lease;
                     auto pin=parents.pin(image,0xb000,1,parent);
                     assert(pin.get() && !lease.binding());
+                    assert(lease.withParentLease([](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
                     auto parentAdmit=[&](const ParentOwner& owner,const TglNativeVphalMhwView& candidate) noexcept {
                         return owner.context()==candidate.parent && candidate.renderer.image==image &&
                             candidate.os==nativeOs && candidate.hardware.interface==nativeMhw;
@@ -20160,6 +20161,14 @@ int main() {
                     assert(lease.acquireOwned(std::move(pin),image,parent,creatorAddress,lifetime,ownedRead,
                         borrowedAdmit,qualify,ownedExec,parentAdmit));
                     assert(!pin.get() && lease.binding()->interface==nativeMhw);
+                    unsigned borrowedPinCalls=0;
+                    assert(lease.withParentLease([&](const auto& held,const TglNativeVphalMhwView& view) noexcept -> int {
+                        static_assert(std::is_const_v<std::remove_reference_t<decltype(held)>>);
+                        ++borrowedPinCalls;assert(held.get() && held.get()->context()==parent && view.parent==parent);
+                        assert(parents.prepareRemoval(image,0xb000,1,removed,
+                            [](const auto&,uint32_t) noexcept -> int {assert(false);return 0;})==5);
+                        return 31;
+                    })==31 && borrowedPinCalls==1);
                     {
                         constexpr uintptr_t database=0x90000000,wrapper=0x90010000,
                             device=0x90020000,create=0x90030000;

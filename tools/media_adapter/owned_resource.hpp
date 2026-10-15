@@ -4656,6 +4656,11 @@ public:
     const TglNativeVphalMhwView* view() const noexcept {
         return parent_.get()?&view_:nullptr;
     }
+    template<class Use> int withParentLease(Use use) const noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<int,Use&,const ParentLease&,const TglNativeVphalMhwView&>);
+        if(!parent_.get())return 5;
+        return use(std::as_const(parent_),std::as_const(view_));
+    }
     // Default destruction releases ONLY the parent pin. The original native
     // VPHAL remains sole MHW owner; no heap cleanup/delete is performed here.
 };
@@ -25361,6 +25366,7 @@ class TglOwnedVphalRendererOwner {
         Storage* storage=nullptr;
         std::atomic<bool> storageBusy{false};
         std::atomic<bool> frameBusy{false};
+        std::atomic<bool> nativeRequestPending{false};
         State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t o,uintptr_t r,
             Read rd,Write wr,TableAdmit ta,ChildAdmit ca,Native n) noexcept
             :image(i),physical(p),object(o),renderer(r),generation(g),
@@ -25377,7 +25383,8 @@ class TglOwnedVphalRendererOwner {
                 read(os+0x8,&embedded,8) && embedded==wrapper+0x48;
         }
         int prepare() noexcept {
-            if(frameBusy || !physicalLease.matches(image,physical,generation) || !boundRenderer() || !boundPhysicalOs()) return 5;
+            if(frameBusy || nativeRequestPending.load(std::memory_order_acquire) ||
+                !physicalLease.matches(image,physical,generation) || !boundRenderer() || !boundPhysicalOs()) return 5;
             using Publication=TglOwnedPrimaryRendererTable::Publication;
             if(rendererTable.publication()==Publication::Ambiguous) return 5;
             if(rendererTable.publication()==Publication::Published &&
@@ -25418,6 +25425,12 @@ public:
     }
     uintptr_t context() const noexcept {return state_?state_->object:0;}
     const TglOwnedVphalLifetimeTable& lifetime() const noexcept {return state_->table;}
+    // Retain BEFORE releasing the same frame pin, including native entry with
+    // no lower/root callback. No CPU/native return can clear this obligation.
+    template<class OwnerLease> bool retainNativeRequest(const OwnerLease& lease) noexcept {
+        if(!state_ || lease.get()!=this)return false;
+        state_->nativeRequestPending.store(true,std::memory_order_release);return true;
+    }
     const TglOwnedPrimaryRendererTable& rendererLifetime() const noexcept {return state_->rendererTable;}
     //235b00 prepares context12e8 BEFORE VPHAL+10. Consume that exact late
     // boundary under the already-active request/frame, never invoke235ab0

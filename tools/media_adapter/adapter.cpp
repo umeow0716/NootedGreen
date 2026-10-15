@@ -3932,7 +3932,7 @@ struct NativePreparedVphalFrameDispatch {
 // Install only the request-qualified router; the producer builds actual roots
 // from each packet. No whole-frame native return is a completion receipt.
 struct NativeLateLowerRequestDispatch {
-    static TglOwnedVeboxCommandTransactionResult run(NativeVphalFramePin& parent,
+    static TglOwnedVeboxCommandTransactionResult run(const NativeVphalFramePin& parent,
         NativePhysicalFrameScope& physical,uintptr_t context,uintptr_t parameters,
         uintptr_t renderer,void* producerContext,TglOwnedLateLowerPassRequest::Produce produce) noexcept {
         auto* owner=parent.get();
@@ -4239,7 +4239,9 @@ struct NativeCreatorPreparation {
                     if(lease.get()!=record->owner || !lease.exclusive())return 5;
                     if(!record->owner->publishLifetime(NativeVphalRouter::Callbacks::destroyEntry(),
                         NativeVphalRouter::Callbacks::deletingDestroyEntry(),&readMemory,
-                        NativeTglImageAdmission{image},&executableMemory,&ownedExecutableMemory,NativeDataAdmission{}))return 5;
+                        NativeTglImageAdmission{image},&executableMemory,&ownedExecutableMemory,NativeDataAdmission{},
+                        selection.ownedSend && selection.domain==NativeRendererCallbackDomain::Temporary?
+                            reinterpret_cast<uintptr_t>(&NativePreparedCodecRequestDispatch::Prepared::callback):0))return 5;
                     record->lifetimePublished=true;return 0;
                 });
             });
@@ -4442,6 +4444,70 @@ struct NativeCreatorPreparation {
                 reinterpret_cast<void*>(parameters),reinterpret_cast<void*>(pass));
         });
         return result; // Frame remains pooled; caller must bind receipt/real completion separately.
+    }
+    struct LateRequest {
+        NativePhysicalFrameScope& physical;
+        uintptr_t image,address,context,creator,renderer;uint64_t generation;
+        NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal;void* argument;
+        NativePhysicalRegistry::FrameTicket frame{};
+        TglOwnedVeboxCommandTransactionResult work{};
+        bool consumed=false,running=false;
+        static TglOwnedVeboxCommandTransactionResult produce(void* raw,uintptr_t actual,void* parameters,void* pass) noexcept {
+            if(!raw)return {};
+            auto& self=*static_cast<LateRequest*>(raw);
+            if(!self.running || actual!=self.renderer || !self.physical.matchesActiveContextRequest(self.context))return {};
+            auto result=bootstrapFirstLower(self.physical,self.image,self.address,self.generation,
+                self.context,self.creator,self.renderer,reinterpret_cast<uintptr_t>(parameters),
+                reinterpret_cast<uintptr_t>(pass),self.decompression,self.temporal,self.argument);
+            if(result.frame.generation) {
+                if(self.frame.generation) {if(!result.work.status)result.work.status=5;}
+                else self.frame=result.frame;
+            }
+            return result.work;
+        }
+        static TglOwnedVeboxCommandTransactionResult consume(void* raw,NativePhysicalFrameScope& active,
+            uintptr_t codec,uintptr_t creator,uintptr_t parameters) noexcept {
+            if(!raw)return {};
+            auto& self=*static_cast<LateRequest*>(raw);
+            if(self.consumed || &active!=&self.physical || codec!=self.context || creator!=self.creator ||
+                !active.matches(self.image,self.address,self.generation) || !active.matchesActiveContextRequest(codec))return {};
+            self.consumed=true;
+            RuntimeView parent;
+            if(!acquireRuntimeView(active,self.image,self.address,self.generation,creator,self.renderer,parent))return {};
+            const int status=parent.withParentLease([&](const NativeVphalFramePin& pin,const TglNativeVphalMhwView& view) noexcept -> int {
+                if(view.parent!=creator || view.renderer.renderer!=self.renderer)return 5;
+                self.running=true;
+                struct Reset {bool& value;~Reset(){value=false;}} reset{self.running};
+                self.work=NativeLateLowerRequestDispatch::run(pin,active,codec,parameters,self.renderer,&self,&produce);
+                // Pin remains live until this retention publication completes.
+                if(self.work.nativeEntered && !pin.get()->retainNativeRequest(pin) && !self.work.status)self.work.status=5;
+                return self.work.status;
+            });
+            if(!self.work.status && status)self.work.status=status;
+            return self.work;
+        }
+    };
+    struct LateDispatchResult {
+        NativePreparedCodecRequestDispatch::Result request{};
+        NativePhysicalRegistry::FrameTicket frame{};
+    };
+    static LateDispatchResult dispatchLateOwnedFrame(NativeRetainedContextFrameDispatch::Lease& lease,
+        NativePhysicalFrameScope& physical,uintptr_t image,uintptr_t address,uint64_t generation,
+        NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument,
+        uintptr_t input,uintptr_t output) noexcept {
+        LateDispatchResult result;
+        const uintptr_t context=lease.get()?lease.get()->context():0;
+        uintptr_t creator=0,renderer=0;
+        if(!context || context>UINTPTR_MAX-0x12f0 || !physical.matches(image,address,generation) ||
+            !readMemory(context+0x12e0,&creator,8) || !creator || creator>UINTPTR_MAX-0x70 ||
+            !readMemory(creator+0x68,&renderer,8) || !renderer ||
+            !passBackendFor(physical,image,address,generation,creator,renderer))return result;
+        LateRequest state{physical,image,address,context,creator,renderer,generation,decompression,temporal,argument};
+        result.request=NativePreparedCodecRequestDispatch::run(lease,physical,input,output,&state,&LateRequest::consume);
+        result.frame=state.frame;
+        return result; // Pending native work remains retained; never infer retirement here.
     }
     // Full synchronous construction handoff, not a component-success alias.
     // Each component keeps its persistent partial state; failure never retries
