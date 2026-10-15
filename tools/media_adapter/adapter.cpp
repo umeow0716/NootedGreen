@@ -2826,13 +2826,17 @@ struct NativeVeboxSendSubmissionStage {
             (void)context.pass.record(5);context.retention.observe(context.command);return 5;
         }
         context.buildAttempted=true;
-        if(!context.entered || &packets.pass!=&context.pass || !context.pass.acceptsProducer() ||
+        auto admitted=[&]() noexcept {
+            return context.commandRetention.linkedTo(context.retention) &&
+                !TglOwnedVeboxAllocationRenderRetention{context.retention,context.commandRetention}();
+        };
+        if(!admitted() || !context.entered || &packets.pass!=&context.pass || !context.pass.acceptsProducer() ||
             !context.admit || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(context.admit),1) ||
             !context.tail.matchesIdentity(reinterpret_cast<uintptr_t>(child),&readMemory))return 5;
         bool setupAttempted=false;
         auto setupWithOrigin=[&](uintptr_t entry,void* nativeChild,void* command,void* hints,
             void* auxiliary,int32_t* consumed) noexcept -> int {
-            if(setupAttempted)return 5;
+            if(setupAttempted || !admitted())return 5;
             setupAttempted=true;
             const int status=TglNativeVeboxSetupInvoker{}(entry,nativeChild,command,hints,auxiliary,consumed);
             if(status)return status;
@@ -3049,7 +3053,8 @@ template<class SurfaceOwner> struct NativeVeboxRenderSendRequestFor {
         auto& commandRetention=render.planner.storage.auxiliary().retention();
         if(request.attempted || request.image!=render.render.binding.image ||
             &request.retention!=&render.render.admission.reset.backing.retention() ||
-            !commandRetention.linkedTo(request.retention) || commandRetention())return result;
+            !commandRetention.linkedTo(request.retention) ||
+            TglOwnedVeboxAllocationRenderRetention{request.retention,commandRetention}())return result;
         request.attempted=true;
         TglOwnedVeboxCommandTransactionResult command;
         Stage::SendContext context{request.frame,producer.pass,request.tail,request.submit,
