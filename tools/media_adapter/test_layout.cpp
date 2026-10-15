@@ -32464,8 +32464,29 @@ int main() {
                 owner.reset();assert(!cpu.live && eventCount==8);
                 assert((std::array<unsigned,4>{events[4],events[5],events[6],events[7]}==
                     std::array<unsigned,4>{1,2,3,4}));
+                // Isolated LAST round: a corrupted base cannot be reused by
+                // the healthy lifecycle tests above, or silently cleaned up.
+                assert(initialize()==TglOwnedBaseConstruction::ConstructedSuccess);
+                assert(owner.installPrivateVtableWithQueries<DeniedFormatRead>(unbound,tableRead,qualify,executable));
+                TglOwnedVpSfcCallerStorage borrowedVp;
+                const uintptr_t foreignVp=1;
+                assert(owner.withPrivateChild([&](void* parent) noexcept -> int {
+                    return owner.withLeasedBorrowedVpCpuView(parent,&borrowedVp,
+                        [&](void* actual,void*) noexcept {
+                            std::memcpy(static_cast<uint8_t*>(actual)+0x80,&foreignVp,8);return 0;
+                        });
+                })==5);
+                uintptr_t preserved=0;std::memcpy(&preserved,cpu.bytes.data()+0x80,8);assert(preserved==foreignVp);
+                assert(!owner.constructedBase() && cpu.live && eventCount==8);
+                assert(!owner.destroyInPlace() && !owner.deleteAllocation());
+                owner.reset();assert(cpu.live && eventCount==8);
+                assert(initialize()==TglOwnedBaseConstruction::NotCalled && constructors==4);
             }
-            assert(eventCount==8 && constructors==3);
+            // SFC dependency's own CPU destructor is separate from blocked
+            // base cleanup; no base cleanup/destroy/release was guessed.
+            assert(cpu.live && eventCount==9 && events[8]==4 && constructors==4);
+            cpu.release(reinterpret_cast<uintptr_t>(cpu.bytes.data())); // Fixture-only ownership resolution.
+            assert(!cpu.live && eventCount==10 && events[9]==3);
             invoke.constructs=invoke.destroys=0;
         }
         {
