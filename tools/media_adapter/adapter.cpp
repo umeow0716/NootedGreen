@@ -5030,28 +5030,39 @@ struct NativeCreatorPreparation {
                         &readMemory,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,
                         [](const NativeVphalOwner& owner,const TglNativeVphalMhwView& view) noexcept {
                             return owner.context()==view.parent && owner.lifetime().object()==view.parent;
-                        }) || !parent.view() || assembly.backing().retention()())return 5;
+                        }) || !parent.view()) {
+                        os_log_info(OS_LOG_DEFAULT,"NGRN_CHILD_PUBLICATION stage=parent-view status=5");return 5;
+                    }
+                    const bool pending=assembly.backing().retention()();
+                    os_log_info(OS_LOG_DEFAULT,"NGRN_CHILD_PUBLICATION stage=retention pending=%{public}d",int(pending));
+                    if(pending)return 5;
                     const auto send=record->selection.ownedSend?&NativeVeboxSendSubmissionStage::send:nullptr;
                     const std::array<int(*)(void*) noexcept,2> sends{send,send};
                     if(!record->selection.valid())return 5;
                     const int installed=record->selection.domain==NativeRendererCallbackDomain::Temporary?
                         NativeTemporaryRendererCompleteHooks::install(assembly,*parent.view(),sends):
                         NativeRendererCompleteHooks::install(assembly,*parent.view(),sends);
+                    os_log_info(OS_LOG_DEFAULT,"NGRN_CHILD_PUBLICATION stage=hooks status=%{public}d",installed);
                     if(installed)return installed;
                     auto configuration=[&](uintptr_t renderer,uint64_t epoch,uintptr_t slot) noexcept {
-                        return physical.matches(image,address,generation) && renderer==record->renderer &&
+                        const bool admitted=physical.matches(image,address,generation) && renderer==record->renderer &&
                             epoch==generation && renderer<=UINTPTR_MAX-0x2cb8 && slot==renderer+0x2cb0 &&
                             writableDataMemory(slot,8);
+                        os_log_info(OS_LOG_DEFAULT,"NGRN_CHILD_PUBLICATION stage=configuration admitted=%{public}d",int(admitted));
+                        return admitted;
                     };
                     auto publish=[&](void* renderer,uint64_t epoch,uintptr_t first,uintptr_t second) noexcept {
-                        return physical.matches(image,address,generation) && reinterpret_cast<uintptr_t>(renderer)==record->renderer &&
+                        const bool admitted=physical.matches(image,address,generation) && reinterpret_cast<uintptr_t>(renderer)==record->renderer &&
                             epoch==generation && first==reinterpret_cast<uintptr_t>(assembly.children().first().owner().constructedBase()) &&
                             second==reinterpret_cast<uintptr_t>(assembly.children().second().owner().constructedBase()) &&
                             writableDataMemory(record->renderer,0x928);
+                        os_log_info(OS_LOG_DEFAULT,"NGRN_CHILD_PUBLICATION stage=pair-gate admitted=%{public}d",int(admitted));
+                        return admitted;
                     };
                     record->childrenPublished=assembly.children().publishFromCreatorOwned(image,creator,generation,
                         record->owner->lifetime(),&readMemory,NativeDataAdmission{},NativeTglImageAdmission{image},
                         &executableMemory,configuration,publish);
+                    os_log_info(OS_LOG_DEFAULT,"NGRN_CHILD_PUBLICATION stage=pair-result published=%{public}d",int(record->childrenPublished));
                     return record->childrenPublished?0:5;
                 });
         });
