@@ -33717,6 +33717,34 @@ int main() {
         auto admit=[&](uintptr_t o,uintptr_t w,uintptr_t c) noexcept {
             return o==address && w==0x60000 && c==native;
         };
+        uintptr_t writer=0xd0000,base=0x80000,end=base+0x1018,cursor=base+0x20;
+        uintptr_t reserved=end+12,limit=base+0x2030;
+        uint32_t sharedSize=0x828,pageHeader=0x04008200;
+        auto pageRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+            auto word=[&](const auto& value) noexcept {std::memcpy(out,&value,n);return true;};
+            if(n==8) {
+                if(p==database+8+uintptr_t{index}*0x15c0+0x20)return word(writer);
+                if(p==writer)return word(end);
+                if(p==writer+8)return word(cursor);
+                if(p==wrapper+0x80)return word(base);
+                if(p==wrapper+0x68)return word(limit);
+                if(p==wrapper+0x60)return word(reserved);
+            }
+            if(n==4 && p==base)return word(sharedSize);
+            if(n==4 && p==base+0x18)return word(pageHeader);
+            return observationRead(p,out,n);
+        };
+        TglNativeOsCommandSubmitBinding::RelocationPage page;
+        assert(binding.captureRelocationPage(pageRead,admit,page) && page.begin==base+0x18 && page.cursor==cursor);
+        const auto original=page;
+        pageHeader=0;assert(!binding.captureRelocationPage(pageRead,admit,page) && page.same(original));pageHeader=0x04008200;
+        cursor=end;assert(!binding.captureRelocationPage(pageRead,admit,page));cursor=base+0x20;
+        --limit;assert(!binding.captureRelocationPage(pageRead,admit,page));++limit;
+        --reserved;assert(!binding.captureRelocationPage(pageRead,admit,page));++reserved;
+        sharedSize=0x1b;assert(!binding.captureRelocationPage(pageRead,admit,page));sharedSize=0x828;
+        assert(!binding.captureRelocationPage(pageRead,
+            [](uintptr_t,uintptr_t,uintptr_t) noexcept {return false;},page));
+        assert(page.same(original) && calls==3);
         auto observedInvoke=[&](uintptr_t p,uintptr_t o,void* buffer,uint32_t flags) noexcept {
             const int status=invoke(p,o,buffer,flags);rawFlags=0x40000000;
             if(failAfter)failFlags=true;

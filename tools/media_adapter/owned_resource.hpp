@@ -19170,6 +19170,50 @@ public:
         return capture() && capture();
     }
     // Exact64df0 obtains its a9dc wrapper from database+8+index*15c0.
+    struct RelocationPage {
+        uintptr_t writer=0,begin=0,cursor=0,end=0,reserved=0,limit=0;
+        bool same(const RelocationPage& other) const noexcept {
+            return writer==other.writer && begin==other.begin && cursor==other.cursor &&
+                end==other.end && reserved==other.reserved && limit==other.limit;
+        }
+    };
+    //646a0 reserves100c bytes, writes8-byte8200/0400 header, advances writer0
+    // by1000;641e0 may extend by another1000. a893 derives limit68 from the
+    // native shared header80. This read-only gate proves current-page bounds,
+    // not record ownership, kernel binding, GPU completion or cache visibility.
+    template<class Read,class Admit>
+    bool captureRelocationPage(Read read,Admit admit,RelocationPage& output) const noexcept {
+        if constexpr(std::is_pointer_v<Read>)if(!read)return false;
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
+        auto capture=[&](RelocationPage& page,uintptr_t& wrapper,uintptr_t& native) noexcept {
+            uintptr_t database=0,base=0;uint32_t index=0,size=0,header=0;
+            if(!os_ || !entry_ || !read(os_,&database,8) || !database ||
+                !read(os_+8,&index,4) || index>=16)return false;
+            const uint64_t offset=8+uint64_t{index}*0x15c0;
+            if(database>UINTPTR_MAX-offset-0x28 ||
+                !read(database+uintptr_t(offset),&wrapper,8) || !wrapper || wrapper>UINTPTR_MAX-0x88 ||
+                !read(wrapper+8,&native,8) || !native || !matchesSlot(os_,wrapper,native,read) ||
+                !admit(os_,wrapper,native) ||
+                !read(database+uintptr_t(offset)+0x20,&page.writer,8) || !page.writer || page.writer>UINTPTR_MAX-16 ||
+                !read(page.writer,&page.end,8) || page.end<0x1000 ||
+                !read(page.writer+8,&page.cursor,8) ||
+                !read(wrapper+0x80,&base,8) || !base || base>UINTPTR_MAX-4 ||
+                !read(base,&size,4) || size<0x1c ||
+                !read(wrapper+0x68,&page.limit,8) || !read(wrapper+0x60,&page.reserved,8))return false;
+            const uint64_t bytes=uint64_t{size-0x1c}*4;
+            page.begin=page.end-0x1000;
+            if(base>UINTPTR_MAX-bytes || page.limit!=base+bytes ||
+                page.begin<base || page.begin>UINTPTR_MAX-8 ||
+                page.end>UINTPTR_MAX-12 || page.end+12>page.reserved || page.reserved>page.limit ||
+                page.cursor<page.begin+8 || page.cursor>page.end-4 || (page.cursor&3) ||
+                !read(page.begin,&header,4) || header!=0x04008200)return false;
+            return true;
+        };
+        RelocationPage first,second;uintptr_t wrapper=0,native=0,again=0,againNative=0;
+        if(!capture(first,wrapper,native) || !capture(second,again,againNative) ||
+            wrapper!=again || native!=againNative || !first.same(second))return false;
+        output=first;return true;
+    }
     // Do not invent OS+15b0: that is a field of the DATABASE RECORD used
     // for the separate optional fence call. At most one a9dc occurs here,
     // but this raw flags snapshot does not assert that its branch ran.
@@ -28450,6 +28494,17 @@ public:
     }
     // SAME active frame, but the planned OS2d0 operation rather than an
     // extra a9dc call. Admit binds OS/wrapper/native context to this renderer.
+    template<class Read,class Admit>
+    bool captureNativeRelocationPage(const TglNativeOsCommandSubmitBinding& binding,Read read,Admit admit,
+        TglNativeOsCommandSubmitBinding::RelocationPage& output) noexcept {
+        if constexpr(std::is_pointer_v<Read>)if(!read)return false;
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
+        if(!busy_ || flushBusy_ || !renderer_ || retirementStarted_ || invalidated())return false;
+        flushBusy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{flushBusy_};
+        return binding.captureRelocationPage(read,[&](uintptr_t os,uintptr_t wrapper,uintptr_t native) noexcept {
+            return admit(std::as_const(*renderer_),os,wrapper,native);
+        },output);
+    }
     template<class Read,class Admit,class Invoke=TglNativeOsCommandSubmitInvoker>
     TglNativeOsCommandSubmitBinding::Observation observeNativeOsSubmit(
         const TglNativeOsCommandSubmitBinding& binding,void* command,uint32_t flags,
