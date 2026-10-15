@@ -20512,9 +20512,11 @@ public:
     }
     TglOwnedTypedCfReference(const TglOwnedTypedCfReference&)=delete;
     TglOwnedTypedCfReference& operator=(const TglOwnedTypedCfReference&)=delete;
-    ~TglOwnedTypedCfReference() noexcept {
+    ~TglOwnedTypedCfReference() noexcept {reset();}
+    void reset() noexcept {
         static_assert(noexcept(api_.release(uintptr_t{})));
-        if(handle_) api_.release(handle_);
+        const auto old=handle_;handle_=0;
+        if(old)api_.release(old);
     }
     bool acquire(uintptr_t handle,uintptr_t expectedType) noexcept {
         static_assert(noexcept(api_.type(uintptr_t{})) && noexcept(api_.retain(uintptr_t{})));
@@ -20554,6 +20556,13 @@ public:
     }
     TglOwnedType1SurfaceReferences(const TglOwnedType1SurfaceReferences&)=delete;
     TglOwnedType1SurfaceReferences& operator=(const TglOwnedType1SurfaceReferences&)=delete;
+    ~TglOwnedType1SurfaceReferences() noexcept {
+        // Match native63c99..63d20: plane IOAccelResources BEFORE IOSurface.
+        // std::array destruction alone would reverse that lifetime order.
+        ready_=false;shell_=nullptr;
+        for(size_t i=0;i<4;++i)pins_[i].reset();
+        pins_[4].reset(); // Array member destructors are now harmless/idempotent.
+    }
     template<class Owner>
     bool acquire(Owner& owner,const TglOwnedSurfaceStorage& shell,
         uintptr_t resourceType,uintptr_t surfaceType) noexcept {
@@ -20579,6 +20588,13 @@ public:
     // no failed acquisition exposes a usable lease or permits another attempt.
     bool ownsBackingOf(const TglOwnedSurfaceStorage& shell) const noexcept {
         return ready_ && shell_==&shell && matches(shell);
+    }
+    bool independentlyPinsSameBackingAs(const TglOwnedType1SurfaceReferences& other) const noexcept {
+        if(this==&other || !ready_ || !other.ready_ || !shell_ || shell_!=other.shell_ ||
+            count_!=other.count_ || handles_!=other.handles_ || !matches(*shell_) || !other.matches(*shell_))return false;
+        for(size_t i=0;i<count_;++i)
+            if(!pins_[i].owns(handles_[i]) || !other.pins_[i].owns(handles_[i]))return false;
+        return pins_[4].owns(handles_[4]) && other.pins_[4].owns(handles_[4]);
     }
 };
 // Sidecar for an ORIGINAL context-root shell. It owns a context pin, never the
@@ -20618,6 +20634,19 @@ public:
     }
     const TglOwnedSurfaceStorage* surfaceBinding() const noexcept {
         return context_.get() && borrowed_?shell_:nullptr;
+    }
+    bool independentlyPinsSameShellAs(const TglNativeContextRootSurfaceOwner& other) const noexcept {
+        auto quiet=[](const auto& owner) noexcept {
+            return !owner.surfaceBusy_ && !owner.conversionBorrowed_ && !owner.conversionFault_ &&
+                !owner.diBorrowed_ && !owner.diFault_ && !owner.denoiseBorrowed_ &&
+                !owner.denoiseFault_ && !owner.denoiseMetadataBorrowed_;
+        };
+        // An IOSurface/plane CF pin alone does not keep the native CPU shell
+        // allocation alive. BOTH sidecars must independently pin its SAME
+        // context owner; neither raw-address equality nor cross-context reuse
+        // is lifetime authority. Caller keeps the physical/frame scope live.
+        return this!=&other && context_.get() && context_.get()==other.context_.get() &&
+            shell_ && shell_==other.shell_ && borrowed_ && other.borrowed_ && quiet(*this) && quiet(other);
     }
     // Publish tracked owned DN only in the already-leased ORIGINAL source90
     // slot. Paired native consumption is reconciled by Parameters; never adopt
@@ -20866,6 +20895,11 @@ public:
         return storage()==&surface && owner_.hasSurfaceLease(surface);
     }
     bool privateLinksQuiescent() const noexcept {return !busy_ && storage();}
+    bool independentlyCovers(const TglOwnedType1BorrowedSurfaceLease& other) const noexcept {
+        return this!=&other && privateLinksQuiescent() && other.privateLinksQuiescent() &&
+            owner_.independentlyPinsSameShellAs(other.owner_) &&
+            references_.independentlyPinsSameBackingAs(other.references_);
+    }
     // Bridge retained frontend CF/context pins to native helpers requiring the
     // ORIGINAL owner type. No owner pointer is returned or ownership moved.
     template<class Use> int withOriginalOwner(Use use) noexcept {
@@ -21121,6 +21155,22 @@ public:
             const auto* shell=slots_[i].lease->storage();
             if(reinterpret_cast<uintptr_t>(shell)==address && slots_[i].lease->hasSurfaceLease(*shell))return true;
         }
+        return false;
+    }
+    bool independentlyCoversRetainedSurfaceOf(const TglOwnedFrontendSourceGraph& other,
+        uintptr_t address) const noexcept {
+        // Read-only coverage, not a transfer/retirement certificate. BOTH
+        // complete graphs stay retained under the same physical/frame scope.
+        if(this==&other || !address || !privateLinksQuiescent() || !other.privateLinksQuiescent())return false;
+        const Lease* original=nullptr;
+        for(size_t i=0;i<other.count_;++i)
+            if(reinterpret_cast<uintptr_t>(other.slots_[i].lease->storage())==address) {
+                original=other.slots_[i].lease;break;
+            }
+        if(!original)return false;
+        for(size_t i=0;i<count_;++i)
+            if(reinterpret_cast<uintptr_t>(slots_[i].lease->storage())==address)
+                return slots_[i].lease->independentlyCovers(*original);
         return false;
     }
     const TglOwnedSurfaceStorage* retainedStorageAt(uintptr_t address) const noexcept {

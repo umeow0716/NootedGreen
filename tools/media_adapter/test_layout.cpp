@@ -18866,6 +18866,77 @@ int main() {
             selected=0;index=UINT32_MAX;
             assert(selection.capture(roots,roles,pass,read,admit) && selection.observed && !selection.source);
         }
+        {
+            struct Context {uintptr_t address;uintptr_t context() const noexcept {return address;}} firstContext{0x10000},otherContext{0x10008};
+            struct ContextPin {Context* owner;Context* get() const noexcept {return owner;}};
+            using Owner=TglNativeContextRootSurfaceOwner<ContextPin>;
+            alignas(8) TglOwnedSurfaceStorage original,copy;
+            const uint32_t type=1,count=1;const uintptr_t plane=1,surface=5;
+            std::memcpy(original.resource.data()+0x14,&type,4);
+            std::memcpy(original.resource.data()+0x60,&count,4);
+            std::memcpy(original.resource.data()+0x58,&surface,8);
+            std::memcpy(original.resource.data()+0x68,&plane,8);copy=original;
+            const auto address=reinterpret_cast<uintptr_t>(&original),copyAddress=reinterpret_cast<uintptr_t>(&copy);
+            TglNativeContextInputRoots roots;roots.input=0x30000;roots.parent.context=firstContext.address;
+            roots.sources[0]=address;roots.sources[1]=copyAddress;
+            auto writable=[&](uintptr_t p,size_t n) noexcept {return (p==address || p==copyAddress) && n==sizeof(original);};
+            Owner a(ContextPin{&firstContext},roots,address,writable),b(ContextPin{&firstContext},roots,address,writable);
+            Owner unleased(ContextPin{&firstContext},roots,address,writable),differentShell(ContextPin{&firstContext},roots,copyAddress,writable);
+            auto foreignRoots=roots;foreignRoots.parent.context=otherContext.address;
+            Owner foreign(ContextPin{&otherContext},foreignRoots,address,writable);
+            std::array<unsigned,6> refs{};
+            struct Api {
+                std::array<unsigned,6>& refs;
+                uintptr_t type(uintptr_t p) noexcept {assert(p==1 || p==5);return p==5?12:11;}
+                bool retain(uintptr_t p) noexcept {++refs[p];return true;}
+                void release(uintptr_t p) noexcept {assert(refs[p]);--refs[p];}
+            };
+            {
+                using Lease=TglOwnedType1BorrowedSurfaceLease<Owner,Api>;
+                Lease x(a,Api{refs},11,12),y(b,Api{refs},11,12),wrongContext(foreign,Api{refs},11,12),wrongShell(differentShell,Api{refs},11,12);
+                assert(x.independentlyCovers(y) && y.independentlyCovers(x));
+                assert(!x.independentlyCovers(x) && !x.independentlyCovers(wrongContext) && !x.independentlyCovers(wrongShell));
+                assert(!a.independentlyPinsSameShellAs(unleased));
+                assert(refs[1]==4 && refs[5]==4); // Four independent CF reference pairs.
+                assert(x.withSurface([&](const auto&) noexcept -> int {
+                    assert(!x.independentlyCovers(y));return 0;
+                })==0);
+                struct EmptyBackend {uintptr_t allocate(size_t) noexcept {return 0;}void release(uintptr_t) noexcept {assert(false);}} backend;
+                TglTrackedCpuOwner<EmptyBackend> absentDn(backend);
+                assert(a.withNativeDenoiseParameters(original,absentDn,[&]() noexcept {
+                    assert(!x.independentlyCovers(y)); // Owner borrow matters even if lease itself is idle.
+                }));
+                assert(x.independentlyCovers(y));
+                const uintptr_t replaced=0;std::memcpy(original.resource.data()+0x68,&replaced,8);
+                assert(!x.independentlyCovers(y));
+                std::memcpy(original.resource.data()+0x68,&plane,8); // Owned fixture restoration only.
+                assert(x.independentlyCovers(y));
+            }
+            assert(!refs[1] && !refs[5] && a.canDestroy() && b.canDestroy());
+            {
+                using Graph=TglOwnedFrontendSourceGraph<Owner,Api>;
+                Graph old(Api{refs}),peer(Api{refs}),wrong(Api{refs});
+                assert(old.acquire(address,[&](uintptr_t p) noexcept -> Owner* {return p==address?&a:nullptr;},11,12));
+                assert(peer.acquire(address,[&](uintptr_t p) noexcept -> Owner* {return p==address?&b:nullptr;},11,12));
+                assert(wrong.acquire(address,[&](uintptr_t p) noexcept -> Owner* {return p==address?&foreign:nullptr;},11,12));
+                assert(peer.independentlyCoversRetainedSurfaceOf(old,address));
+                assert(!old.independentlyCoversRetainedSurfaceOf(old,address));
+                assert(!wrong.independentlyCoversRetainedSurfaceOf(old,address));
+                assert(!peer.independentlyCoversRetainedSurfaceOf(old,1));
+                const std::array<TglNativeForwardLinkChange,18> noChanges{};
+                assert(old.withForwardLinkReconciliation(noChanges,0,[&]() noexcept -> int {
+                    assert(!peer.independentlyCoversRetainedSurfaceOf(old,address));return 31;
+                })==31);
+                assert(peer.independentlyCoversRetainedSurfaceOf(old,address));
+                typename Graph::DeferredForwardToken pending;
+                assert(peer.beginDeferredForwardLinks(noChanges,0,pending));
+                assert(!peer.independentlyCoversRetainedSurfaceOf(old,address));
+                assert(peer.finishDeferredForwardLinks(pending));
+                assert(peer.independentlyCoversRetainedSurfaceOf(old,address));
+                assert(refs[1]==3 && refs[5]==3);
+            }
+            assert(!refs[1] && !refs[5] && a.canDestroy() && b.canDestroy());
+        }
         struct ModeFrame {
             bool lost=false,ready=true;
             bool invalidated() const noexcept {return lost;}
@@ -19533,9 +19604,13 @@ int main() {
         struct Api {
             std::array<unsigned,6>& refs;
             uintptr_t denied=0;
+            std::array<uintptr_t,5>* order=nullptr;size_t* orderCount=nullptr;
             uintptr_t type(uintptr_t value) noexcept {assert(value>=1 && value<=5);return value==5?12:11;}
             bool retain(uintptr_t value) noexcept {if(value==denied) return false;++refs[value];return true;}
-            void release(uintptr_t value) noexcept {assert(refs[value]);--refs[value];}
+            void release(uintptr_t value) noexcept {
+                assert(refs[value]);--refs[value];
+                if(order && orderCount) {assert(*orderCount<order->size());(*order)[(*orderCount)++]=value;}
+            }
         };
         struct Owner {
             TglOwnedSurfaceStorage& shell;
@@ -19568,6 +19643,27 @@ int main() {
         }
         for(auto ref:refs) assert(!ref);
         const uintptr_t restored=1;std::memcpy(shell.resource.data()+0x68,&restored,8);
+        {
+            std::array<uintptr_t,5> order{};size_t count=0;
+            {
+                TglOwnedType1SurfaceReferences<Api> nativeOrder(Api{refs,0,&order,&count});
+                assert(nativeOrder.acquire(owner,shell,11,12));
+            }
+            assert(count==5 && (order==std::array<uintptr_t,5>{1,2,3,4,5}));
+            order={};count=0;
+            {
+                TglOwnedType1SurfaceReferences<Api> partial(Api{refs,3,&order,&count});
+                assert(!partial.acquire(owner,shell,11,12));
+            }
+            assert(count==2 && order[0]==1 && order[1]==2);
+            order={};count=0;
+            {
+                TglOwnedTypedCfReference<Api> pin(Api{refs,0,&order,&count});
+                assert(pin.acquire(1,11));pin.reset();pin.reset();
+            }
+            assert(count==1 && order[0]==1);
+            for(auto ref:refs)assert(!ref);
+        }
         {
             TglOwnedType1BorrowedSurfaceLease<Owner,Api> source(owner,Api{refs},11,12);
             assert(owner.borrowed && source.storage()==&shell && source.hasSurfaceLease(shell));
