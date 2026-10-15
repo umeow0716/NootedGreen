@@ -9,6 +9,28 @@
 #include "owned_resource.hpp"
 #include <memory>
 
+// Gate fixture only: deliberately does NOT clear any retention state.
+struct TestCompletedGroupScope {
+    unsigned calls=0;
+    template<class Owner,class History,class Live>
+    bool acknowledge(Owner&,size_t count,const History&,Live live) noexcept {
+        assert(count==1);++calls;return live();
+    }
+};
+struct TestRetentionGroupOwner {
+    using Retention=TglOwnedVeboxFrameRetention;
+    Retention root,first{Retention::AggregateLink{},root},second{Retention::AggregateLink{},root};
+    std::array<Retention*,2> members{&first,&second};
+    bool captureRetentionPair(Retention::PairSnapshot& output) const noexcept {
+        return root.capturePair(*members[0],*members[1],output);
+    }
+    bool retentionPairUnchanged(const Retention::PairSnapshot& snapshot) const noexcept {
+        return root.pairUnchanged(snapshot);
+    }
+    template<class Proof> bool acknowledgeCompletedPairWork(const Retention::PairSnapshot& snapshot,Proof proof) noexcept {
+        return root.acknowledgeCompletedPairWork(snapshot,proof);
+    }
+};
 // Presence-test functions only; never used as renderer producers or published.
 struct TestPairedVpResourceLines {
     TglOwnedVpSfcCallerStorage* vp=nullptr;
@@ -18681,6 +18703,51 @@ int main() {
             assert(!root.pairUnchanged(old)); // Count/address reuse cannot restore old proof.
             delete replacement;
         }
+        {
+            using Group=TglOwnedVeboxPairCompletionGroup<TestRetentionGroupOwner>;
+            TestRetentionGroupOwner owner,other;
+            TglOwnedVeboxCommandTransactionResult work,historyResult;
+            work.nativeEntered=true;historyResult.nativeHistoryPublished=true;
+            owner.first.observe(work);owner.second.observe(historyResult);
+            std::array<TglNativeHistoryCacheInspection,2> history{{{true,false},{true,true}}};
+            int frames[3]{};unsigned proofs=0;
+            auto live=[&]() noexcept {++proofs;return true;}; // CPU fixture only.
+            Group wrongOwner;
+            assert(wrongOwner.observeOwner(owner,&frames[0]));
+            assert(!wrongOwner.observeOwner(other,&frames[1]));
+            assert(!wrongOwner.acknowledge(owner,2,history,live) && !proofs);
+            Group duplicate;
+            assert(duplicate.observeOwner(owner,&frames[0]));
+            assert(!duplicate.observeOwner(owner,&frames[0]));
+            assert(!duplicate.acknowledge(owner,2,history,live) && !proofs);
+            Group missing;
+            assert(missing.observeOwner(owner,&frames[0]));
+            assert(!missing.acknowledge(owner,2,history,live) && !proofs);
+            Group unknown;
+            assert(unknown.observeOwner(owner,&frames[0]) && unknown.observeOwner(owner,&frames[1]));
+            auto unknownHistory=history;unknownHistory[1].observed=false;
+            assert(!unknown.acknowledge(owner,2,unknownHistory,live) && !proofs);
+            Group changed;
+            assert(changed.observeOwner(owner,&frames[0]));
+            owner.first.observe(work);
+            assert(!changed.observeOwner(owner,&frames[1]));
+            assert(!changed.acknowledge(owner,2,history,live) && !proofs);
+            Group expired;
+            assert(expired.observeOwner(owner,&frames[0]) && expired.observeOwner(owner,&frames[1]));
+            assert(!expired.acknowledge(owner,2,history,[]() noexcept {return false;}));
+            assert(!expired.acknowledge(owner,2,history,live) && !proofs); // One live attempt only.
+            Group valid;
+            assert(valid.observeOwner(owner,&frames[0]) && valid.observeOwner(owner,&frames[1]));
+            assert(valid.acknowledge(owner,2,history,live) && proofs==1);
+            assert(!owner.root.mayHaveGpuWork() && owner.root.mayHaveNativeHistory());
+            assert(!owner.first() && owner.second());
+            assert(!valid.acknowledge(owner,2,history,live) && proofs==1);
+            owner.first.observe(work);
+            Group during;
+            assert(during.observeOwner(owner,&frames[0]) && during.observeOwner(owner,&frames[1]));
+            assert(!during.acknowledge(owner,2,history,[&]() noexcept {owner.first.observe(work);return true;}));
+            assert(owner.first.mayHaveGpuWork() && owner.root.mayHaveGpuWork());
+        }
         struct ModeFrame {
             bool lost=false,ready=true;
             bool invalidated() const noexcept {return lost;}
@@ -28001,6 +28068,24 @@ int main() {
                                     inspectionMode=2;
                                     assert(frontend.withRetainedInspection(inspection)==5 && inspections==1);
                                     assert(frontend.requiresRetention() && accessCalls==5);
+                                    TestCompletedGroupScope completedGroup;
+                                    std::array<TglNativeHistoryCacheInspection,2> groupHistory{};
+                                    auto liveGroup=[&](const auto& inspected,const auto&) noexcept {
+                                        assert(&inspected==&cpu && originalSource.borrowed && originalTarget.borrowed);
+                                        assert(frontend.withRetainedInspection(inspection)==5);
+                                        assert(frontend.acknowledgeCompletedGroupWork(completedGroup,1,groupHistory,
+                                            [](const auto&...) noexcept {assert(false);return true;})==5);
+                                        return true;
+                                    };
+                                    inspectionMode=1;
+                                    assert(frontend.acknowledgeCompletedGroupWork(completedGroup,1,groupHistory,liveGroup)==5);
+                                    assert(!completedGroup.calls); // Omitted parent scope never reaches writer.
+                                    inspectionMode=0;
+                                    assert(frontend.acknowledgeCompletedGroupWork(completedGroup,1,groupHistory,liveGroup)==0);
+                                    assert(completedGroup.calls==1 && frontend.requiresRetention() && cpu.backing().retention()());
+                                    inspectionMode=2;
+                                    assert(frontend.acknowledgeCompletedGroupWork(completedGroup,1,groupHistory,liveGroup)==5);
+                                    assert(completedGroup.calls==2); // Repeated parent callback cannot write twice.
                                     assert(storageOwner.get()==cpuAddress && !storage.backing().retention()());
                                 }
                                 assert(refs==originalRefs && !originalSource.borrowed && !originalTarget.borrowed && !originalHistory.borrowed);

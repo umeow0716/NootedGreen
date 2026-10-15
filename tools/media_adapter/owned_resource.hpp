@@ -15103,6 +15103,45 @@ public:
         retain(result.acquired || result.writtenBack);
     }
 };
+// Stack-local binding for ONE live all-frame query. Owner pointers and frame
+// identities are opaque keys; they are never dereferenced outside the caller's
+// actual retained-parent scope. Saved completion packets cannot construct it.
+template<class Owner,size_t Capacity=2>
+class TglOwnedVeboxPairCompletionGroup {
+    const Owner* owner_=nullptr;
+    TglOwnedVeboxFrameRetention::PairSnapshot pair_;
+    std::array<const void*,Capacity> frames_{};
+    size_t count_=0;
+    bool fault_=false,consumed_=false;
+public:
+    TglOwnedVeboxPairCompletionGroup()=default;
+    TglOwnedVeboxPairCompletionGroup(const TglOwnedVeboxPairCompletionGroup&)=delete;
+    TglOwnedVeboxPairCompletionGroup& operator=(const TglOwnedVeboxPairCompletionGroup&)=delete;
+    bool unchanged(const Owner& owner) const noexcept {
+        return !fault_ && owner_==&owner && owner.retentionPairUnchanged(pair_);
+    }
+    bool observeOwner(const Owner& owner,const void* frame) noexcept {
+        if(fault_ || consumed_ || !frame || count_==Capacity) {fault_=true;return false;}
+        for(size_t i=0;i<count_;++i)if(frames_[i]==frame) {fault_=true;return false;}
+        if(!owner_) {
+            if(!owner.captureRetentionPair(pair_)) {fault_=true;return false;}
+            owner_=&owner;
+        } else if(!unchanged(owner)) {fault_=true;return false;}
+        frames_[count_++]=frame;return true;
+    }
+    template<class Live>
+    bool acknowledge(Owner& owner,size_t count,
+        const std::array<TglNativeHistoryCacheInspection,Capacity>& history,Live live) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<bool,Live&>);
+        if constexpr(std::is_pointer_v<Live>)if(!live)return false;
+        if(consumed_ || !count || count!=count_ || !unchanged(owner))return false;
+        for(size_t i=0;i<count;++i)if(!history[i].observed)return false;
+        consumed_=true;
+        return owner.acknowledgeCompletedPairWork(pair_,[&]() noexcept {
+            return live() && unchanged(owner);
+        });
+    }
+};
 // CPU producer admission for an unused sibling within one authenticated native
 // request. Caller owns root/child and proof state through this synchronous TLS
 // scope. This never changes pending(), releases resources or certifies drain.
@@ -28565,6 +28604,29 @@ public:
         });
         return status?status:(entered && !repeated)?0:5;
     }
+    template<class Group,class History,class Live>
+    int acknowledgeCompletedGroupWork(Group& group,size_t count,const History& history,Live live) noexcept {
+        if constexpr(std::is_pointer_v<Live>)if(!live)return 5;
+        if(busy_ || !surfacesReady())return 5;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        bool entered=false,repeated=false;auto* held=parent_.get();
+        const int status=access_(parent_,[&](auto& cpu,const auto& view) noexcept -> int {
+            if(entered) {repeated=true;return 5;}
+            entered=true;
+            auto valid=[&]() noexcept {
+                return parent_.get()==held && held && source_.storage() && target_.storage() &&
+                    cpu.children().first().owner().constructedBase() && cpu.children().second().owner().constructedBase() &&
+                    cpu.children().first().owner().allocationGeneration()==generation0_ &&
+                    cpu.children().second().owner().allocationGeneration()==generation1_;
+            };
+            if(!valid())return 5;
+            return group.acknowledge(cpu,count,history,[&]() noexcept {
+                static_assert(noexcept(live(std::as_const(cpu),view)));
+                return valid() && live(std::as_const(cpu),view) && valid();
+            })?0:5;
+        });
+        return status?status:(entered && !repeated)?0:5;
+    }
     template<class Use> TglOwnedVeboxCommandTransactionResult withCpuFrontend(Use use) noexcept {
         TglOwnedVeboxCommandTransactionResult result;
         if(busy_ || retained_ || !surfacesReady())return result;
@@ -28626,6 +28688,10 @@ public:
     }
     template<class Use> int withRetainedInspection(Use use) noexcept {
         return frontend_.withRetainedInspection(use);
+    }
+    template<class Group,class History,class Live>
+    int acknowledgeCompletedGroupWork(Group& group,size_t count,const History& history,Live live) noexcept {
+        return frontend_.acknowledgeCompletedGroupWork(group,count,history,live);
     }
     bool surfacesReady() const noexcept {return frontend_.surfacesReady();}
     bool requiresRetention() const noexcept {return frontend_.requiresRetention();}

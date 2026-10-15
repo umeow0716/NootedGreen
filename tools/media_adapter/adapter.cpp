@@ -275,6 +275,9 @@ public:
         return completeRetentionMembership() &&
             retention_.capturePair(*retentionMembers_[0],*retentionMembers_[1],output);
     }
+    bool retentionPairUnchanged(const TglOwnedVeboxFrameRetention::PairSnapshot& snapshot) const noexcept {
+        return completeRetentionMembership() && retention_.pairUnchanged(snapshot);
+    }
     template<class ScopedGroupProof>
     bool acknowledgeCompletedPairWork(const TglOwnedVeboxFrameRetention::PairSnapshot& snapshot,
         ScopedGroupProof proof) noexcept {
@@ -4381,6 +4384,57 @@ struct NativePhysicalBackend {
         });
         if(!status)output=candidate;
         return status; // Value observation only; no pending/history clear.
+    }
+    static int acknowledgeNativeCompletedGroupWork(void* physical) noexcept {
+        TglNativePhysicalCallbackBinding native;TglNativeFenceBackingObservation fence;
+        if(!binding(native) || !library.resourceCreate || !fence.resolve(native.image,&readMemory,
+            NativeTglImageAdmission{native.image},&executableMemory))return 5;
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            TglOwnedVeboxPairCompletionGroup<NativeRendererCpuAssembly> group;
+            NativeBorrowedFrontend* first=nullptr;
+            uintptr_t creator=0,renderer=0;
+            auto sameView=[&](const auto& view) noexcept {
+                return view.image==native.image && view.creator==creator && view.renderer==renderer &&
+                    view.matchesRendererTable(&readMemory);
+            };
+            auto query=[&](NativeBorrowedFrontend& frontend,const NGVfTaskCompletion::Request& request,
+                NGVfTaskCompletion::Reply& reply) noexcept {
+                // Capture the ACTUAL parent's pair revision BEFORE its kernel
+                // query; every following frontend must bind to that same owner.
+                const int bound=frontend.withRetainedInspection([&](const auto& cpu,const auto& view,
+                    const auto&,const auto&,bool) noexcept -> int {
+                    if(view.image!=native.image || !group.observeOwner(cpu,&frontend))return 5;
+                    if(!first) {first=&frontend;creator=view.creator;renderer=view.renderer;}
+                    return sameView(view)?0:5;
+                });
+                if(bound || !NativeRetainedTaskCompletionQuery{native.image,library.resourceCreate}(frontend,request,reply))
+                    return false;
+                return frontend.withRetainedInspection([&](const auto& cpu,const auto& view,
+                    const auto&,const auto&,bool) noexcept -> int {
+                    return group.unchanged(cpu) && sameView(view)?0:5;
+                })==0;
+            };
+            return callbacks.withTaskCompletionGroup(ticket,address,fence,&readMemory,
+                NativeRetainedFenceOwnerAdmission{native.image,address},query,
+                [](NativeBorrowedFrontend& frontend) noexcept {return NativeRendererHistoryInspection::run(frontend);},
+                [&](size_t count,const auto& frames,const auto&,const auto&,
+                    const auto&,const auto&,const auto& history) noexcept -> int {
+                    if(!first)return 5;
+                    auto healthy=[&]() noexcept {
+                        for(size_t i=0;i<count;++i)if(!frames[i] || frames[i]->invalidated())return false;
+                        return true;
+                    };
+                    if(!healthy())return 5;
+                    // All physical/pool/frame observation scopes remain live.
+                    // Re-enter the SAME retained parent's mutable storage gate;
+                    // consume revisions there, never via a const_cast or cache.
+                    return first->acknowledgeCompletedGroupWork(group,count,history,
+                        [&](const auto& cpu,const auto& view) noexcept {
+                            return healthy() && group.unchanged(cpu) && sameView(view);
+                        });
+                });
+        });
     }
     static int retireNativeTaskCompletedFrame(void* physical,typename NativePhysicalRegistry::FrameTicket frame,
         NativeFrameHistoryRetirement::Prepare prepare) noexcept {
