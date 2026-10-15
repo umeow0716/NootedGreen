@@ -3408,6 +3408,7 @@ static void testTrackedCpuOwner() {
         uintptr_t empty=0;std::memcpy(slot,&empty,8);
         assert(owner.withNativeReleaseSlot(slot,[&]() noexcept {
             ++calls;
+            assert(!owner.canRelease());
             uintptr_t published=0;std::memcpy(&published,slot,8);
             assert(published==original && backend.live==1);
             owner.reset();assert(owner.get()==original && backend.live==1);
@@ -3415,6 +3416,7 @@ static void testTrackedCpuOwner() {
             assert(!owner.withNativeReleaseSlot(slot,[&]() noexcept { ++calls; }));
         }));
         assert(owner.get()==original && owner.size()==0x2a8 && calls==1);
+        assert(owner.canRelease());
         uintptr_t detached=1;std::memcpy(&detached,slot,8);assert(!detached);
         assert(owner.withNativeReleaseSlot(slot,[&]() noexcept {
             ++calls;backend.release(original);std::memcpy(slot,&empty,8);
@@ -3427,10 +3429,56 @@ static void testTrackedCpuOwner() {
         }));
         std::memcpy(&detached,slot,8);
         assert(!detached && owner.get() && backend.live==1);
-        owner.reset();assert(backend.releases==5);
+        assert(!owner.canRelease());
+        owner.reset();assert(backend.releases==4 && backend.live==1);
+        assert(!owner.allocate(0x2a8));
+        assert(!owner.withBorrowedAddress([](uintptr_t,size_t) noexcept {assert(false);}));
+        assert(!owner.withNativeReleaseSlot(slot,[]() noexcept {assert(false);}));
         assert(field.front()==0xa5 && field.back()==0x5a);
     }
+    assert(backend.releases==4 && backend.live==1); // Destructor did NOT guess ownership.
+    backend.release(reinterpret_cast<uintptr_t>(backend.bytes.data())); // CPU fixture reclaim only.
     assert(backend.releases==5 && backend.live==0);
+    {
+        TglTrackedCpuOwner<Backend> owner(backend);
+        assert(owner.allocate(0x2a8));uint8_t slot[8]{};
+        assert(!owner.withNativeReleaseSlot(slot,[&]() noexcept {
+            backend.release(owner.get()); // Native consumed it, then published a FOREIGN value.
+            const uintptr_t foreign=123;std::memcpy(slot,&foreign,8);
+        }));
+        assert(!owner.canRelease() && backend.live==0 && backend.releases==6);
+        owner.reset();assert(backend.releases==6); // No second release of consumed storage.
+    }
+    assert(backend.releases==6 && backend.live==0);
+    for(bool changeOriginal:{false,true}) {
+        const auto releases=backend.releases;
+        {
+            TglTrackedCpuOwner<Backend> owner(backend);
+            assert(owner.allocate(0x2a8));uint8_t originalSlot[8]{},alias[8]{};
+            assert(!owner.withNativeReleaseSlot(originalSlot,[&]() noexcept {
+                std::memcpy(alias,originalSlot,8);
+                assert(!owner.withNativeReleaseAlias(alias,[&]() noexcept {
+                    backend.release(owner.get());
+                    const uintptr_t foreign=123;
+                    std::memcpy(changeOriginal?originalSlot:alias,&foreign,8);
+                }));
+            }));
+            assert(!owner.canRelease() && backend.live==0 && backend.releases==releases+1);
+            owner.reset();assert(backend.releases==releases+1);
+            uintptr_t detached=1;std::memcpy(&detached,originalSlot,8);assert(!detached);
+        }
+        assert(backend.releases==releases+1 && backend.live==0);
+    }
+    assert(backend.releases==8);
+    {
+        TglTrackedCpuOwner<Backend> absent(backend);uint8_t slot[8]{};
+        const auto attempts=backend.allocations;
+        assert(!absent.withNativeReleaseSlot(slot,[&]() noexcept {
+            const uintptr_t foreign=123;std::memcpy(slot,&foreign,8);
+        }));
+        assert(!absent.canRelease() && !absent.allocate(0x2a8));
+        assert(backend.allocations==attempts && backend.live==0);
+    }
 }
 
 static void testOwnedVeboxVtable() {

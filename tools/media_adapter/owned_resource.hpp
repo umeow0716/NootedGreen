@@ -1636,6 +1636,7 @@ template<class Backend> class TglTrackedCpuOwner {
     uintptr_t storage = 0;
     size_t extent = 0;
     bool borrowed = false;
+    bool releaseFault_=false;
     uint8_t* nativeReleaseSlot_=nullptr;
     uint8_t* nativeAliasSlot_=nullptr;
 public:
@@ -1644,20 +1645,25 @@ public:
     TglTrackedCpuOwner& operator=(const TglTrackedCpuOwner&) = delete;
     ~TglTrackedCpuOwner() { reset(); }
     bool allocate(size_t bytes) {
-        if (borrowed || storage || !bytes) return false;
+        if (!canRelease() || storage || !bytes) return false;
         auto candidate = backend.allocate(bytes);
         if (!candidate) return false;
         storage = candidate; extent = bytes; return true;
     }
     void reset() noexcept {
-        if (borrowed || !storage) return;
+        if (!canRelease() || !storage) return;
         const auto old = storage; storage = 0; extent = 0;
         backend.release(old);
     }
     uintptr_t get() const { return storage; }
     size_t size() const { return extent; }
+    // CPU publication state only, NOT a GPU/frame retirement certificate.
+    // Ambiguous native ownership must not become a destructor double-free.
+    bool canRelease() const noexcept {
+        return !releaseFault_ && !borrowed && !nativeReleaseSlot_ && !nativeAliasSlot_;
+    }
     bool hasNativeReleaseSlot(const uint8_t* slot) const noexcept {
-        if(!borrowed || !slot || slot!=nativeReleaseSlot_) return false;
+        if(releaseFault_ || !borrowed || !slot || slot!=nativeReleaseSlot_) return false;
         uintptr_t published=0;std::memcpy(&published,slot,sizeof(published));
         return !published || published==storage;
     }
@@ -1668,7 +1674,7 @@ public:
     // never adoption. Caller authenticates the native consumer and both slots.
     template<class Use> bool withNativeReleaseAlias(uint8_t* alias,Use use) noexcept {
         static_assert(noexcept(use()) && std::is_same_v<decltype(use()),void>);
-        if(!borrowed || !nativeReleaseSlot_ || nativeAliasSlot_ || !alias || alias==nativeReleaseSlot_)return false;
+        if(releaseFault_ || !borrowed || !nativeReleaseSlot_ || nativeAliasSlot_ || !alias || alias==nativeReleaseSlot_)return false;
         uintptr_t original=0,published=0;
         std::memcpy(&original,nativeReleaseSlot_,8);std::memcpy(&published,alias,8);
         if(original!=published || (published && published!=storage))return false;
@@ -1677,8 +1683,9 @@ public:
         use();
         uintptr_t currentOriginal=0,observed=0;
         std::memcpy(&currentOriginal,nativeReleaseSlot_,8);std::memcpy(&observed,alias,8);
-        if(currentOriginal!=original)return false;
+        if(currentOriginal!=original) {releaseFault_=true;return false;}
         std::memcpy(nativeReleaseSlot_,&observed,8);
+        if(observed && observed!=published)releaseFault_=true;
         return !observed || observed==published;
     }
     bool hasNativeReleaseAlias(const uint8_t* slot) const noexcept {
@@ -1691,7 +1698,7 @@ public:
     bool withBorrowedAddress(Use use) noexcept {
         static_assert(noexcept(use(uintptr_t{},size_t{})) &&
             std::is_same_v<decltype(use(uintptr_t{},size_t{})),void>,"tracked CPU borrow ABI");
-        if(borrowed || !storage) return false;
+        if(releaseFault_ || borrowed || !storage) return false;
         borrowed=true;
         struct Restore {bool& borrowed;~Restore(){borrowed=false;}} restore{borrowed};
         use(storage,extent);return true;
@@ -1703,7 +1710,7 @@ public:
     bool withNativeReleaseSlot(uint8_t* slot,Use use) noexcept {
         static_assert(noexcept(use()),"native consuming callback must not throw");
         static_assert(std::is_same_v<decltype(use()),void>,"native feature ABI is void");
-        if(borrowed || !slot) return false;
+        if(releaseFault_ || borrowed || !slot) return false;
         uintptr_t previous=0;std::memcpy(&previous,slot,sizeof(previous));
         if(previous) return false;
         // Native12a844..12a854 explicitly admits NULL source90. An empty
@@ -1716,7 +1723,8 @@ public:
             uintptr_t observed=0;std::memcpy(&observed,slot,sizeof(observed));
             std::memcpy(slot,&previous,sizeof(previous));
             nativeReleaseSlot_=nullptr;borrowed=false;
-            return observed==0;
+            if(observed)releaseFault_=true;
+            return !releaseFault_;
         }
         const auto published=storage;
         borrowed=true;nativeReleaseSlot_=slot;
@@ -1726,8 +1734,9 @@ public:
         // Detach the borrowed field even on an unexpected native mutation.
         std::memcpy(slot,&previous,sizeof(previous));
         if(!observed) { storage=0;extent=0; }
+        else if(observed!=published)releaseFault_=true;
         nativeReleaseSlot_=nullptr;borrowed=false;
-        return !observed || observed==published;
+        return !releaseFault_;
     }
 };
 
