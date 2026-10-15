@@ -25117,6 +25117,33 @@ template<size_t Capacity=16> struct TglNativeRemovedContextBatch {
         candidate.count=n;candidate.valid=true;*this=candidate;return true;
     }
 };
+// Capture under codec-owner + empty-frame physical gates BEFORE native deletion.
+// This proven composition requires one distinct creator per codec; shared
+// creators need their own ownership proof, never duplicate cleanup inference.
+template<size_t Capacity=16> class TglNativeRemovedCreatorSnapshot {
+    TglNativeRemovedContextBatch<Capacity> codecs_,creators_;
+    bool attempted_=false,ready_=false;
+public:
+    template<class Read> bool capture(const TglNativeRemovedContextBatch<Capacity>& batch,Read read) noexcept {
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            std::is_same_v<decltype(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),bool>);
+        if(attempted_)return false;attempted_=true;
+        if(!batch.valid || batch.count>Capacity)return false;
+        TglNativeRemovedContextBatch<Capacity> creators;
+        for(uint32_t i=0;i<batch.count;++i) {
+            const auto codec=batch.contexts[i];
+            if(!codec || codec>UINTPTR_MAX-0x12e8 || !read(codec+0x12e0,&creators.contexts[i],8) ||
+                !creators.contexts[i])return false;
+            for(uint32_t j=0;j<i;++j)if(batch.contexts[j]==codec || creators.contexts[j]==creators.contexts[i])return false;
+        }
+        creators.count=batch.count;creators.valid=true;
+        codecs_=batch;creators_=creators;ready_=true;return true;
+    }
+    bool matches(const TglNativeRemovedContextBatch<Capacity>& batch) const noexcept {
+        return ready_ && batch.valid && batch.count==codecs_.count && batch.contexts==codecs_.contexts;
+    }
+    const TglNativeRemovedContextBatch<Capacity>* creators() const noexcept {return ready_?&creators_:nullptr;}
+};
 // Caller holds ledger + empty-frame physical mutation gates and calls this
 // ONLY after native removal success. Reconcile owns the separate owner proof;
 // this metadata helper never dereferences context identities or grants fences.

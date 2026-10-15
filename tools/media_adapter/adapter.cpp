@@ -4182,10 +4182,11 @@ struct NativePhysicalBackend {
     using RemovedBatch=TglNativeRemovedContextBatch<16>;
     using RemovalScope=typename NativePhysicalRegistry::DependencyAdoptionScope;
     using PrepareRemoval=int(*)(void*,RemovalScope&,uintptr_t,uintptr_t,uint64_t,const RemovedBatch&) noexcept;
-    static int removePreparedContexts(void* physical,const void* input,void* cleanup,PrepareRemoval prepare) noexcept {
+    static int removePreparedContexts(void* physical,const void* input,void* cleanup,PrepareRemoval prepare,PrepareRemoval confirm) noexcept {
         TglNativePhysicalCallbackBinding native;
-        if(!input || !cleanup || !prepare || !binding(native) ||
-            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(prepare),1))return 5;
+        if(!input || !cleanup || !prepare || !confirm || !binding(native) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(prepare),1) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(confirm),1))return 5;
         const auto address=reinterpret_cast<uintptr_t>(physical);
         return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
             return callbacks.template removePreparedContextsAndReconcileBatchScoped<16>(ticket,address,input,
@@ -4194,6 +4195,8 @@ struct NativePhysicalBackend {
                     return prepare(cleanup,scope,native.image,actual,ticket.generation,batch);
                 },[&](RemovalScope& scope,uintptr_t actual,const RemovedBatch& batch) noexcept -> int {
                     if(actual!=address || !scope.matches(native.image,actual,ticket.generation))return 5;
+                    const int confirmed=confirm(cleanup,scope,native.image,actual,ticket.generation,batch);
+                    if(confirmed)return confirmed;
                     // Coordinator calls this ONLY after the same captured
                     // batch's native deleting destructors returned success.
                     // Authenticate metadata membership; never reread freed objects.
@@ -4413,6 +4416,37 @@ struct NativeCreatorPreparation {
                     physical.matches(image,address,generation)?0:5;
             })?0:5;
         });
+    }
+    static int reconcileExternalRemoval(NativePhysicalBackend::RemovalScope& physical,uintptr_t image,
+        uintptr_t address,uint64_t generation,const NativePhysicalBackend::RemovedBatch& creators) noexcept {
+        if(!physical.matches(image,address,generation) || !creators.valid || creators.count>16)return 5;
+        std::array<size_t,16> indices{};
+        {
+            auto& state=ledger();if(state.gate.test_and_set(std::memory_order_acquire))return 5;
+            struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
+            for(uint32_t i=0;i<creators.count;++i) {
+                bool found=false;
+                for(size_t j=0;j<state.records.size();++j) {
+                    const auto& record=state.records[j];
+                    if(record.used && record.removing && record.image==image && record.physical==address &&
+                        record.generation==generation && record.creator==creators.contexts[i]) {indices[i]=j;found=true;break;}
+                }
+                if(!found)return 5;
+            }
+        }
+        const int status=NativeVphalRouter::reconcileSuccessfulRemoval(image,address,generation,creators,
+            [&](NativeVphalOwner& owner) noexcept -> int {
+                return owner.confirmExternalRemoval([&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t object) noexcept {
+                    if(i!=image || p!=address || g!=generation || !physical.matches(i,p,g))return false;
+                    for(uint32_t k=0;k<creators.count;++k)if(creators.contexts[k]==object)return true;
+                    return false;
+                }) && owner.nativeDestructionComplete()?0:5;
+            });
+        if(status)return status;
+        auto& state=ledger();if(state.gate.test_and_set(std::memory_order_acquire))return 5;
+        struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
+        for(uint32_t i=0;i<creators.count;++i)state.records[indices[i]]={};
+        return 0;
     }
     // Component status only. Caller MUST initialize/publish complete owned
     // children before returning success from the full native creator handoff.
@@ -4762,6 +4796,46 @@ struct NativeCreatorPreparation {
         if(selection.ownedSend && selection.domain==NativeRendererCallbackDomain::Temporary)
             return publishMainRenderer(physical,image,address,generation,creator);
         return 0;
+    }
+};
+struct NativeCompositeContextRemoval {
+    using Scope=NativePhysicalBackend::RemovalScope;
+    using Batch=NativePhysicalBackend::RemovedBatch;
+    TglNativeRemovedCreatorSnapshot<16> snapshot;
+    bool attempted=false,prepared=false,confirmed=false;
+    static int prepare(void* raw,Scope& scope,uintptr_t image,uintptr_t physical,uint64_t generation,const Batch& batch) noexcept {
+        auto& self=*static_cast<NativeCompositeContextRemoval*>(raw);
+        if(self.attempted || !scope.matches(image,physical,generation))return 5;
+        self.attempted=true;
+        const int status=NativeCodecBackend::owners().prepareRemoval(image,physical,generation,batch,
+            [&](const std::array<NativeCodecOwner*,16>& owners,uint32_t count) noexcept -> int {
+                if(count!=batch.count)return 5;
+                for(uint32_t i=0;i<count;++i)if(!owners[i] || owners[i]->context()!=batch.contexts[i])return 5;
+                if(!self.snapshot.capture(batch,&readMemory))return 5;
+                const auto* creators=self.snapshot.creators();if(!creators)return 5;
+                for(uint32_t i=0;i<count;++i) {
+                    const int result=NativeCreatorPreparation::prepareExternalRemoval(scope,image,physical,generation,creators->contexts[i]);
+                    if(result)return result;
+                }
+                for(uint32_t i=0;i<count;++i)if(!owners[i]->prepareRemoval(
+                    [&](uintptr_t actualImage,uintptr_t parent,uint64_t epoch,uintptr_t codec) noexcept {
+                        return actualImage==image && parent==physical && epoch==generation && codec==batch.contexts[i] &&
+                            scope.matches(image,physical,generation);
+                    }))return 5;
+                return 0;
+            });
+        self.prepared=status==0;return status;
+    }
+    static int confirm(void* raw,Scope& scope,uintptr_t image,uintptr_t physical,uint64_t generation,const Batch& batch) noexcept {
+        auto& self=*static_cast<NativeCompositeContextRemoval*>(raw);
+        if(!self.prepared || self.confirmed || !scope.matches(image,physical,generation) || !self.snapshot.matches(batch))return 5;
+        const auto* creators=self.snapshot.creators();if(!creators)return 5;
+        const int status=NativeCreatorPreparation::reconcileExternalRemoval(scope,image,physical,generation,*creators);
+        self.confirmed=status==0;return status;
+    }
+    static int run(void* physical,const void* input) noexcept {
+        NativeCompositeContextRemoval cleanup;
+        return NativePhysicalBackend::removePreparedContexts(physical,input,&cleanup,&prepare,&confirm);
     }
 };
 bool nativeOwnedSendSelectionMatches(uintptr_t image,uintptr_t creator,uintptr_t renderer,

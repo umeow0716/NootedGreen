@@ -17409,6 +17409,27 @@ static void testRetainedVeboxFrames() {
         assert(!preparedRegistry.lookup(image,0xf200).generation);
         assert(preparedCallbacks.removePreparedContextsAndReconcileBatch<2>(preparedPhysical.ticket,0xf200,input,
             prepareOwners,preparedReconcile,preparedNative)==5 && removalStage==1);
+        for(unsigned scenario=0;scenario<5;++scenario) {
+            TglNativeRemovedContextBatch<2> codecs;codecs.valid=true;codecs.count=2;codecs.contexts={0x10000,0x20000};
+            if(scenario==3)codecs.contexts[1]=0;
+            if(scenario==4)codecs.contexts[1]=UINTPTR_MAX;
+            unsigned reads=0;
+            auto creatorRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                ++reads;if(bytes!=8 || scenario==2)return false;
+                uintptr_t creator=at==0x10000+0x12e0?0x30000:at==0x20000+0x12e0?(scenario==1?0x30000:0x40000):0;
+                if(!creator)return false;std::memcpy(out,&creator,8);return true;
+            };
+            TglNativeRemovedCreatorSnapshot<2> snapshot;
+            assert(snapshot.capture(codecs,creatorRead)==(scenario==0) && reads<=2);
+            assert(bool(snapshot.creators())==(scenario==0));
+            if(!scenario) {
+                assert(snapshot.matches(codecs) && snapshot.creators()->contexts[0]==0x30000 &&
+                    snapshot.creators()->contexts[1]==0x40000);
+                auto altered=codecs;++altered.contexts[1];assert(!snapshot.matches(altered));
+                const auto capturedReads=reads;
+                assert(!snapshot.capture(codecs,creatorRead) && reads==capturedReads && snapshot.matches(codecs));
+            }
+        }
     }
 }
 
