@@ -27938,6 +27938,13 @@ public:
         return true;
     }
     template<class Admit> bool admitVeboxQueryOutputs(const OwnedRecords& owned,Admit admit) const noexcept {
+        return admitQueryOutputs(owned,[](uintptr_t,TglNativeContextFamily& family,uintptr_t& callback) noexcept -> bool {
+            family=TglNativeContextFamily::VeboxVp;callback=0x235890;return true;
+        },admit);
+    }
+    // Resolve authenticates saved owner family/original callback under the
+    // caller's physical/context leases; no vptr guesses or basename admission.
+    template<class Resolve,class Admit> bool admitQueryOutputs(const OwnedRecords& owned,Resolve resolve,Admit admit) const noexcept {
         if(!ready_ || owned.header.count!=count_ || owned.header.records!=reinterpret_cast<uintptr_t>(owned.records.data()))return false;
         auto overlap=[](uintptr_t a,size_t an,uintptr_t b,size_t bn) noexcept {
             return a<b+bn && b<a+an;
@@ -27948,11 +27955,17 @@ public:
             std::memcpy(&type,record+8,8);std::memcpy(&property,record+0x10,4);
             std::memcpy(&operation,record+0x20,4);std::memcpy(&output,record+0x28,8);
             std::memcpy(&context,record+0x18,8);
-            // Exact2358e0 supports only these two0x4a-byte outputs.
-            if(type!=0x800 || operation!=5 || (property!=1002 && property!=1003) ||
-                context!=contexts_[i] || !output || output>UINTPTR_MAX-0x4a ||
-                overlap(output,0x4a,input_,16) || overlap(output,0x4a,records_,size_t(count_)*0x30) ||
-                overlap(output,0x4a,reinterpret_cast<uintptr_t>(&owned),sizeof(owned)) || !admit(output,size_t{0x4a}))return false;
+            TglNativeContextFamily family=TglNativeContextFamily::Unknown;uintptr_t callback=0;size_t bytes=0;
+            if(context!=contexts_[i] || !resolve(context,family,callback))return false;
+            if(family==TglNativeContextFamily::VeboxVp) {
+                if(callback!=0x235890 || type!=0x800 || operation!=5 || (property!=1002 && property!=1003))return false;
+                bytes=0x4a;
+            } else if(family!=TglNativeContextFamily::NativeOther ||
+                !tglNativeOtherQueryWriteExtent(callback,operation,bytes))return false;
+            if(!bytes)continue; // Preserve the native branch/result, no write authority granted.
+            if(!output || output>UINTPTR_MAX-bytes ||
+                overlap(output,bytes,input_,16) || overlap(output,bytes,records_,size_t(count_)*0x30) ||
+                overlap(output,bytes,reinterpret_cast<uintptr_t>(&owned),sizeof(owned)) || !admit(output,bytes))return false;
         }
         return true;
     }

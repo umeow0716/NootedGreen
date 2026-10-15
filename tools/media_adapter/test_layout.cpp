@@ -18768,6 +18768,28 @@ int main() {
             std::memcpy(record.data()+0x20,&queryOperation,4);
         }
         assert(batch.admitVeboxQueryOutputs(frozen,queryAdmit));
+        auto mixedResolve=[](uintptr_t context,TglNativeContextFamily& family,uintptr_t& callback) noexcept -> bool {
+            family=context==0x3000?TglNativeContextFamily::NativeOther:TglNativeContextFamily::VeboxVp;
+            callback=context==0x3000?0x2283e0:0x235890;return true;
+        };
+        const auto savedQueryRecord=frozen.records[1];
+        const uint32_t nativeOperation=11;
+        std::memcpy(frozen.records[1].data()+0x20,&nativeOperation,4);
+        unsigned outputAdmissions=0;
+        assert(batch.admitQueryOutputs(frozen,mixedResolve,[&](uintptr_t at,size_t bytes) noexcept -> bool {
+            ++outputAdmissions;return (at==0x5000 && bytes==0x4a) || (at==0x5100 && bytes==0x1c);
+        }) && outputAdmissions==2);
+        assert(!batch.admitQueryOutputs(frozen,[](uintptr_t,TglNativeContextFamily&,uintptr_t&) noexcept -> bool {return false;},queryAdmit));
+        const uintptr_t nullOutput=0;
+        std::memcpy(frozen.records[1].data()+0x28,&nullOutput,8);
+        assert(!batch.admitQueryOutputs(frozen,mixedResolve,[](uintptr_t,size_t) noexcept {return true;}));
+        const uint32_t unsupportedOperation=99;
+        std::memcpy(frozen.records[1].data()+0x20,&unsupportedOperation,4);
+        outputAdmissions=0;
+        assert(batch.admitQueryOutputs(frozen,mixedResolve,[&](uintptr_t at,size_t bytes) noexcept -> bool {
+            ++outputAdmissions;return at==0x5000 && bytes==0x4a;
+        }) && outputAdmissions==1);
+        frozen.records[1]=savedQueryRecord;
         const auto originalOutput=payload;
         payload=0x2000;std::memcpy(frozen.records[1].data()+0x28,&payload,8);
         assert(!batch.admitVeboxQueryOutputs(frozen,[](uintptr_t,size_t) noexcept {return true;}));
