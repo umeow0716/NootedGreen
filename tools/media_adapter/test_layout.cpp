@@ -17905,12 +17905,22 @@ static void testRetainedVeboxFrames() {
         Pool::Ticket synchronousRootFrame;
         unsigned synchronousCalls=0;
         assert(callbacks.withFrameScope(success.ticket,0x8000,[&](auto& scope) noexcept -> int {
+            unsigned completionServices=0;
+            assert(scope.withCompletionService([&](auto& pool) noexcept -> int {
+                ++completionServices;assert(pool.emptyForNativeRequest());
+                assert(scope.withCompletionService([](auto&) noexcept -> int {assert(false);return 0;})==5);
+                assert(scope.withNativeRequestItem(0x20000,[](auto&) noexcept -> int {assert(false);return 0;})==5);
+                assert(scope.withEmptyFrameMutation([](auto&) noexcept -> int {assert(false);return 0;})==5);
+                assert(callbacks.withFrameScope(success.ticket,0x8000,[](auto&) noexcept -> int {assert(false);return 0;})==5);
+                return 31;
+            })==31 && completionServices==1);
             assert(!scope.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
             assert(!scope.runContextRootFrame([](Frame&) noexcept {
                 assert(false);return TglOwnedVeboxCommandTransactionResult{};
             }).acquired);
             return scope.withNativeRequestItem(0x20000,[&](auto& active) noexcept -> int {
                 ++synchronousCalls;
+                assert(active.withCompletionService([](auto&) noexcept -> int {assert(false);return 0;})==5);
                 assert(callbacks.withFrameScope(success.ticket,0x8000,[](auto&) noexcept -> int {assert(false);return 0;})==5);
                 assert(active.withNativeRequestItem(0x20000,[](auto&) noexcept -> int {assert(false);return 0;})==5);
                 synchronousRootFrame=active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);

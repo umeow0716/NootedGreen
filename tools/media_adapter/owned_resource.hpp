@@ -25736,7 +25736,7 @@ public:
         TglOwnedVeboxCommandTransactionResult requestPassResult_{};
         int requestPassFailure_=0;
         bool requestPassExecuted_=false;
-        bool creatingPass_=false,requestOutputBound_=false;
+        bool creatingPass_=false,requestOutputBound_=false,servicingCompletion_=false;
         TglNativeFrameOutputReceipt requestReceipt_{};
         Frame* activeRequestFrame_=nullptr;
         explicit Scope(Entry& entry) noexcept
@@ -25769,7 +25769,7 @@ public:
         template<class Invoke> int withNativeRequestItem(uintptr_t context,Invoke invoke) noexcept {
             static_assert(noexcept(invoke(std::declval<Scope&>())) &&
                 std::is_same_v<decltype(invoke(std::declval<Scope&>())),int>);
-            if(!context || context_) return 5;
+            if(!context || context_ || servicingCompletion_) return 5;
             return frames_.withNativeRequestItem([&]() noexcept -> int {
                 context_=context;
                 struct Reset {Scope& scope;~Reset(){
@@ -25817,8 +25817,20 @@ public:
         bool matchesActiveContextRequest(uintptr_t context) const noexcept {
             return context && context==context_ && entry_.state==State::Live && !frames_.workFaulted();
         }
+        // Borrow the pool between native batch items under THIS registry gate.
+        // Service must reuse the existing fence/kernel/history proof; access
+        // alone grants no completion, deletion or cached-ticket authority.
+        template<class Use> int withCompletionService(Use use) noexcept {
+            static_assert(noexcept(use(std::declval<Pool&>())) &&
+                std::is_same_v<decltype(use(std::declval<Pool&>())),int>);
+            if(context_ || creatingPass_ || activeRequestFrame_ || servicingCompletion_ ||
+                !matches(entry_.image,physical_,entry_.generation))return 5;
+            servicingCompletion_=true;
+            struct Reset {bool& value;~Reset(){value=false;}} reset{servicingCompletion_};
+            return use(frames_);
+        }
         template<class Use> int withEmptyFrameMutation(Use use) noexcept {
-            if(context_ || creatingPass_ || activeRequestFrame_ || !frames_.emptyForNativeRequest())return 5;
+            if(context_ || creatingPass_ || activeRequestFrame_ || servicingCompletion_ || !frames_.emptyForNativeRequest())return 5;
             return use(*this); // Enclosing registry gate remains held, pool gate does not.
         }
         bool matchesActiveContextFrame(uintptr_t context,const Frame* frame) const noexcept {
