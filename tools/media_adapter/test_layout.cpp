@@ -16923,6 +16923,7 @@ static void testRetainedVeboxFrames() {
                     return TglOwnedVeboxCommandTransactionResult{31,0,false,false};
                 });
                 assert(unsubmitted.status==31 && !unsubmitted.acquired);
+                assert(!active.createNextContextPassFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
                 assert(observedRoot && !active.matchesActiveContextFrame(0x20000,observedRoot));
                 assert(!active.bindContextRootFrameOutput({0x20008,0x62000,7,true}));
                 assert(!active.bindContextRootFrameOutput({0x20000,0x62000,7,true})); // No acquired work.
@@ -16934,6 +16935,26 @@ static void testRetainedVeboxFrames() {
                 assert(!pending && frame.roots.sources[16]==0x50000);return 0;
             });
         })==0 && rootDestroyed==2);
+        {
+            std::array<decltype(synchronousRootFrame),2> idlePasses{};
+            assert(callbacks.withFrameScope(success.ticket,0x8000,[&](auto& scope) noexcept -> int {
+                return scope.withNativeRequestItem(0x20000,[&](auto& active) noexcept -> int {
+                    idlePasses[0]=active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
+                    assert(idlePasses[0].generation);
+                    auto idle=[](Frame&) noexcept {return TglOwnedVeboxCommandTransactionResult{0,0,false,false};};
+                    assert(active.runContextRootFrame(idle).status==0);
+                    idlePasses[1]=active.createNextContextPassFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
+                    assert(idlePasses[1].generation);
+                    assert(active.runContextRootFrame(idle).status==0);
+                    return 0;
+                });
+            })==0);
+            assert(callbacks.withFrame(success.ticket,0x8000,[&](auto& frames) noexcept -> int {
+                for(const auto ticket:idlePasses)assert(frames.retire(ticket,
+                    [](const Frame&,bool pending,const auto&) noexcept -> int {assert(!pending);return 0;})==0);
+                return 0;
+            })==0);
+        }
         // A rejected later lower pass must not erase the first submitted
         // frame or its receipt. This is retention coverage, not multipass support.
         decltype(synchronousRootFrame) nextPassFrame;
@@ -16942,6 +16963,7 @@ static void testRetainedVeboxFrames() {
             return scope.withNativeRequestItem(0x20000,[&](auto& active) noexcept -> int {
                 synchronousRootFrame=active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
                 assert(synchronousRootFrame.generation);
+                assert(!active.createNextContextPassFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
                 assert(active.runContextRootFrame([](Frame&) noexcept {
                     return TglOwnedVeboxCommandTransactionResult{0,0,true,true};
                 }).writtenBack);
@@ -16974,7 +16996,7 @@ static void testRetainedVeboxFrames() {
                 })==0);
             }
             return 0;
-        })==0 && rootDestroyed==4);
+        })==0 && rootDestroyed==6);
         {
             Pool::Ticket eventFrame;
             assert(callbacks.withNewRequest(success.ticket,0x8000,[&](auto& frames) noexcept -> int {

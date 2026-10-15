@@ -24646,6 +24646,9 @@ public:
         FrameTicket requestFrame_{};
         std::array<FrameTicket,Pool::frameCapacity> requestFrames_{};
         size_t requestFrameCount_=0;
+        TglOwnedVeboxCommandTransactionResult requestPassResult_{};
+        int requestPassFailure_=0;
+        bool requestPassExecuted_=false;
         bool creatingPass_=false,requestOutputBound_=false;
         Frame* activeRequestFrame_=nullptr;
         explicit Scope(Entry& entry) noexcept
@@ -24661,7 +24664,7 @@ public:
             const auto frame=frames_.create(static_cast<const TglNativeContextInputRoots&>(roots),std::forward<Args>(args)...);
             if(!frame.generation)return {};
             requestFrames_[requestFrameCount_++]=frame;
-            requestFrame_=frame;return frame;
+            requestFrame_=frame;requestPassResult_={};requestPassExecuted_=false;return frame;
         }
     public:
         Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
@@ -24684,6 +24687,8 @@ public:
                 struct Reset {Scope& scope;~Reset(){
                     scope.context_=0;scope.requestFrame_={};scope.requestFrames_={};
                     scope.requestFrameCount_=0;scope.requestOutputBound_=false;
+                    scope.requestPassResult_={};scope.requestPassFailure_=0;
+                    scope.requestPassExecuted_=false;
                 }} reset{*this};
                 return invoke(*this);
             });
@@ -24694,10 +24699,10 @@ public:
             return createRequestPass(read,admit,std::forward<Args>(args)...);
         }
         // Explicit same-request continuation, not a new request or frame rearm.
-        // Earlier frames stay pending; every pass gets freshly captured roots.
+        // Earlier frames stay owned; every pass gets freshly captured roots.
         template<class Read,class Admit,class... Args>
         FrameTicket createNextContextPassFrame(Read read,Admit admit,Args&&... args) noexcept {
-            if(!requestFrameCount_)return {};
+            if(!requestFrameCount_ || requestPassFailure_ || !requestPassExecuted_ || requestPassResult_.status)return {};
             return createRequestPass(read,admit,std::forward<Args>(args)...);
         }
         // Execute only the frame created by this active native request. Never
@@ -24705,11 +24710,20 @@ public:
         template<class Invoke>
         TglOwnedVeboxCommandTransactionResult runContextRootFrame(Invoke invoke) noexcept {
             if(!context_ || !requestFrame_.generation || activeRequestFrame_)return {};
-            return frames_.run(requestFrame_,[&](Frame& frame) noexcept {
+            bool entered=false;
+            const auto result=frames_.run(requestFrame_,[&](Frame& frame) noexcept {
+                entered=true;
                 activeRequestFrame_=&frame;
                 struct Reset {Frame*& value;~Reset(){value=nullptr;}} reset{activeRequestFrame_};
                 return invoke(frame);
             });
+            // A rejected borrow must not overwrite the earlier retained pass.
+            // Conversely, a real failure stays sticky even before acquisition.
+            if(entered) {
+                requestPassResult_=result;requestPassExecuted_=true;
+                if(result.status && !requestPassFailure_)requestPassFailure_=result.status;
+            }
+            return result;
         }
         bool matchesActiveContextRequest(uintptr_t context) const noexcept {
             return context && context==context_ && entry_.state==State::Live && !frames_.workFaulted();
