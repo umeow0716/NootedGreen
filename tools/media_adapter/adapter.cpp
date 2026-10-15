@@ -5564,8 +5564,8 @@ struct NativePropertyParentMutation {
     }
 };
 struct NativeFactoryContextProperties {
-    // NOT PUBLISHED: metadata is frozen only for exact VEBOX property families;
-    // payload/owned-allocation alias admission remains a publication prerequisite.
+    // NOT PUBLISHED: VP payloads use owned snapshots; qualified native-other
+    // Configure preserves native payload lifetime. Query is still VP-only.
     // Both operations retain every distinct codec. Configuration additionally
     // requires the physical empty-frame mutation gate; use that gate for this
     // initial bundle, never treat native return0 as retirement authority.
@@ -5583,7 +5583,6 @@ struct NativeFactoryContextProperties {
                 if(!batch.capture(reinterpret_cast<uintptr_t>(input),&readMemory))return 5;
                 TglNativeContextPropertyBatch<16>::OwnedRecords frozen;
                 if(!batch.freeze(&readMemory,frozen))return 5;
-                if(operation==Operation::Configure && !batch.admitsVeboxConfiguration(frozen))return 5;
                 if(operation==Operation::Query && !batch.admitVeboxQueryOutputs(frozen,NativeDataAdmission{}))return 5;
                 using Lease=decltype(NativeCodecBackend::owners().pinExclusive(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{}));
                 std::array<Lease,16> leases;
@@ -5599,9 +5598,26 @@ struct NativeFactoryContextProperties {
                         !readMemory(context,&vptr,8) || vptr!=reinterpret_cast<uintptr_t>(table.addressPoint()))return 5;
                     contexts[count++]=context;
                 }
+                if(operation==Operation::Configure && !batch.admitMixedConfiguration(frozen,
+                    [&](uintptr_t context,TglNativeContextFamily& family,uintptr_t& callback) noexcept -> bool {
+                        for(size_t i=0;i<count;++i)if(contexts[i]==context) {
+                            const auto* table=leases[i].get()->frameTable().addressPoint();
+                            if(!table || table[0x18/8]<image)return false;
+                            family=leases[i].get()->family();callback=table[0x18/8]-image;return true;
+                        }
+                        return false;
+                    },[](uintptr_t payload,size_t bytes) noexcept -> bool {
+                        std::array<uint8_t,0x2d0> scratch{};
+                        return bytes<=scratch.size() && readMemory(payload,scratch.data(),bytes);
+                    }))return 5;
                 std::array<NativeCreatorPreparation::RuntimeView,16> parents;
                 std::array<uintptr_t,16> creators{};size_t parentCount=0;
                 for(size_t i=0;i<count;++i) {
+                    if(leases[i].get()->family()==TglNativeContextFamily::NativeOther) {
+                        if(operation==Operation::Query || !leases[i].get()->nativeOtherWorkQuiescent())return 5;
+                        continue;
+                    }
+                    if(leases[i].get()->family()!=TglNativeContextFamily::VeboxVp)return 5;
                     uintptr_t creator=0,renderer=0;
                     if(contexts[i]>UINTPTR_MAX-0x12e8 || !readMemory(contexts[i]+0x12e0,&creator,8) ||
                         !creator || creator>UINTPTR_MAX-0x70 || !readMemory(creator+0x68,&renderer,8) || !renderer)return 5;

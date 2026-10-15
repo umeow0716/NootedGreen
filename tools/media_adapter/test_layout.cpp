@@ -18970,6 +18970,45 @@ int main() {
         for(auto& record:frozen.records){std::memcpy(record.data(),&veboxKind,4);
             std::memcpy(record.data()+0x20,&configureOperation,4);}
         assert(batch.admitsVeboxConfiguration(frozen));
+        {
+            const auto originalRecords=frozen.records;
+            contexts[0]=0x4000;
+            TglNativeContextPropertyBatch<2> mixedBatch;
+            TglNativeContextPropertyBatch<2>::OwnedRecords mixedFrozen;
+            assert(mixedBatch.capture(0x1000,read) && mixedBatch.freeze(read,mixedFrozen));
+            mixedFrozen.records=originalRecords;
+            std::memcpy(mixedFrozen.records[0].data()+0x18,&contexts[0],8);
+            auto& batch=mixedBatch;auto& frozen=mixedFrozen;
+            const uint32_t nativeKind=1,nativeOperation=5;const uint64_t nativeType=0x200;
+            std::memcpy(frozen.records[1].data(),&nativeKind,4);
+            std::memcpy(frozen.records[1].data()+8,&nativeType,8);
+            std::memcpy(frozen.records[1].data()+0x20,&nativeOperation,4);
+            auto resolve=[](uintptr_t context,TglNativeContextFamily& family,uintptr_t& callback) noexcept -> bool {
+                family=context==0x3000?TglNativeContextFamily::NativeOther:TglNativeContextFamily::VeboxVp;
+                callback=context==0x3000?0x2282f0:0x2341b0;return true;
+            };
+            assert(batch.admitMixedConfiguration(frozen,resolve,[](uintptr_t,size_t) noexcept -> bool {assert(false);return false;}));
+            assert(!frozen.nativeOtherRecords[0] && frozen.nativeOtherRecords[1]);
+            const uint32_t setScalar=2;std::memcpy(frozen.records[1].data()+0x20,&setScalar,4);
+            assert(!batch.admitMixedConfiguration(frozen,resolve,[](uintptr_t at,size_t bytes) noexcept -> bool {
+                assert(at==0x5100 && bytes==4);return false;
+            }) && !frozen.nativeOtherRecords[1]);
+            std::memcpy(frozen.records[1].data()+0x20,&nativeOperation,4);
+            assert(batch.admitMixedConfiguration(frozen,resolve,[](uintptr_t,size_t) noexcept -> bool {assert(false);return false;}));
+            unsigned scalarReads=0;
+            auto mixedRead=[&](uintptr_t at,void* out,size_t bytes) noexcept -> bool {
+                if(at==0x5000){++scalarReads;assert(bytes==16);std::memset(out,0,bytes);return true;}
+                assert(at!=0x5100);return read(at,out,bytes);
+            };
+            assert(batch.freezeVeboxScalarPayloads(mixedRead,frozen) && scalarReads==2);
+            assert(batch.freezeVeboxInlineConversionPayloads(mixedRead,frozen));
+            assert(batch.freezeVeboxCubePayloads(mixedRead,frozen,0));
+            uintptr_t retainedPayload=0;std::memcpy(&retainedPayload,frozen.records[1].data()+0x28,8);
+            assert(retainedPayload==0x5100);
+            frozen.records=originalRecords;frozen.nativeOtherRecords={};
+            frozen.scalarPayloadsFrozen=false;frozen.conversionPayloadsFrozen=false;frozen.cubesAttempted=false;
+            contexts[0]=0x3000;
+        }
         const uint32_t protectedKind=1;
         std::memcpy(frozen.records[1].data(),&protectedKind,4);
         assert(!batch.admitsVeboxConfiguration(frozen));

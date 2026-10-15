@@ -27902,6 +27902,38 @@ public:
 // branch does not touch caller output, NOT that its result is success. Caller
 // must authenticate the saved original callback and retain context/physical
 // leases, then exclude every owned allocation from a nonzero output span.
+struct TglNativeOtherConfigureAccess {size_t bytes=0;bool nullable=false,retainsPointer=false;};
+inline bool tglNativeOtherConfigureAccess(uintptr_t callback,uint32_t kind,uint64_t type,uint32_t operation,
+    TglNativeOtherConfigureAccess& access) noexcept {
+    access={};
+    switch(callback) {
+        case 0x3b8e:if(operation==3)access.bytes=1;return true;
+        case 0x7302:
+            if(kind==0x20 && type==0x80) {
+                if(operation==1 || operation==7 || operation==12)access.bytes=4;
+                else if(operation==9)access.bytes=8;
+            }return true;
+        case 0x1d078:
+            if(operation==2 || operation==3 || operation==5 || operation==6 || operation==10 || operation==11)access.bytes=4;
+            else if(operation==4)access.bytes=20;
+            else if(operation==13)access.bytes=1;
+            return true;
+        case 0x1eb12:if(operation==4)access.bytes=0x2d0;return true;
+        case 0x27202:
+            if(kind==0x20 && type==0x400) {
+                if(operation==1 || operation==5 || operation==6 || operation==14)access.bytes=4;
+                else if(operation==4)access.bytes=20;
+                else if(operation==9)access.bytes=8;
+            }return true;
+        case 0x2282f0:
+            if(operation==2){access.bytes=4;access.nullable=true;}
+            else if(operation==5 || operation==6 || operation==9)access.retainsPointer=true;
+            return true;
+        case 0x22ad60:if(operation==2){access.bytes=4;access.nullable=true;}return true;
+        case 0x1095e:case 0x22f800:case 0x2317b0:case 0x23c060:case 0x28b20:return true;
+        default:return false;
+    }
+}
 inline bool tglNativeOtherQueryWriteExtent(uintptr_t callbackOffset,uint32_t operation,size_t& bytes) noexcept {
     bytes=0;
     switch(callbackOffset) {
@@ -27931,6 +27963,7 @@ template<size_t Capacity=16> class TglNativeContextPropertyBatch {
     bool attempted_=false,ready_=false;
 public:
     struct OwnedRecords {
+        std::array<bool,Capacity> nativeOtherRecords{};
         alignas(8) std::array<std::array<uint8_t,0x30>,Capacity> records{};
         alignas(8) std::array<std::array<uint8_t,0x30>,Capacity> scalarPayloads{};
         bool scalarPayloadsFrozen=false;
@@ -27949,7 +27982,7 @@ public:
         // Publish self-referencing header only after every record is copied and
         // its context matches the identity that will be pinned. Payload pointers
         // remain original: this does not claim ownership of caller output buffers.
-        owned.header={};owned.scalarPayloadsFrozen=false;owned.conversionPayloadsFrozen=false;
+        owned.header={};owned.nativeOtherRecords={};owned.scalarPayloadsFrozen=false;owned.conversionPayloadsFrozen=false;
         if(!stable(read))return false;
         for(size_t i=0;i<count_;++i){uintptr_t context=0;
             if(!read(records_+i*0x30,owned.records[i].data(),0x30))return false;
@@ -27962,6 +27995,7 @@ public:
     bool admitsVeboxConfiguration(const OwnedRecords& owned) const noexcept {
         if(!ready_ || owned.header.count!=count_ || owned.header.records!=reinterpret_cast<uintptr_t>(owned.records.data()))return false;
         for(size_t i=0;i<count_;++i){uint32_t kind=0,operation=0;uint64_t type=0;uintptr_t context=0;
+            if(owned.nativeOtherRecords[i])continue;
             const auto* record=owned.records[i].data();
             std::memcpy(&kind,record,4);std::memcpy(&type,record+8,8);
             std::memcpy(&operation,record+0x20,4);std::memcpy(&context,record+0x18,8);
@@ -27973,6 +28007,26 @@ public:
         }
         return true;
     }
+    template<class Resolve,class Admit> bool admitMixedConfiguration(OwnedRecords& owned,Resolve resolve,Admit admit) const noexcept {
+        owned.nativeOtherRecords={};std::array<bool,Capacity> selected{};
+        if(!ready_ || owned.header.count!=count_ || owned.header.records!=reinterpret_cast<uintptr_t>(owned.records.data()))return false;
+        for(size_t i=0;i<count_;++i) {
+            const auto* record=owned.records[i].data();uint32_t kind=0,operation=0;uint64_t type=0;uintptr_t context=0,payload=0,callback=0;
+            std::memcpy(&kind,record,4);std::memcpy(&type,record+8,8);std::memcpy(&context,record+0x18,8);
+            std::memcpy(&operation,record+0x20,4);std::memcpy(&payload,record+0x28,8);
+            TglNativeContextFamily family=TglNativeContextFamily::Unknown;
+            if(context!=contexts_[i] || !resolve(context,family,callback))return false;
+            if(family==TglNativeContextFamily::VeboxVp){if(callback!=0x2341b0)return false;continue;}
+            TglNativeOtherConfigureAccess access;
+            if(family!=TglNativeContextFamily::NativeOther || !tglNativeOtherConfigureAccess(callback,kind,type,operation,access))return false;
+            if(access.bytes && !(access.nullable && !payload) &&
+                (!payload || payload>UINTPTR_MAX-access.bytes || !admit(payload,access.bytes)))return false;
+            selected[i]=true; // Preserve native payload pointer, including retained opaque pointers.
+        }
+        owned.nativeOtherRecords=selected;
+        if(!admitsVeboxConfiguration(owned)){owned.nativeOtherRecords={};return false;}
+        return true;
+    }
     template<class Read> bool freezeVeboxScalarPayloads(Read read,OwnedRecords& owned) const noexcept {
         // Exact234210 reads12 DWORDs;2343d0 type800 ops1/2/3 read16/8/4
         // bytes, op4/property1002 reads4 bytes into a local helper argument.
@@ -27980,6 +28034,7 @@ public:
         if(owned.scalarPayloadsFrozen || !admitsVeboxConfiguration(owned) || !stable(read))return false;
         std::array<bool,Capacity> captured{};
         for(size_t i=0;i<count_;++i) {
+            if(owned.nativeOtherRecords[i])continue;
             uint64_t type=0;uintptr_t payload=0;uint32_t operation=0,property=0;
             std::memcpy(&type,owned.records[i].data()+8,8);
             std::memcpy(&operation,owned.records[i].data()+0x20,4);
@@ -28005,6 +28060,7 @@ public:
         if(owned.conversionPayloadsFrozen || !admitsVeboxConfiguration(owned) || !stable(read))return false;
         std::array<bool,Capacity> captured{};
         for(size_t i=0;i<count_;++i) {
+            if(owned.nativeOtherRecords[i])continue;
             uint64_t type=0;uintptr_t payload=0;uint32_t flags=0;
             std::memcpy(&type,owned.records[i].data()+8,8);if(type!=0x200)continue;
             std::memcpy(&payload,owned.records[i].data()+0x28,8);
@@ -28063,6 +28119,7 @@ public:
         std::array<TglNativeCubeLutGeometry,Capacity> plans{};
         size_t total=0;
         for(size_t i=0;i<count_;++i) {
+            if(owned.nativeOtherRecords[i])continue;
             uint64_t type=0;uint32_t flags=0;
             std::memcpy(&type,owned.records[i].data()+8,8);if(type!=0x200)continue;
             std::memcpy(&payloads[i],owned.records[i].data()+0x28,8);
