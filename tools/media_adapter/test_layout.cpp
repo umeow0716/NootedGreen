@@ -27,8 +27,9 @@ struct TestRetentionGroupOwner {
     bool retentionPairUnchanged(const Retention::PairSnapshot& snapshot) const noexcept {
         return root.pairUnchanged(snapshot);
     }
-    template<class Proof> bool acknowledgeCompletedPairWork(const Retention::PairSnapshot& snapshot,Proof proof) noexcept {
-        return root.acknowledgeCompletedPairWork(snapshot,proof);
+    template<class Proof> bool acknowledgeCompletedPairWork(const Retention::PairSnapshot& snapshot,Proof proof,
+        bool drained=false) noexcept {
+        return root.acknowledgeCompletedPairWork(snapshot,proof,drained);
     }
 };
 // Presence-test functions only; never used as renderer producers or published.
@@ -18832,6 +18833,13 @@ int main() {
             assert(during.observeOwner(owner,&frames[0]) && during.observeOwner(owner,&frames[1]));
             assert(!during.acknowledge(owner,2,history,[&]() noexcept {owner.first.observe(work);return true;}));
             assert(owner.first.mayHaveGpuWork() && owner.root.mayHaveGpuWork());
+            Group drained;
+            assert(drained.observeOwner(owner,&frames[0]) && drained.observeOwner(owner,&frames[1]));
+            const std::array<TglNativeHistoryCacheInspection,2> empty{{{true,false,true},{true,false,true}}};
+            assert(drained.acknowledge(owner,2,empty,live));
+            assert(!owner.root() && !owner.first() && !owner.second());
+            assert(!owner.root.mayHaveNativeHistory() && !owner.second.mayHaveNativeHistory());
+            assert(!drained.acknowledge(owner,2,empty,live));
         }
         {
             constexpr uintptr_t pass=0x10000,surface=0x20000;

@@ -280,8 +280,8 @@ public:
     }
     template<class ScopedGroupProof>
     bool acknowledgeCompletedPairWork(const TglOwnedVeboxFrameRetention::PairSnapshot& snapshot,
-        ScopedGroupProof proof) noexcept {
-        return completeRetentionMembership() && retention_.acknowledgeCompletedPairWork(snapshot,proof);
+        ScopedGroupProof proof,bool wholeNativeHistoryDrained=false) noexcept {
+        return completeRetentionMembership() && retention_.acknowledgeCompletedPairWork(snapshot,proof,wholeNativeHistoryDrained);
     }
     bool producerPending(size_t index) noexcept {
         auto* command=commandForChild(index);if(!command)return true;
@@ -4438,6 +4438,16 @@ struct NativePhysicalBackend {
                     // consume revisions there, never via a const_cast or cache.
                     return first->acknowledgeCompletedGroupWork(group,count,history,
                         [&](const auto& cpu,const auto& view) noexcept {
+                            if(!healthy() || !group.unchanged(cpu) || !sameView(view))return false;
+                            bool drainClaim=true;
+                            for(size_t i=0;i<count;++i)
+                                if(!history[i].wholeCacheEmpty || history[i].referencesFrame)drainClaim=false;
+                            if(drainClaim) {
+                                std::array<uintptr_t,18> before{},after{};
+                                if(!readMemory(view.renderer+0x928,before.data(),sizeof(before)) ||
+                                    !readMemory(view.renderer+0x928,after.data(),sizeof(after)) || before!=after)return false;
+                                for(auto entry:after)if(entry)return false;
+                            }
                             return healthy() && group.unchanged(cpu) && sameView(view);
                         });
                 });

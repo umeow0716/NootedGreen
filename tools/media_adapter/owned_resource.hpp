@@ -15110,7 +15110,8 @@ public:
             snapshot.revisions_[2]==snapshot.second_->revision_;
     }
     template<class ScopedGroupProof>
-    bool acknowledgeCompletedPairWork(const PairSnapshot& snapshot,ScopedGroupProof proof) noexcept {
+    bool acknowledgeCompletedPairWork(const PairSnapshot& snapshot,ScopedGroupProof proof,
+        bool wholeNativeHistoryDrained=false) noexcept {
         static_assert(std::is_nothrow_invocable_r_v<bool,ScopedGroupProof&>);
         if constexpr(std::is_pointer_v<ScopedGroupProof>)if(!proof)return false;
         if(completionBusy_ || !pairUnchanged(snapshot))return false;
@@ -15121,10 +15122,14 @@ public:
         // Check again: even another observe(true) changes revision and must
         // not be cleared using the preceding completion observation.
         if(!proof() || !pairUnchanged(snapshot))return false;
+        // Only the enclosing live all-frame/parent scope may supply the full
+        // native cache-drain observation. Absence of this frame is NOT drain.
         for(auto* member:{snapshot.first_,snapshot.second_}) {
+            if(wholeNativeHistoryDrained)member->historyPending_=false;
             member->workPending_=false;member->pending_=member->historyPending_;
             member->advanceRevision();
         }
+        if(wholeNativeHistoryDrained)historyPending_=false;
         workPending_=false;pending_=historyPending_;advanceRevision();
         return true;
     }
@@ -15170,11 +15175,15 @@ public:
         static_assert(std::is_nothrow_invocable_r_v<bool,Live&>);
         if constexpr(std::is_pointer_v<Live>)if(!live)return false;
         if(consumed_ || !count || count!=count_ || !unchanged(owner))return false;
-        for(size_t i=0;i<count;++i)if(!history[i].observed)return false;
+        bool drained=true;
+        for(size_t i=0;i<count;++i) {
+            if(!history[i].observed)return false;
+            if(!history[i].wholeCacheEmpty || history[i].referencesFrame)drained=false;
+        }
         consumed_=true;
         return owner.acknowledgeCompletedPairWork(pair_,[&]() noexcept {
             return live() && unchanged(owner);
-        });
+        },drained);
     }
 };
 // CPU producer admission for an unused sibling within one authenticated native
