@@ -19105,6 +19105,14 @@ int main() {
                         return 31;
                     })==31);
                     assert(graph.valid() && graph.linkedStorage(root,0xc0)==&previous && refs==heldRefs);
+                    std::array<const TglOwnedSurfaceStorage*,2> temporal{};
+                    assert(tglCaptureRetainedTemporalRoles(graph,root,temporal) && temporal[0]==&previous &&
+                        temporal[1]==graph.linkedStorage(root,0xc8) && refs==heldRefs);
+                    const auto savedTemporal=temporal;
+                    assert(!tglCaptureRetainedTemporalRoles(graph,shell,temporal) && temporal==savedTemporal);
+                    uintptr_t foreignTemporal=1;std::memcpy(root.prefix.data()+0xc0,&foreignTemporal,8);
+                    assert(!tglCaptureRetainedTemporalRoles(graph,root,temporal) && temporal==savedTemporal);
+                    std::memcpy(root.prefix.data()+0xc0,&p,8);
                     changes[0]={&root,o};
                     assert(graph.withForwardLinkReconciliation(changes,1,[&]() noexcept -> int {
                         std::memcpy(root.prefix.data()+0xc0,&o,8);return 0;

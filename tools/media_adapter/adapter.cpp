@@ -3698,7 +3698,7 @@ struct NativeRetainedTemporaryTransaction {
     using Target=TglOwnedType1BorrowedSurfaceLease<NativeContextSurfaceOwner,TglDarwinTypedCfReferenceApi>;
     Backend& backend;NativeRendererCpuAssembly& assembly;
     const TglNativeCreatedVeboxRendererView& pinned;NativeSourceGraph& graph;const Target& finalTarget;
-    const std::array<const TglOwnedSurfaceStorage*,2>& temporal;NativeDenoiseParameters& denoise;
+    NativeDenoiseParameters& denoise;
     size_t childIndex;const TglVeboxAdmissionBorrowedInterfaces& interfaces;
     const TglOwnedVpEntrySet& catalogue;NativeModeRetirementAuthority& retirement;
     const TglNativeVphalMhwView& view;TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
@@ -3716,6 +3716,10 @@ struct NativeRetainedTemporaryTransaction {
         std::array<TglOwnedSurfaceStorage*,25> originals{};
         for(size_t i=0;i<25;++i)originals[i]=reinterpret_cast<TglOwnedSurfaceStorage*>(
             i<17?roles.sources[i]:roles.targets[i-17]);
+        uint32_t sourceIndex=0;std::memcpy(&sourceIndex,pass.data()+0xc,4);
+        const auto* selectedSource=graph.retainedStorageAt(roles.sourceSlot(sourceIndex));
+        std::array<const TglOwnedSurfaceStorage*,2> temporal{};
+        if(!selectedSource || !tglCaptureRetainedTemporalRoles(graph,*selectedSource,temporal))return {};
         auto held=[&](size_t index,const TglOwnedSurfaceStorage* surface) noexcept {
             if(index>=25 || !surface || !graph.valid() || !finalTarget.storage())return false;
             const auto address=reinterpret_cast<uintptr_t>(surface);
@@ -3747,7 +3751,6 @@ struct NativeRetainedTemporaryExecution {
         NativeRetainedTemporaryTransaction::Backend& backend;
         std::array<uint8_t,0x139>& parameters;std::array<uint8_t,0x60>& pass;
         const TglNativeOuterSurfaceRoles& roles;size_t sourceIndex,targetIndex,childIndex;
-        const std::array<const TglOwnedSurfaceStorage*,2>& temporal;
         const TglVeboxAdmissionBorrowedInterfaces* interfaces;const TglOwnedVpEntrySet& catalogue;
         NativeModeRetirementAuthority* retirement;const TglNativeVphalMhwView& view;
         TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
@@ -3774,7 +3777,7 @@ struct NativeRetainedTemporaryExecution {
         auto* lifetime=TglOwnedVeboxScopedContext<NativeRendererChildLifetime>::get(reinterpret_cast<void*>(child));
         if(!lifetime || lifetime!=(request.childIndex?&second:&first))return {};
         auto execute=[&](const TglVeboxAdmissionBorrowedInterfaces& interfaces,NativeModeRetirementAuthority& retirement) noexcept {
-            NativeRetainedTemporaryTransaction transaction{request.backend,cpu,pinned,graph,target,request.temporal,
+            NativeRetainedTemporaryTransaction transaction{request.backend,cpu,pinned,graph,target,
                 denoise,request.childIndex,interfaces,request.catalogue,retirement,request.view,
                 request.acquisition,request.decompressionStatus,request.decompression,request.argument};
             transaction.sendFrame=request.sendFrame;
@@ -3905,7 +3908,6 @@ struct NativeRetainedTemporaryExecution {
         const TglOwnedVpEntrySet& catalogue;
         TglNativeVphalMhwView view;TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;void* argument;
-        std::array<const TglOwnedSurfaceStorage*,2> temporal;
         bool busy=false;int failure=0;
         NativeRootPassAuthority authority{};
         static TglOwnedVeboxCommandTransactionResult produce(void* raw,NativeContextRendererFrame& active,
@@ -3931,7 +3933,7 @@ struct NativeRetainedTemporaryExecution {
             size_t sourceRole=0,targetRole=0;
             if(!active.retainedRoleIndices(roles,sourceRole,targetRole))return reject();
             std::array<uint8_t,0x139> ownedParameters{};std::array<uint8_t,0x60> ownedPass{};
-            Request request{self.backend,ownedParameters,ownedPass,roles,sourceRole,targetRole,childIndex,self.temporal,
+            Request request{self.backend,ownedParameters,ownedPass,roles,sourceRole,targetRole,childIndex,
                 nullptr,self.catalogue,nullptr,self.view,self.acquisition,self.decompressionStatus,
                 self.decompression,self.argument};
             request.ownedSend=true;
@@ -3998,7 +4000,7 @@ struct NativeRetainedContextFrameDispatch {
         const TglNativeVphalMhwView& view,
         const TglOwnedVpEntrySet& catalogue,const NativeRootPassAuthority& authority,
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,
-        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument,
+        void* argument,
         uintptr_t input,uintptr_t output,TglNativeFrameOutputReceipt& receipt) noexcept {
         if(!backend.bound() || view.renderer.image!=backend.image() ||
             !view.renderer.renderer || authority.physical!=&physical ||
@@ -4006,7 +4008,7 @@ struct NativeRetainedContextFrameDispatch {
         TglVeboxPipeAcquisition acquisition;
         int decompressionStatus=0;
         NativeRetainedTemporaryExecution::PassProvider provider{frame,backend,
-            catalogue,view,acquisition,decompressionStatus,decompression,argument,temporal};
+            catalogue,view,acquisition,decompressionStatus,decompression,argument};
         provider.authority=authority;
         auto result=run(lease,physical,frame,view.renderer.renderer,input,output,
             &provider,&NativeRetainedTemporaryExecution::PassProvider::produce,receipt);
@@ -4654,7 +4656,7 @@ struct NativeCreatorPreparation {
         const TglNativeVphalMhwView& view,
         const TglOwnedVpEntrySet& catalogue,
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,
-        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument,
+        void* argument,
         uintptr_t input,uintptr_t output,TglNativeFrameOutputReceipt& receipt) noexcept {
         auto* backend=passBackendFor(physical,view.renderer.image,address,generation,
             view.parent,view.renderer.renderer);
@@ -4663,7 +4665,7 @@ struct NativeCreatorPreparation {
         // The lookup gate is released before native execution: callbacks use
         // this same ledger for lineage admission and must never recurse its lock.
         return NativeRetainedContextFrameDispatch::runOwned(lease,physical,frame,*backend,view,
-            catalogue,authority,decompression,temporal,argument,input,output,receipt);
+            catalogue,authority,decompression,argument,input,output,receipt);
     }
     using RuntimeView=TglNativeBorrowedVphalMhwLease<NativeVphalFramePin>;
     static bool acquireRuntimeView(NativePhysicalFrameScope& physical,uintptr_t image,uintptr_t address,
@@ -4700,7 +4702,7 @@ struct NativeCreatorPreparation {
     static LowerBootstrapResult bootstrapLowerPass(NativePhysicalFrameScope& physical,uintptr_t image,
         uintptr_t address,uint64_t generation,uintptr_t context,uintptr_t creator,uintptr_t renderer,
         uintptr_t parameters,uintptr_t pass,NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,
-        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument,bool continuation) noexcept {
+        void* argument,bool continuation) noexcept {
         LowerBootstrapResult result;
         if(!physical.matchesActiveContextRequest(context))return result;
         RuntimeView parent;
@@ -4722,7 +4724,7 @@ struct NativeCreatorPreparation {
                 TglVeboxPipeAcquisition acquisition;int decompressionStatus=0;
                 TglOwnedVpEntrySet base; // All callbacks come from the real scoped producers.
                 NativeRetainedTemporaryExecution::PassProvider provider{frame,*backend,base,*parent.view(),
-                    acquisition,decompressionStatus,decompression,argument,temporal};
+                    acquisition,decompressionStatus,decompression,argument};
                 provider.authority={&physical,address,context,generation};
                 return NativeRetainedTemporaryExecution::PassProvider::produce(&provider,frame,renderer,
                     reinterpret_cast<void*>(parameters),reinterpret_cast<void*>(pass));
@@ -4739,7 +4741,7 @@ struct NativeCreatorPreparation {
         NativePhysicalFrameScope& physical;
         uintptr_t image,address,context,creator,renderer;uint64_t generation;
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;
-        const std::array<const TglOwnedSurfaceStorage*,2>& temporal;void* argument;
+        void* argument;
         std::array<NativePhysicalRegistry::FrameTicket,2> frames{};
         size_t frameCount=0;
         TglOwnedVeboxCommandTransactionResult work{};
@@ -4755,7 +4757,7 @@ struct NativeCreatorPreparation {
                 !self.physical.matchesActiveContextRequest(self.context))return {};
             auto result=bootstrapLowerPass(self.physical,self.image,self.address,self.generation,
                 self.context,self.creator,self.renderer,reinterpret_cast<uintptr_t>(parameters),
-                reinterpret_cast<uintptr_t>(pass),self.decompression,self.temporal,self.argument,self.frameCount!=0);
+                reinterpret_cast<uintptr_t>(pass),self.decompression,self.argument,self.frameCount!=0);
             if(result.frame.generation) {
                 self.frames[self.frameCount++]=result.frame;
             }
@@ -4791,7 +4793,7 @@ struct NativeCreatorPreparation {
     static LateDispatchResult dispatchLateOwnedFrame(NativeRetainedContextFrameDispatch::Lease& lease,
         NativePhysicalFrameScope& physical,uintptr_t image,uintptr_t address,uint64_t generation,
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,
-        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument,
+        void* argument,
         uintptr_t input,uintptr_t output) noexcept {
         LateDispatchResult result;
         const uintptr_t context=lease.get()?lease.get()->context():0;
@@ -4800,7 +4802,7 @@ struct NativeCreatorPreparation {
             !readMemory(context+0x12e0,&creator,8) || !creator || creator>UINTPTR_MAX-0x70 ||
             !readMemory(creator+0x68,&renderer,8) || !renderer ||
             !passBackendFor(physical,image,address,generation,creator,renderer))return result;
-        LateRequest state{physical,image,address,context,creator,renderer,generation,decompression,temporal,argument};
+        LateRequest state{physical,image,address,context,creator,renderer,generation,decompression,argument};
         result.request=NativePreparedCodecRequestDispatch::run(lease,physical,input,output,&state,&LateRequest::consume);
         result.frames=state.frames;result.frameCount=state.frameCount;
         return result; // Pending native work remains retained; never infer retirement here.

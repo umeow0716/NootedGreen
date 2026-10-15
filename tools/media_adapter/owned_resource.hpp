@@ -21008,6 +21008,23 @@ public:
         return valid()?status:5;
     }
 };
+// Resolve temporal roles from the actual selected source, not another pass's
+// cached pair. Nonnull links must have retained graph owners; unknown is not
+// equivalent to absent. Output publication is atomic on success only.
+template<class Graph>
+bool tglCaptureRetainedTemporalRoles(const Graph& graph,const TglOwnedSurfaceStorage& source,
+    std::array<const TglOwnedSurfaceStorage*,2>& output) noexcept {
+    if(!graph.valid() || !graph.hasRetainedSurfaceLease(source))return false;
+    std::array<const TglOwnedSurfaceStorage*,2> candidate{};
+    for(size_t i=0;i<2;++i) {
+        const size_t offset=i?0xc8:0xc0;uintptr_t raw=0;
+        std::memcpy(&raw,source.prefix.data()+offset,8);
+        candidate[i]=graph.linkedRetainedStorage(source,offset);
+        if(raw!=reinterpret_cast<uintptr_t>(candidate[i]))return false;
+    }
+    if(!graph.valid() || !graph.hasRetainedSurfaceLease(source))return false;
+    output=candidate;return true;
+}
 // Bridge the retained frontend to native Render's uniform original-owner API.
 // Role snapshot is captured by the enclosing native frame; this is not a new
 // role selector or GPU completion proof. Observe entry/acquisition BEFORE pins
