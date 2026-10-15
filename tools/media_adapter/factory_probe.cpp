@@ -371,16 +371,16 @@ int main(int argc, char **argv) {
         if (adapterMode) {
             std::array<uintptr_t, 17> callbacks{};
             if (!read(reinterpret_cast<uintptr_t>(table), callbacks.data(), sizeof(callbacks))) goto cleanup;
+            Dl_info owned{};
+            if (!dladdr(reinterpret_cast<void *>(create), &owned) || !owned.dli_fbase ||
+                !owned.dli_fname || std::strcmp(owned.dli_fname, selected)) goto cleanup;
             for (size_t i = 1; i < callbacks.size(); ++i) {
-                if (i == 3) {
-                    if (callbacks[i] != reinterpret_cast<uintptr_t>(dlsym(library, "NGRN_ObservedCreateContexts"))) goto cleanup;
-                    continue;
-                }
                 Dl_info info{};
                 if (!dladdr(reinterpret_cast<void *>(callbacks[i]), &info) ||
-                    !info.dli_fname || std::strcmp(info.dli_fname, path)) goto cleanup;
+                    info.dli_fbase != owned.dli_fbase || !info.dli_fname ||
+                    std::strcmp(info.dli_fname, selected)) goto cleanup;
             }
-            std::puts("ADAPTER_NATIVE_CALLBACKS_UNCHANGED_OK slots=15 scoped-observer-slot=18");
+            std::puts("ADAPTER_OWNED_CALLBACKS_PUBLISHED_OK slots=16 factory-only no-gpu");
         } else {
             if (!adapter.build(records)) goto cleanup;
             for (size_t i = 0; i < records.size(); ++i)

@@ -4794,7 +4794,7 @@ struct Entry {
             image,address,generation,selected,&readMemory,NativeDataAdmission{},&writableDataMemory,construct);
     }
     std::array<uintptr_t, 17> callbacks{};
-    std::array<uintptr_t, 17> preparedCallbacks{}; // Not selected until final publication audit.
+    std::array<uintptr_t, 17> preparedCallbacks{}; // Published only after all entries qualify.
     void *native = nullptr;
 };
 class NativeFactorySource {
@@ -6465,7 +6465,6 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
         // Establish the process-qualified immutable image before publishing
         // any owned factory table. No Entry pointer or factory-table lifetime
         // is captured by the physical backend; conflicting images fail closed.
-        // This does not yet enable the prepared lifecycle callback bundle.
         if(!NativePhysicalBackend::bind(entry->physical)) {
             library.destroy(table);
             return 10;
@@ -6478,20 +6477,22 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
             library.destroy(table);
             return 10;
         }
-        nativeCreateContexts.store(callback, std::memory_order_release);
         entry->native = table;
-        entry->callbacks[3] = reinterpret_cast<uintptr_t>(&NGRN_ObservedCreateContexts);
         native.descriptor = reinterpret_cast<uintptr_t>(entry->bridge.descriptor());
-        void *ownedTable = entry->callbacks.data();
+        // Return and registry identity must name the SAME qualified full table.
+        // callbacks remains the immutable original native table snapshot.
+        void *ownedTable = entry->preparedCallbacks.data();
         {
             std::lock_guard<std::mutex> lock(registryLock);
             if (registry.count(ownedTable)) { library.destroy(table); return 10; }
             registry.emplace(ownedTable, std::move(entry));
         }
-        // Owned table keeps all 15 other callbacks and all native contexts intact.
+        // All sixteen entries now dispatch through the prepared owned lifecycle.
+        // Native userdata and native trampoline results remain unchanged.
         *metadata = native;
         *output = ownedTable;
         std::fprintf(stderr, "NGRN_ADAPTER_FACTORY_TRANSLATED native=430 consumer=438\n");
+        std::fprintf(stderr, "NGRN_ADAPTER_FULL_FACTORY_PUBLISHED callbacks=16\n");
         return 0;
     } catch (...) {
         if (table && library.destroy) library.destroy(table);
