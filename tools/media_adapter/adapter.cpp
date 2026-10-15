@@ -4938,6 +4938,54 @@ struct NativeLateFactoryBatch {
         return NativeFactoryFrameBatch::run(physical,input,output,&request,&dispatch);
     }
 };
+struct NativeFactoryContextProperties {
+    // NOT PUBLISHED: all captured owners are pinned, but the native loop still
+    // rereads caller metadata. Per-item admission or proven caller serialization
+    // must close that race before this wrapper enters a factory table.
+    // Both operations retain every distinct codec. Configuration additionally
+    // requires the physical empty-frame mutation gate; use that gate for this
+    // initial bundle, never treat native return0 as retirement authority.
+    enum class Operation { Configure,Query };
+    static int run(void* physical,const void* input,Operation operation) noexcept {
+        if(!input || (operation!=Operation::Configure && operation!=Operation::Query))return 5;
+        TglNativePhysicalCallbackBinding native;
+        if(!NativePhysicalBackend::binding(native))return 5;
+        const auto image=native.image;
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return NativePhysicalBackend::withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.withNewRequest(ticket,address,[&](auto&) noexcept -> int {
+                TglNativeContextPropertyBatch<16> batch;
+                if(!batch.capture(reinterpret_cast<uintptr_t>(input),&readMemory))return 5;
+                using Lease=decltype(NativeCodecBackend::owners().pinExclusive(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{}));
+                std::array<Lease,16> leases;
+                std::array<uintptr_t,16> contexts{};size_t count=0;
+                for(size_t i=0;i<batch.count();++i){
+                    const auto context=batch.context(i);size_t found=0;
+                    while(found<count && contexts[found]!=context)++found;
+                    if(found<count)continue;
+                    leases[count]=NativeCodecBackend::owners().pinExclusive(image,address,ticket.generation,context);
+                    if(!leases[count].get() || !leases[count].exclusive())return 5;
+                    const auto& table=leases[count].get()->frameTable();uintptr_t vptr=0;
+                    if(table.publication()!=TglOwnedContextFrameVtable::Publication::Published || !table.addressPoint() ||
+                        !readMemory(context,&vptr,8) || vptr!=reinterpret_cast<uintptr_t>(table.addressPoint()))return 5;
+                    contexts[count++]=context;
+                }
+                const uintptr_t offset=operation==Operation::Configure?0x15c0e:0x15f1f;
+                constexpr std::array<uint8_t,17> configure{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x58};
+                constexpr std::array<uint8_t,11> query{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x54,0x53};
+                std::array<uint8_t,17> actual{};
+                const size_t size=operation==Operation::Configure?configure.size():query.size();
+                if(image>UINTPTR_MAX-offset-size || !executableMemory(image+offset,size) ||
+                    !readMemory(image+offset,actual.data(),size) ||
+                    std::memcmp(actual.data(),operation==Operation::Configure?configure.data():query.data(),size) ||
+                    !batch.stable(&readMemory))return 5;
+                const int result=TglNativeBackingAllocateInvoker{}(image+offset,address,input);
+                return batch.stable(&readMemory)?result:5;
+            });
+        });
+    }
+};
+
 struct NativeCompositeContextRemoval {
     using Scope=NativePhysicalBackend::RemovalScope;
     using Batch=NativePhysicalBackend::RemovedBatch;
