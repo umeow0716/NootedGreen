@@ -27955,6 +27955,59 @@ inline bool tglNativeOtherQueryWriteExtent(uintptr_t callbackOffset,uint32_t ope
         default:return false;
     }
 }
+// Caller must qualify exact Tahoe AppleGVA and hold its synchronous call.
+// This produces GVA-owned output lineage, NOT ownership of arbitrary heap.
+class TglNativeGvaQueryRecordOutput {
+    struct Snapshot {
+        uintptr_t object=0,vptr=0,table=0,physical=0,context=0,query=0;
+        unsigned index=0;
+        bool operator==(const Snapshot& other) const noexcept {
+            return object==other.object && vptr==other.vptr && table==other.table && physical==other.physical &&
+                context==other.context && query==other.query && index==other.index;
+        }
+    } snapshot_;
+    uintptr_t image_=0,caller_=0,output_=0,physical_=0,context_=0,query_=0;
+    bool attempted_=false,ready_=false;
+    template<class Read,class Qualify,class Admit,class OwnedQuery>
+    bool observe(Read read,Qualify qualify,Admit admit,OwnedQuery ownedQuery,Snapshot& result) const noexcept {
+        constexpr uintptr_t callerOffset=0x7ffa0c5f42b9ULL-0x7ffa0c578000ULL;
+        constexpr std::array<uint8_t,11> callAnchor{0x48,0x8b,0x43,0x10,0x48,0x8b,0x7b,0x18,0xff,0x50,0x70};
+        std::array<uint8_t,11> actual{};
+        if(!image_ || image_>UINTPTR_MAX-callerOffset || caller_!=image_+callerOffset || qualify(caller_)!=image_ ||
+            !physical_ || !context_ || !query_ || !ownedQuery(query_) || !output_ || output_>UINTPTR_MAX-0x4a ||
+            !admit(output_,0x4a) || !read(caller_-callAnchor.size(),actual.data(),actual.size()) || actual!=callAnchor)return false;
+        unsigned matches=0;
+        for(unsigned index=0;index<4;++index) {
+            const uintptr_t offset=0x1ee838+uintptr_t(index)*0x68;
+            if(output_<=offset)continue;
+            Snapshot candidate;candidate.object=output_-offset;candidate.index=index;
+            if(candidate.object>UINTPTR_MAX-0x1eea00 ||
+                !read(candidate.object,&candidate.vptr,8) || qualify(candidate.vptr)!=image_ ||
+                !read(candidate.object+0x10,&candidate.table,8) || !candidate.table || candidate.table>UINTPTR_MAX-0x78 ||
+                !read(candidate.object+0x18,&candidate.physical,8) || candidate.physical!=physical_ ||
+                !read(candidate.table+0x70,&candidate.query,8) || candidate.query!=query_ ||
+                !read(output_-0x10,&candidate.context,8) || candidate.context!=context_)continue;
+            uint8_t live=0;if(!read(output_-0x18,&live,1) || live!=1)continue;
+            result=candidate;++matches;
+        }
+        return matches==1;
+    }
+public:
+    template<class Read,class Qualify,class Admit,class OwnedQuery>
+    bool capture(uintptr_t image,uintptr_t caller,uintptr_t output,size_t bytes,uintptr_t physical,uintptr_t context,
+        uintptr_t query,Read read,Qualify qualify,Admit admit,OwnedQuery ownedQuery) noexcept {
+        if(attempted_)return false;attempted_=true;
+        if(bytes!=0x4a)return false;
+        image_=image;caller_=caller;output_=output;physical_=physical;context_=context;query_=query;
+        Snapshot after;
+        if(!observe(read,qualify,admit,ownedQuery,snapshot_) || !observe(read,qualify,admit,ownedQuery,after) || !(snapshot_==after))return false;
+        ready_=true;return true;
+    }
+    template<class Read,class Qualify,class Admit,class OwnedQuery>
+    bool unchanged(Read read,Qualify qualify,Admit admit,OwnedQuery ownedQuery) const noexcept {
+        Snapshot after;return ready_ && observe(read,qualify,admit,ownedQuery,after) && snapshot_==after;
+    }
+};
 template<size_t Capacity=16> class TglNativeContextPropertyBatch {
     static_assert(Capacity>0 && Capacity<=128);
     uintptr_t input_=0,records_=0;

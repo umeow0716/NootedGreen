@@ -18585,6 +18585,38 @@ struct ScopedCompletionFlowFixture {
         const int result=use(pool);busy=false;return result;
     }
 };
+static void testGvaQueryRecordOutput() {
+    constexpr uintptr_t image=0x70000000,object=0x10000000,table=0x20000000,physical=0x30000000,context=0x40000000,query=0x50000000;
+    constexpr uintptr_t caller=image+(0x7ffa0c5f42b9ULL-0x7ffa0c578000ULL),vptr=image+0x1000;
+    for(unsigned index=0;index<4;++index)for(unsigned scenario=0;scenario<11;++scenario) {
+        const uintptr_t output=object+0x1ee838+uintptr_t(scenario==9?4:index)*0x68;
+        uint8_t live=scenario==6?0:1;unsigned vptrReads=0;
+        auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept -> bool {
+            if(at==caller-11 && bytes==11){const uint8_t anchor[]={0x48,0x8b,0x43,0x10,0x48,0x8b,0x7b,0x18,0xff,0x50,0x70};std::memcpy(out,anchor,11);return true;}
+            if(at==output-0x18 && bytes==1){std::memcpy(out,&live,1);return true;}
+            uintptr_t value=0;
+            if(bytes!=8)return false;
+            if(at==object){++vptrReads;value=scenario==8 && vptrReads>1?vptr+8:vptr;}
+            else if(at==object+0x10)value=table;
+            else if(at==object+0x18)value=physical+(scenario==3?8:0);
+            else if(at==table+0x70)value=query+(scenario==4?8:0);
+            else if(at==output-0x10)value=context+(scenario==5?8:0);
+            else return false;
+            std::memcpy(out,&value,8);return true;
+        };
+        auto qualify=[&](uintptr_t address) noexcept -> uintptr_t {
+            return address==caller || (address==vptr && scenario!=2)?image:0;
+        };
+        auto writable=[&](uintptr_t address,size_t bytes) noexcept -> bool {return address==output && bytes==0x4a && scenario!=7;};
+        auto owned=[](uintptr_t address) noexcept -> bool {return address==query;};
+        TglNativeGvaQueryRecordOutput destination;
+        const bool captured=destination.capture(image,caller+(scenario==1?1:0),output,scenario==10?0x4c:0x4a,
+            physical,context,query,read,qualify,writable,owned);
+        assert(captured==(scenario==0));
+        if(captured){assert(destination.unchanged(read,qualify,writable,owned));live=0;assert(!destination.unchanged(read,qualify,writable,owned));}
+        assert(!destination.capture(image,caller,output,0x4a,physical,context,query,read,qualify,writable,owned));
+    }
+}
 static void testScopedCompletionFlow() {
     for(unsigned scenario=0;scenario<8;++scenario) {
         ScopedCompletionFlowFixture scope;unsigned acknowledgements=0,retirements=0;
@@ -18698,6 +18730,7 @@ static void testNativeCreatorRequestChains() {
     }
 }
 static void testActualNv12LayoutSnapshot() {
+    testGvaQueryRecordOutput();
     testScopedCompletionFlow();
     testNativeCreatorRequestChains();
     // Exact native-other query callbacks; no synthetic native result and no
