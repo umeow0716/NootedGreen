@@ -4265,6 +4265,11 @@ struct TglVeboxHardwareBinding {
     // 30710/testAllStamps30756 may return true from cached f8 without reread.
     // A fresh stamp read still needs same backing/reset/lifetime provenance;
     // native success or cached equality cannot authorize owned retirement.
+    // Native VEBox FIFO4c851 submitBatchBuffer is followed by4c8e9
+    // writeStamp4237a->commitStampCommand421f0, then4c91d submitToRing.
+    // Ring init414ed/414fa obtains GPU28/CPU30 from the SAME task288 buffer;
+    // IGAccelEventMachine::getStampOffset15da4 is channel<<6. This identifies
+    // the post-batch stamp candidate, not reset-free completion authority.
     // Further exact family reference UUID6C4A16B1-66DC-3A8B-9F0B-D3E027B16EB1:
     // reportGPURestart3d82e increments accelerator9dc at3d8ed. This is a
     // candidate restart report counter, NOT proved userspace generation ABI.
