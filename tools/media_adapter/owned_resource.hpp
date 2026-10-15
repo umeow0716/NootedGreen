@@ -24369,6 +24369,60 @@ struct TglNativeFrameOutputReceipt {
     uint32_t index=0;
     bool valid=false;
 };
+// Exact225a8 GetFenceBuffer publication,226bc index*64 consumer. This reads
+// expected events only; neither stable bytes nor native test success retires work.
+class TglNativeFenceBackingObservation {
+    uintptr_t image_=0;
+public:
+    struct Snapshot {
+        uintptr_t codec=0,wrapper=0,frameworkContext=0,mapping=0,event=0;
+        uint64_t bytes=0;uint32_t index=0,count=0;
+        std::array<uint64_t,8> expected{};
+        bool valid=false;
+    };
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t image,Read read,Qualify qualify,Executable executable) noexcept {
+        image_=0;
+        constexpr std::array<uint8_t,13> entry{0x55,0x48,0x89,0xe5,0x53,0x50,0x48,0x89,0xfb,0x48,0x8b,0x7f,0x10};
+        constexpr std::array<uint8_t,5> get{0xe8,0x28,0xbb,0x21,0x00};
+        constexpr std::array<uint8_t,11> sizeToCount{0x48,0x8b,0x43,0x38,0x48,0xc1,0xe8,0x06,0x89,0x43,0x40};
+        auto matches=[&](uintptr_t offset,const auto& expected) noexcept {
+            auto actual=expected;return executable(image+offset,actual.size()) &&
+                read(image+offset,actual.data(),actual.size()) && actual==expected;
+        };
+        if(!image || image>UINTPTR_MAX-0x226e6 || !qualify(image) ||
+            !matches(0x225a8,entry) || !matches(0x225c5,get) || !matches(0x225d2,sizeToCount))return false;
+        image_=image;return true;
+    }
+    template<class Read,class Admit>
+    bool capture(const TglNativeFrameOutputReceipt& receipt,uintptr_t wrapper,Read read,Admit admit,Snapshot& output) const noexcept {
+        // Admit must hold SAME codec/frame/wrapper/framework/mapping leases and
+        // bind their generations. Receipt.context is codec, NOT the wrapper.
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
+        if(!image_ || !receipt.valid || !receipt.context || !receipt.event || receipt.event>UINTPTR_MAX-8 ||
+            !wrapper || wrapper>UINTPTR_MAX-0x48)return false;
+        Snapshot candidate;candidate.codec=receipt.context;candidate.wrapper=wrapper;
+        candidate.event=receipt.event;candidate.index=receipt.index;
+        auto metadata=[&](Snapshot& value) noexcept {
+            uint32_t index=0;
+            return read(wrapper+0x10,&value.frameworkContext,8) && value.frameworkContext &&
+                read(wrapper+0x20,&value.mapping,8) && value.mapping &&
+                read(wrapper+0x38,&value.bytes,8) && value.bytes && !(value.bytes&63) &&
+                value.bytes/64<=UINT32_MAX && value.mapping<=UINTPTR_MAX-value.bytes &&
+                read(wrapper+0x40,&value.count,4) && value.count==value.bytes/64 && value.index<value.count &&
+                read(receipt.event+4,&index,4) && index==value.index;
+        };
+        if(!metadata(candidate) || !admit(candidate.codec,wrapper,candidate.frameworkContext,candidate.mapping,candidate.bytes,candidate.index))return false;
+        const auto address=candidate.mapping+size_t(candidate.index)*64;
+        std::array<uint64_t,8> again{};
+        if(!read(address,candidate.expected.data(),64) || !read(address,again.data(),64) || candidate.expected!=again)return false;
+        Snapshot after;after.index=candidate.index;
+        if(!metadata(after) || after.frameworkContext!=candidate.frameworkContext || after.mapping!=candidate.mapping ||
+            after.bytes!=candidate.bytes || after.count!=candidate.count ||
+            !admit(candidate.codec,wrapper,candidate.frameworkContext,candidate.mapping,candidate.bytes,candidate.index))return false;
+        candidate.valid=true;output=candidate;return true;
+    }
+};
 // Exact slot12=15b01: batch count0/list8, 24-byte items with event0,
 // type8/wait12/status16. Status1 is only a native report, NOT completion:
 // wait/test may bypass on reset/termination. Caller holds the SAME retained

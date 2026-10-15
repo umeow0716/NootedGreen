@@ -17641,6 +17641,46 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        constexpr uintptr_t image=0x100000,wrapper=0x2000,event=0x3000;
+        uintptr_t framework=0x4000,mapping=0x5000;uint64_t bytes=128;uint32_t count=2,index=1;
+        std::array<uint64_t,8> expected{};expected[0]=(uint64_t{42}<<32)|3;
+        bool codeGood=true,drift=false;unsigned eventReads=0;
+        auto read=[&](uintptr_t address,void* output,size_t size) noexcept {
+            const std::array<uint8_t,13> entry{0x55,0x48,0x89,0xe5,0x53,0x50,0x48,0x89,0xfb,0x48,0x8b,0x7f,0x10};
+            const std::array<uint8_t,5> get{0xe8,0x28,0xbb,0x21,0};
+            const std::array<uint8_t,11> shift{0x48,0x8b,0x43,0x38,0x48,0xc1,0xe8,0x06,0x89,0x43,0x40};
+            if(address==image+0x225a8 && size==entry.size()){std::memcpy(output,entry.data(),size);return codeGood;}
+            if(address==image+0x225c5 && size==get.size()){std::memcpy(output,get.data(),size);return codeGood;}
+            if(address==image+0x225d2 && size==shift.size()){std::memcpy(output,shift.data(),size);return codeGood;}
+            if(address==wrapper+0x10 && size==8){std::memcpy(output,&framework,8);return true;}
+            if(address==wrapper+0x20 && size==8){std::memcpy(output,&mapping,8);return true;}
+            if(address==wrapper+0x38 && size==8){std::memcpy(output,&bytes,8);return true;}
+            if(address==wrapper+0x40 && size==4){std::memcpy(output,&count,4);return true;}
+            if(address==event+4 && size==4){std::memcpy(output,&index,4);return true;}
+            if(address==0x5040 && size==64){auto value=expected;if(drift && ++eventReads>1)++value[0];
+                std::memcpy(output,value.data(),64);return true;}
+            return false;
+        };
+        auto admit=[](uintptr_t codec,uintptr_t object,uintptr_t context,uintptr_t base,uint64_t size,uint32_t slot) noexcept {
+            return codec==0x6000 && object==wrapper && context==0x4000 && base==0x5000 && size==128 && slot==1;
+        };
+        TglNativeFenceBackingObservation binding;
+        assert(binding.resolve(image,read,[](uintptr_t base) noexcept{return base==image;},[](uintptr_t,size_t) noexcept{return true;}));
+        TglNativeFrameOutputReceipt receipt{0x6000,event,1,true};
+        TglNativeFenceBackingObservation::Snapshot snapshot;
+        assert(binding.capture(receipt,wrapper,read,admit,snapshot) && snapshot.valid && snapshot.expected==expected);
+        auto preserved=snapshot;drift=true;eventReads=0;
+        assert(!binding.capture(receipt,wrapper,read,admit,snapshot) && snapshot.expected==preserved.expected);drift=false;
+        index=0;assert(!binding.capture(receipt,wrapper,read,admit,snapshot));index=1;
+        count=1;assert(!binding.capture(receipt,wrapper,read,admit,snapshot));count=2;
+        bytes=127;assert(!binding.capture(receipt,wrapper,read,admit,snapshot));bytes=128;
+        mapping=UINTPTR_MAX-64;assert(!binding.capture(receipt,wrapper,read,admit,snapshot));mapping=0x5000;
+        using Missing=bool(*)(uintptr_t,uintptr_t,uintptr_t,uintptr_t,uint64_t,uint32_t) noexcept;
+        assert(!binding.capture(receipt,wrapper,read,Missing{},snapshot));
+        codeGood=false;assert(!binding.resolve(image,read,[](uintptr_t) noexcept{return true;},[](uintptr_t,size_t) noexcept{return true;}));
+        assert(!binding.capture(receipt,wrapper,read,admit,snapshot));
+    }
+    {
         uint32_t count=2;uintptr_t records=0x2000;
         std::array<uintptr_t,2> contexts{0x3000,0x3000}; // Repeated properties on one codec are legal.
         bool unreadable=false,drift=false;unsigned headerReads=0;
