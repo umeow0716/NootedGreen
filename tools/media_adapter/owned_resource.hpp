@@ -4276,8 +4276,12 @@ struct TglVeboxHardwareBinding {
     // diagnostic until the remaining coverage/lifetime proof is complete.
     // start3a752 is a DIFFERENT lifecycle boundary:3a7de clears EAX and
     //3a7fc stores that zero qword at accelerator9d8,including restart9dc.
-    // Thus restartReports is not monotonic across service start. Excluding
-    // enable/disable resets does not establish stable start/context identity;
+    // Thus restartReports is not monotonic across service start.
+    // Public xnu12377.121.6 matching allocates/probes a fresh candidate and
+    // removes it from startList before startCandidate; exact TGL238e2 probe
+    // returns this/null(238f9->23946/23943). This narrows NORMAL matching
+    // restart, not all private start callers or reset/loss coverage.
+    // Excluding enable/disable resets does not establish stable start/context identity;
     // a same-valued raw reply cannot alone authorize backing rearm.
     // Context loss has separate destructive reporting: exact family ae6e
     // affectedByHardwareReset(bool,reason) conditionally sets63b|20,644 and
