@@ -7030,7 +7030,7 @@ TglNativeSharedConnectionResult tglWithNativeSharedConnectionSnapshot(
         }
     };
     const auto capture=[&](Snapshot& value) {
-        if(!read(os,&value.database,8) || !read(os+8,&value.index,4) || !value.database) return false;
+        if(!read(os,&value.database,8) || !read(os+8,&value.index,4) || value.index>=16 || !value.database) return false;
         const uint64_t offset=8+uint64_t(value.index)*0x15c0;
         if(offset>UINTPTR_MAX-8 || value.database>UINTPTR_MAX-8-offset ||
            !read(value.database+uintptr_t(offset),&value.wrapper,8) ||
@@ -19160,6 +19160,7 @@ public:
         auto capture=[&]() noexcept {
             uintptr_t database=0,actualWrapper=0,actualNative=0,entry=0;uint32_t index=0;
             if(!read(os_,&database,8) || !database || !read(os_+8,&index,4) ||
+                index>=16 ||
                 !read(os_+0x2d0,&entry,8) || entry!=entry_)return false;
             const uint64_t offset=8+uint64_t{index}*0x15c0;
             return offset<=UINTPTR_MAX-8 && database<=UINTPTR_MAX-8-offset &&
@@ -19189,7 +19190,7 @@ public:
         };
         auto capture=[&](Snapshot& value) noexcept {
             if(!os_ || os_>UINTPTR_MAX-12 || !read(os_,&value.database,8) || !value.database ||
-                !read(os_+8,&value.index,4))return false;
+                !read(os_+8,&value.index,4) || value.index>=16)return false;
             const uint64_t offset=8+uint64_t{value.index}*0x15c0;
             if(offset>UINTPTR_MAX-8 || value.database>UINTPTR_MAX-8-offset)return false;
             value.record=value.database+uintptr_t(offset);
