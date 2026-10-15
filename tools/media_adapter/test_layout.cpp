@@ -15339,8 +15339,18 @@ static void testRetainedVeboxFrames() {
             constexpr uintptr_t physical=0x30000,os=0x40000,wrapper=0x50000;
             uintptr_t actualParent=physical;
             bool nativeRemoved=false;
+            bool allocationProof=true;
             auto ownerRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
                 assert(!nativeRemoved); // No native-object read after successful removal.
+                if(address==base+0x14916 && bytes==5) {
+                    constexpr uint8_t anchor[]={0xbf,0x70,0x13,0,0};std::memcpy(out,anchor,5);return allocationProof;
+                }
+                if(address==base+0x1492b && bytes==5) {
+                    constexpr uint8_t anchor[]={0xe8,0xb0,0xec,0x21,0};std::memcpy(out,anchor,5);return allocationProof;
+                }
+                if(address==base+0x23350c && bytes==7) {
+                    constexpr uint8_t anchor[]={0x48,0x8d,0x05,0x05,0x9b,0x52,0};std::memcpy(out,anchor,7);return allocationProof;
+                }
                 if(address==0x66000 && bytes==8) {const uintptr_t event=0x77000;std::memcpy(out,&event,8);return true;}
                 if(address==0x77004 && bytes==4) {const uint32_t index=9;std::memcpy(out,&index,4);return true;}
                 if(bytes==8) {
@@ -15396,6 +15406,12 @@ static void testRetainedVeboxFrames() {
                 actualParent+=8;assert(!owner->publishFrame(exclusive,hook,scope,ownedExecutable) && !vptrWrites);
                 actualParent-=8;assert(owner->publishFrame(exclusive,hook,scope,ownedExecutable));
                 assert(owner->frameTable().nativeFrame()==entry && owner->frameTable().requiresRetention());
+                assert(!owner->excludesPublishedContextWritableSpan(exclusive,context,0x4a));
+                assert(!owner->excludesPublishedContextWritableSpan(exclusive,context+0x136f,2));
+                assert(!owner->excludesPublishedContextWritableSpan(exclusive,reinterpret_cast<uintptr_t>(owner),1));
+                assert(owner->excludesPublishedContextWritableSpan(exclusive,context+0x1370,1));
+                allocationProof=false;assert(!owner->excludesPublishedContextWritableSpan(exclusive,0x60000,1));allocationProof=true;
+                assert(!owner->excludesPublishedContextWritableSpan(exclusive,UINTPTR_MAX,1));
                 assert(!owner->confirmNativeRemoval([](auto...) noexcept {assert(false);return true;}));
             }
             TglNativeRemovedContextBatch<1> removed;removed.valid=true;removed.count=1;removed.contexts[0]=context;

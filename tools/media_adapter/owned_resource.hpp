@@ -26172,6 +26172,32 @@ public:
         if(state_ && state_->removed && !state_->table.requiresRetention())delete state_;
     }
     uintptr_t context() const noexcept {return state_?state_->context:0;}
+    template<class OwnerLease>
+    bool excludesPublishedContextWritableSpan(const OwnerLease& lease,uintptr_t address,size_t bytes) noexcept {
+        if(!state_ || lease.get()!=this || !lease.exclusive() || !address || !bytes ||
+            address>UINTPTR_MAX-bytes || !enter())return false;
+        Unlock unlock{state_->busy};
+        if(state_->removed || !state_->retainedIdentity() || !state_->nativeParentMatches() ||
+            !state_->qualify(state_->image) || state_->image>UINTPTR_MAX-0x233513 ||
+            state_->table.publication()!=TglOwnedContextFrameVtable::Publication::Published)return false;
+        uintptr_t vptr=0;
+        if(!state_->read(state_->context,&vptr,8) || vptr!=reinterpret_cast<uintptr_t>(state_->table.addressPoint()))return false;
+        constexpr std::array<uint8_t,5> sizeAnchor{0xbf,0x70,0x13,0,0},ctorCall{0xe8,0xb0,0xec,0x21,0};
+        constexpr std::array<uint8_t,7> ctorVptr{0x48,0x8d,0x05,0x05,0x9b,0x52,0};
+        auto matches=[&](uintptr_t offset,const auto& expected) noexcept {
+            auto actual=expected;
+            return state_->executable(state_->image+offset,actual.size()) &&
+                state_->read(state_->image+offset,actual.data(),actual.size()) && actual==expected;
+        };
+        if(!matches(0x14916,sizeAnchor) || !matches(0x1492b,ctorCall) || !matches(0x23350c,ctorVptr))return false;
+        const auto excludes=[&](uintptr_t base,size_t extent) noexcept {
+            return base && base<=UINTPTR_MAX-extent && (address>=base+extent || base>=address+bytes);
+        };
+        // Exact native VP class root plus both owned C++ allocations/private table.
+        // Nested native context shells/creator/OS allocations remain separate.
+        return excludes(state_->context,0x1370) && excludes(reinterpret_cast<uintptr_t>(this),sizeof(*this)) &&
+            excludes(reinterpret_cast<uintptr_t>(state_),sizeof(*state_));
+    }
     const TglOwnedContextFrameVtable& frameTable() const noexcept {return state_->table;}
     bool nativeRemovalConfirmed() const noexcept {
         return state_ && state_->removed && !state_->table.requiresRetention();
