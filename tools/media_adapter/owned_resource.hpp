@@ -25342,6 +25342,7 @@ public:
         int requestPassFailure_=0;
         bool requestPassExecuted_=false;
         bool creatingPass_=false,requestOutputBound_=false;
+        TglNativeFrameOutputReceipt requestReceipt_{};
         Frame* activeRequestFrame_=nullptr;
         explicit Scope(Entry& entry) noexcept
             :frames_(entry.frames),physical_(entry.physical),entry_(entry) {}
@@ -25379,6 +25380,7 @@ public:
                 struct Reset {Scope& scope;~Reset(){
                     scope.context_=0;scope.requestFrame_={};scope.requestFrames_={};
                     scope.requestFrameCount_=0;scope.requestOutputBound_=false;
+                    scope.requestReceipt_={};
                     scope.requestPassResult_={};scope.requestPassFailure_=0;
                     scope.requestPassExecuted_=false;
                 }} reset{*this};
@@ -25449,7 +25451,20 @@ public:
             if(requestFrameCount_==1)bound=frames_.bindOutputReceipt(requestFrames_[0],receipt);
             if constexpr(Pool::frameCapacity==2)
                 if(requestFrameCount_==2)bound=frames_.bindOutputReceipts(requestFrames_,receipt);
-            requestOutputBound_=bound;return bound;
+            requestOutputBound_=bound;
+            if(bound)requestReceipt_=receipt;
+            return bound;
+        }
+        template<class Use> int withPublishedRequestFrames(const TglNativeFrameOutputReceipt& receipt,Use use) noexcept {
+            // Exact current-request coverage AFTER successful output binding.
+            // A request with native entry but no lower frame cannot enter.
+            // No saved tickets/empty pool can manufacture this synchronous scope.
+            if(!matchesActiveContextRequest(receipt.context) || creatingPass_ || activeRequestFrame_ ||
+                !requestOutputBound_ || !requestFrameCount_ || !requestPassExecuted_ || requestPassFailure_ ||
+                requestPassResult_.status || !receipt.valid || !requestReceipt_.valid ||
+                receipt.context!=requestReceipt_.context || receipt.event!=requestReceipt_.event ||
+                receipt.index!=requestReceipt_.index)return 5;
+            return frames_.withExactRetainedFrameGroup(requestFrames_,requestFrameCount_,use);
         }
     };
 private:

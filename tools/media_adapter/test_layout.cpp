@@ -17317,8 +17317,22 @@ static void testRetainedVeboxFrames() {
                 }).writtenBack);
                 assert(continuationFrame && !active.matchesContinuationFrame(0x20000,continuationFrame));
                 assert(!active.createNextContextPassFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
+                auto never=[](auto&&...) noexcept -> int {assert(false);return 0;};
+                assert(active.withPublishedRequestFrames({0x20000,0x62000,7,true},never)==5);
                 assert(active.bindContextRootFrameOutput({0x20000,0x62000,7,true}));
                 assert(!active.bindContextRootFrameOutput({0x20000,0x62008,8,true}));
+                assert(active.withPublishedRequestFrames({0x20000,0x62008,7,true},never)==5);
+                assert(active.withPublishedRequestFrames({0x20000,0x62000,8,true},never)==5);
+                assert(active.withPublishedRequestFrames({0x20000,0x62000,7,false},never)==5);
+                unsigned covered=0;
+                assert(active.withPublishedRequestFrames({0x20000,0x62000,7,true},
+                    [&](size_t count,const auto& frames,const auto& tickets) noexcept -> int {
+                        ++covered;assert(count==2 && frames[0] && frames[1] && frames[0]!=frames[1]);
+                        assert(tickets[0].generation==synchronousRootFrame.generation &&
+                            tickets[1].generation==nextPassFrame.generation);
+                        assert(active.withPublishedRequestFrames({0x20000,0x62000,7,true},never)==5);
+                        return 31; // Forward consumer result, no completion/clear authority.
+                    })==31 && covered==1);
                 return 0;
             });
         })==0);
