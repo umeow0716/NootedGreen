@@ -167,7 +167,13 @@ int main() {
         assert(evidence.observationSerial==99);
         assert(tracker.completionEvidence(token,7,4,false,evidence));
         assert(evidence.observationSerial==token && evidence.stamp==7 && evidence.head==4);
+        const auto rejected=tracker.begin(1,9,16,12,true);
+        assert(rejected!=token && tracker.finish(rejected,1,false));
+        assert(tracker.gpuComplete(7,4,false)); // Old idle policy deliberately unchanged.
+        assert(!tracker.completionEvidence(rejected,7,4,false,evidence));
+        assert(!tracker.completionEvidence(token,7,4,false,evidence));
         assert(tracker.resetForReuse());
+        assert(!tracker.coveredSerial);
         assert(!tracker.completionEvidence(token,7,4,false,evidence));
         assert(!unmarked.completionEvidence(unmarkedToken,7,4,false,evidence));
     }

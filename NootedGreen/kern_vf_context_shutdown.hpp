@@ -109,6 +109,7 @@ struct Tracker {
 	// initial state; slot reuse goes through resetForReuse() without resetting
 	// the monotonic serial.
 	uint64_t serial;
+	uint64_t coveredSerial; // Observation metadata; never used by idle/submit policy.
 	uint64_t owner;
 	uint32_t stamp;
 	uint32_t tail;
@@ -158,6 +159,7 @@ struct Tracker {
 		coveredStamp = value;
 		coveredTail = byteTail;
 		coveredHead = reportHead;
+		coveredSerial = serial;
 		return true;
 	}
 
@@ -199,7 +201,7 @@ struct Tracker {
 	bool completionEvidence(uint64_t expectedSerial, uint32_t observedStamp,
 	                        uint32_t observedHead, bool softwareCompletionPossible,
 	                        CompletionEvidence &output) const {
-		if (!expectedSerial || serial != expectedSerial || !submitted ||
+		if (!expectedSerial || serial != expectedSerial || coveredSerial != expectedSerial || !submitted ||
 		    !gpuComplete(observedStamp, observedHead, softwareCompletionPossible))
 			return false;
 		output = {serial, coveredStamp, coveredHead};
@@ -216,6 +218,7 @@ struct Tracker {
 		stamp = tail = reportHead = coveredStamp = coveredTail = coveredHead = 0;
 		claimed = published = carriesStamp = tainted = false;
 		submitted = false;
+		coveredSerial = 0;
 		return true;
 	}
 };
