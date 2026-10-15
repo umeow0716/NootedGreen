@@ -16175,6 +16175,42 @@ static void testRetainedVeboxFrames() {
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         {
+            alignas(8) std::array<uint8_t,0x128> contextBytes{};
+            alignas(8) std::array<uint8_t,0x68> physicalBytes{};
+            alignas(8) std::array<uint8_t,0x48> wrapperBytes{};
+            std::array<std::array<uint32_t,2>,32> events{};
+            const auto context=reinterpret_cast<uintptr_t>(contextBytes.data());
+            const auto physical=reinterpret_cast<uintptr_t>(physicalBytes.data());
+            const auto wrapper=reinterpret_cast<uintptr_t>(wrapperBytes.data());
+            const auto event=reinterpret_cast<uintptr_t>(events[16].data());
+            auto put=[&](auto& bytes,size_t offset,auto value) {std::memcpy(bytes.data()+offset,&value,sizeof(value));};
+            put(contextBytes,8,physical);put(contextBytes,0x10,wrapper);put(physicalBytes,0x58,wrapper);
+            put(wrapperBytes,0x40,uint32_t{8});events[16][1]=3;
+            for(size_t i=0;i<32;++i)put(contextBytes,0x20+i*8,reinterpret_cast<uintptr_t>(events[i].data()));
+            auto admit=[&](uintptr_t p,size_t n) noexcept {
+                auto inside=[&](uintptr_t start,size_t length) {return p>=start && p-start<=length && n<=length-(p-start);};
+                return inside(context,contextBytes.size()) || inside(physical,physicalBytes.size()) ||
+                    inside(wrapper,wrapperBytes.size()) || inside(reinterpret_cast<uintptr_t>(events.data()),sizeof(events));
+            };
+            auto rd=[&](uintptr_t p,void* out,size_t n) noexcept {
+                if(!admit(p,n))return false;std::memcpy(out,reinterpret_cast<void*>(p),n);return true;
+            };
+            TglNativeFrameOutputReceipt receipt{context,event,3,true};
+            TglNativeOtherContextEventLineage lineage;
+            assert(lineage.capture(physical,receipt,rd,admit) && lineage.wrapper==wrapper);
+            TglNativeFenceBackingObservation::Snapshot fence;
+            fence.valid=true;fence.codec=context;fence.wrapper=wrapper;fence.event=event;fence.index=3;fence.count=8;
+            assert(lineage.matchesFence(fence,rd,admit));
+            ++fence.index;assert(!lineage.matchesFence(fence,rd,admit));--fence.index;
+            events[16][1]=4;assert(!lineage.capture(physical,receipt,rd,admit) && !lineage.valid);events[16][1]=3;
+            put(contextBytes,0x20,event);assert(!lineage.capture(physical,receipt,rd,admit));
+            put(contextBytes,0x20,reinterpret_cast<uintptr_t>(events[0].data()));
+            put(wrapperBytes,0x40,uint32_t{3});assert(!lineage.capture(physical,receipt,rd,admit));put(wrapperBytes,0x40,uint32_t{8});
+            put(contextBytes,8,physical+8);assert(!lineage.capture(physical,receipt,rd,admit));put(contextBytes,8,physical);
+            put(physicalBytes,0x58,uintptr_t{0});assert(!lineage.capture(physical,receipt,rd,admit));put(physicalBytes,0x58,wrapper);
+            assert(lineage.capture(physical,receipt,rd,admit));
+        }
+        {
             for(const auto& schema:TglNativeOtherContextFrameBinding::schemas) {
                 uintptr_t actualTable=image+schema.table,parentPhysical=0x9000;int corrupt=-1;bool rx=true,identity=true;
                 auto readFamily=[&](uintptr_t p,void* out,size_t n) noexcept {

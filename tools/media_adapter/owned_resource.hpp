@@ -24991,6 +24991,55 @@ public:
 // bypasses device44 cached values and NEVER writes them. A snapshot is NOT
 // retirement authority: admission must hold backing leases; reset/termination
 // exclusion (including CPU-synthesized stamps) remains a separate obligation.
+// Native-other base21756 owns32 eight-byte output-event records.219de
+// selects one;2190a/227e0 and the encoder frame entries publish its fence
+// index at+4. This proves OUTPUT LINEAGE only, not completion or retirement.
+struct TglNativeOtherContextEventLineage {
+    uintptr_t context=0,physical=0,wrapper=0,event=0;
+    uint32_t index=0,count=0;bool valid=false;
+    template<class Read,class Admit>
+    bool capture(uintptr_t parent,const TglNativeFrameOutputReceipt& receipt,Read read,Admit admit) noexcept {
+        *this={};
+        if(!parent || parent>UINTPTR_MAX-0x68 || !receipt.valid || !receipt.context ||
+           receipt.context>UINTPTR_MAX-0x128 || !receipt.event || receipt.event>UINTPTR_MAX-8 ||
+           !admit(parent,0x68) || !admit(receipt.context,0x128) || !admit(receipt.event,8))return false;
+        TglNativeOtherContextEventLineage candidate;
+        candidate.context=receipt.context;candidate.physical=parent;candidate.event=receipt.event;candidate.index=receipt.index;
+        auto captureIdentity=[&](uintptr_t& wrapper,uint32_t& count) noexcept {
+            uintptr_t physicalNow=0;
+            if(!read(receipt.context+8,&physicalNow,8) || physicalNow!=parent ||
+               !read(receipt.context+0x10,&wrapper,8) || !wrapper || wrapper>UINTPTR_MAX-0x48 || !admit(wrapper,0x48))return false;
+            bool matchingDevice=false;
+            for(size_t offset:{size_t{0x50},size_t{0x58},size_t{0x60}}) {
+                uintptr_t device=0;if(!read(parent+offset,&device,8))return false;
+                matchingDevice=matchingDevice || device==wrapper;
+            }
+            if(!matchingDevice || !read(wrapper+0x40,&count,4) || !count || receipt.index>=count)return false;
+            unsigned matches=0;
+            for(size_t i=0;i<32;++i) {
+                uintptr_t output=0;if(!read(receipt.context+0x20+i*8,&output,8))return false;
+                matches+=output==receipt.event;
+            }
+            uint32_t currentIndex=0;
+            return matches==1 && read(receipt.event+4,&currentIndex,4) && currentIndex==receipt.index;
+        };
+        uintptr_t afterWrapper=0;uint32_t afterCount=0;
+        if(!captureIdentity(candidate.wrapper,candidate.count) || !captureIdentity(afterWrapper,afterCount) ||
+           afterWrapper!=candidate.wrapper || afterCount!=candidate.count)return false;
+        candidate.valid=true;*this=candidate;return true;
+    }
+    // Compose with the EXISTING exact native fence-buffer reader. Caller must
+    // still hold context/physical generation and all backing lifetime pins.
+    template<class Read,class Admit>
+    bool matchesFence(const TglNativeFenceBackingObservation::Snapshot& fence,Read read,Admit admit) const noexcept {
+        if(!valid || !fence.valid || fence.codec!=context || fence.wrapper!=wrapper || fence.event!=event ||
+           fence.index!=index || fence.count!=count)return false;
+        TglNativeOtherContextEventLineage current;
+        return current.capture(physical,{context,event,index,true},read,admit) &&
+            current.wrapper==wrapper && current.count==count;
+    }
+};
+
 class TglNativeFreshStampObservation {
     uintptr_t callback_=0;
 public:
