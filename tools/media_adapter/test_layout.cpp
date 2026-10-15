@@ -15753,9 +15753,11 @@ static void testRetainedVeboxFrames() {
         {
             std::array<uintptr_t,17> table{};
             table[1]=image+0x135d9;table[2]=image+0x13c8c;table[3]=image+0x13e43;
+            table[9]=image+0x155d1;table[10]=image+0x1580c;
+            table[15]=image+0x15f96;table[16]=image+0x161c3;
             const auto saved=table;
             assert(binding.matchesFactoryTable(table) && table==saved);
-            for(unsigned slot:{1U,2U,3U}) {
+            for(unsigned slot:{1U,2U,3U,9U,10U,15U,16U}) {
                 ++table[slot];assert(!binding.matchesFactoryTable(table));--table[slot];
             }
             assert(!TglNativePhysicalCallbackBinding{}.matchesFactoryTable(table));

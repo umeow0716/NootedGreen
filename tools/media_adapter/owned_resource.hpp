@@ -25864,8 +25864,10 @@ struct TglNativePhysicalCallbackBinding {
             cpu.allocate==image+0x437e0 && cpu.release==image+0x436d0;
     }
     bool matchesFactoryTable(const std::array<uintptr_t,17>& table) const noexcept {
-        return image && image<=UINTPTR_MAX-0x13e43 && initialize && destroy &&
-            table[1]==initialize && table[2]==destroy && table[3]==image+0x13e43;
+        return image && image<=UINTPTR_MAX-0x161c3 && initialize && destroy &&
+            table[1]==initialize && table[2]==destroy && table[3]==image+0x13e43 &&
+            table[9]==image+0x155d1 && table[10]==image+0x1580c &&
+            table[15]==image+0x15f96 && table[16]==image+0x161c3;
     }
     template<class Read,class Qualify,class Executable>
     bool resolve(uintptr_t base,Read read,Qualify qualify,Executable executable) noexcept {

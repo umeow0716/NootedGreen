@@ -4139,6 +4139,40 @@ struct NativePhysicalBackend {
         NativePhysicalCallbacks callbacks(registry(),native,&readMemory,NativeTglImageAdmission{native.image},&executableMemory);
         return callbacks.destroy(physical);
     }
+    template<class Use> static int withCoordinator(uintptr_t physical,Use use) noexcept {
+        TglNativePhysicalCallbackBinding native;
+        if(!physical || !binding(native))return 5;
+        const auto ticket=registry().lookup(native.image,physical);
+        if(!ticket.generation)return 5;
+        NativePhysicalCallbacks callbacks(registry(),native,&readMemory,NativeTglImageAdmission{native.image},&executableMemory);
+        static_assert(noexcept(use(callbacks,ticket)) && std::is_same_v<decltype(use(callbacks,ticket)),int>);
+        // Coordinator owns the mutation gate. Do not nest withFrameScope here.
+        return use(callbacks,ticket);
+    }
+    static int allocateBacking(void* physical,const void* input) noexcept {
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.allocateBacking(ticket,address,input);
+        });
+    }
+    static int releaseBacking(void* physical,uint32_t type) noexcept {
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.releaseBacking(ticket,address,type);
+        });
+    }
+    static int setProperties(void* physical,const void* input) noexcept {
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.physicalProperties(ticket,address,input,NativePhysicalCallbacks::PropertyOperation::Set);
+        });
+    }
+    static int queryProperties(void* physical,const void* input) noexcept {
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.physicalProperties(ticket,address,input,NativePhysicalCallbacks::PropertyOperation::Query);
+        });
+    }
     template<class Use> static int withScope(uintptr_t physical,Use use) noexcept {
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         TglNativePhysicalCallbackBinding native;
