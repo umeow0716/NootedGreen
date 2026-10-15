@@ -4699,7 +4699,9 @@ struct NativePhysicalBackend {
         if(admission)*admission="physical-input-binding";
         if(!physical || !input || !binding(native))return 5;
         if(admission)*admission="physical-generation";
-        const auto ticket=registry().lookup(native.image,physical);
+        const char* lookupReason="unknown";
+        const auto ticket=registry().lookup(native.image,physical,&lookupReason);
+        os_log_info(OS_LOG_DEFAULT,"NGRN_PHYSICAL_CONTEXT_LOOKUP reason=%{public}s",lookupReason);
         if(!ticket.generation)return 5;
         NativePhysicalCallbacks callbacks(registry(),native,&readMemory,NativeTglImageAdmission{native.image},&executableMemory);
         if(admission)*admission="physical-anchor-or-adoption";
@@ -6105,6 +6107,15 @@ template NativeCreatorScopedInvocation::BatchResult NativeCreatorScopedInvocatio
     NativeCreatorScopedInvocation::AdmitFn>(const Entry&,uintptr_t,uintptr_t,const void*,
     NativeCreatorScopedInvocation::AdmitFn&,NativeRendererConstructionSelection) noexcept;
 struct NativeFactoryLifecycle {
+    template<class Invoke> static int observe(unsigned slot,Invoke invoke) noexcept {
+        static_assert(noexcept(invoke()) && std::is_same_v<decltype(invoke()),int>);
+        static std::atomic<unsigned> observations{0};
+        const unsigned ticket=observations.fetch_add(1,std::memory_order_relaxed);
+        if(ticket<32)os_log_info(OS_LOG_DEFAULT,"NGRN_FACTORY_LIFECYCLE slot=%{public}u ticket=%{public}u enter",slot,ticket);
+        const int result=invoke();
+        if(ticket<32)os_log_info(OS_LOG_DEFAULT,"NGRN_FACTORY_LIFECYCLE slot=%{public}u ticket=%{public}u result=%{public}d",slot,ticket,result);
+        return result;
+    }
     static uint64_t describeFormats(void* physical,void* descriptor) noexcept {
         const auto* source=NativeFactorySource::process().get();if(!source || !descriptor)return 1;
         TglNativePhysicalCallbackBinding native;
@@ -6179,11 +6190,11 @@ struct NativeFactoryLifecycle {
             physical,input,NativeFactoryContextProperties::Operation::Query,caller):5;
     }
     static int setPhysicalProperties(void* physical,const void* input) noexcept {
-        return NativeFactorySource::process().get()?NativePhysicalBackend::setProperties(physical,input):5;
+        return observe(15,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::setProperties(physical,input):5;});
     }
     static int queryPhysicalProperties(void* physical,const void* input) noexcept {
         // Native161c3 may lazily initialize physical state; preserve coordinator mutation admission.
-        return NativeFactorySource::process().get()?NativePhysicalBackend::queryProperties(physical,input):5;
+        return observe(16,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::queryProperties(physical,input):5;});
     }
     static int frame(void* physical,const void* input,void* output) noexcept {
         if(!NativeFactorySource::process().get())return 5;
@@ -6199,26 +6210,25 @@ struct NativeFactoryLifecycle {
         return native?native:NativeOtherFrameBackend::poll(physical);
     }
     static int removeContexts(void* physical,const void* input) noexcept {
-        return NativeFactorySource::process().get()?NativeCompositeContextRemoval::run(physical,input):5;
+        return observe(4,[&]() noexcept {return NativeFactorySource::process().get()?NativeCompositeContextRemoval::run(physical,input):5;});
     }
     static int allocateBacking(void* physical,const void* input) noexcept {
-        return NativeFactorySource::process().get()?NativePhysicalBackend::allocateBacking(physical,input):5;
+        return observe(6,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::allocateBacking(physical,input):5;});
     }
     static int releaseBacking(void* physical,uint32_t type) noexcept {
-        return NativeFactorySource::process().get()?NativePhysicalBackend::releaseBacking(physical,type):5;
+        return observe(7,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::releaseBacking(physical,type):5;});
     }
     static int allocatePool(void* physical,const void* input) noexcept {
-        return NativeFactorySource::process().get()?NativePhysicalBackend::allocatePool(physical,input):5;
+        return observe(9,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::allocatePool(physical,input):5;});
     }
     static int releasePool(void* physical,uint32_t type) noexcept {
-        return NativeFactorySource::process().get()?NativePhysicalBackend::releasePool(physical,type):5;
+        return observe(10,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::releasePool(physical,type):5;});
     }
     static int initialize(void** output,const void* input) noexcept {
-        if(!NativeFactorySource::process().get())return 5;
-        return NativePhysicalBackend::initialize(output,input).status;
+        return observe(1,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::initialize(output,input).status:5;});
     }
     static int destroy(void* physical) noexcept {
-        return NativeFactorySource::process().get()?NativePhysicalBackend::destroy(reinterpret_cast<uintptr_t>(physical)):5;
+        return observe(2,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::destroy(reinterpret_cast<uintptr_t>(physical)):5;});
     }
     static int createContexts(void* physical,const void* input) noexcept {
         const auto* source=NativeFactorySource::process().get();if(!source)return 5;

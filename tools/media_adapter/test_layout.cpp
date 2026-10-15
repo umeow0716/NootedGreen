@@ -16055,6 +16055,17 @@ static void testRetainedVeboxFrames() {
         assert(registry.publish(physicalTicket,image,physical));
         assert(registry.lookup(image,physical).generation==physicalTicket.generation);
         assert(!registry.lookup(image+1,physical).generation);
+        const char* lookupReason=nullptr;
+        assert(registry.lookup(image,physical,&lookupReason).generation==physicalTicket.generation &&
+            std::strcmp(lookupReason,"live")==0);
+        assert(!registry.lookup(image+1,physical,&lookupReason).generation &&
+            std::strcmp(lookupReason,"identity-missing")==0);
+        assert(!registry.lookup(0,physical,&lookupReason).generation &&
+            std::strcmp(lookupReason,"invalid-identity")==0);
+        assert(registry.withLive(physicalTicket,image,physical,[&](auto&) noexcept -> int {
+            assert(!registry.lookup(image,physical,&lookupReason).generation &&
+                std::strcmp(lookupReason,"registry-busy")==0);return 0;
+        })==0);
         {
             assert(!registry.pinDependency(physicalTicket,image+1,physical).live());
             auto stale=physicalTicket;++stale.generation;
@@ -16127,6 +16138,8 @@ static void testRetainedVeboxFrames() {
         assert(registry.withContextRemoval(physicalTicket,image,physical,removeSuccess)==0 && removals==1);
         assert(registry.lookup(image,physical).generation==physicalTicket.generation);
         assert(registry.destroy(physicalTicket,image,physical,nativeFailure)==31 && destroys==1);
+        assert(!registry.lookup(image,physical,&lookupReason).generation &&
+            std::strcmp(lookupReason,"identity-not-live")==0);
         assert(registry.withNewRequest(physicalTicket,image,physical,unreachable)==5);
         assert(!registry.lookup(image,physical).generation);
         assert(registry.withLive(physicalTicket,image,physical,unreachable)==5);

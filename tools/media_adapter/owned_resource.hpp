@@ -26004,13 +26004,20 @@ public:
     // Native callbacks carry physical pointers, not owned tickets. Re-resolve
     // under the gate; a concurrent teardown between lookup/use rejects the
     // generation rather than exposing a freed Entry or resurrecting a pool.
-    Ticket lookup(uintptr_t image,uintptr_t physical) noexcept {
-        if(!image || !physical || gate_.test_and_set(std::memory_order_acquire)) return {};
+    Ticket lookup(uintptr_t image,uintptr_t physical,const char** reason=nullptr) noexcept {
+        if(reason)*reason="invalid-identity";
+        if(!image || !physical)return {};
+        if(reason)*reason="registry-busy";
+        if(gate_.test_and_set(std::memory_order_acquire)) return {};
         Unlock unlock{gate_};
+        if(reason)*reason="identity-missing";
         for(size_t i=0;i<Capacity;++i) {
             const auto* entry=entries_[i];
-            if(entry && entry->state==State::Live && !entry->frames.workFaulted() && entry->image==image && entry->physical==physical)
-                return {i,entry->generation,this};
+            if(!entry || entry->image!=image || entry->physical!=physical)continue;
+            if(entry->state!=State::Live) {if(reason)*reason="identity-not-live";continue;}
+            if(entry->frames.workFaulted()) {if(reason)*reason="frame-work-faulted";continue;}
+            if(reason)*reason="live";
+            return {i,entry->generation,this};
         }
         return {};
     }
