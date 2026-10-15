@@ -4855,6 +4855,13 @@ public:
         return created.resolveOwned(image,creator,lifetime,read,admit,qualify,executable) &&
             resolveCreated(image,vphal,creator,created,read,admit,qualify);
     }
+    template<class Lifetime,class Read,class Admit,class Qualify,class Executable>
+    bool resolveOwnedRenderer(uintptr_t image,uintptr_t vphal,uintptr_t creator,const Lifetime& lifetime,
+        const TglOwnedPrimaryRendererTable& rendererOwner,Read read,Admit admit,Qualify qualify,Executable executable) noexcept {
+        *this={};TglNativeCreatedVeboxRendererView created;
+        return created.resolveOwnedRenderer(image,creator,lifetime,rendererOwner,read,admit,qualify,executable) &&
+            resolveCreated(image,vphal,creator,created,read,admit,qualify);
+    }
 };
 
 // Borrowing transfers a real parent pin, never just a copied MHW address. The
@@ -4892,6 +4899,17 @@ public:
         TglNativeVphalMhwView candidate;
         if(!candidate.resolveOwned(image,vphal,creator,lifetime,read,admit,qualify,executable) ||
             !parentAdmit(*parent.get(),candidate)) return false;
+        parent_=std::move(parent);view_=candidate;return true;
+    }
+    template<class Lifetime,class Read,class Admit,class Qualify,class Executable,class ParentAdmit>
+    bool acquireOwnedRenderer(ParentLease&& parent,uintptr_t image,uintptr_t vphal,uintptr_t creator,
+        const Lifetime& lifetime,const TglOwnedPrimaryRendererTable& rendererOwner,Read read,Admit admit,
+        Qualify qualify,Executable executable,ParentAdmit parentAdmit) noexcept {
+        static_assert(std::is_nothrow_move_assignable_v<ParentLease>);
+        if(parent_.get() || !parent.get())return false;
+        TglNativeVphalMhwView candidate;
+        if(!candidate.resolveOwnedRenderer(image,vphal,creator,lifetime,rendererOwner,read,admit,qualify,executable) ||
+            !parentAdmit(*parent.get(),candidate))return false;
         parent_=std::move(parent);view_=candidate;return true;
     }
     const TglVeboxHardwareBinding* binding() const noexcept {

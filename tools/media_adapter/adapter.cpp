@@ -5020,8 +5020,11 @@ struct NativeCreatorPreparation {
                 // From here onward a real candidate exists. Keep ALL failure
                 // records until qualified teardown, including failed adoption.
                 auto dependency=physical.retainPhysicalDependency();
+                // create consumes/nulls its owning input. Keep the ledger's
+                // non-owning identity for SAME-owner retirement comparisons.
+                auto* transfer=record->storage;
                 record->owner=NativeVphalOwner::create(image,address,generation,creator,record->renderer,
-                    dependency,record->storage,&readMemory,NativeDataPointerWriter{},NativeDataAdmission{},
+                    dependency,transfer,&readMemory,NativeDataPointerWriter{},NativeDataAdmission{},
                     NativeRendererChildAdmission{},NativeVphalDestructorInvoker{});
                 if(!record->owner)return 5; // Persistent ledger owns failed candidate, never stack cleanup.
                 if(!NativeVphalRouter::adopt(image,address,generation,record->owner))return 5;
@@ -5228,7 +5231,7 @@ struct NativeCreatorPreparation {
             auto pin=NativeVphalRouter::pinFrame(image,address,generation,creator);
             auto* owner=pin.get();
             if(!owner || owner->context()!=creator)return 5;
-            return output.acquireOwned(std::move(pin),image,creator,creator,owner->lifetime(),
+            return output.acquireOwnedRenderer(std::move(pin),image,creator,creator,owner->lifetime(),owner->rendererLifetime(),
                 &readMemory,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,
                 [creator,renderer](const NativeVphalOwner& actual,const TglNativeVphalMhwView& view) noexcept {
                     return actual.context()==creator && actual.lifetime().object()==creator &&

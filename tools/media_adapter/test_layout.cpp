@@ -22700,6 +22700,39 @@ int main() {
                         assert(address==creatorAddress);put(address,0,value);return true;
                     };
                     assert(lifetime.publish(creatorAddress,ownedRead,writeCreator,borrowedAdmit));
+                    {
+                        TglOwnedPrimaryRendererTable rendererOwner,foreignOwner;
+                        std::array<uintptr_t,15> exact{};exact[1]=image+0x75bc00;exact[14]=16;
+                        for(size_t i=0;i<12;++i)exact[i+2]=image+TglNativePrimaryRendererTable::offsets[i];
+                        auto mainRead=[&](uintptr_t at,void* out,size_t n) noexcept {
+                            const auto start=image+0x75bb90,point=rendererOwner.addressPoint();
+                            if(at>=start && at-start<=sizeof(exact) && n<=sizeof(exact)-(at-start)) {
+                                std::memcpy(out,reinterpret_cast<const uint8_t*>(exact.data())+at-start,n);return true;
+                            }
+                            if(point && at>=point && at-point<=96 && n<=96-(at-point)) {
+                                std::memcpy(out,reinterpret_cast<const void*>(at),n);return true;
+                            }
+                            return ownedRead(at,out,n);
+                        };
+                        auto mainExec=[&](uintptr_t at,size_t n) noexcept {return (at==0xf210 && n==1) || ownedExec(at,n);};
+                        auto mainWrite=[&](uintptr_t at,uintptr_t value) noexcept {if(at!=r)return false;put(r,0,value);return true;};
+                        assert(rendererOwner.build(image,0xf200,mainRead,qualify,
+                            [](uintptr_t,size_t) noexcept {return true;},
+                            [](uintptr_t at,size_t) noexcept {return at==0xf200 || at==0xf210;},0xf210));
+                        assert(rendererOwner.publish(r,mainRead,mainWrite,borrowedAdmit));
+                        TglNativeBorrowedVphalMhwLease<decltype(parents)::ContextLease> ownedLease;
+                        auto ownedPin=parents.pin(image,0xb000,1,parent);
+                        assert(!ownedLease.acquireOwned(std::move(ownedPin),image,parent,creatorAddress,lifetime,mainRead,
+                            borrowedAdmit,qualify,mainExec,parentAdmit) && ownedPin.get());
+                        assert(!ownedLease.acquireOwnedRenderer(std::move(ownedPin),image,parent,creatorAddress,lifetime,foreignOwner,
+                            mainRead,borrowedAdmit,qualify,mainExec,parentAdmit) && ownedPin.get());
+                        assert(!ownedLease.acquireOwnedRenderer(std::move(ownedPin),image,parent,creatorAddress,lifetime,rendererOwner,
+                            mainRead,borrowedAdmit,qualify,mainExec,[](const auto&,const auto&) noexcept {return false;}) && ownedPin.get());
+                        assert(ownedLease.acquireOwnedRenderer(std::move(ownedPin),image,parent,creatorAddress,lifetime,rendererOwner,
+                            mainRead,borrowedAdmit,qualify,mainExec,parentAdmit));
+                        assert(!ownedPin.get() && ownedLease.view()->renderer.renderer==r && ownedLease.binding()->interface==nativeMhw);
+                        assert(rendererOwner.detach(mainRead,mainWrite,borrowedAdmit));
+                    }
                     assert(!lease.acquire(std::move(pin),image,parent,creatorAddress,ownedRead,
                         borrowedAdmit,qualify,ownedExec,parentAdmit) && pin.get());
                     assert(!lease.acquireOwned(std::move(pin),image,parent,creatorAddress,lifetime,ownedRead,
