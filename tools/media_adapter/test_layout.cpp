@@ -16166,6 +16166,33 @@ static void testRetainedVeboxFrames() {
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         {
+            for(const auto& schema:TglNativeOtherContextFrameBinding::schemas) {
+                uintptr_t actualTable=image+schema.table;int corrupt=-1;bool rx=true,identity=true;
+                auto readFamily=[&](uintptr_t p,void* out,size_t n) noexcept {
+                    if(n!=8)return false;
+                    uintptr_t value=0;
+                    if(p==0x8000)value=actualTable;
+                    else if(p>=image+schema.table-16 && p<image+schema.table+schema.count*8 && !(p&7)) {
+                        const size_t i=(p-(image+schema.table-16))/8;
+                        value=i==0?0:i==1?image+schema.rtti:image+schema.callbacks[i-2];
+                        if(int(i)==corrupt)value^=8;
+                    } else return false;
+                    std::memcpy(out,&value,8);return true;
+                };
+                auto qualified=[&](uintptr_t p) noexcept {return identity && p==image;};
+                auto executableFamily=[&](uintptr_t,size_t) noexcept {return rx;};
+                TglNativeOtherContextFrameBinding family;
+                auto resolveFamily=[&]() noexcept {return family.resolve(image,0x8000,readFamily,qualified,executableFamily);};
+                assert(resolveFamily() && family.callbackCount==schema.count && family.frame==image+schema.callbacks[5]);
+                for(size_t i=0;i<schema.count+2;++i) {
+                    corrupt=int(i);assert(!resolveFamily() && !family.frame && !family.callbackCount);
+                }
+                corrupt=-1;rx=false;assert(!resolveFamily());rx=true;
+                identity=false;assert(!resolveFamily());identity=true;
+                actualTable=image+0x75d018;assert(!resolveFamily()); // VP uses its stronger dedicated binding.
+            }
+        }
+        {
             assert(tglNativeContextFamilyFromVtable(image,image+0x75d018)==TglNativeContextFamily::VeboxVp);
             assert(tglNativeContextFamilyFromVtable(image,image+0x75d028)==TglNativeContextFamily::Unknown);
             for(uintptr_t offset:{0x7541a0,0x7542c0,0x754350,0x754408,0x754550,0x754608,
