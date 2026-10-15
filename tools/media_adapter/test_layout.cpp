@@ -22811,7 +22811,17 @@ int main() {
                         return -17;
                     })==-17);
                     assert(backing.live==3 && !backing.releases);
+                    assert(frame.reinitializeUnsubmittedVpPass(2,[]() noexcept -> int {
+                        assert(false);return 0;
+                    })==5);
+                    unsigned unsubmittedCalls=0;
+                    assert(frame.reinitializeUnsubmittedVpPass(0,[&]() noexcept -> int {
+                        ++unsubmittedCalls;return 31;
+                    })==31 && unsubmittedCalls==1 && backing.live==3 && !backing.releases);
                     frame.retention().observe(TglOwnedVeboxCommandTransactionResult{31,31,true,false});
+                    assert(frame.reinitializeUnsubmittedVpPass(0,[]() noexcept -> int {
+                        assert(false);return 0;
+                    })==5 && backing.live==3 && !backing.releases);
                     assert(frame.retireVpResources(0,[]() noexcept -> int {
                         assert(false);return 0;
                     })==5 && backing.live==3 && !backing.releases);
