@@ -15428,6 +15428,14 @@ static void testRetainedVeboxFrames() {
             Physical physicals;const auto ticket=physicals.reserve(base);
             assert(physicals.publish(ticket,base,physical));
             auto dependency=physicals.pinDependency(ticket,base,physical);assert(dependency.live());
+            TglNativeCreatedContextBatch<2> vpBatch;vpBatch.valid=true;vpBatch.count=1;vpBatch.contexts[0]=context;
+            TglNativeContextFamilyBatchSnapshot<2> vpFamilies;
+            assert(vpFamilies.capture(vpBatch,base,physical,ownerRead,ownerAdmit,qualify,executable) &&
+                vpFamilies.vpCount==1 && !vpFamilies.nativeOtherCount);
+            assert(vpFamilies.acceptsCreatorSuccess(true,true,true));
+            assert(!vpFamilies.acceptsCreatorSuccess(false,true,true) && !vpFamilies.acceptsCreatorSuccess(true,false,true) &&
+                !vpFamilies.acceptsCreatorSuccess(true,true,false));
+            vpFamilies.vpCount=2;assert(!vpFamilies.acceptsCreatorSuccess(true,true,true));
             assert(!Codec::create(base,physical,ticket.generation+1,context,dependency,ownerRead,writeVptr,ownerAdmit,qualify,executable));
             assert(dependency.live());
             dependency.reset();
@@ -16241,6 +16249,17 @@ static void testRetainedVeboxFrames() {
                     decltype(admitOwner),decltype(qualified),decltype(executableFamily),
                     TglNativeMixedContextParentView,TglNativeMixedContextFrameBinding>;
                 unsigned drops=0;FamilyPin dependency(image,drops);actualTable=image+schema.table;
+                TglNativeCreatedContextBatch<2> otherBatch;otherBatch.valid=true;otherBatch.count=2;otherBatch.contexts[0]=0x8000;
+                TglNativeContextFamilyBatchSnapshot<2> otherFamilies;
+                assert(otherFamilies.capture(otherBatch,image,0x9000,readFamily,admitOwner,qualified,executableFamily) &&
+                    otherFamilies.nativeOtherCount==1 && !otherFamilies.vpCount &&
+                    otherFamilies.families[1]==TglNativeContextFamily::Unknown);
+                assert(otherFamilies.acceptsCreatorSuccess(false,false,false));
+                assert(!otherFamilies.acceptsCreatorSuccess(true,false,false) &&
+                    !otherFamilies.acceptsCreatorSuccess(false,true,false) && !otherFamilies.acceptsCreatorSuccess(false,false,true));
+                assert(!otherFamilies.capture(otherBatch,image,0x9008,readFamily,admitOwner,qualified,executableFamily) && !otherFamilies.valid);
+                otherBatch.contexts[1]=0x8000;
+                assert(!otherFamilies.capture(otherBatch,image,0x9000,readFamily,admitOwner,qualified,executableFamily));
                 parentPhysical+=8;
                 assert(!OtherOwner::create(image,0x9000,1,0x8000,dependency,readFamily,writeTable,admitOwner,qualified,executableFamily));
                 assert(dependency.active && !drops);parentPhysical-=8;

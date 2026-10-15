@@ -26363,6 +26363,37 @@ struct TglNativeMixedContextParentView {
     }
 };
 
+template<size_t Capacity=16> struct TglNativeContextFamilyBatchSnapshot {
+    TglNativeCreatedContextBatch<Capacity> batch{};
+    std::array<TglNativeContextFamily,Capacity> families{};
+    uint32_t vpCount=0,nativeOtherCount=0;bool valid=false;
+    template<class Read,class Admit,class Qualify,class Executable>
+    bool capture(const TglNativeCreatedContextBatch<Capacity>& source,uintptr_t image,uintptr_t physical,
+        Read read,Admit admit,Qualify qualify,Executable executable) noexcept {
+        *this={};if(!source.wellFormed() || !physical)return false;
+        TglNativeContextFamilyBatchSnapshot candidate;candidate.batch=source;
+        for(size_t i=0;i<source.count;++i)if(source.contexts[i]) {
+            TglNativeMixedContextFrameBinding frame;TglNativeMixedContextParentView parent;parent.image=image;
+            uintptr_t after=0;
+            if(!frame.resolve(image,source.contexts[i],read,qualify,executable) ||
+               !parent.resolve(source.contexts[i],read,admit) || parent.physical!=physical || parent.family!=frame.family ||
+               !read(source.contexts[i],&after,8) || after!=frame.vtable)return false;
+            candidate.families[i]=frame.family;
+            if(frame.family==TglNativeContextFamily::VeboxVp)++candidate.vpCount;
+            else if(frame.family==TglNativeContextFamily::NativeOther)++candidate.nativeOtherCount;
+            else return false;
+        }
+        candidate.valid=true;*this=candidate;return true;
+    }
+    bool acceptsCreatorSuccess(bool selected,bool metadataCopied,bool handoffCompleted) const noexcept {
+        if(!valid)return false;
+        if(!vpCount)return !selected && !metadataCopied && !handoffCompleted;
+        // Current observer/handoff scope consumes exactly one VP creator.
+        // Multiple VP creators remain unsupported, never silently accepted.
+        return vpCount==1 && selected && metadataCopied && handoffCompleted;
+    }
+};
+
 template<class PhysicalLease,class Read,class Write,class Admit,class Qualify,class Executable,
          class ParentBinding=TglNativeVeboxParentView,class FrameBinding=TglNativeContextFrameBinding>
 class TglOwnedNativeCodecContextOwner {

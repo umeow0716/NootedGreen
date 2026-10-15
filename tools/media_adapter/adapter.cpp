@@ -5508,7 +5508,7 @@ std::map<void *, std::unique_ptr<Entry>> registry;
 struct NativeCreatorScopedInvocation {
     struct Result {
         int nativeResult=5,handoffResult=5;
-        bool nativeInvoked=false,selected=false,metadataCopied=false,handoffCompleted=false;
+        bool nativeInvoked=false,selected=false,metadataCopied=false,handoffCompleted=false,nativeOtherOnly=false;
     };
     using Scope=typename NativePhysicalRegistry::DependencyAdoptionScope;
     using AdmitFn=bool(*)(void*) noexcept;
@@ -5538,7 +5538,7 @@ struct NativeCreatorScopedInvocation {
                 result.creator=runComplete(factory,entry,actual,request,scope,admit,selection);
                 if(!result.creator.nativeInvoked)return 5;
                 if(result.creator.nativeResult)return result.creator.nativeResult;
-                return result.creator.handoffCompleted?0:5;
+                return result.creator.handoffCompleted || result.creator.nativeOtherOnly?0:5;
             });
         return result;
     }
@@ -5558,7 +5558,19 @@ struct NativeCreatorScopedInvocation {
                     reinterpret_cast<uintptr_t>(creator),selection);
             });
         };
-        return run(entry,physical,input,scope,admit,handoff);
+        auto result=run(entry,physical,input,scope,admit,handoff);
+        if(!result.nativeInvoked || result.nativeResult)return result;
+        TglNativeCreatedContextBatch<16> batch,after;
+        TglNativeContextFamilyBatchSnapshot<16> families;
+        const auto request=reinterpret_cast<uintptr_t>(input);
+        if(!scope.matches(image,physical,generation) || !batch.capture(request,&readMemory) ||
+           !families.capture(batch,image,physical,&readMemory,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory) ||
+           !after.capture(request,&readMemory) || after.count!=batch.count || after.contexts!=batch.contexts ||
+           !families.acceptsCreatorSuccess(result.selected,result.metadataCopied,result.handoffCompleted)) {
+            result.handoffCompleted=false;return result;
+        }
+        result.nativeOtherOnly=families.vpCount==0;
+        return result;
     }
     template<class Admit,class Handoff>
     static Result run(uintptr_t entry,uintptr_t physical,const void* input,Scope& physicalScope,
