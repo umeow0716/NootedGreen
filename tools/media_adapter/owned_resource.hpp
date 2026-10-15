@@ -26028,6 +26028,20 @@ public:
         if(!stable(read))return false;
         owned.header.count=count_;owned.header.records=reinterpret_cast<uintptr_t>(owned.records.data());return true;
     }
+    bool admitsVeboxConfiguration(const OwnedRecords& owned) const noexcept {
+        if(!ready_ || owned.header.count!=count_ || owned.header.records!=reinterpret_cast<uintptr_t>(owned.records.data()))return false;
+        for(size_t i=0;i<count_;++i){uint32_t kind=0,operation=0;uint64_t type=0;uintptr_t context=0;
+            const auto* record=owned.records[i].data();
+            std::memcpy(&kind,record,4);std::memcpy(&type,record+8,8);
+            std::memcpy(&operation,record+0x20,4);std::memcpy(&context,record+0x18,8);
+            // Exact2341b0/234210/2343d0 VEBOX paths; never copy the
+            // separate factory13 SetContentKey/external-ME record ABI.
+            if(kind!=2 || context!=contexts_[i] ||
+                !(type==0x10000 || (type==0x800 && operation>=1 && operation<=4) ||
+                  (type==0x200 && operation==4)))return false;
+        }
+        return true;
+    }
     template<class Admit> bool admitVeboxQueryOutputs(const OwnedRecords& owned,Admit admit) const noexcept {
         if(!ready_ || owned.header.count!=count_ || owned.header.records!=reinterpret_cast<uintptr_t>(owned.records.data()))return false;
         auto overlap=[](uintptr_t a,size_t an,uintptr_t b,size_t bn) noexcept {

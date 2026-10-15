@@ -17683,6 +17683,18 @@ int main() {
         assert(!batch.admitVeboxQueryOutputs(frozen,[](uintptr_t,size_t) noexcept {return true;}));
         std::memcpy(frozen.records[1].data()+0x28,&originalOutput,8);
         assert(!batch.admitVeboxQueryOutputs(frozen,[](uintptr_t,size_t) noexcept {return false;}));
+        assert(!batch.admitsVeboxConfiguration(frozen));
+        const uint32_t veboxKind=2,configureOperation=1;
+        for(auto& record:frozen.records){std::memcpy(record.data(),&veboxKind,4);
+            std::memcpy(record.data()+0x20,&configureOperation,4);}
+        assert(batch.admitsVeboxConfiguration(frozen));
+        const uint32_t protectedKind=1;
+        std::memcpy(frozen.records[1].data(),&protectedKind,4);
+        assert(!batch.admitsVeboxConfiguration(frozen));
+        std::memcpy(frozen.records[1].data(),&veboxKind,4);
+        const uint64_t arbitraryType=0x400;
+        std::memcpy(frozen.records[1].data()+8,&arbitraryType,8);
+        assert(!batch.admitsVeboxConfiguration(frozen));
         contexts[1]=0x4000;assert(!batch.stable(read));contexts[1]=0x3000;
         contexts[1]=0x4000;assert(!batch.freeze(read,frozen) && !frozen.input());contexts[1]=0x3000;
         count=0;TglNativeContextPropertyBatch<2> empty;assert(!empty.capture(0x1000,read));
