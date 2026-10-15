@@ -17439,6 +17439,11 @@ int main() {
         std::array<uint8_t,0x148> resource{};
         auto put=[&](size_t at,uint32_t value) noexcept {std::memcpy(resource.data()+at,&value,4);};
         uint32_t token=99;
+        assert(!tglNativeRelocationRecordRequired(resource,2));
+        assert(tglNativeRelocationRecordRequired(resource,0));
+        put(0xb8,UINT32_MAX);assert(!tglNativeRelocationRecordRequired(resource,2));
+        put(0xb8,1);assert(tglNativeRelocationRecordRequired(resource,2));
+        put(0xb8,0);
         assert(tglProjectNativeRelocationToken(resource,99,token) && token==0);
         put(0x38,0x12345678);
         assert(tglProjectNativeRelocationToken(resource,99,token) && token==0x12345678);
@@ -17456,11 +17461,11 @@ int main() {
         TglNativeDiIecpRegistration admit{services};
         assert(admit(resource,true,true)==31 && calls==1);
         put(0x80,0xffff);put(0xb8,0xffff);put(0xf0,0xffff);
-        assert(admit(resource,true,true)==5 && calls==1);
-        put(0xf0,0);assert(admit(resource,true,true)==31 && calls==2);
+        assert(admit(resource,true,true)==31 && calls==2);
+        put(0xf0,0);assert(admit(resource,true,true)==31 && calls==3);
         put(0x14,2);token=99;
         assert(!tglProjectNativeRelocationToken(resource,0,token) && token==99);
-        assert(admit(resource,true,true)==5 && calls==2);
+        assert(admit(resource,true,true)==31 && calls==4);
     }
     {
         struct Producer {

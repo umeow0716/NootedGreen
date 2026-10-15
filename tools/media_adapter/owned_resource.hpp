@@ -6799,6 +6799,13 @@ inline bool tglProjectNativeRelocationToken(const std::array<uint8_t,0x148>& res
     if(token==UINT32_MAX)return false;
     output=token;return true;
 }
+// Exact641e0's pre-record branch. Absence here is native policy, not missing
+// backing or successful kernel binding; the resource kind is not consulted.
+inline bool tglNativeRelocationRecordRequired(const std::array<uint8_t,0x148>& resource,
+    uint32_t usage) noexcept {
+    uint32_t plane=0;std::memcpy(&plane,resource.data()+0xb8,4);
+    return usage!=2 || (plane!=0 && plane!=UINT32_MAX);
+}
 struct TglNativeRegistrationInvoker {
     int operator()(uintptr_t entry, uintptr_t os, const void* resource,
                    bool write, bool read) const noexcept {
@@ -18790,11 +18797,9 @@ struct TglNativeDiIecpRegistration {
     const TglNativeDiIecpServices& services;
     template<class Resource> int operator()(const Resource& resource,bool write,bool read) const noexcept {
         if(!tglNativeDiIecpServicesReady(services)) return 5;
-        uint32_t token=0;
-        // Registration has no plane-usage argument. Refuse only if NEITHER
-        // native surface projection can yield a token; MHW chooses actual use.
-        if(!tglProjectNativeRelocationToken(resource,0,token) &&
-            !tglProjectNativeRelocationToken(resource,5,token))return 5;
+        //641e0 deliberately emits NO record for usage2 with resourceB8=0/-1.
+        // This ABI has no usage argument: token projection here would reject
+        // legal native no-record cases. Validate emitted records, not this stub.
         return TglNativeRegistrationInvoker{}(services.registration.entry,
             services.registration.context,&resource,write,read);
     }
