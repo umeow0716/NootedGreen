@@ -4980,6 +4980,7 @@ struct NativeCreatorPreparation {
     struct LowerBootstrapResult {
         TglOwnedVeboxCommandTransactionResult work{};
         NativePhysicalRegistry::FrameTicket frame{};
+        TglNativeOuterHistoryReconnectTarget historyTarget{};
     };
     static LowerBootstrapResult bootstrapLowerPass(NativePhysicalFrameScope& physical,uintptr_t image,
         uintptr_t address,uint64_t generation,uintptr_t context,uintptr_t creator,uintptr_t renderer,
@@ -4996,7 +4997,8 @@ struct NativeCreatorPreparation {
         TglNativePreparedLowerPassInput input;
         if(!roots.resolve(context,&readMemory,NativeDataAdmission{}) || roots.parent.physical!=address ||
             !readMemory(context+0x12e0,&actualCreator,8) || actualCreator!=creator ||
-            !input.capture(roots,renderer,parameters,pass,&readMemory))return result;
+            !input.capture(roots,renderer,parameters,pass,&readMemory) ||
+            !result.historyTarget.capture(roots,input.selected.roles,pass,&readMemory,NativeDataAdmission{}))return result;
         result.frame=factory.createContextPassRootFrame(physical,address,generation,creator,renderer,context,input.childIndex,
             input.selected,continuation);
         if(!result.frame.generation)return result;
@@ -5025,6 +5027,7 @@ struct NativeCreatorPreparation {
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;
         void* argument;
         std::array<NativePhysicalRegistry::FrameTicket,2> frames{};
+        std::array<TglNativeOuterHistoryReconnectTarget,2> historyTargets{};
         size_t frameCount=0;
         TglOwnedVeboxCommandTransactionResult work{};
         bool consumed=false,running=false;
@@ -5041,6 +5044,7 @@ struct NativeCreatorPreparation {
                 self.context,self.creator,self.renderer,reinterpret_cast<uintptr_t>(parameters),
                 reinterpret_cast<uintptr_t>(pass),self.decompression,self.argument,self.frameCount!=0);
             if(result.frame.generation) {
+                self.historyTargets[self.frameCount]=result.historyTarget;
                 self.frames[self.frameCount++]=result.frame;
             }
             return result.work;

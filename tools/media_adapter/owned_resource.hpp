@@ -2605,6 +2605,29 @@ struct TglNativePreparedLowerPassInput {
         *this=candidate;return true;
     }
 };
+// Native130dc0 records the LAST source134==2 at temporary pass30/38;
+// native131520 tail uses that exact source for1300f0(mode0). Capture the
+// actual native selection, never assume current pass source or final output.
+struct TglNativeOuterHistoryReconnectTarget {
+    uintptr_t source=0;uint32_t index=0;bool observed=false;
+    template<class Read,class Admit>
+    bool capture(const TglNativeContextInputRoots& roots,const TglNativeOuterSurfaceRoles& roles,
+        uintptr_t pass,Read read,Admit admit) noexcept {
+        if(!pass || pass>UINTPTR_MAX-0x40)return false;
+        TglNativeOuterHistoryReconnectTarget candidate;uint32_t afterIndex=0;
+        uintptr_t afterSource=0;
+        if(!read(pass+0x30,&candidate.index,4) || !read(pass+0x38,&candidate.source,8))return false;
+        if(candidate.source) {
+            uint32_t kind=0;
+            if(candidate.index>=roles.sources.size() || roles.sources[candidate.index]!=candidate.source ||
+                !roots.contains(candidate.source) || candidate.source>UINTPTR_MAX-0x138 ||
+                !admit(candidate.source,size_t{0x138}) || !read(candidate.source+0x134,&kind,4) || kind!=2)return false;
+        }
+        if(!read(pass+0x30,&afterIndex,4) || !read(pass+0x38,&afterSource,8) ||
+            afterIndex!=candidate.index || afterSource!=candidate.source)return false;
+        candidate.observed=true;*this=candidate;return true;
+    }
+};
 // Exact TGL226e6 forwards wrapper+10/index to FinishFenceEvent. This exposes
 // its real IOReturn (OS64df0 discards it), NOT a completion certificate: reset
 // and termination can satisfy the kernel predicate without successful work.
@@ -24889,6 +24912,30 @@ public:
         if(!slot.frame || slot.generation!=ticket.generation || !slot.pending || !slot.receipt.valid)return 5;
         return use(*slot.frame,slot.receipt);
     }
+    // Before the enclosing native request publishes its output receipt, its
+    // complete ticket set is the only admission for history reconciliation.
+    // Require EVERY occupied slot; no caller-selected subset or foreign frame.
+    template<size_t Count,class Use>
+    int withExactRetainedFrameGroup(const std::array<Ticket,Count>& tickets,size_t count,Use use) noexcept {
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        if(!count || count>Count || count>Capacity || gate_.test_and_set(std::memory_order_acquire))return 5;
+        Unlock unlock{gate_};
+        if(physicalTeardownStarted_ || workFaulted())return 5;
+        size_t occupied=0;for(const auto& slot:slots_)if(slot.frame)++occupied;
+        if(occupied!=count)return 5;
+        std::array<Frame*,Capacity> frames{};
+        for(size_t i=0;i<count;++i) {
+            const auto ticket=tickets[i];
+            if(ticket.pool!=this || ticket.index>=Capacity || !ticket.generation)return 5;
+            for(size_t j=0;j<i;++j)if(tickets[j].index==ticket.index)return 5;
+            const auto& slot=slots_[ticket.index];
+            if(!slot.frame || slot.generation!=ticket.generation)return 5;
+            frames[i]=slot.frame;
+        }
+        static_assert(std::is_nothrow_invocable_r_v<int,Use&,size_t,const decltype(frames)&,
+            const std::array<Ticket,Count>&>);
+        return use(count,std::as_const(frames),tickets);
+    }
     template<class Use> int withPendingReceiptGroup(Use use) noexcept {
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         if(gate_.test_and_set(std::memory_order_acquire))return 5;
@@ -25257,6 +25304,14 @@ public:
         bool matchesContinuationFrame(uintptr_t context,const Frame* frame) const noexcept {
             return requestFrameCount_>1 && !creatingPass_ && !requestPassFailure_ && !requestOutputBound_ &&
                 matchesActiveContextFrame(context,frame) && !TglRetainedFrameNativeState<Frame>::invalidated(*frame);
+        }
+        template<class Use> int withRequestFramesForHistory(uintptr_t context,Use use) noexcept {
+            // Same live physical/context request, AFTER a pass unwound and
+            // BEFORE final output publication. No registry/pool reentry and
+            // no submit, teardown or independent-ticket admission is granted.
+            if(!matchesActiveContextRequest(context) || creatingPass_ || activeRequestFrame_ ||
+                !requestPassExecuted_ || !requestFrameCount_ || requestOutputBound_)return 5;
+            return frames_.withExactRetainedFrameGroup(requestFrames_,requestFrameCount_,use);
         }
         bool bindContextRootFrameOutput(const TglNativeFrameOutputReceipt& receipt) noexcept {
             if(!context_ || activeRequestFrame_ || creatingPass_ || requestOutputBound_ ||

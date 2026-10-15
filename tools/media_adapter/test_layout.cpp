@@ -14910,6 +14910,22 @@ static void testRetainedVeboxFrames() {
         {
             TglOwnedVeboxRetainedFrames<ReceiptFrame> group,other;
             const auto first=group.create(),second=group.create(),outside=other.create();
+            auto denyExact=[](size_t,const auto&,const auto&) noexcept -> int {assert(false);return 0;};
+            const auto pair=std::array{first,second};
+            assert(group.withExactRetainedFrameGroup(pair,0,denyExact)==5);
+            assert(group.withExactRetainedFrameGroup(pair,3,denyExact)==5);
+            assert(group.withExactRetainedFrameGroup(pair,1,denyExact)==5); // Never omit an occupied sibling.
+            assert(group.withExactRetainedFrameGroup(std::array{first,first},2,denyExact)==5);
+            assert(group.withExactRetainedFrameGroup(std::array{first,outside},2,denyExact)==5);
+            auto staleGroupTicket=second;++staleGroupTicket.generation;
+            assert(group.withExactRetainedFrameGroup(std::array{first,staleGroupTicket},2,denyExact)==5);
+            assert(group.withExactRetainedFrameGroup(std::array{second,first},2,[&](size_t count,
+                const auto& frames,const auto& tickets) noexcept -> int {
+                assert(count==2 && frames[0] && frames[1] && frames[0]!=frames[1]);
+                assert(tickets[0].index==second.index && tickets[1].index==first.index);
+                assert(group.withExactRetainedFrameGroup(pair,2,denyExact)==5);
+                return 31;
+            })==31);
             auto submit=[](auto&) noexcept {
                 TglOwnedVeboxCommandTransactionResult r;r.acquired=true;return r;
             };
@@ -17194,6 +17210,8 @@ static void testRetainedVeboxFrames() {
                 synchronousRootFrame=active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
                 assert(synchronousRootFrame.generation);
                 assert(!active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
+                auto noHistory=[](size_t,const auto&,const auto&) noexcept -> int {assert(false);return 0;};
+                assert(active.withRequestFramesForHistory(0x20000,noHistory)==5); // Pass not executed yet.
                 Frame* observedRoot=nullptr;
                 const auto unsubmitted=active.runContextRootFrame([&](Frame& frame) noexcept {
                     observedRoot=&frame;
@@ -17204,9 +17222,18 @@ static void testRetainedVeboxFrames() {
                         assert(false);return TglOwnedVeboxCommandTransactionResult{};
                     }).acquired);
                     assert(frame.roots.parent.physical==0x8000);
+                    assert(active.withRequestFramesForHistory(0x20000,noHistory)==5); // Active producer cannot borrow itself.
                     return TglOwnedVeboxCommandTransactionResult{31,0,false,false};
                 });
                 assert(unsubmitted.status==31 && !unsubmitted.acquired);
+                assert(active.withRequestFramesForHistory(0x20008,noHistory)==5);
+                assert(active.withRequestFramesForHistory(0x20000,[&](size_t count,const auto& frames,
+                    const auto& tickets) noexcept -> int {
+                    assert(count==1 && frames[0]==observedRoot && tickets[0].generation==synchronousRootFrame.generation);
+                    assert(active.withRequestFramesForHistory(0x20000,noHistory)==5);
+                    assert(!active.createNextContextPassFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
+                    return 31; // Borrow only, no receipt/GPU/destruction authority.
+                })==31);
                 assert(!active.createNextContextPassFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
                 assert(observedRoot && !active.matchesActiveContextFrame(0x20000,observedRoot));
                 assert(!active.bindContextRootFrameOutput({0x20008,0x62000,7,true}));
@@ -17227,9 +17254,19 @@ static void testRetainedVeboxFrames() {
                     assert(idlePasses[0].generation);
                     auto idle=[](Frame&) noexcept {return TglOwnedVeboxCommandTransactionResult{0,0,false,false};};
                     assert(active.runContextRootFrame(idle).status==0);
+                    assert(active.withRequestFramesForHistory(0x20000,[&](size_t count,const auto& frames,
+                        const auto& tickets) noexcept -> int {
+                        assert(count==1 && frames[0] && tickets[0].generation==idlePasses[0].generation);return 0;
+                    })==0);
                     idlePasses[1]=active.createNextContextPassFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
                     assert(idlePasses[1].generation);
                     assert(active.runContextRootFrame(idle).status==0);
+                    assert(active.withRequestFramesForHistory(0x20000,[&](size_t count,const auto& frames,
+                        const auto& tickets) noexcept -> int {
+                        assert(count==2 && frames[0] && frames[1] && frames[0]!=frames[1]);
+                        assert(tickets[0].generation==idlePasses[0].generation && tickets[1].generation==idlePasses[1].generation);
+                        return 0;
+                    })==0);
                     return 0;
                 });
             })==0);
@@ -18795,6 +18832,39 @@ int main() {
             assert(during.observeOwner(owner,&frames[0]) && during.observeOwner(owner,&frames[1]));
             assert(!during.acknowledge(owner,2,history,[&]() noexcept {owner.first.observe(work);return true;}));
             assert(owner.first.mayHaveGpuWork() && owner.root.mayHaveGpuWork());
+        }
+        {
+            constexpr uintptr_t pass=0x10000,surface=0x20000;
+            TglNativeContextInputRoots roots;roots.input=0x30000;roots.sources[0]=surface;
+            TglNativeOuterSurfaceRoles roles;roles.sources[1]=surface;
+            uint32_t index=1,kind=2;uintptr_t selected=surface;
+            bool allowed=true,drift=false;unsigned sourceReads=0;
+            auto read=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                if(address==pass+0x30 && size==4)std::memcpy(bytes,&index,4);
+                else if(address==pass+0x38 && size==8) {
+                    const uintptr_t value=selected+((drift && ++sourceReads==2)?8:0);
+                    std::memcpy(bytes,&value,8);
+                } else if(address==surface+0x134 && size==4)std::memcpy(bytes,&kind,4);
+                else return false;
+                return true;
+            };
+            auto admit=[&](uintptr_t address,size_t size) noexcept {return allowed && address==surface && size==0x138;};
+            TglNativeOuterHistoryReconnectTarget selection;
+            assert(selection.capture(roots,roles,pass,read,admit) && selection.observed && selection.source==surface && selection.index==1);
+            // Current sourceCount may already be cleared by native inner-loop
+            // processing. The actual prelude's retained slot identity wins.
+            assert(!roles.sourceCount);
+            kind=1;assert(!selection.capture(roots,roles,pass,read,admit));kind=2;
+            assert(selection.source==surface && selection.index==1);
+            allowed=false;assert(!selection.capture(roots,roles,pass,read,admit));allowed=true;
+            index=17;assert(!selection.capture(roots,roles,pass,read,admit));index=1;
+            roles.sources[1]=surface+8;assert(!selection.capture(roots,roles,pass,read,admit));roles.sources[1]=surface;
+            roots.input=0;assert(!selection.capture(roots,roles,pass,read,admit));roots.input=0x30000;
+            drift=true;sourceReads=0;assert(!selection.capture(roots,roles,pass,read,admit));drift=false;
+            assert(selection.source==surface && selection.index==1);
+            assert(!selection.capture(roots,roles,UINTPTR_MAX-0x3f,read,admit));
+            selected=0;index=UINT32_MAX;
+            assert(selection.capture(roots,roles,pass,read,admit) && selection.observed && !selection.source);
         }
         struct ModeFrame {
             bool lost=false,ready=true;
