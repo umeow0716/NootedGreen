@@ -19268,6 +19268,23 @@ int main() {
         assert(count==2);
         using Auxiliary=TglNativeVeboxAuxiliaryFrameStorage<DeniedSurfaceApi>;
         static_assert(!std::is_move_constructible_v<Auxiliary>);
+        {
+            TglOwnedVeboxFrameRetention aggregate;
+            using Link=TglOwnedVeboxFrameRetention::AggregateLink;
+            using Command=TglNativeVeboxCommandFrameStorage<DeniedSurfaceApi>;
+            Command first(Link{},aggregate,TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{});
+            Command second(Link{},aggregate,TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{});
+            assert(&first.scratch()!=&second.scratch());
+            auto& a=first.backing().auxiliary();auto& b=second.backing().auxiliary();
+            assert(&a.stmm()!=&b.stmm() && &a.statistics()!=&b.statistics());
+            assert(!a.retention()() && !b.retention()() && !aggregate());
+            TglOwnedVeboxCommandTransactionResult acquired;acquired.acquired=true;
+            b.retention().observe(acquired);
+            assert(b.retention()() && aggregate() && !a.retention()());
+            assert(b.releaseModeResources(storage.pair(),false,
+                []() noexcept -> int {assert(false);return 0;})==5);
+            assert(!a.statistics().layout().bytes && !b.statistics().layout().bytes); // no resource/GPU invocation
+        }
         Auxiliary auxiliary(TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{});
         assert(!auxiliary.retention()());
         assert(auxiliary.stmm().ensure(keys)==5);

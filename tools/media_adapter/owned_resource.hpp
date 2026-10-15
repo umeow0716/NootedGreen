@@ -23426,6 +23426,13 @@ public:
         :stmm_(resource,pageSize,std::forward<Args>(args)...),
          statisticsBackend_(resource,0,pageSize),fill_(fill),
          statistics_(statisticsBackend_,statisticsShell_) {}
+    template<class... Args>
+    TglNativeVeboxAuxiliaryFrameStorage(TglOwnedVeboxFrameRetention::AggregateLink link,
+        TglOwnedVeboxFrameRetention& aggregate,const TglNativeResourceBinding& resource,
+        uint64_t pageSize,const TglNativeBufferFillBinding& fill,Args&&... args) noexcept
+        :retention_(link,aggregate),stmm_(resource,pageSize,std::forward<Args>(args)...),
+         statisticsBackend_(resource,0,pageSize),fill_(fill),
+         statistics_(statisticsBackend_,statisticsShell_) {}
     TglNativeVeboxAuxiliaryFrameStorage(const TglNativeVeboxAuxiliaryFrameStorage&)=delete;
     TglNativeVeboxAuxiliaryFrameStorage& operator=(const TglNativeVeboxAuxiliaryFrameStorage&)=delete;
     auto& stmm() noexcept {return stmm_.pair();}
@@ -23511,6 +23518,14 @@ public:
     TglNativeVeboxSurfaceFrameStorage(const TglNativeResourceBinding& binding,
         uint64_t pageSize,const TglNativeBufferFillBinding& fill,Args&&... args) noexcept
         :auxiliary_(binding,pageSize,fill,std::forward<Args>(args)...),
+         backend_(binding,1,pageSize),
+         ffdi_{Surface(backend_),Surface(backend_),Surface(backend_),Surface(backend_)},
+         ffdn_{Surface(backend_),Surface(backend_)} {}
+    template<class... Args>
+    TglNativeVeboxSurfaceFrameStorage(TglOwnedVeboxFrameRetention::AggregateLink link,
+        TglOwnedVeboxFrameRetention& aggregate,const TglNativeResourceBinding& binding,
+        uint64_t pageSize,const TglNativeBufferFillBinding& fill,Args&&... args) noexcept
+        :auxiliary_(link,aggregate,binding,pageSize,fill,std::forward<Args>(args)...),
          backend_(binding,1,pageSize),
          ffdi_{Surface(backend_),Surface(backend_),Surface(backend_),Surface(backend_)},
          ffdn_{Surface(backend_),Surface(backend_)} {}
@@ -26923,6 +26938,11 @@ public:
     TglNativeVeboxCommandFrameStorage(const TglNativeResourceBinding& binding,
         uint64_t pageSize,const TglNativeBufferFillBinding& fill,Args&&... args) noexcept
         :backing_(binding,pageSize,fill,std::forward<Args>(args)...) {}
+    template<class... Args>
+    TglNativeVeboxCommandFrameStorage(TglOwnedVeboxFrameRetention::AggregateLink link,
+        TglOwnedVeboxFrameRetention& aggregate,const TglNativeResourceBinding& binding,
+        uint64_t pageSize,const TglNativeBufferFillBinding& fill,Args&&... args) noexcept
+        :backing_(link,aggregate,binding,pageSize,fill,std::forward<Args>(args)...) {}
     TglNativeVeboxCommandFrameStorage(const TglNativeVeboxCommandFrameStorage&)=delete;
     TglNativeVeboxCommandFrameStorage& operator=(const TglNativeVeboxCommandFrameStorage&)=delete;
     auto& backing() noexcept {return backing_;}
