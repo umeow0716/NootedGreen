@@ -17725,10 +17725,12 @@ int main() {
         };
         Fresh::Snapshot result;
         Fresh fresh;
+        assert(!fresh.sameBinding(fresh));
         assert(!fresh.capture(0x1000,128,fence,read,admit,result));
         auto qualify=[](uintptr_t address) noexcept{return address==0x4000 || address==0x6083;};
         auto executable=[](uintptr_t,size_t) noexcept{return true;};
         assert(fresh.resolve(0x4000,read,qualify,executable));
+        auto pinnedFresh=fresh;assert(pinnedFresh.sameBinding(fresh));
         assert(fresh.capture(0x1000,128,fence,read,admit,result));
         assert(result.valid && result.active[0] && !result.active[1] && result.observed[0]==16);
         auto preserved=result;pointer=0x2044;
@@ -17740,6 +17742,7 @@ int main() {
         drift=true;admissions=0;assert(!fresh.capture(0x1000,128,fence,read,admit,result));drift=false;
         callback=0x6084;assert(!fresh.capture(0x1000,128,fence,read,admit,result));callback=0x6083;
         codeBad=true;assert(!fresh.resolve(0x4000,read,qualify,executable));
+        assert(!pinnedFresh.sameBinding(fresh));
         assert(!fresh.capture(0x1000,128,fence,read,admit,result));
     }
     {

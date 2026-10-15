@@ -24,7 +24,7 @@ constexpr uint8_t expectedHash[32] = {
     0xcf,0x1c,0xb7,0x4a,0x1f,0xb3,0x60,0x69,0xbb,0x1b,0x35,0x62,0xb3,0x75,0x01,0x29};
 using Create = int (*)(void **, const void *, AvdMetadata *);
 using Destroy = int (*)(void *);
-struct Library { void *handle = nullptr; Create create = nullptr; Destroy destroy = nullptr; uintptr_t resourceShared=0; };
+struct Library { void *handle = nullptr; Create create = nullptr; Destroy destroy = nullptr; uintptr_t resourceShared=0,deviceCreate=0; };
 Library library;
 std::once_flag loadOnce;
 std::once_flag ownedImageOnce;
@@ -4335,6 +4335,7 @@ struct Entry {
     AvdDescriptorBridge bridge;
     TglNativePhysicalCallbackBinding physical;
     TglNativeResourceCfTypeBinding resourceClass;
+    TglNativeFreshStampObservation freshStamps;
     // Qualified allocator entries only. A frontend must own its backend beside
     // its DN owner; borrowing a backend from this factory-lifetime Entry would
     // leave a dangling reference when the native factory table is destroyed.
@@ -4447,13 +4448,16 @@ public:
         const auto image=candidate.physical.image;
         if(!candidate.physical.matchesFactoryTable(candidate.callbacks) ||
             !candidate.physical.matchesCreatorInputs(candidate.nativeCpu,image+0x13e43) ||
-            !candidate.resourceClass.sameBinding(candidate.resourceClass))return false;
+            !candidate.resourceClass.sameBinding(candidate.resourceClass) ||
+            !candidate.freshStamps.sameBinding(candidate.freshStamps))return false;
         std::lock_guard<std::mutex> lock(gate_);
         if(ready_.load(std::memory_order_acquire))return bindings_.physical.image==image &&
             bindings_.physical.initialize==candidate.physical.initialize && bindings_.physical.destroy==candidate.physical.destroy &&
             bindings_.nativeCpu.image==candidate.nativeCpu.image && bindings_.nativeCpu.allocate==candidate.nativeCpu.allocate &&
-            bindings_.nativeCpu.release==candidate.nativeCpu.release && bindings_.resourceClass.sameBinding(candidate.resourceClass);
+            bindings_.nativeCpu.release==candidate.nativeCpu.release && bindings_.resourceClass.sameBinding(candidate.resourceClass) &&
+            bindings_.freshStamps.sameBinding(candidate.freshStamps);
         bindings_.physical=candidate.physical;bindings_.nativeCpu=candidate.nativeCpu;bindings_.resourceClass=candidate.resourceClass;
+        bindings_.freshStamps=candidate.freshStamps;
         ready_.store(true,std::memory_order_release);return true;
     }
     const Entry* get() const noexcept {return ready_.load(std::memory_order_acquire)?&bindings_:nullptr;}
@@ -5330,6 +5334,7 @@ void load() {
     library.create = reinterpret_cast<Create>(dlsym(library.handle, "AVD_CreateAVDAccelerator"));
     library.destroy = reinterpret_cast<Destroy>(dlsym(library.handle, "AVD_DestroyAVDAccelerator"));
     library.resourceShared=reinterpret_cast<uintptr_t>(dlsym(library.handle,"IOAccelResourceGetClientShared"));
+    library.deviceCreate=reinterpret_cast<uintptr_t>(dlsym(library.handle,"IOAccelDeviceCreateWithAPIProperty"));
     // Keep the native image loaded for all forwarded callback lifetimes.
 }
 }
@@ -5546,7 +5551,8 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
             return framework && dladdr(reinterpret_cast<void*>(address),&info) &&
                 reinterpret_cast<uintptr_t>(info.dli_fbase)==framework;
         };
-        if(!framework || !entry->resourceClass.resolve(library.resourceShared,readMemory,frameworkImage,executableMemory)) {
+        if(!framework || !entry->resourceClass.resolve(library.resourceShared,readMemory,frameworkImage,executableMemory) ||
+            !entry->freshStamps.resolve(library.deviceCreate,readMemory,frameworkImage,executableMemory)) {
             library.destroy(table);
             return 10;
         }
