@@ -13557,6 +13557,24 @@ static void testSfcSetupOrder() {
 
 static void testSfcStateParameterOwnership() {
     {
+        TglNativeCubeLutGeometry geometry;
+        assert(tglPlanNativeCubeLutGeometry(2,1,geometry));
+        assert(geometry.width==2 && geometry.height==4 && geometry.destinationRowBytes==8 &&
+            geometry.sourceBytes==32 && geometry.destinationBytes==32);
+        assert(tglPlanNativeCubeLutGeometry(2,2,geometry) && geometry.sourceBytes==64 && geometry.destinationBytes==32);
+        const auto saved=geometry;
+        for(uint32_t dimension:{0u,65536u,UINT32_MAX}) {
+            assert(!tglPlanNativeCubeLutGeometry(dimension,1,geometry));
+            assert(geometry.sourceBytes==saved.sourceBytes && geometry.width==saved.width);
+        }
+        assert(!tglPlanNativeCubeLutGeometry(2,0,geometry));
+        assert(!tglPlanNativeCubeLutGeometry(2,3,geometry));
+        if(SIZE_MAX>UINT32_MAX) {
+            assert(tglPlanNativeCubeLutGeometry(65535,2,geometry));
+            assert(geometry.height==uint32_t(uint64_t(65535)*65535)); // No invented GPU dimension cap.
+        }
+    }
+    {
         std::array<uint8_t,8> field{};uintptr_t value=0x1234;
         std::memcpy(field.data(),&value,8);
         assert(tglRestoreExactBorrowedVpLink(field.data(),value,0));

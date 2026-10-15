@@ -26732,6 +26732,27 @@ struct TglNativePhysicalCallbackBinding {
 };
 // Factory13/14 use contiguous0x30 records, unlike factory11's pointer array.
 // Snapshot carries identities only: caller must pin every codec before native use.
+struct TglNativeCubeLutGeometry {
+    uint32_t width=0,height=0,destinationRowBytes=0;
+    size_t sourceBytes=0,destinationBytes=0;
+};
+inline bool tglPlanNativeCubeLutGeometry(uint32_t dimension,uint32_t format,
+    TglNativeCubeLutGeometry& output) noexcept {
+    // Exact2343d0: width=d, height=d*d; format1 consumes4 bytes/voxel,
+    // format2 consumes four16-bit channels; destination stride is4 bytes,
+    // with native updating only the three color bytes (alpha untouched).
+    // Arithmetic representability only, NOT hardware/IOSurface admission.
+    if(!dimension || (format!=1 && format!=2))return false;
+    const uint64_t square=uint64_t(dimension)*dimension;
+    if(square>UINT32_MAX || dimension>UINT32_MAX/4)return false;
+    const size_t channelBytes=format==1?4:8;
+    if(square>SIZE_MAX/dimension || size_t(square)*dimension>SIZE_MAX/channelBytes)return false;
+    const size_t voxels=size_t(square)*dimension;
+    TglNativeCubeLutGeometry candidate;
+    candidate.width=dimension;candidate.height=uint32_t(square);candidate.destinationRowBytes=dimension*4;
+    candidate.sourceBytes=voxels*channelBytes;candidate.destinationBytes=voxels*4;
+    output=candidate;return true;
+}
 template<size_t Capacity=16> class TglNativeContextPropertyBatch {
     static_assert(Capacity>0 && Capacity<=128);
     uintptr_t input_=0,records_=0;
