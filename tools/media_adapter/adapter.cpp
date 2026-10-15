@@ -3666,7 +3666,8 @@ struct NativeRetainedTemporaryTransaction {
     TglNativePerPassCommandResult run(std::array<uint8_t,0x139>& parameters,std::array<uint8_t,0x60>& pass,
         const TglNativeOuterSurfaceRoles& roles) noexcept {
         if(attempted || childIndex>1 || !backend.bound() || backend.image()!=pinned.image ||
-            !assembly.readyForFrontend() || !graph.valid() || !finalTarget.storage())return {};
+            !assembly.readyForFrontend() || assembly.producerPending(childIndex) ||
+            !graph.valid() || !finalTarget.storage())return {};
         attempted=true;
         std::array<TglOwnedSurfaceStorage*,25> originals{};
         for(size_t i=0;i<25;++i)originals[i]=reinterpret_cast<TglOwnedSurfaceStorage*>(
@@ -3676,8 +3677,10 @@ struct NativeRetainedTemporaryTransaction {
             const auto address=reinterpret_cast<uintptr_t>(surface);
             return graph.hasRetainedSurfaceAddress(address) || surface==finalTarget.storage();
         };
+        TglOwnedVeboxGraphProducerRetention producerRetention{assembly.backing().retention(),
+            assembly.commandForChild(childIndex)->backing().auxiliary().retention()};
         return tglRunRetainedGraphPerPassTransaction(backend,graph,parameters,pass,originals,
-            temporal,assembly.backing().retention(),held,
+            temporal,producerRetention,held,
             [&](auto& params,auto& packet,auto& source,auto& target,auto* secondary,auto* previous) noexcept {
                 const auto* input=source.surfaceBinding();const auto* output=target.surfaceBinding();
                 if(!input || !output)return TglOwnedVeboxCommandTransactionResult{};

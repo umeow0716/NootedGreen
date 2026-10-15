@@ -17608,18 +17608,23 @@ int main() {
         TglOwnedVeboxAllocationRenderRetention allocationKeep{aggregate,first};
         TglOwnedVeboxAllocationRenderRetention siblingKeep{aggregate,unusedSibling};
         TglOwnedVeboxAllocationRenderRetention foreignKeep{aggregate,foreignBacking};
+        TglOwnedVeboxGraphProducerRetention graphKeep{aggregate,first};
         assert(allocationKeep() && siblingKeep() && foreignKeep());
+        assert(graphKeep());
         using AdmissionBinding=TglOwnedVeboxUnusedChildAdmission::Binding;
         assert(aggregate.admissionPending());
         {
             AdmissionBinding binding(&aggregate,admission);assert(binding.bound());
             assert(aggregate() && !aggregate.admissionPending() && !first());
             assert(!allocationKeep() && siblingKeep() && foreignKeep());
+            assert(!graphKeep());graphKeep.observe(idle);
+            assert(aggregate() && !first() && !graphKeep());
             AdmissionBinding reentrant(&aggregate,admission);assert(!reentrant.bound());
             live=false;assert(aggregate.admissionPending() && allocationKeep());
             live=true;assert(!aggregate.admissionPending());
             first.observe(work);assert(first() && aggregate() && aggregate.admissionPending());
             assert(allocationKeep());
+            assert(graphKeep());
         }
         assert(aggregate() && aggregate.admissionPending());
         assert(allocationKeep() && siblingKeep() && foreignKeep());

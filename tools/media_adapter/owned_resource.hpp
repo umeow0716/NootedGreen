@@ -29522,6 +29522,18 @@ struct TglOwnedVeboxAllocationRenderRetention {
         return !admission || !admission->permits(render,backing);
     }
 };
+// Graph producer admission is scoped to one command backing. Results still
+// latch the aggregate; this adapter has no clear, release or completion API.
+struct TglOwnedVeboxGraphProducerRetention {
+    TglOwnedVeboxFrameRetention& aggregate;
+    TglOwnedVeboxFrameRetention& command;
+    bool operator()() const noexcept {
+        return TglOwnedVeboxAllocationRenderRetention{aggregate,command}();
+    }
+    void observe(const TglOwnedVeboxCommandTransactionResult& result) noexcept {
+        aggregate.observe(result);
+    }
+};
 template<class ChildOwner,class Allocate>
 using TglOwnedVeboxRenderAllocationContext=TglOwnedVeboxAllocationContext<ChildOwner,Allocate,
     TglOwnedVeboxNoAllocationUnwind,TglOwnedVeboxAllocationRenderRetention>;
