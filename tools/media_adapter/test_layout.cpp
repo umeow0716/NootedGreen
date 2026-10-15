@@ -3311,11 +3311,20 @@ static void testTrackedCpuOwner() {
         assert(!owner.get() && !owner.size() && !backend.live && !backend.releases);
         backend.fail = false; assert(owner.allocate(0x2a8));
         assert(owner.get() && owner.size() == 0x2a8 && backend.live == 1);
+        const uintptr_t allocation=owner.get();
+        assert(!owner.excludesWritableSpan(allocation,1));
+        assert(!owner.excludesWritableSpan(allocation+0x2a7,2));
+        assert(!owner.excludesWritableSpan(allocation-1,2));
+        assert(owner.excludesWritableSpan(allocation-1,1));
+        assert(owner.excludesWritableSpan(allocation+0x2a8,1));
+        assert(!owner.excludesWritableSpan(0,1) && !owner.excludesWritableSpan(allocation,0));
+        assert(!owner.excludesWritableSpan(UINTPTR_MAX,1));
         const auto attempts = backend.allocations;
         assert(!owner.allocate(0x2a8) && backend.allocations == attempts);
         for (auto byte : backend.bytes) assert(byte == 0);
         owner.reset(); owner.reset();
         assert(backend.releases == 1 && !backend.live && !owner.get() && !owner.size());
+        assert(owner.excludesWritableSpan(allocation,1));
         assert(owner.allocate(0x2a8));
     }
     assert(backend.releases == 2 && backend.live == 0);

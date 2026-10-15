@@ -1657,6 +1657,14 @@ public:
     }
     uintptr_t get() const { return storage; }
     size_t size() const { return extent; }
+    // Caller must hold the enclosing owner lifetime/mutation reservation.
+    // Invalid spans fail closed; a quarantined allocation remains protected.
+    bool excludesWritableSpan(uintptr_t address,size_t bytes) const noexcept {
+        if(!address || !bytes || address>UINTPTR_MAX-bytes)return false;
+        if(!storage)return extent==0;
+        if(!extent || storage>UINTPTR_MAX-extent)return false;
+        return address>=storage+extent || storage>=address+bytes;
+    }
     // CPU publication state only, NOT a GPU/frame retirement certificate.
     // Ambiguous native ownership must not become a destructor double-free.
     bool canRelease() const noexcept {
