@@ -28897,13 +28897,13 @@ public:
             });
         });
     }
-    template<class FenceRead,class Admit,class Query,class History,class Use>
-    int withTaskCompletionGroup(typename Registry::Ticket ticket,uintptr_t physical,
+private:
+    template<class Pool,class FenceRead,class Admit,class Query,class History,class Use>
+    int withTaskCompletionGroupPool(Pool& pool,uintptr_t physical,
         const TglNativeFenceBackingObservation& binding,FenceRead read,Admit admit,Query query,History history,Use use) noexcept {
         if(binding.image()!=binding_.image || physical>UINTPTR_MAX-0x58)return 5;
         if constexpr(std::is_pointer_v<FenceRead>)if(!read)return 5;
         if constexpr(std::is_pointer_v<History>)if(!history)return 5;
-        return withFrame(ticket,physical,[&](auto& pool) noexcept -> int {
             uintptr_t wrapper=0;
             if(!read(physical+0x50,&wrapper,8) || !wrapper)return 5;
             return pool.withPendingTaskCompletionGroup([&](auto& retained,const auto& receipt,auto next) noexcept {
@@ -28913,20 +28913,50 @@ public:
                         return next(expected,reply,history(renderer));
                     });
             },use);
+    }
+    template<class Pool,class FenceRead,class Admit,class Query,class History,class Prepare>
+    int retireTaskCompletedFramePool(Pool& pool,uintptr_t physical,
+        typename Registry::FrameTicket frame,const TglNativeFenceBackingObservation& binding,
+        FenceRead read,Admit admit,Query query,History history,Prepare prepare) noexcept {
+        if(binding.image()!=binding_.image || physical>UINTPTR_MAX-0x58)return 5;
+        if constexpr(std::is_pointer_v<FenceRead>)if(!read)return 5;
+            uintptr_t wrapper=0;
+            if(!read(physical+0x50,&wrapper,8) || !wrapper)return 5;
+            return pool.retirePendingWithReceipt(frame,[&](auto& retained,const auto& receipt) noexcept -> int {
+                return retained.prepareTaskCompletionRetirement(binding,receipt,wrapper,read,admit,query,history,prepare);
+            });
+    }
+public:
+    template<class FenceRead,class Admit,class Query,class History,class Use>
+    int withTaskCompletionGroup(typename Registry::Ticket ticket,uintptr_t physical,
+        const TglNativeFenceBackingObservation& binding,FenceRead read,Admit admit,Query query,History history,Use use) noexcept {
+        return withFrame(ticket,physical,[&](auto& pool) noexcept -> int {
+            return withTaskCompletionGroupPool(pool,physical,binding,read,admit,query,history,use);
+        });
+    }
+    template<class FenceRead,class Admit,class Query,class History,class Use>
+    int withTaskCompletionGroupScoped(typename Registry::Scope& scope,uint64_t generation,uintptr_t physical,
+        const TglNativeFenceBackingObservation& binding,FenceRead read,Admit admit,Query query,History history,Use use) noexcept {
+        if(!valid() || !generation || !scope.matches(binding_.image,physical,generation))return 5;
+        return scope.withCompletionService([&](auto& pool) noexcept -> int {
+            return withTaskCompletionGroupPool(pool,physical,binding,read,admit,query,history,use);
         });
     }
     template<class FenceRead,class Admit,class Query,class History,class Prepare>
     int retireTaskCompletedFrame(typename Registry::Ticket ticket,uintptr_t physical,
         typename Registry::FrameTicket frame,const TglNativeFenceBackingObservation& binding,
         FenceRead read,Admit admit,Query query,History history,Prepare prepare) noexcept {
-        if(binding.image()!=binding_.image || physical>UINTPTR_MAX-0x58)return 5;
-        if constexpr(std::is_pointer_v<FenceRead>)if(!read)return 5;
         return withFrame(ticket,physical,[&](auto& pool) noexcept -> int {
-            uintptr_t wrapper=0;
-            if(!read(physical+0x50,&wrapper,8) || !wrapper)return 5;
-            return pool.retirePendingWithReceipt(frame,[&](auto& retained,const auto& receipt) noexcept -> int {
-                return retained.prepareTaskCompletionRetirement(binding,receipt,wrapper,read,admit,query,history,prepare);
-            });
+            return retireTaskCompletedFramePool(pool,physical,frame,binding,read,admit,query,history,prepare);
+        });
+    }
+    template<class FenceRead,class Admit,class Query,class History,class Prepare>
+    int retireTaskCompletedFrameScoped(typename Registry::Scope& scope,uint64_t generation,uintptr_t physical,
+        typename Registry::FrameTicket frame,const TglNativeFenceBackingObservation& binding,
+        FenceRead read,Admit admit,Query query,History history,Prepare prepare) noexcept {
+        if(!valid() || !generation || !scope.matches(binding_.image,physical,generation))return 5;
+        return scope.withCompletionService([&](auto& pool) noexcept -> int {
+            return retireTaskCompletedFramePool(pool,physical,frame,binding,read,admit,query,history,prepare);
         });
     }
     struct DeviceFrameEventObservationResult {

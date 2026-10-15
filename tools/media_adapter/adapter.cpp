@@ -4543,6 +4543,18 @@ struct NativePhysicalBackend {
                 [](NativeBorrowedFrontend& frontend) noexcept {return NativePrivateFrameRetirementInspection::run(frontend);},prepare);
         });
     }
+    static int retireNativeTaskCompletedFrameScoped(NativePhysicalFrameScope& scope,uintptr_t address,uint64_t generation,
+        typename NativePhysicalRegistry::FrameTicket frame,NativeFrameHistoryRetirement::Prepare prepare) noexcept {
+        if(!prepare || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(prepare),1))return 5;
+        TglNativePhysicalCallbackBinding native;TglNativeFenceBackingObservation fence;
+        if(!binding(native) || !library.resourceCreate || !scope.matches(native.image,address,generation) ||
+            !fence.resolve(native.image,&readMemory,NativeTglImageAdmission{native.image},&executableMemory))return 5;
+        NativePhysicalCallbacks callbacks(registry(),native,&readMemory,NativeTglImageAdmission{native.image},&executableMemory);
+        return callbacks.retireTaskCompletedFrameScoped(scope,generation,address,frame,fence,&readMemory,
+            NativeRetainedFenceOwnerAdmission{native.image,address},
+            NativeRetainedTaskCompletionQuery{native.image,library.resourceCreate},
+            [](NativeBorrowedFrontend& frontend) noexcept {return NativePrivateFrameRetirementInspection::run(frontend);},prepare);
+    }
     static int serviceNativeCompletedFrames(void* physical) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
         std::array<typename NativePhysicalRegistry::FrameTicket,2> frames{};size_t count=0;
