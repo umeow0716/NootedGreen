@@ -26806,6 +26806,8 @@ public:
         bool scalarPayloadsFrozen=false;
         alignas(8) std::array<std::array<uint8_t,0x2d0>,Capacity> conversionPayloads{};
         alignas(8) std::array<std::array<uint8_t,1024>,Capacity> floatLuts{};
+        std::array<TglOwnedCubeLutSnapshot,Capacity> cubes{};
+        bool cubesAttempted=false;
         bool conversionPayloadsFrozen=false;
         struct Header {uint32_t count=0,reserved=0;uintptr_t records=0;} header;
         OwnedRecords()=default;
@@ -26920,6 +26922,62 @@ public:
             std::memcpy(owned.records[i].data()+0x28,&payload,8);
         }
         owned.conversionPayloadsFrozen=true;return true;
+    }
+    template<class Read> bool freezeVeboxCubePayloads(Read read,OwnedRecords& owned,size_t admittedBatchBytes) const noexcept {
+        if(owned.cubesAttempted || !admitsVeboxConfiguration(owned) || !stable(read))return false;
+        owned.cubesAttempted=true;
+        std::array<bool,Capacity> selected{};
+        std::array<size_t,Capacity> extents{};
+        std::array<uintptr_t,Capacity> payloads{},sources{};
+        std::array<uint32_t,Capacity> dimensions{},formats{};
+        std::array<TglNativeCubeLutGeometry,Capacity> plans{};
+        size_t total=0;
+        for(size_t i=0;i<count_;++i) {
+            uint64_t type=0;uint32_t flags=0;
+            std::memcpy(&type,owned.records[i].data()+8,8);if(type!=0x200)continue;
+            std::memcpy(&payloads[i],owned.records[i].data()+0x28,8);
+            if(!payloads[i] || payloads[i]>UINTPTR_MAX-4 || !read(payloads[i],&flags,4))return false;
+            if(!(flags&0x10))continue;
+            if(flags&8)return false; // Native mutually exclusive LUT modes.
+            size_t bytes=flags&0x80?0x25c:0x80;
+            auto& metadata=owned.conversionPayloads[i];
+            metadata.fill(0);
+            if(payloads[i]>UINTPTR_MAX-bytes || !read(payloads[i],metadata.data(),bytes))return false;
+            if(flags&0x80) {
+                uint32_t selector=0,enabled=0;
+                std::memcpy(&selector,metadata.data()+0x254,4);std::memcpy(&enabled,metadata.data()+0x258,4);
+                if(!selector && enabled==1)bytes=0x2d0;
+            }
+            std::array<uint8_t,0x2d0> second{};
+            if(payloads[i]>UINTPTR_MAX-bytes || !read(payloads[i],metadata.data(),bytes) ||
+                !read(payloads[i],second.data(),bytes) || metadata!=second)return false;
+            uint32_t actual=0;std::memcpy(&actual,metadata.data(),4);if(actual!=flags)return false;
+            if(flags&0x80) {
+                uint32_t selector=0,enabled=0;
+                std::memcpy(&selector,metadata.data()+0x254,4);std::memcpy(&enabled,metadata.data()+0x258,4);
+                if((!selector && enabled==1)!=(bytes==0x2d0))return false;
+            }
+            std::memcpy(&dimensions[i],metadata.data()+0x70,4);std::memcpy(&formats[i],metadata.data()+0x74,4);
+            std::memcpy(&sources[i],metadata.data()+0x78,8);
+            if(!tglPlanNativeCubeLutGeometry(dimensions[i],formats[i],plans[i]) ||
+                plans[i].sourceBytes>admittedBatchBytes-total)return false;
+            total+=plans[i].sourceBytes;selected[i]=true;extents[i]=bytes;
+        }
+        // ALL geometry must fit ONE batch budget before the first allocation.
+        for(size_t i=0;i<count_;++i)if(selected[i])
+            if(!owned.cubes[i].capture(sources[i],dimensions[i],formats[i],plans[i].sourceBytes,read))return false;
+        if(!stable(read))return false;
+        for(size_t i=0;i<count_;++i)if(selected[i]) {
+            std::array<uint8_t,0x2d0> check{};
+            if(!read(payloads[i],check.data(),extents[i]) || check!=owned.conversionPayloads[i])return false;
+        }
+        for(size_t i=0;i<count_;++i)if(selected[i]) {
+            const uintptr_t backing=reinterpret_cast<uintptr_t>(owned.cubes[i].data());
+            const uintptr_t metadata=reinterpret_cast<uintptr_t>(owned.conversionPayloads[i].data());
+            std::memcpy(owned.conversionPayloads[i].data()+0x78,&backing,8);
+            std::memcpy(owned.records[i].data()+0x28,&metadata,8);
+        }
+        return true;
     }
     template<class Admit> bool admitVeboxQueryOutputs(const OwnedRecords& owned,Admit admit) const noexcept {
         if(!ready_ || owned.header.count!=count_ || owned.header.records!=reinterpret_cast<uintptr_t>(owned.records.data()))return false;

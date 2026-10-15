@@ -18204,6 +18204,38 @@ int main() {
             }
         }
         contexts[1]=0x4000;assert(!batch.freeze(read,frozen) && !frozen.input());contexts[1]=0x3000;
+        for(size_t budget:{size_t{63},size_t{64}}) {
+            TglNativeContextPropertyBatch<2>::OwnedRecords cubes;
+            assert(batch.freeze(read,cubes));
+            const uint64_t type=0x200;const uint32_t operation=4,flags=0x10,dimension=2,format=1;
+            const uintptr_t sourceAddress=0x9000;
+            std::array<uint8_t,0x80> metadata{};std::array<uint8_t,32> data{};data.fill(0x3b);
+            std::memcpy(metadata.data(),&flags,4);std::memcpy(metadata.data()+0x70,&dimension,4);
+            std::memcpy(metadata.data()+0x74,&format,4);std::memcpy(metadata.data()+0x78,&sourceAddress,8);
+            for(auto& record:cubes.records) {
+                std::memcpy(record.data(),&veboxKind,4);std::memcpy(record.data()+8,&type,8);
+                std::memcpy(record.data()+0x20,&operation,4);std::memcpy(record.data()+0x28,&originalOutput,8);
+            }
+            unsigned backingReads=0;
+            auto cubeRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(at==originalOutput) {assert(bytes<=metadata.size());std::memcpy(out,metadata.data(),bytes);return true;}
+                if(at==sourceAddress) {assert(bytes==data.size());++backingReads;std::memcpy(out,data.data(),bytes);return true;}
+                return read(at,out,bytes);
+            };
+            assert(batch.freezeVeboxCubePayloads(cubeRead,cubes,budget)==(budget==64));
+            if(budget==63)assert(!backingReads && !cubes.cubes[0].data() && !cubes.cubes[1].data());
+            else {
+                assert(backingReads==4 && cubes.cubes[0].data()!=cubes.cubes[1].data());
+                for(size_t i=0;i<2;++i) {
+                    uintptr_t pointer=0;std::memcpy(&pointer,cubes.records[i].data()+0x28,8);
+                    assert(pointer==reinterpret_cast<uintptr_t>(cubes.conversionPayloads[i].data()));
+                    std::memcpy(&pointer,cubes.conversionPayloads[i].data()+0x78,8);
+                    assert(pointer==reinterpret_cast<uintptr_t>(cubes.cubes[i].data()));
+                    assert(cubes.cubes[i].size()==32 && !std::memcmp(cubes.cubes[i].data(),data.data(),32));
+                }
+            }
+            assert(!batch.freezeVeboxCubePayloads(cubeRead,cubes,budget));
+        }
         count=0;TglNativeContextPropertyBatch<2> empty;assert(!empty.capture(0x1000,read));
         count=3;TglNativeContextPropertyBatch<2> oversized;assert(!oversized.capture(0x1000,read));
         count=2;records=UINTPTR_MAX-16;TglNativeContextPropertyBatch<2> overflow;
