@@ -18440,16 +18440,32 @@ int main() {
         uintptr_t selectedSource=1,selectedTarget=1;
         assert(roles.selectContextRoots(roots,5,0,selectedSource,selectedTarget) && selectedSource==sp && selectedTarget==tp);
         {
-            uint32_t sourceIndex=5,targetIndex=6; // BOTH native fields index source[17], not target[8].
+            uint32_t sourceIndex=5,targetIndex=6,childIndex=1; // BOTH native fields index source[17], not target[8].
+            bool mutateChild=false,mutateSource=false;unsigned childReads=0,sourceReads=0;
             auto passRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+                if(n==4 && p==0x39bc) {
+                    const uint32_t value=childIndex+(mutateChild && ++childReads==2?1:0);
+                    std::memcpy(out,&value,4);return true;
+                }
                 if(n==4 && (p==0x200c || p==0x2030)) {
-                    const auto value=p==0x200c?sourceIndex:targetIndex;std::memcpy(out,&value,4);return true;
+                    const auto value=p==0x200c?sourceIndex+(mutateSource && ++sourceReads==2?1:0):targetIndex;
+                    std::memcpy(out,&value,4);return true;
                 }
                 return read(p,out,n);
             };
             TglNativeContextPassRootSelection selected;
             assert(selected.capture(roots,0x1000,0x2000,5,0,passRead) && selected.source==sp && selected.target==tp &&
                 selected.sourceIndex==5 && selected.targetIndex==0 && selected.passSourceIndex==5 && selected.passTargetSourceIndex==6);
+            TglNativePreparedLowerPassInput lower;
+            assert(lower.capture(roots,0x3000,0x1000,0x2000,passRead) && lower.childIndex==1 &&
+                lower.selected.source==sp && lower.selected.target==tp && lower.selected.passTargetSourceIndex==6);
+            childIndex=2;assert(!lower.capture(roots,0x3000,0x1000,0x2000,passRead) && !lower.selected.source);childIndex=1;
+            mutateChild=true;childReads=0;
+            assert(!lower.capture(roots,0x3000,0x1000,0x2000,passRead));mutateChild=false;
+            mutateSource=true;sourceReads=0;
+            assert(!lower.capture(roots,0x3000,0x1000,0x2000,passRead));mutateSource=false;
+            const uint32_t two=2;std::memcpy(input.data()+0x90,&two,4);
+            assert(!lower.capture(roots,0x3000,0x1000,0x2000,passRead));std::memcpy(input.data()+0x90,&one,4);
             sourceIndex=17;
             assert(!selected.capture(roots,0x1000,0x2000,5,0,passRead) && !selected.source && !selected.target && !selected.roles.sourceCount);
             sourceIndex=5;targetIndex=0; // Empty native source slot; target[0] is irrelevant here.

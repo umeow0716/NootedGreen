@@ -2539,6 +2539,25 @@ struct TglNativeContextPassRootSelection {
         *this=candidate;return true;
     }
 };
+//131520 copies139 params, publishes the CURRENT output at98/count90=1,
+// and12d280 selects renderer910/918 by renderer9bc. Both temporary indices
+// still refer to source[17]; none is a final-output ordinal.
+struct TglNativePreparedLowerPassInput {
+    TglNativeContextPassRootSelection selected{};
+    uint32_t childIndex=0;
+    template<class Read> bool capture(const TglNativeContextInputRoots& roots,uintptr_t renderer,
+        uintptr_t parameters,uintptr_t pass,Read read) noexcept {
+        *this={};TglNativePreparedLowerPassInput candidate;
+        uint32_t sourceRole=0,afterChild=0;
+        if(!renderer || renderer>UINTPTR_MAX-0x9c0 || !pass || pass>UINTPTR_MAX-0x34 ||
+            !read(renderer+0x9bc,&candidate.childIndex,4) || candidate.childIndex>=2 ||
+            !read(pass+0xc,&sourceRole,4) ||
+            !candidate.selected.capture(roots,parameters,pass,sourceRole,0,read) ||
+            candidate.selected.roles.targetCount!=1 || candidate.selected.passSourceIndex!=sourceRole ||
+            !read(renderer+0x9bc,&afterChild,4) || afterChild!=candidate.childIndex)return false;
+        *this=candidate;return true;
+    }
+};
 // Exact TGL226e6 forwards wrapper+10/index to FinishFenceEvent. This exposes
 // its real IOReturn (OS64df0 discards it), NOT a completion certificate: reset
 // and termination can satisfy the kernel predicate without successful work.

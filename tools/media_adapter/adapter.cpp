@@ -3766,7 +3766,6 @@ struct NativeRetainedTemporaryExecution {
     }
     struct PassProvider {
         NativeContextRendererFrame& frame;NativeRetainedTemporaryTransaction::Backend& backend;
-        size_t childIndex;
         const TglOwnedVpEntrySet& catalogue;
         TglNativeVphalMhwView view;TglVeboxPipeAcquisition& acquisition;int& decompressionStatus;
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;void* argument;
@@ -3779,22 +3778,24 @@ struct NativeRetainedTemporaryExecution {
             if(!raw)return result;
             auto& self=*static_cast<PassProvider*>(raw);
             auto reject=[&]() noexcept {if(!self.failure)self.failure=5;result.status=self.failure;return result;};
-            if(self.busy || self.failure || &self.frame!=&active || self.childIndex>1 ||
+            if(self.busy || self.failure || &self.frame!=&active ||
                 !self.authority.matches(active,self.view.renderer.image) ||
                 renderer!=self.view.renderer.renderer || !parameters || !pass ||
                 active.invalidated() || !active.surfacesReady())return reject();
             self.busy=true;struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{self.busy};
-            TglNativeOuterSurfaceRoles roles;uint32_t source=0,target=0;
+            TglNativeOuterSurfaceRoles roles;uint32_t source=0,target=0,childIndex=0,afterChild=0;
             const auto input=reinterpret_cast<uintptr_t>(parameters),packet=reinterpret_cast<uintptr_t>(pass);
-            if(input>UINTPTR_MAX-0x139 || packet>UINTPTR_MAX-0x40 ||
+            if(input>UINTPTR_MAX-0x139 || packet>UINTPTR_MAX-0x40 || renderer>UINTPTR_MAX-0x9c0 ||
+                !readMemory(renderer+0x9bc,&childIndex,4) || childIndex>=2 ||
                 !writableDataMemory(input,0x130) || !writableDataMemory(packet,0x40) ||
                 !roles.capture(input,&readMemory) || !readMemory(packet+0xc,&source,4) ||
                 !readMemory(packet+0x30,&target,4) || source>=roles.sources.size() || target>=roles.sources.size() ||
-                !roles.sources[source] || !roles.sources[target])return reject();
+                !roles.sources[source] || !roles.sources[target] || roles.targetCount!=1 ||
+                !readMemory(renderer+0x9bc,&afterChild,4) || afterChild!=childIndex)return reject();
             size_t sourceRole=0,targetRole=0;
             if(!active.retainedRoleIndices(roles,sourceRole,targetRole))return reject();
             std::array<uint8_t,0x139> ownedParameters{};std::array<uint8_t,0x60> ownedPass{};
-            Request request{self.backend,ownedParameters,ownedPass,roles,sourceRole,targetRole,self.childIndex,self.temporal,
+            Request request{self.backend,ownedParameters,ownedPass,roles,sourceRole,targetRole,childIndex,self.temporal,
                 nullptr,self.catalogue,nullptr,self.view,self.acquisition,self.decompressionStatus,
                 self.decompression,self.argument};
             request.ownedSend=true;
@@ -3858,17 +3859,17 @@ struct NativeRetainedContextFrameDispatch {
     // resources. Per-call policy latches live through every native sub-pass.
     static TglOwnedVeboxCommandTransactionResult runOwned(Lease& lease,NativePhysicalFrameScope& physical,
         NativeContextRendererFrame& frame,NativeRetainedTemporaryTransaction::Backend& backend,
-        const TglNativeVphalMhwView& view,size_t childIndex,
+        const TglNativeVphalMhwView& view,
         const TglOwnedVpEntrySet& catalogue,const NativeRootPassAuthority& authority,
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument,
         uintptr_t input,uintptr_t output,TglNativeFrameOutputReceipt& receipt) noexcept {
         if(!backend.bound() || view.renderer.image!=backend.image() ||
-            !view.renderer.renderer || childIndex>1 || authority.physical!=&physical ||
+            !view.renderer.renderer || authority.physical!=&physical ||
             !authority.matches(frame,backend.image()) || receipt.valid)return {};
         TglVeboxPipeAcquisition acquisition;
         int decompressionStatus=0;
-        NativeRetainedTemporaryExecution::PassProvider provider{frame,backend,childIndex,
+        NativeRetainedTemporaryExecution::PassProvider provider{frame,backend,
             catalogue,view,acquisition,decompressionStatus,decompression,argument,temporal};
         provider.authority=authority;
         auto result=run(lease,physical,frame,view.renderer.renderer,input,output,
@@ -4312,7 +4313,7 @@ struct NativeCreatorPreparation {
     static TglOwnedVeboxCommandTransactionResult dispatchOwnedFrame(
         NativeRetainedContextFrameDispatch::Lease& lease,NativePhysicalFrameScope& physical,
         uintptr_t address,uint64_t generation,NativeContextRendererFrame& frame,
-        const TglNativeVphalMhwView& view,size_t childIndex,
+        const TglNativeVphalMhwView& view,
         const TglOwnedVpEntrySet& catalogue,
         NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,
         const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument,
@@ -4324,7 +4325,7 @@ struct NativeCreatorPreparation {
         // The lookup gate is released before native execution: callbacks use
         // this same ledger for lineage admission and must never recurse its lock.
         return NativeRetainedContextFrameDispatch::runOwned(lease,physical,frame,*backend,view,
-            childIndex,catalogue,authority,decompression,temporal,argument,input,output,receipt);
+            catalogue,authority,decompression,temporal,argument,input,output,receipt);
     }
     using RuntimeView=TglNativeBorrowedVphalMhwLease<NativeVphalFramePin>;
     static bool acquireRuntimeView(NativePhysicalFrameScope& physical,uintptr_t image,uintptr_t address,
