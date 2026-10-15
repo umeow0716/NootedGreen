@@ -16905,6 +16905,35 @@ static void testRetainedVeboxFrames() {
                 assert(!pending && frame.roots.sources[16]==0x50000);return 0;
             });
         })==0 && rootDestroyed==2);
+        // A rejected later lower pass must not erase the first submitted
+        // frame or its receipt. This is retention coverage, not multipass support.
+        assert(callbacks.withFrameScope(success.ticket,0x8000,[&](auto& scope) noexcept -> int {
+            return scope.withNativeRequestItem(0x20000,[&](auto& active) noexcept -> int {
+                synchronousRootFrame=active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
+                assert(synchronousRootFrame.generation);
+                assert(active.runContextRootFrame([](Frame&) noexcept {
+                    return TglOwnedVeboxCommandTransactionResult{0,0,true,true};
+                }).writtenBack);
+                assert(!active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
+                unsigned reentered=0;
+                const auto refused=active.runContextRootFrame([&](Frame&) noexcept {
+                    ++reentered;return TglOwnedVeboxCommandTransactionResult{};
+                });
+                assert(!reentered && !refused.acquired);
+                assert(active.bindContextRootFrameOutput({0x20000,0x62000,7,true}));
+                assert(!active.bindContextRootFrameOutput({0x20000,0x62008,8,true}));
+                return 0;
+            });
+        })==0);
+        assert(callbacks.withFrame(success.ticket,0x8000,[&](auto& frames) noexcept -> int {
+            assert(frames.withOutputReceipt(synchronousRootFrame,[](const auto& receipt) noexcept -> int {
+                assert(receipt.context==0x20000 && receipt.event==0x62000);return 0;
+            })==0);
+            // Explicit fixture authority only; production still needs GPU completion.
+            return frames.retire(synchronousRootFrame,[](const Frame&,bool pending,const auto&) noexcept -> int {
+                assert(pending);return 0;
+            });
+        })==0 && rootDestroyed==3);
         {
             Pool::Ticket eventFrame;
             assert(callbacks.withNewRequest(success.ticket,0x8000,[&](auto& frames) noexcept -> int {
