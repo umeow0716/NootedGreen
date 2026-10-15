@@ -247,8 +247,13 @@ public:
         return index==0?&cpu_.backing().command():index==1?&secondCommand_:nullptr;
     }
     auto& children() noexcept {return cpu_.children();}
+    bool producerPending(size_t index) noexcept {
+        auto* command=commandForChild(index);if(!command)return true;
+        TglOwnedVeboxAllocationRenderRetention keep{backing().retention(),command->backing().auxiliary().retention()};
+        return keep();
+    }
     bool readyForFrontend() noexcept {
-        if(!executionBackend_.bound() || !basesReady_ || !cleanupBound_ || backing().retention()() ||
+        if(!executionBackend_.bound() || !basesReady_ || !cleanupBound_ || backing().retention().admissionPending() ||
             !backing().vpBound(0) || !backing().vpBound(1))return false;
         // Do not retain a frame pin before both private tables are admitted:
         // that pin would prevent the exclusive creator installation stage.
@@ -3207,7 +3212,7 @@ struct NativeRetainedFrontendRuntime {
         if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
             frontend.childIndex>1 || !core.live() || frontend.pinned.image!=core.image ||
             frontend.pinned.originalChildren[frontend.childIndex]!=core.child ||
-            frontend.assembly.backing().retention()())return 5;
+            frontend.assembly.producerPending(frontend.childIndex))return 5;
         const int status=tglWithOriginalVeboxPacketLeases(core.sourceOwner,core.source,core.targetOwner,core.target,
             *frontend.assembly.commandForChild(frontend.childIndex),core.child,core.execution,
             frontend.interfaces.renderHal,frontend.interfaces.sku,
@@ -3223,7 +3228,7 @@ struct NativeRetainedFrontendRuntime {
             frontend.childIndex>1 || !core.live() || frontend.pinned.image!=core.image ||
             frontend.pinned.originalChildren[frontend.childIndex]!=core.child ||
             !graph.ownsStorage(core.vp.bytes.data()) || !lines.lines().boundToVp(core.vp) ||
-            frontend.assembly.backing().retention()())return 5;
+            frontend.assembly.producerPending(frontend.childIndex))return 5;
         NativeSfcReleaseSelection selection{core.childOwner,reinterpret_cast<void*>(core.child),
             frontend.interfaces.renderHal,frontend.interfaces.sku,graph};
         NativeModeAllocationPlanFor<SurfaceOwner> allocation{frontend.assembly.commandForChild(frontend.childIndex)->backing(),lines.resources(),
@@ -3271,7 +3276,7 @@ struct NativeRetainedFrontendRuntime {
         if(!context || !use || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(use),1) ||
             frontend.childIndex>1 || !core.live() || core.image!=frontend.pinned.image ||
             frontend.pinned.originalChildren[frontend.childIndex]!=core.child ||
-            !graph.ownsStorage(core.vp.bytes.data()) || frontend.assembly.backing().retention()())return 5;
+            !graph.ownsStorage(core.vp.bytes.data()) || frontend.assembly.producerPending(frontend.childIndex))return 5;
         TglVeboxFeatureBinding feature;
         uintptr_t mhw=0,linkedVp=0;
         if(!feature.resolve(core.image,&readMemory,NativeTglImageAdmission{core.image},&executableMemory) ||
@@ -4223,7 +4228,7 @@ struct Entry {
                         view.originalChildren[0]==reinterpret_cast<uintptr_t>(cpu.children().first().owner().constructedBase()) &&
                         view.originalChildren[1]==reinterpret_cast<uintptr_t>(cpu.children().second().owner().constructedBase()) &&
                         cpu.children().first().owner().allocationGeneration() && cpu.children().second().owner().allocationGeneration() &&
-                        !cpu.backing().retention()();
+                        !cpu.backing().retention().admissionPending();
                 });
         };
         if(continuation) {
