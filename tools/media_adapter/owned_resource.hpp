@@ -5255,27 +5255,26 @@ public:
         return address>=self+sizeof(*this) || self>=address+bytes;
     }
     bool excludesBaseAndShellWritableSpan(uintptr_t address,size_t bytes) const noexcept {
-        if(busy_ || !excludesBaseWritableSpan(address,bytes))return false;
+        if(busy_ || !constructed_ || !storage_.get() || storage_.size()<0x1bc0 ||
+            !excludesBaseWritableSpan(address,bytes))return false;
         constexpr size_t offsets[8]={0x1b0,0x1b8,0xba8,0xbb0,0x680,0x688,0x690,0x698};
         for(size_t i=0;i<transferredShells_.size();++i) {
             const uintptr_t shell=transferredShells_[i];
-            if(!shell)continue;
-            if(!constructed_ || !storage_.get() || storage_.size()<0x1bc0 || shell>UINTPTR_MAX-0x2a8)return false;
             uintptr_t current=0;
             std::memcpy(&current,reinterpret_cast<const uint8_t*>(storage_.get())+offsets[i],8);
-            if(current!=shell || (address<shell+0x2a8 && shell<address+bytes))return false;
+            if(current!=shell)return false; // Never ignore an untracked native allocation.
+            if(!shell)continue;
+            if(shell>UINTPTR_MAX-0x2a8 || (address<shell+0x2a8 && shell<address+bytes))return false;
         }
         return true; // Still excludes neither helper nor borrowed resource/SFC allocations.
     }
     bool excludesBaseShellAndHelperWritableSpan(uintptr_t address,size_t bytes) const noexcept {
         if(!excludesBaseAndShellWritableSpan(address,bytes))return false;
-        if(!transferredHelper_)return true;
-        if(!constructed_ || !storage_.get() || storage_.size()<0x1bc0 ||
-            transferredHelper_>UINTPTR_MAX-0xa0)return false;
         uintptr_t current=0;
         std::memcpy(&current,reinterpret_cast<const uint8_t*>(storage_.get())+0x1bb8,8);
-        return current==transferredHelper_ &&
-            (address>=transferredHelper_+0xa0 || transferredHelper_>=address+bytes);
+        if(current!=transferredHelper_)return false;
+        if(!current)return true;
+        return current<=UINTPTR_MAX-0xa0 && (address>=current+0xa0 || current>=address+bytes);
     }
     TglOwnedVeboxBaseOwner(CpuBackend& cpu,SfcInvoke& sfc,Cleanup& cleanup,Destroy& destroy)
         :storage_(cpu),sfc_(sfc),cleanup_(cleanup),destroy_(destroy) {

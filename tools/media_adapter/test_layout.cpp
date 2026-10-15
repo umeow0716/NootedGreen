@@ -31195,6 +31195,19 @@ int main() {
                     owner.reset();
                     assert(owner.constructedBase());
                 };
+                {
+                    auto* child=static_cast<uint8_t*>(owner.constructedBase());
+                    constexpr size_t slots[9]={0x1b0,0x1b8,0xba8,0xbb0,0x680,0x688,0x690,0x698,0x1bb8};
+                    assert(owner.excludesBaseShellAndHelperWritableSpan(0x10000,1));
+                    for(size_t slot:slots) {
+                        uintptr_t previous=0;std::memcpy(&previous,child+slot,8);assert(!previous);
+                        const uintptr_t unexplained=0x30000;
+                        std::memcpy(child+slot,&unexplained,8);
+                        assert(!owner.excludesBaseShellAndHelperWritableSpan(0x10000,1));
+                        std::memcpy(child+slot,&previous,8);
+                    }
+                    assert(owner.excludesBaseShellAndHelperWritableSpan(0x10000,1));
+                }
                 assert(owner.allocateCpuShells(shellBackend));
                 shellsTransferred=true;
                 {
