@@ -25198,13 +25198,22 @@ public:
     template<class OwnerLease,class Scope,class Frame,class Executable,class Invoke>
     int dispatchPreparedFrame(const OwnerLease& lease,Scope& scope,Frame& frame,
         uintptr_t context,uintptr_t parameters,Executable executable,Invoke invoke) noexcept {
+        if(!scope.matchesActiveContextFrame(context,&frame))return 5;
+        return dispatchPreparedRequest(lease,scope,context,parameters,executable,invoke);
+    }
+    // The native lower packet does not exist until133cb0 runs. Permit that
+    // one late request entry before a root frame is constructed; this grants
+    // no root-frame, submit, retirement or completion authority.
+    template<class OwnerLease,class Scope,class Executable,class Invoke>
+    int dispatchPreparedRequest(const OwnerLease& lease,Scope& scope,
+        uintptr_t context,uintptr_t parameters,Executable executable,Invoke invoke) noexcept {
         if(!state_ || lease.get()!=this || !context || context>UINTPTR_MAX-0x12f0 || !parameters ||
             !state_->storage || state_->storageBusy ||
             state_->destruction.phase()!=TglOwnedVphalDestructionState::Phase::Idle ||
             state_->table.publication()!=TglOwnedVphalLifetimeTable::Publication::Published ||
             !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
             !scope.matches(state_->image,state_->physical,state_->generation) ||
-            !scope.matchesActiveContextFrame(context,&frame) || !state_->boundRenderer() || !state_->boundPhysicalOs())return 5;
+            !scope.matchesActiveContextRequest(context) || !state_->boundRenderer() || !state_->boundPhysicalOs())return 5;
         uintptr_t creator=0,input=0,vptr=0;
         const uintptr_t entry=state_->table.nativeFrame();
         if(!entry || !executable(entry,1) || !state_->read(context+0x12e0,&creator,8) || creator!=state_->object ||

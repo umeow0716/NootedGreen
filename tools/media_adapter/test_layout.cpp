@@ -19576,6 +19576,17 @@ int main() {
                             unsigned calls=0;
                             assert(physicalOwners.withScope(ticket,image,0x90000,[&](auto& scope) noexcept -> int {
                                 return scope.withNativeRequestItem(0xe0000,[&](auto& active) noexcept -> int {
+                                    unsigned lateCalls=0;
+                                    auto lateInvoke=[&](uintptr_t entry,uintptr_t object,uintptr_t parameters) noexcept -> int {
+                                        assert(entry==image+0x133cb0 && object==creatorAddress && parameters==0xe2000);
+                                        ++lateCalls;
+                                        assert(owner->dispatchPreparedRequest(pin,active,0xe0000,parameters,ownerExecutable,
+                                            [](uintptr_t,uintptr_t,uintptr_t) noexcept -> int {assert(false);return 0;})==5);
+                                        return 31;
+                                    };
+                                    assert(owner->dispatchPreparedRequest(pin,active,0xe0008,0xe2000,ownerExecutable,lateInvoke)==5);
+                                    assert(owner->dispatchPreparedRequest(pin,active,0xe0000,0xe2008,ownerExecutable,lateInvoke)==5);
+                                    assert(owner->dispatchPreparedRequest(pin,active,0xe0000,0xe2000,ownerExecutable,lateInvoke)==31 && lateCalls==1);
                                     frameTicket=active.createContextRootFrame(ownerRead,
                                         [](uintptr_t,size_t) noexcept {return true;});
                                     assert(frameTicket.generation);
