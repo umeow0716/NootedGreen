@@ -19799,6 +19799,34 @@ int main() {
                     assert(!publishedView.resolveOwned(image,creatorAddress,lifetime,publishedRead,
                         creatorAdmit,qualify,creatorExecutable));
                     assert(!lifetime.publish(creatorAddress,readObject,writeObject,admitObject));
+                    for(bool fail:{false,true}) {
+                        TglOwnedVphalLifetimeTable externalTable;
+                        assert(externalTable.build(image,0xf000,0xf100,readLifetime,qualify,execLifetime,ownedLifetime));
+                        uintptr_t externalVptr=externalTable.source();unsigned prepareCalls=0;
+                        auto externalRead=[&](uintptr_t at,void* out,size_t n) noexcept {
+                            if(at!=creatorAddress || n!=8)return false;
+                            std::memcpy(out,&externalVptr,8);return true;
+                        };
+                        auto externalWrite=[&](uintptr_t at,uintptr_t value) noexcept {
+                            assert(at==creatorAddress);externalVptr=value;return true;
+                        };
+                        assert(externalTable.publish(creatorAddress,externalRead,externalWrite,admitObject));
+                        TglOwnedVphalDestructionState external;
+                        auto prepare=[&]() noexcept -> int {
+                            ++prepareCalls;
+                            return fail?31:externalTable.detach(externalRead,externalWrite,admitObject)?0:5;
+                        };
+                        assert(!external.prepareExternalRemoval(externalTable,creatorAddress+8,prepare) && !prepareCalls);
+                        assert(external.prepareExternalRemoval(externalTable,creatorAddress,prepare)==!fail && prepareCalls==1);
+                        assert(external.requiresRetention());
+                        assert(!external.recover(externalTable,[](uintptr_t) noexcept {assert(false);return true;},
+                            prepare,[](uintptr_t,uintptr_t) noexcept {assert(false);}));
+                        assert(!external.confirmExternalRemoval(externalTable,creatorAddress,[](uintptr_t) noexcept {return false;}));
+                        assert(external.confirmExternalRemoval(externalTable,creatorAddress,[&](uintptr_t object) noexcept {
+                            assert(object==creatorAddress);return true;
+                        })==!fail);
+                        assert(external.requiresRetention()==fail && prepareCalls==1);
+                    }
                     {
                         // Actual counted physical lease + stable owner composition;
                         // child/backing/native invocations remain CPU fixtures.

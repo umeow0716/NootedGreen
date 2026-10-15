@@ -2239,12 +2239,13 @@ public:
 //235e80 accounting: invoke the saved destructor directly, not counted delete.
 class TglOwnedVphalDestructionState {
 public:
-    enum class Phase { Idle,Preparing,Quarantined,Invoking,Complete };
+    enum class Phase { Idle,Preparing,Quarantined,Invoking,ExternallyPrepared,Complete };
     enum class Kind { Destroy,DeletingDestroy };
 private:
     Phase phase_=Phase::Idle;
     Kind kind_=Kind::Destroy;
     uintptr_t object_=0;
+    bool external_=false;
     template<class Prepare,class Native>
     bool finish(TglOwnedVphalLifetimeTable& table,Prepare prepare,Native native) noexcept {
         static_assert(noexcept(prepare()) && noexcept(native(uintptr_t{},uintptr_t{})));
@@ -2262,6 +2263,25 @@ public:
     TglOwnedVphalDestructionState& operator=(const TglOwnedVphalDestructionState&)=delete;
     Phase phase() const noexcept {return phase_;}
     bool requiresRetention() const noexcept {return phase_!=Phase::Complete;}
+    template<class Prepare>
+    bool prepareExternalRemoval(TglOwnedVphalLifetimeTable& table,uintptr_t object,Prepare prepare) noexcept {
+        static_assert(noexcept(prepare()) && std::is_same_v<decltype(prepare()),int>);
+        if(phase_!=Phase::Idle || !object || object!=table.object() ||
+            table.publication()!=TglOwnedVphalLifetimeTable::Publication::Published)return false;
+        object_=object;external_=true;phase_=Phase::Preparing;
+        if(prepare()!=0 || table.publication()!=TglOwnedVphalLifetimeTable::Publication::Detached) {
+            phase_=Phase::Quarantined;return false;
+        }
+        phase_=Phase::ExternallyPrepared;return true; // Native caller owns the only destructor invocation.
+    }
+    template<class Proof>
+    bool confirmExternalRemoval(const TglOwnedVphalLifetimeTable& table,uintptr_t object,Proof proof) noexcept {
+        static_assert(noexcept(proof(object)) && std::is_same_v<decltype(proof(object)),bool>);
+        if(!external_ || (phase_!=Phase::ExternallyPrepared && phase_!=Phase::Complete) ||
+            object!=object_ || table.object()!=object ||
+            table.publication()!=TglOwnedVphalLifetimeTable::Publication::Detached || !proof(object))return false;
+        phase_=Phase::Complete;return true;
+    }
     template<class Prepare,class Native>
     bool request(TglOwnedVphalLifetimeTable& table,uintptr_t object,Kind kind,
         Prepare prepare,Native native) noexcept {
@@ -2293,7 +2313,7 @@ public:
     template<class Recover,class Prepare,class Native>
     bool recover(TglOwnedVphalLifetimeTable& table,Recover recover,Prepare prepare,Native native) noexcept {
         static_assert(noexcept(recover(uintptr_t{})));
-        if(phase_!=Phase::Quarantined || table.object()!=object_) return false;
+        if(external_ || phase_!=Phase::Quarantined || table.object()!=object_) return false;
         phase_=Phase::Preparing;
         if(!recover(object_)) {phase_=Phase::Quarantined;return false;}
         return finish(table,prepare,native);
@@ -25762,6 +25782,27 @@ public:
         }};
         TglOwnedScopedContext<TglOwnedVphalRetirementContext,TglOwnedVphalRetirementDomain> scope(state_->storage,context);
         return scope.bound()?use():5;
+    }
+    template<class ExclusiveLease,class PhysicalScope,class Proof>
+    bool prepareExternalRemoval(const ExclusiveLease& lease,PhysicalScope& physical,Proof proof) noexcept {
+        if constexpr(std::is_pointer_v<Proof>)if(!proof)return false;
+        return withRetirementAuthority(lease,physical,proof,[&]() noexcept -> int {
+            if(state_->storageBusy || state_->frameBusy)return 5;
+            return state_->destruction.prepareExternalRemoval(state_->table,state_->object,
+                [&]() noexcept -> int {return state_->prepare();})?0:5;
+        })==0;
+    }
+    // Called only by same-batch native-success reconciliation. Inspect retained
+    // identities/state, never the already-deleted native object or its vptr.
+    template<class Proof> bool confirmExternalRemoval(Proof proof) noexcept {
+        static_assert(noexcept(proof(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{})) &&
+            std::is_same_v<decltype(proof(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{})),bool>);
+        if constexpr(std::is_pointer_v<Proof>)if(!proof)return false;
+        if(!state_ || state_->storage || state_->storageBusy || state_->frameBusy ||
+            !state_->physicalLease.matches(state_->image,state_->physical,state_->generation))return false;
+        return state_->destruction.confirmExternalRemoval(state_->table,state_->object,[&](uintptr_t object) noexcept {
+            return proof(state_->image,state_->physical,state_->generation,object);
+        });
     }
     template<class ExclusiveLease,class PhysicalScope,class Proof,class Use>
     int withChildAdmissionAuthority(const ExclusiveLease& lease,PhysicalScope& physical,Proof proof,Use use) noexcept {

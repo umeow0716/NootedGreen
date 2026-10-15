@@ -4235,6 +4235,8 @@ struct NativePhysicalBackend {
             },nativeCreate);
     }
 };
+using NativeVphalRemovalLease=decltype(NativeVphalRouter::pin(uintptr_t{}));
+using NativeVphalRemovalRetire=int(*)(void*,uint64_t,size_t) noexcept;
 struct Entry {
     using CodecOwner=NativeCodecOwner;
     // Factory table lifetime only, not the native physical context lifetime.
@@ -4972,6 +4974,10 @@ void load() {
 
 // Expand the real Darwin/native backend composition, not the fixture Api and
 // tracked allocator types. This compiles cleanup, but enables no callbacks.
+template bool NativeVphalOwner::prepareExternalRemoval<NativeVphalRemovalLease,
+    NativePhysicalBackend::RemovalScope,NativeVphalRemovalRetire>(const NativeVphalRemovalLease&,
+    NativePhysicalBackend::RemovalScope&,NativeVphalRemovalRetire) noexcept;
+template bool NativeVphalOwner::confirmExternalRemoval<NativeRemovalProof>(NativeRemovalProof) noexcept;
 template class TglOwnedVeboxVpCleanupContext<NativeRendererBacking,NativeRendererRetirementAuthority>;
 template class TglNativeVeboxRendererCpuStorage<TglDarwinStmmSurfaceApi,NativeRendererCleanup>;
 template class TglOwnedVphalRendererOwner<NativeRendererCpuAssembly,TglOwnedPhysicalDependencyLease,
