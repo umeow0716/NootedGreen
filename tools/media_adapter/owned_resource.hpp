@@ -2523,15 +2523,22 @@ bool tglAdmitNativeCreatorCall(uintptr_t image,uintptr_t physical,uintptr_t crea
         read(creator+0x48,&afterRenderHal,8) && afterRenderHal==renderHal &&
         read(physical+0x50,&afterWrapper,8) && afterWrapper==wrapper;
 }
-template<class Native,class Handoff,class AdmitCreator> class TglOwnedCreatorCallScope {
+template<class Native,class Handoff,class AdmitCreator,size_t Capacity=1> class TglOwnedCreatorCallScope {
+    static_assert(Capacity>0 && Capacity<=16);
     inline static thread_local TglOwnedCreatorCallScope* active_=nullptr;
     Native& native_;Handoff& handoff_;AdmitCreator& admit_;
     TglOwnedCreatorCallTable table_;
     bool consumed_=false,busy_=false,handoffCompleted_=false;
+    std::array<void*,Capacity> creators_{};
+    size_t consumedCount_=0,completedCount_=0;
     int result_=5;
     static int dispatch(void* creator) noexcept {
         auto* self=active_;
-        if(!self || tglOwnedCreatorCallScopeActive!=self || self->consumed_ || self->busy_ || !self->admit_(creator)) return 5;
+        if(!self || tglOwnedCreatorCallScopeActive!=self || self->consumedCount_==Capacity || self->busy_ ||
+            (self->consumedCount_ && !self->handoffCompleted_)) return 5;
+        for(size_t i=0;i<self->consumedCount_;++i)if(self->creators_[i]==creator)return 5;
+        if(!self->admit_(creator))return 5;
+        self->creators_[self->consumedCount_++]=creator;self->handoffCompleted_=false;
         self->consumed_=true;self->busy_=true;
         struct Exit {bool& busy;~Exit(){busy=false;}} exit{self->busy_};
         const int result=self->native_(self->table_.nativeCreate(),creator);
@@ -2540,6 +2547,7 @@ template<class Native,class Handoff,class AdmitCreator> class TglOwnedCreatorCal
         TglOwnedScopedContext<TglOwnedCreatorHandoffContext,TglOwnedCreatorHandoffDomain> handoff(creator,context);
         self->result_=handoff.bound()?self->handoff_(creator):5;
         self->handoffCompleted_=handoff.bound() && self->result_==0;
+        if(self->handoffCompleted_)++self->completedCount_;
         return self->result_;
     }
 public:
@@ -2566,6 +2574,9 @@ public:
     static uintptr_t callbackAddress() noexcept {return reinterpret_cast<uintptr_t>(&dispatch);}
     const TglOwnedCreatorCallTable& table() const noexcept {return table_;}
     bool consumed() const noexcept {return consumed_;}
+    size_t consumedCount() const noexcept {return consumedCount_;}
+    size_t completedCount() const noexcept {return completedCount_;}
+    void* completedCreator(size_t index) const noexcept {return index<completedCount_?creators_[index]:nullptr;}
     bool handoffCompleted() const noexcept {return handoffCompleted_;}
     int result() const noexcept {return result_;}
 };

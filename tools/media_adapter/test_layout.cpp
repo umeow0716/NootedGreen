@@ -22250,6 +22250,29 @@ int main() {
                 const auto address=callTable.addressPoint();
                 assert(!buildCall(0xf000) && callTable.addressPoint()==address);
                 assert(creatorTable==image+0x75bb58 && create==image+0x1e6610);
+                for(unsigned failure=0;failure<3;++failure) {
+                    unsigned nativeCalls=0,handoffs=0;int(*callback)(void*)=nullptr;
+                    auto native=[&](uintptr_t entry,void*) noexcept -> int {
+                        assert(entry==create);++nativeCalls;return failure==1 && nativeCalls==2?31:0;
+                    };
+                    auto handoff=[&](void* object) noexcept -> int {
+                        ++handoffs;assert(callback(object)==5);
+                        return failure==2 && handoffs==2?17:0;
+                    };
+                    auto admit=[](void* object) noexcept -> bool {return object!=nullptr;};
+                    using Multi=TglOwnedCreatorCallScope<decltype(native),decltype(handoff),decltype(admit),2>;
+                    callback=reinterpret_cast<int(*)(void*)>(Multi::callbackAddress());
+                    Multi scope(native,handoff,admit);
+                    assert(scope.prepare(image,creatorRead,qualify,callExecutable,
+                        [](uintptr_t address,size_t bytes) noexcept {return address==Multi::callbackAddress() && bytes==1;}));
+                    assert(callback(reinterpret_cast<void*>(creatorAddress))==0);
+                    assert(scope.consumedCount()==1 && scope.completedCount()==1 && scope.completedCreator(0)==reinterpret_cast<void*>(creatorAddress));
+                    assert(callback(reinterpret_cast<void*>(creatorAddress))==5 && nativeCalls==1);
+                    assert(callback(reinterpret_cast<void*>(creatorAddress+0x100))==(failure==1?31:failure==2?17:0));
+                    assert(scope.consumedCount()==2 && scope.completedCount()==(failure?1U:2U));
+                    assert(scope.handoffCompleted()==!failure && scope.completedCreator(scope.completedCount())==nullptr);
+                    assert(callback(reinterpret_cast<void*>(creatorAddress+0x200))==5 && nativeCalls==2 && handoffs==(failure==1?1U:2U));
+                }
                 for(const auto outcomes:{std::pair<int,int>{31,0},{0,31},{0,0}}) {
                     unsigned nativeCalls=0,handoffs=0;
                     int (*callback)(void*)=nullptr;
