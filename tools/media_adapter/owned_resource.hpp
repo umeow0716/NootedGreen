@@ -6991,6 +6991,9 @@ class TglNativeResourceCfTypeBinding {
     static_assert(sizeof(uintptr_t)==8,"exact Tahoe x86_64 resource CF ABI");
     uintptr_t globals_=0;
 public:
+    bool sameBinding(const TglNativeResourceCfTypeBinding& other) const noexcept {
+        return globals_ && globals_==other.globals_;
+    }
     template<class Read,class Qualify,class Executable>
     bool resolve(uintptr_t shared,Read read,Qualify qualify,Executable executable) noexcept {
         static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})));

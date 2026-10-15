@@ -11029,6 +11029,10 @@ static void testResourceBinding() {
         uintptr_t output=0xfeed;
         assert(!binding.readType(output,read) && output==0xfeed);
         assert(resolve() && !globalReads && binding.readType(output,read) && output==0x1234);
+        const auto copiedBinding=binding;
+        assert(binding.sameBinding(copiedBinding) && copiedBinding.sameBinding(binding));
+        assert(!binding.sameBinding(TglNativeResourceCfTypeBinding{}) &&
+            !TglNativeResourceCfTypeBinding{}.sameBinding(TglNativeResourceCfTypeBinding{}));
         for(unsigned mode=0;mode<3;++mode) {
             globalData={UINT64_MAX,0x1234};output=0xfeed;
             if(mode==0)globalData[0]=0;

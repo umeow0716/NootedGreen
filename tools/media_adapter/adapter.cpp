@@ -4383,6 +4383,27 @@ struct Entry {
     std::array<uintptr_t, 17> callbacks{};
     void *native = nullptr;
 };
+class NativeFactorySource {
+    std::mutex gate_;
+    Entry bindings_; // Values only: native/callback data/descriptor remain empty.
+    std::atomic<bool> ready_{false};
+public:
+    static NativeFactorySource& process() {static NativeFactorySource value;return value;}
+    bool bind(const Entry& candidate) {
+        const auto image=candidate.physical.image;
+        if(!candidate.physical.matchesFactoryTable(candidate.callbacks) ||
+            !candidate.physical.matchesCreatorInputs(candidate.nativeCpu,image+0x13e43) ||
+            !candidate.resourceClass.sameBinding(candidate.resourceClass))return false;
+        std::lock_guard<std::mutex> lock(gate_);
+        if(ready_.load(std::memory_order_acquire))return bindings_.physical.image==image &&
+            bindings_.physical.initialize==candidate.physical.initialize && bindings_.physical.destroy==candidate.physical.destroy &&
+            bindings_.nativeCpu.image==candidate.nativeCpu.image && bindings_.nativeCpu.allocate==candidate.nativeCpu.allocate &&
+            bindings_.nativeCpu.release==candidate.nativeCpu.release && bindings_.resourceClass.sameBinding(candidate.resourceClass);
+        bindings_.physical=candidate.physical;bindings_.nativeCpu=candidate.nativeCpu;bindings_.resourceClass=candidate.resourceClass;
+        ready_.store(true,std::memory_order_release);return true;
+    }
+    const Entry* get() const noexcept {return ready_.load(std::memory_order_acquire)?&bindings_:nullptr;}
+};
 enum class NativeRendererCallbackDomain : uint8_t {Original,Temporary};
 struct NativeRendererConstructionSelection {
     NativeRendererCallbackDomain domain=NativeRendererCallbackDomain::Original;
@@ -5405,6 +5426,10 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
         // is captured by the physical backend; conflicting images fail closed.
         // This does not yet enable the prepared lifecycle callback bundle.
         if(!NativePhysicalBackend::bind(entry->physical)) {
+            library.destroy(table);
+            return 10;
+        }
+        if(!NativeFactorySource::process().bind(*entry)) {
             library.destroy(table);
             return 10;
         }
