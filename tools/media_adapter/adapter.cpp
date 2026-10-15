@@ -3731,7 +3731,7 @@ struct NativeRetainedTemporaryExecution {
             if(input>UINTPTR_MAX-0x139 || packet>UINTPTR_MAX-0x40 ||
                 !writableDataMemory(input,0x130) || !writableDataMemory(packet,0x40) ||
                 !roles.capture(input,&readMemory) || !readMemory(packet+0xc,&source,4) ||
-                !readMemory(packet+0x30,&target,4) || source>=roles.sourceCount || target>=roles.targetCount)return reject();
+                !readMemory(packet+0x30,&target,4) || !roles.sourceSlot(source) || !roles.targetSlot(target))return reject();
             std::array<uint8_t,0x139> ownedParameters{};std::array<uint8_t,0x60> ownedPass{};
             Request request{self.backend,ownedParameters,ownedPass,roles,source,target,self.childIndex,self.temporal,
                 self.interfaces,self.catalogue,self.retirement,self.view,self.acquisition,self.decompressionStatus,
@@ -4028,6 +4028,24 @@ struct Entry {
             return result?0:5;
         });
         return status?nullptr:result;
+    }
+    NativePhysicalRegistry::FrameTicket createContextPassRootFrame(NativePhysicalFrameScope& physical,
+        uintptr_t address,uint64_t generation,uintptr_t creator,const TglNativeContextPassRootSelection& selected) const noexcept {
+        const uintptr_t image=nativeCpu.image;
+        if(!image || !creator || !selected.source || !selected.target || !physical.matches(image,address,generation))return {};
+        auto construct=[&](uintptr_t source,auto resolve,NativeContextSurfaceOwner& target) noexcept -> NativeBorrowedFrontend* {
+            return createBorrowedFrontend(physical,address,generation,creator,source,resolve,target,
+                [image,creator](NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view,
+                    const TglOwnedSurfaceStorage* input,const TglOwnedSurfaceStorage* output) noexcept -> bool {
+                    return input && output && view.image==image && view.creator==creator &&
+                        view.originalChildren[0]==reinterpret_cast<uintptr_t>(cpu.children().first().owner().constructedBase()) &&
+                        view.originalChildren[1]==reinterpret_cast<uintptr_t>(cpu.children().second().owner().constructedBase()) &&
+                        cpu.children().first().owner().allocationGeneration() && cpu.children().second().owner().allocationGeneration() &&
+                        !cpu.backing().retention()();
+                });
+        };
+        return physical.createContextRootFrame(&readMemory,NativeDataAdmission{},NativeCodecBackend::owners(),
+            image,address,generation,selected,&readMemory,NativeDataAdmission{},&writableDataMemory,construct);
     }
     std::array<uintptr_t, 17> callbacks{};
     void *native = nullptr;

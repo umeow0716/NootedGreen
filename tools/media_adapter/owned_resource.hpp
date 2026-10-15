@@ -2489,21 +2489,51 @@ struct TglNativeOuterSurfaceRoles {
         std::memcpy(targets.data(),bytes.data()+0x98,sizeof(targets));
         sourceCount=sc;targetCount=tc;return true;
     }
-    template<class Owner> bool sourceMatches(size_t index,Owner& owner,
-        const TglOwnedSurfaceStorage& surface) const noexcept {
-        if(index>=sources.size() || !sourceCount ||
-           sources[index]!=reinterpret_cast<uintptr_t>(&surface)) return false;
+    uintptr_t sourceSlot(size_t index) const noexcept {
+        if(index>=sources.size() || !sourceCount || sourceCount>sources.size() || !sources[index])return 0;
         uint32_t ordinal=0;
         for(size_t i=0;i<=index;++i) if(sources[i]) ++ordinal;
-        return ordinal<=sourceCount && owner.hasSurfaceLease(surface);
+        return ordinal<=sourceCount?sources[index]:0;
+    }
+    uintptr_t targetSlot(size_t index) const noexcept {
+        return targetCount<=targets.size() && index<targets.size() && index<targetCount?targets[index]:0;
+    }
+    bool selectContextRoots(const TglNativeContextInputRoots& roots,size_t sourceIndex,size_t targetIndex,
+        uintptr_t& source,uintptr_t& target) const noexcept {
+        source=0;target=0;
+        const uintptr_t selectedSource=sourceSlot(sourceIndex),selectedTarget=targetSlot(targetIndex);
+        if(!roots.input || !selectedSource || !selectedTarget)return false;
+        bool sourceRoot=false,targetRoot=false;
+        for(auto p:roots.sources)sourceRoot=sourceRoot || p==selectedSource;
+        for(auto p:roots.targets)targetRoot=targetRoot || p==selectedTarget;
+        if(!sourceRoot || !targetRoot)return false;
+        source=selectedSource;target=selectedTarget;return true;
+    }
+    template<class Owner> bool sourceMatches(size_t index,Owner& owner,
+        const TglOwnedSurfaceStorage& surface) const noexcept {
+        return sourceSlot(index)==reinterpret_cast<uintptr_t>(&surface) && owner.hasSurfaceLease(surface);
     }
     template<class Owner> bool targetMatches(size_t index,Owner& owner,
         const TglOwnedSurfaceStorage& surface) const noexcept {
-        return index<targetCount && targets[index]==reinterpret_cast<uintptr_t>(&surface) &&
+        return targetSlot(index)==reinterpret_cast<uintptr_t>(&surface) &&
             owner.hasSurfaceLease(surface);
     }
 };
 
+struct TglNativeContextPassRootSelection {
+    TglNativeOuterSurfaceRoles roles{};
+    uint32_t sourceIndex=0,targetIndex=0;
+    uintptr_t source=0,target=0;
+    template<class Read> bool capture(const TglNativeContextInputRoots& roots,
+        uintptr_t parameters,uintptr_t pass,Read read) noexcept {
+        *this={};TglNativeContextPassRootSelection candidate;
+        if(!pass || pass>UINTPTR_MAX-0x34 || !candidate.roles.capture(parameters,read) ||
+            !read(pass+0xc,&candidate.sourceIndex,4) || !read(pass+0x30,&candidate.targetIndex,4) ||
+            !candidate.roles.selectContextRoots(roots,candidate.sourceIndex,candidate.targetIndex,
+                candidate.source,candidate.target))return false;
+        *this=candidate;return true;
+    }
+};
 // Exact TGL226e6 forwards wrapper+10/index to FinishFenceEvent. This exposes
 // its real IOReturn (OS64df0 discards it), NOT a completion certificate: reset
 // and termination can satisfy the kernel predicate without successful work.
@@ -28137,7 +28167,20 @@ class TglNativeContextRendererFrameStorage {
     uint32_t lossFlags_=0;
     int renderPassFailure_=0;
     uintptr_t flushContext_=0,flushNativeContext_=0;
+    static uintptr_t selectedPassRoot(const TglNativeContextInputRoots& roots,
+        const TglNativeContextPassRootSelection& selected,bool chooseTarget) noexcept {
+        uintptr_t source=0,target=0;
+        if(!selected.roles.selectContextRoots(roots,selected.sourceIndex,selected.targetIndex,source,target) ||
+            source!=selected.source || target!=selected.target)return 0;
+        return chooseTarget?target:source;
+    }
 public:
+    template<class Read,class Admit,class Writable,class Construct>
+    TglNativeContextRendererFrameStorage(const TglNativeContextInputRoots& roots,Registry& registry,
+        uintptr_t image,uintptr_t physical,uint64_t generation,const TglNativeContextPassRootSelection& selected,
+        Read read,Admit admit,Writable writable,Construct construct) noexcept
+        :TglNativeContextRendererFrameStorage(registry,image,physical,generation,roots,
+            selectedPassRoot(roots,selected,false),selectedPassRoot(roots,selected,true),read,admit,writable,construct) {}
     // Scope::createContextRootFrame supplies its freshly authenticated roots
     // first. Preserve that same proof; never resolve an independent root set.
     template<class Read,class Admit,class Writable,class Construct>

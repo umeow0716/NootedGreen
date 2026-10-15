@@ -16313,7 +16313,17 @@ static void testRetainedVeboxFrames() {
                         return new(std::nothrow) RendererFixture(*resolve(address),targetOwner,destroyedRenderer);
                     };
                     using Storage=TglNativeContextRendererFrameStorage<decltype(owners),RendererFixture,2>;
-                    Storage retained(owners,image,0x8000,success.ticket.generation,renderRoots,address,historyAddress,
+                    TglNativeContextPassRootSelection selected;
+                    selected.roles.sourceCount=1;selected.roles.targetCount=1;
+                    selected.roles.sources[5]=address;selected.roles.targets[0]=historyAddress;
+                    selected.sourceIndex=5;selected.source=address;selected.target=historyAddress;
+                    {
+                        auto inconsistent=selected;inconsistent.target=address;
+                        Storage denied(renderRoots,owners,image,0x8000,success.ticket.generation,inconsistent,
+                            readGraph,admitGraph,admitGraph,construct);
+                        assert(!denied.surfacesReady() && !constructed);
+                    }
+                    Storage retained(renderRoots,owners,image,0x8000,success.ticket.generation,selected,
                         readGraph,admitGraph,admitGraph,construct);
                     assert(retained.surfacesReady() && retained.canDestroy() && constructed==1);
                     assert(retained.recordRenderPassResult(-99)==5 && !retained.renderPassFailure());
@@ -18385,6 +18395,34 @@ int main() {
         assert(roles.capture(0x1000,read));
         assert(roles.sourceMatches(5,sourceOwner,source));
         assert(!roles.sourceMatches(6,targetOwner,target)); // beyond first nonnull sourceCount entries
+        assert(roles.sourceSlot(5)==sp && !roles.sourceSlot(0) && !roles.sourceSlot(6) && !roles.sourceSlot(SIZE_MAX));
+        assert(roles.targetSlot(0)==tp && !roles.targetSlot(SIZE_MAX));
+        TglNativeContextInputRoots roots;roots.input=0x1000;roots.sources[5]=sp;roots.targets[0]=tp;
+        uintptr_t selectedSource=1,selectedTarget=1;
+        assert(roles.selectContextRoots(roots,5,0,selectedSource,selectedTarget) && selectedSource==sp && selectedTarget==tp);
+        {
+            uint32_t sourceIndex=5,targetIndex=0;
+            auto passRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+                if(n==4 && (p==0x200c || p==0x2030)) {
+                    const auto value=p==0x200c?sourceIndex:targetIndex;std::memcpy(out,&value,4);return true;
+                }
+                return read(p,out,n);
+            };
+            TglNativeContextPassRootSelection selected;
+            assert(selected.capture(roots,0x1000,0x2000,passRead) && selected.source==sp && selected.target==tp && selected.sourceIndex==5);
+            sourceIndex=6;
+            assert(!selected.capture(roots,0x1000,0x2000,passRead) && !selected.source && !selected.target && !selected.roles.sourceCount);
+            sourceIndex=5;targetIndex=1;
+            assert(!selected.capture(roots,0x1000,0x2000,passRead));
+            assert(!selected.capture(roots,0x1000,UINTPTR_MAX,passRead));
+        }
+        assert(!roles.selectContextRoots(roots,6,0,selectedSource,selectedTarget) && !selectedSource && !selectedTarget);
+        roots.sources.fill(0);roots.targets[1]=sp;
+        assert(!roles.selectContextRoots(roots,5,0,selectedSource,selectedTarget)); // target membership cannot grant source role
+        roots.sources[5]=sp;roots.targets.fill(0);roots.sources[6]=tp;
+        assert(!roles.selectContextRoots(roots,5,0,selectedSource,selectedTarget));
+        roles.targetCount=9;assert(!roles.targetSlot(0));roles.targetCount=1;
+        roles.sourceCount=18;assert(!roles.sourceSlot(5));roles.sourceCount=1;
         uint32_t tooMany=18;std::memcpy(input.data(),&tooMany,4);
         assert(!roles.capture(0x1000,read) && !roles.sourceCount && !roles.targets[0]);
         std::memcpy(input.data(),&one,4);tooMany=9;std::memcpy(input.data()+0x90,&tooMany,4);
