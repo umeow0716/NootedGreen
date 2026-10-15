@@ -26734,13 +26734,13 @@ struct TglNativePhysicalCallbackBinding {
 // Snapshot carries identities only: caller must pin every codec before native use.
 struct TglNativeCubeLutGeometry {
     uint32_t width=0,height=0,destinationRowBytes=0;
-    size_t sourceBytes=0,destinationBytes=0;
+    size_t sourceBytes=0,sourceReadBytes=0,destinationBytes=0;
 };
 inline bool tglPlanNativeCubeLutGeometry(uint32_t dimension,uint32_t format,
     TglNativeCubeLutGeometry& output) noexcept {
     // Exact2343d0: width=d, height=d*d; format1 consumes4 bytes/voxel,
-    // format2 consumes four16-bit channels; destination stride is4 bytes,
-    // with native updating only the three color bytes (alpha untouched).
+    // format2 source stride is8 bytes, but only three16-bit color values
+    // are read. Destination stride is4 bytes, alpha remains untouched.
     // Arithmetic representability only, NOT hardware/IOSurface admission.
     if(!dimension || (format!=1 && format!=2))return false;
     const uint64_t square=uint64_t(dimension)*dimension;
@@ -26751,8 +26751,48 @@ inline bool tglPlanNativeCubeLutGeometry(uint32_t dimension,uint32_t format,
     TglNativeCubeLutGeometry candidate;
     candidate.width=dimension;candidate.height=uint32_t(square);candidate.destinationRowBytes=dimension*4;
     candidate.sourceBytes=voxels*channelBytes;candidate.destinationBytes=voxels*4;
+    candidate.sourceReadBytes=candidate.sourceBytes-(format==2?2:0);
     output=candidate;return true;
 }
+class TglOwnedCubeLutSnapshot {
+    std::unique_ptr<uint8_t[]> storage_;
+    size_t bytes_=0;
+    bool busy_=false;
+public:
+    TglOwnedCubeLutSnapshot()=default;
+    TglOwnedCubeLutSnapshot(const TglOwnedCubeLutSnapshot&)=delete;
+    TglOwnedCubeLutSnapshot& operator=(const TglOwnedCubeLutSnapshot&)=delete;
+    const uint8_t* data() const noexcept {return busy_?nullptr:storage_.get();}
+    size_t size() const noexcept {return data()?bytes_:0;}
+    template<class Read> bool capture(uintptr_t source,uint32_t dimension,uint32_t format,
+        size_t admittedByteBudget,Read read) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<bool,Read&,uintptr_t,void*,size_t>);
+        if constexpr(std::is_pointer_v<Read>)if(!read)return false;
+        TglNativeCubeLutGeometry geometry;
+        if(busy_ || storage_ || !source || !tglPlanNativeCubeLutGeometry(dimension,format,geometry) ||
+            geometry.sourceBytes>admittedByteBudget || geometry.sourceBytes>size_t(PTRDIFF_MAX) ||
+            source>UINTPTR_MAX-geometry.sourceReadBytes)return false;
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        std::unique_ptr<uint8_t[]> candidate(new(std::nothrow) uint8_t[geometry.sourceBytes]);
+        if(!candidate)return false;
+        constexpr size_t chunk=4096;
+        for(size_t offset=0;offset<geometry.sourceReadBytes;) {
+            const auto bytes=std::min(chunk,geometry.sourceReadBytes-offset);
+            if(!read(source+offset,candidate.get()+offset,bytes))return false;
+            offset+=bytes;
+        }
+        // Verification occurs AFTER the entire copy; bounded scratch avoids
+        // a second cube-sized allocation. Caller must keep input lifetime.
+        std::array<uint8_t,chunk> check{};
+        for(size_t offset=0;offset<geometry.sourceReadBytes;) {
+            const auto bytes=std::min(chunk,geometry.sourceReadBytes-offset);
+            if(!read(source+offset,check.data(),bytes) || std::memcmp(check.data(),candidate.get()+offset,bytes))return false;
+            offset+=bytes;
+        }
+        for(size_t i=geometry.sourceReadBytes;i<geometry.sourceBytes;++i)candidate[i]=0;
+        bytes_=geometry.sourceBytes;storage_=std::move(candidate);return true;
+    }
+};
 template<size_t Capacity=16> class TglNativeContextPropertyBatch {
     static_assert(Capacity>0 && Capacity<=128);
     uintptr_t input_=0,records_=0;

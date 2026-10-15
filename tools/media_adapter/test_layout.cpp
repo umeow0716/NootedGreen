@@ -13557,11 +13557,48 @@ static void testSfcSetupOrder() {
 
 static void testSfcStateParameterOwnership() {
     {
+        std::array<uint8_t,5000> input{};for(size_t i=0;i<input.size();++i)input[i]=uint8_t(i);
+        TglOwnedCubeLutSnapshot snapshot;
+        unsigned calls=0;bool deny=false;
+        auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+            ++calls;assert(at>=0x1000 && bytes<=4096 && at-0x1000+bytes<=input.size());
+            assert(!snapshot.data() && !snapshot.size());
+            assert(!snapshot.capture(0x1000,2,1,32,[](uintptr_t,void*,size_t) noexcept {assert(false);return true;}));
+            if(deny)return false;
+            std::memcpy(out,input.data()+at-0x1000,bytes);
+            return true;
+        };
+        //10^3*4=4000 fits one chunk;10^3*8=8000 exceeds fixture.
+        assert(!snapshot.capture(0x1000,10,1,3999,read) && !calls);
+        assert(!snapshot.capture(UINTPTR_MAX-4,10,1,4000,read) && !calls);
+        deny=true;assert(!snapshot.capture(0x1000,10,1,4000,read) && !snapshot.data());deny=false;
+        calls=0;assert(snapshot.capture(0x1000,10,1,4000,read));
+        assert(snapshot.size()==4000 && std::memcmp(snapshot.data(),input.data(),4000)==0);
+        assert(!snapshot.capture(0x1000,10,1,4000,read));
+        input.fill(0xff);assert(snapshot.data()[0]==0 && snapshot.data()[1]==1);
+        std::array<uint8_t,5830> larger{}; // Last two alpha bytes are not readable input.
+        TglOwnedCubeLutSnapshot unstable;unsigned reads=0;
+        auto changing=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+            assert(bytes<=4096 && at>=0x2000 && at-0x2000+bytes<=larger.size());
+            std::memcpy(out,larger.data()+at-0x2000,bytes);
+            if(++reads==3)static_cast<uint8_t*>(out)[0]=1;
+            return true;
+        };
+        assert(!unstable.capture(0x2000,9,2,5832,changing) && !unstable.data() && reads==3);
+        TglOwnedCubeLutSnapshot exact;
+        assert(exact.capture(0x2000,9,2,5832,[&](uintptr_t at,void* out,size_t bytes) noexcept {
+            assert(bytes<=4096 && at>=0x2000 && at-0x2000+bytes<=larger.size());
+            std::memcpy(out,larger.data()+at-0x2000,bytes);return true;
+        }));
+        assert(exact.size()==5832 && !exact.data()[5830] && !exact.data()[5831]);
+    }
+    {
         TglNativeCubeLutGeometry geometry;
         assert(tglPlanNativeCubeLutGeometry(2,1,geometry));
         assert(geometry.width==2 && geometry.height==4 && geometry.destinationRowBytes==8 &&
             geometry.sourceBytes==32 && geometry.destinationBytes==32);
-        assert(tglPlanNativeCubeLutGeometry(2,2,geometry) && geometry.sourceBytes==64 && geometry.destinationBytes==32);
+        assert(tglPlanNativeCubeLutGeometry(2,2,geometry) && geometry.sourceBytes==64 &&
+            geometry.sourceReadBytes==62 && geometry.destinationBytes==32);
         const auto saved=geometry;
         for(uint32_t dimension:{0u,65536u,UINT32_MAX}) {
             assert(!tglPlanNativeCubeLutGeometry(dimension,1,geometry));
