@@ -5424,8 +5424,10 @@ struct NativeFactoryContextProperties {
                             if(!leases[i].get()->excludesPublishedContextWritableSpan(leases[i],output,bytes))return false;
                         return output<=UINTPTR_MAX-bytes && NativeDataAdmission{}(output,bytes) &&
                             (output>=storage+sizeof(cpu) || storage>=output+bytes) &&
-                            cpu.children().first().owner().excludesBaseShellAndHelperWritableSpan(output,bytes) &&
-                            cpu.children().second().owner().excludesBaseShellAndHelperWritableSpan(output,bytes);
+                            cpu.children().first().owner().excludesBaseShellHelperAndReportWritableSpan(output,bytes,
+                                &readMemory,NativeTglImageAdmission{image},&executableMemory) &&
+                            cpu.children().second().owner().excludesBaseShellHelperAndReportWritableSpan(output,bytes,
+                                &readMemory,NativeTglImageAdmission{image},&executableMemory);
                     })?0:5;
                 };
                 return NativePropertyParentMutation::run(parents,parentCount,0,mutation,image,address,generation,admitOutputs,invoke);

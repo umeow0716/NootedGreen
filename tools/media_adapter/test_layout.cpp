@@ -5222,6 +5222,18 @@ static void testExecutionShape() {
             return 0;
         })==0);
         assert(!leasedExclude(0x6000,1) && !owner.get());
+        const auto savedFirst=first,savedSecond=second;
+        auto queryExclude=[&](uintptr_t p,size_t n) {
+            return tglExcludeExecutionAllocationSpans(object,image,p,n,boundedRead,qualify,
+                [&](uintptr_t,size_t){return rx;},true);
+        };
+        first=second=0;
+        assert(queryExclude(0x6000,1) && !exclude(0x6000,1)); // Query permits constructor-only report; execution does not.
+        assert(!queryExclude(object,1));
+        first=savedFirst;
+        assert(queryExclude(0x6000,1) && !queryExclude(first,1) && !exclude(0x6000,1));
+        second=savedSecond;
+        assert(queryExclude(0x6000,1) && !queryExclude(second,1));
     }
     qualified = false; assert(!tglExecutionShape(object, image, read, qualify)); qualified = true;
     allowed = false; assert(!tglExecutionShape(object, image, read, qualify)); allowed = true;
@@ -31387,6 +31399,10 @@ int main() {
                 }
                 assert(shellBackend.live==8 && shellBackend.releases==11 && !eventCount);
                 shellBackend.reenter=nullptr;
+                assert(owner.excludesBaseShellHelperAndReportWritableSpan(0x10000,1,
+                    [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
+                    [](uintptr_t) noexcept {assert(false);return false;},
+                    [](uintptr_t,size_t) noexcept {assert(false);return false;})); // NULL report requires no factory/readiness work.
                 uint32_t helperAllocationSize=0xa0;
                 bool helperSizeReadable=true;
                 auto helperRead=[&](uintptr_t address,void* output,size_t size) noexcept {

@@ -3463,9 +3463,20 @@ bool tglExecutionShape(uintptr_t object, uintptr_t image, Read read, Qualify qua
 // Factory allocation spans only; nested members inside these children are not covered.
 template<class Read,class Qualify,class Executable>
 bool tglExcludeExecutionAllocationSpans(uintptr_t object,uintptr_t image,uintptr_t address,size_t bytes,
-    Read read,Qualify qualify,Executable executable) {
+    Read read,Qualify qualify,Executable executable,bool allowUninitializedChildren=false) {
+    auto shape=[&]() {
+        if(!allowUninitializedChildren)return tglExecutionShape(object,image,read,qualify);
+        if(!object || object>UINTPTR_MAX-0xd48 || !image || image>UINTPTR_MAX-0x757fd0 || !qualify(image))return false;
+        uintptr_t vptr=0,first=0,second=0;
+        if(!read(object,&vptr,8) || vptr!=image+0x757e90 ||
+            !read(object+0xd38,&first,8) || !read(object+0xd40,&second,8) ||
+            (first && (first==object || first==second)) || second==object)return false;
+        if(first && (first>UINTPTR_MAX-0x20 || !read(first,&vptr,8) || vptr!=image+0x757f78))return false;
+        if(second && (second>UINTPTR_MAX-0x48 || !read(second,&vptr,8) || vptr!=image+0x757fb8))return false;
+        return true;
+    };
     if(!address || !bytes || address>UINTPTR_MAX-bytes ||
-        !tglExecutionShape(object,image,read,qualify))return false;
+        !shape())return false;
     constexpr std::array<uintptr_t,4> offsets{0x12e45c,0x12e4bd,0x12e82f,0x12e8ff};
     constexpr std::array<std::array<uint8_t,5>,4> anchors{{
         {0xe8,0xbf,0x03,0,0},{0xe8,0x2e,0x04,0,0},
@@ -3476,11 +3487,11 @@ bool tglExcludeExecutionAllocationSpans(uintptr_t object,uintptr_t image,uintptr
     }
     uintptr_t first=0,second=0;
     if(!read(object+0xd38,&first,8) || !read(object+0xd40,&second,8) ||
-        !first || !second || first>UINTPTR_MAX-0x20 || second>UINTPTR_MAX-0x48)return false;
+        first>UINTPTR_MAX-0x20 || second>UINTPTR_MAX-0x48)return false;
     const auto disjoint=[&](uintptr_t base,size_t extent) {return address>=base+extent || base>=address+bytes;};
-    if(!disjoint(object,0xd48) || !disjoint(first,0x20) || !disjoint(second,0x48))return false;
+    if(!disjoint(object,0xd48) || (first && !disjoint(first,0x20)) || (second && !disjoint(second,0x48)))return false;
     uintptr_t finalFirst=0,finalSecond=0;
-    return tglExecutionShape(object,image,read,qualify) &&
+    return shape() &&
         read(object+0xd38,&finalFirst,8) && read(object+0xd40,&finalSecond,8) &&
         finalFirst==first && finalSecond==second;
 }
@@ -5316,6 +5327,26 @@ public:
         if(current!=transferredHelper_)return false;
         if(!current)return true;
         return current<=UINTPTR_MAX-0xa0 && (address>=current+0xa0 || current>=address+bytes);
+    }
+    template<class Read,class Qualify,class Executable>
+    bool excludesBaseShellHelperAndReportWritableSpan(uintptr_t address,size_t bytes,
+        Read read,Qualify qualify,Executable executable) noexcept {
+        // Query2358e0 does not use reports: NULL is valid, never initialize one.
+        // Enclosing property/physical reservation retains this native base
+        // through output consumption. This short gate prevents reentrant reset.
+        if(!excludesBaseShellAndHelperWritableSpan(address,bytes))return false;
+        busy_=true;
+        struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        uintptr_t report=0;
+        std::memcpy(&report,reinterpret_cast<const uint8_t*>(storage_.get())+0x88,8);
+        if(transferredHelper_) {
+            uintptr_t borrowed=0;
+            if(!read(transferredHelper_+0x10,&borrowed,8) || borrowed!=report)return false;
+        }
+        if(!report)return true;
+        TglExecutionBinding binding;
+        return binding.resolve(image_,read,qualify,executable) &&
+            tglExcludeExecutionAllocationSpans(report,image_,address,bytes,read,qualify,executable,true);
     }
     TglOwnedVeboxBaseOwner(CpuBackend& cpu,SfcInvoke& sfc,Cleanup& cleanup,Destroy& destroy)
         :storage_(cpu),sfc_(sfc),cleanup_(cleanup),destroy_(destroy) {
