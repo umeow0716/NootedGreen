@@ -5111,6 +5111,14 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
             library.destroy(table);
             return 10;
         }
+        // Establish the process-qualified immutable image before publishing
+        // any owned factory table. No Entry pointer or factory-table lifetime
+        // is captured by the physical backend; conflicting images fail closed.
+        // This does not yet enable the prepared lifecycle callback bundle.
+        if(!NativePhysicalBackend::bind(entry->physical)) {
+            library.destroy(table);
+            return 10;
+        }
         nativeCreateContexts.store(callback, std::memory_order_release);
         entry->native = table;
         entry->callbacks[3] = reinterpret_cast<uintptr_t>(&NGRN_ObservedCreateContexts);
