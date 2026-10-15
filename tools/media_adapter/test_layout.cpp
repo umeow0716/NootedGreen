@@ -17393,8 +17393,16 @@ static void testRetainedVeboxFrames() {
             assert(removalStage==2 && physical==0xf200 && batch.valid && batch.contexts==batchContexts);
             removalStage=3;return 0;
         };
-        assert(preparedCallbacks.removePreparedContextsAndReconcileBatch<2>(preparedPhysical.ticket,0xf200,input,
-            prepareOwners,preparedReconcile,preparedNative)==0 && removalStage==3);
+        const void* activeRemovalScope=nullptr;
+        assert(preparedCallbacks.removePreparedContextsAndReconcileBatchScoped<2>(preparedPhysical.ticket,0xf200,input,
+            [&](auto& scope,uintptr_t physical,const auto& batch) noexcept -> int {
+                assert(scope.matches(image,physical,preparedPhysical.ticket.generation));
+                assert(!scope.matches(image,physical,preparedPhysical.ticket.generation+1));
+                activeRemovalScope=&scope;return prepareOwners(physical,batch);
+            },[&](auto& scope,uintptr_t physical,const auto& batch) noexcept -> int {
+                assert(activeRemovalScope==&scope && scope.matches(image,physical,preparedPhysical.ticket.generation));
+                return preparedReconcile(physical,batch);
+            },preparedNative)==0 && removalStage==3);
         removalStage=0;prepareStatus=31;
         assert(preparedCallbacks.removePreparedContextsAndReconcileBatch<2>(preparedPhysical.ticket,0xf200,input,
             prepareOwners,preparedReconcile,preparedNative)==31 && removalStage==1);

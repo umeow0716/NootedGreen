@@ -4180,19 +4180,20 @@ struct NativePhysicalBackend {
         });
     }
     using RemovedBatch=TglNativeRemovedContextBatch<16>;
-    using PrepareRemoval=int(*)(void*,uintptr_t,uintptr_t,uint64_t,const RemovedBatch&) noexcept;
+    using RemovalScope=typename NativePhysicalRegistry::DependencyAdoptionScope;
+    using PrepareRemoval=int(*)(void*,RemovalScope&,uintptr_t,uintptr_t,uint64_t,const RemovedBatch&) noexcept;
     static int removePreparedContexts(void* physical,const void* input,void* cleanup,PrepareRemoval prepare) noexcept {
         TglNativePhysicalCallbackBinding native;
         if(!input || !cleanup || !prepare || !binding(native) ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(prepare),1))return 5;
         const auto address=reinterpret_cast<uintptr_t>(physical);
         return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
-            return callbacks.template removePreparedContextsAndReconcileBatch<16>(ticket,address,input,
-                [&](uintptr_t actual,const RemovedBatch& batch) noexcept -> int {
+            return callbacks.template removePreparedContextsAndReconcileBatchScoped<16>(ticket,address,input,
+                [&](RemovalScope& scope,uintptr_t actual,const RemovedBatch& batch) noexcept -> int {
                     if(actual!=address)return 5;
-                    return prepare(cleanup,native.image,actual,ticket.generation,batch);
-                },[&](uintptr_t actual,const RemovedBatch& batch) noexcept -> int {
-                    if(actual!=address)return 5;
+                    return prepare(cleanup,scope,native.image,actual,ticket.generation,batch);
+                },[&](RemovalScope& scope,uintptr_t actual,const RemovedBatch& batch) noexcept -> int {
+                    if(actual!=address || !scope.matches(native.image,actual,ticket.generation))return 5;
                     // Coordinator calls this ONLY after the same captured
                     // batch's native deleting destructors returned success.
                     // Authenticate metadata membership; never reread freed objects.

@@ -26713,6 +26713,35 @@ public:
         });
     }
     template<size_t Capacity=16,class Prepare,class Reconcile,class Native=TglNativeBackingAllocateInvoker>
+    int removePreparedContextsAndReconcileBatchScoped(typename Registry::Ticket ticket,uintptr_t physical,
+        const void* input,Prepare prepare,Reconcile reconcile,Native native=Native{}) noexcept {
+        using Batch=TglNativeRemovedContextBatch<Capacity>;
+        using Scope=typename Registry::DependencyAdoptionScope;
+        static_assert(noexcept(prepare(std::declval<Scope&>(),uintptr_t{},std::declval<const Batch&>())) &&
+            std::is_same_v<decltype(prepare(std::declval<Scope&>(),uintptr_t{},std::declval<const Batch&>())),int>);
+        static_assert(noexcept(reconcile(std::declval<Scope&>(),uintptr_t{},std::declval<const Batch&>())) &&
+            std::is_same_v<decltype(reconcile(std::declval<Scope&>(),uintptr_t{},std::declval<const Batch&>())),int>);
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+        constexpr std::array<uint8_t,17> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+            0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18};
+        std::array<uint8_t,17> actual{};
+        if(!input || !valid() || binding_.image>UINTPTR_MAX-0x15128-anchor.size() ||
+            !executable_(binding_.image+0x15128,anchor.size()) ||
+            !read_(binding_.image+0x15128,actual.data(),actual.size()) || actual!=anchor)return 5;
+        return registry_.withDependencyAdoption(ticket,binding_.image,physical,[&](Scope& scope) noexcept -> int {
+            Batch snapshot;
+            if(!scope.matches(binding_.image,physical,ticket.generation) ||
+                !snapshot.capture(reinterpret_cast<uintptr_t>(input),read_))return 5;
+            const int prepared=prepare(scope,physical,static_cast<const Batch&>(snapshot));
+            if(prepared)return prepared;
+            if(!scope.matches(binding_.image,physical,ticket.generation))return 5;
+            const int status=native(binding_.image+0x15128,physical,input);
+            if(status)return status;
+            return reconcile(scope,physical,static_cast<const Batch&>(snapshot));
+        });
+    }
+    template<size_t Capacity=16,class Prepare,class Reconcile,class Native=TglNativeBackingAllocateInvoker>
     int removePreparedContextsAndReconcileBatch(typename Registry::Ticket ticket,uintptr_t physical,
         const void* input,Prepare prepare,Reconcile reconcile,Native native=Native{}) noexcept {
         using Batch=TglNativeRemovedContextBatch<Capacity>;
@@ -26722,18 +26751,9 @@ public:
             std::is_same_v<decltype(reconcile(uintptr_t{},std::declval<const Batch&>())),int>);
         static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
             std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
-        Batch snapshot;
-        return removeContextsAndReconcile(ticket,physical,input,
-            [&](uintptr_t address,const void*) noexcept -> int {
-                return reconcile(address,static_cast<const Batch&>(snapshot));
-            },[&](uintptr_t entry,uintptr_t address,const void* original) noexcept -> int {
-                if(!snapshot.capture(reinterpret_cast<uintptr_t>(original),read_)) return 5;
-                // Prepare validates all owners, then detaches published children
-                // before native can delete them. Partial failure quarantines;
-                // it does not authorize release or imply rollback.
-                const int prepared=prepare(address,static_cast<const Batch&>(snapshot));
-                return prepared?prepared:native(entry,address,original);
-            });
+        return removePreparedContextsAndReconcileBatchScoped<Capacity>(ticket,physical,input,
+            [&](auto&,uintptr_t address,const Batch& snapshot) noexcept -> int {return prepare(address,snapshot);},
+            [&](auto&,uintptr_t address,const Batch& snapshot) noexcept -> int {return reconcile(address,snapshot);},native);
     }
     template<size_t Capacity=16,class Reconcile,class Native=TglNativeBackingAllocateInvoker>
     int removeContextsAndReconcileBatch(typename Registry::Ticket ticket,uintptr_t physical,
