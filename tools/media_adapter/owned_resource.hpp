@@ -24374,6 +24374,7 @@ struct TglNativeFrameOutputReceipt {
 class TglNativeFenceBackingObservation {
     uintptr_t image_=0;
 public:
+    uintptr_t image() const noexcept{return image_;}
     struct Snapshot {
         uintptr_t codec=0,wrapper=0,frameworkContext=0,mapping=0,event=0;
         uint64_t bytes=0;uint32_t index=0,count=0;
@@ -29148,6 +29149,7 @@ class TglNativeContextRendererFrameStorage {
         std::is_same_v<typename Renderer::TargetOwnerType,Owner>,"original context-pinned renderer owners");
     Sidecars* sidecars_=nullptr;
     Renderer* renderer_=nullptr;
+    uintptr_t image_=0,codec_=0;
     uintptr_t sourceRoot_=0,targetRoot_=0;
     bool busy_=false,retirementStarted_=false,retirementFailed_=false,retired_=false;
     bool flushBusy_=false,flushEntered_=false,flushUncertain_=false;
@@ -29188,6 +29190,7 @@ public:
         sourceRoot_=source;targetRoot_=target;
         sidecars_=new(std::nothrow) Sidecars;
         if(!sidecars_ || !sidecars_->initialize(registry,image,physical,generation,roots,read,admit,writable)) return;
+        image_=image;codec_=roots.parent.context;
         auto* sourceOwner=sidecars_->resolve(source);auto* targetOwner=sidecars_->resolve(target);
         if(!sourceOwner || !targetOwner) return;
         auto* heldSidecars=sidecars_;
@@ -29225,6 +29228,24 @@ public:
         return busy_ && renderer_==&renderer && !retirementStarted_ && !invalidated();
     }
     bool invalidated() const noexcept {return flushUncertain_ || lossFlags_;}
+    template<class Read,class Admit>
+    bool captureExpectedFence(const TglNativeFenceBackingObservation& binding,
+        const TglNativeFrameOutputReceipt& receipt,uintptr_t wrapper,Read read,Admit admit,
+        TglNativeFenceBackingObservation::Snapshot& output) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<bool,Read&,uintptr_t,void*,size_t> &&
+            std::is_nothrow_invocable_r_v<bool,Admit&,const Renderer&,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uint64_t,uint32_t>);
+        if constexpr(std::is_pointer_v<Read>)if(!read)return false;
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
+        if(busy_ || flushBusy_ || !renderer_ || retirementStarted_ || retired_ || invalidated() ||
+            !requiresRetention() || renderPassFailure_ || !codec_ || receipt.context!=codec_ || binding.image()!=image_)return false;
+        busy_=true;struct Reset{bool& busy;~Reset(){busy=false;}} reset{busy_};
+        // OS database flushContext_ is NOT the fence wrapper. Caller proves
+        // the separate wrapper through this retained renderer/physical owner.
+        return binding.capture(receipt,wrapper,read,
+            [&](uintptr_t codec,uintptr_t object,uintptr_t context,uintptr_t mapping,uint64_t bytes,uint32_t index) noexcept {
+                return codec==codec_ && admit(std::as_const(*renderer_),codec,object,context,mapping,bytes,index);
+            },output);
+    }
     bool requiresRetention() const noexcept {
         return nativeFrameEntered_ || flushEntered_ || (renderer_ && renderer_->requiresRetention());
     }

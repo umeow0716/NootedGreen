@@ -16490,6 +16490,13 @@ static void testRetainedVeboxFrames() {
                     Storage retained(renderRoots,owners,image,0x8000,success.ticket.generation,selected,
                         readGraph,admitGraph,admitGraph,construct);
                     assert(retained.surfacesReady() && retained.canDestroy() && constructed==1);
+                    TglNativeFenceBackingObservation fenceBacking;
+                    TglNativeFenceBackingObservation::Snapshot fenceSnapshot;
+                    auto denyFenceOwner=[](const RendererFixture&,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uint64_t,uint32_t) noexcept {
+                        assert(false);return false;
+                    };
+                    const TglNativeFrameOutputReceipt fenceReceipt{renderRoots.parent.context,0x90000,1,true};
+                    assert(!retained.captureExpectedFence(fenceBacking,fenceReceipt,0xa0000,readGraph,denyFenceOwner,fenceSnapshot));
                     size_t sourceRole=0,targetRole=0;
                     assert(retained.retainedRoleIndices(selected.roles,sourceRole,targetRole) && sourceRole==5 && targetRole==0);
                     auto ambiguous=selected.roles;ambiguous.sources[6]=address;ambiguous.sourceCount=2;
@@ -16511,6 +16518,7 @@ static void testRetainedVeboxFrames() {
                         return -99; // first inner error wins over outer return
                     })==-31);
                     assert(retained.renderPassFailure()==-31);
+                    assert(!retained.captureExpectedFence(fenceBacking,fenceReceipt,0xa0000,readGraph,denyFenceOwner,fenceSnapshot));
                     assert(retained.withRenderPass([](auto&) noexcept -> int {assert(false);return 0;})==-31);
                     assert(retained.withFrame([](auto&) noexcept -> int {return 0;})==0); // cleanup scope is not blocked
                     assert(!retained.canDestroy() && !retained.clear() && !destroyedRenderer);
