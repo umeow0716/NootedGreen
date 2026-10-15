@@ -16167,11 +16167,12 @@ static void testRetainedVeboxFrames() {
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         {
             for(const auto& schema:TglNativeOtherContextFrameBinding::schemas) {
-                uintptr_t actualTable=image+schema.table;int corrupt=-1;bool rx=true,identity=true;
+                uintptr_t actualTable=image+schema.table,parentPhysical=0x9000;int corrupt=-1;bool rx=true,identity=true;
                 auto readFamily=[&](uintptr_t p,void* out,size_t n) noexcept {
                     if(n!=8)return false;
                     uintptr_t value=0;
                     if(p==0x8000)value=actualTable;
+                    else if(p==0x8008)value=parentPhysical;
                     else if(p>=image+schema.table-16 && p<image+schema.table+schema.count*8 && !(p&7)) {
                         const size_t i=(p-(image+schema.table-16))/8;
                         value=i==0?0:i==1?image+schema.rtti:image+schema.callbacks[i-2];
@@ -16214,6 +16215,45 @@ static void testRetainedVeboxFrames() {
                 auto failedWrite=[&](uintptr_t,uintptr_t value) noexcept {actualTable=value;return false;};
                 assert(!ambiguous.publish(readFamily,failedWrite,admitTable) && ambiguous.requiresRetention());
                 assert(ambiguous.publication()==Table::Publication::Ambiguous);
+                // Same owner state machine, distinct native-other parent/table
+                // policies: never read VP12f0/128 on these objects.
+                struct FamilyPin {
+                    uintptr_t image=0,physical=0;unsigned* drops=nullptr;bool active=false;
+                    FamilyPin()=default;
+                    FamilyPin(uintptr_t i,unsigned& d):image(i),physical(0x9000),drops(&d),active(true) {}
+                    FamilyPin(const FamilyPin&)=delete;
+                    FamilyPin& operator=(const FamilyPin&)=delete;
+                    FamilyPin& operator=(FamilyPin&& other) noexcept {
+                        image=other.image;physical=other.physical;drops=other.drops;
+                        active=std::exchange(other.active,false);return *this;
+                    }
+                    ~FamilyPin(){if(active)++*drops;}
+                    bool matches(uintptr_t i,uintptr_t p,uint64_t g) const noexcept {
+                        return active && i==image && p==physical && g==1;
+                    }
+                };
+                auto admitOwner=[](uintptr_t p,size_t n) noexcept {return p==0x8000 && (n==8 || n==16);};
+                using OtherOwner=TglOwnedNativeCodecContextOwner<FamilyPin,decltype(readFamily),decltype(writeTable),
+                    decltype(admitOwner),decltype(qualified),decltype(executableFamily),
+                    TglNativeOtherContextParentView,TglNativeOtherContextFrameBinding>;
+                unsigned drops=0;FamilyPin dependency(image,drops);actualTable=image+schema.table;
+                parentPhysical+=8;
+                assert(!OtherOwner::create(image,0x9000,1,0x8000,dependency,readFamily,writeTable,admitOwner,qualified,executableFamily));
+                assert(dependency.active && !drops);parentPhysical-=8;
+                auto* retained=OtherOwner::create(image,0x9000,1,0x8000,dependency,readFamily,writeTable,admitOwner,qualified,executableFamily);
+                assert(retained && !dependency.active && !TglImplicitContextRelease<OtherOwner>::allowed(*retained));
+                struct FamilyLease {OtherOwner* owner;OtherOwner* get() const noexcept {return owner;}bool exclusive() const noexcept {return true;}} lease{retained};
+                auto same=[&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c) noexcept {
+                    return i==image && p==0x9000 && g==1 && c==0x8000;
+                };
+                parentPhysical+=8;assert(!retained->publishFrame(lease,hook,same,executableFamily));parentPhysical-=8;
+                assert(retained->publishFrame(lease,hook,same,executableFamily));
+                assert(retained->frameTable().callbackCount()==schema.count);
+                assert(!retained->excludesPublishedContextWritableSpan(lease,0xa000,4));
+                assert(!retained->confirmNativeRemoval(same));
+                assert(retained->prepareRemoval(same) && retained->confirmNativeRemoval(same));
+                assert(TglImplicitContextRelease<OtherOwner>::allowed(*retained));
+                delete retained;assert(drops==1);
             }
         }
         {

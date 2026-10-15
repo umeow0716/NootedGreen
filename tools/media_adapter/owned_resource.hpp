@@ -26136,12 +26136,13 @@ struct TglNativeContextFrameInvoker {
 // No native image modification. Caller must pin this owner before publication.
 // Its enclosing context owner must retain this object and both code images
 // until all calls end; copying/moving or rebuilding a published table is unsafe.
+enum class TglContextFramePublication { Unpublished,Published,RemovalPrepared,NativeDestroyed,Detached,Ambiguous };
 template<class Binding> class TglOwnedContextFrameVtableFor {
     decltype(std::declval<Binding>().original) table_{};
     size_t callbackCount_=0;
     uintptr_t context_=0,nativeFrame_=0,originalVptr_=0;bool attempted_=false,ready_=false;
 public:
-    enum class Publication { Unpublished,Published,RemovalPrepared,NativeDestroyed,Detached,Ambiguous };
+    using Publication=TglContextFramePublication;
 private:
     Publication publication_=Publication::Unpublished;
 public:
@@ -26303,20 +26304,34 @@ using TglOwnedNativeOtherContextFrameVtable=TglOwnedContextFrameVtableFor<TglNat
 // Concrete codec-context table owner. It owns NO native context allocation:
 // native slot4 remains responsible for deleting that allocation. Its physical
 // pin/table state survive until successful native-removal reconciliation.
-template<class PhysicalLease,class Read,class Write,class Admit,class Qualify,class Executable>
+// All19 native-other initializers reach2180a, whose2181a store writes
+// physical to context+8. No VP-specific OS-data or wrapper layout is implied.
+struct TglNativeOtherContextParentView {
+    uintptr_t context=0,physical=0,os=0,wrapper=0; // OS identities deliberately unresolved.
+    template<class Read,class Admit> bool resolve(uintptr_t candidate,Read read,Admit admit) noexcept {
+        *this={};uintptr_t parent=0;
+        if(!candidate || candidate>UINTPTR_MAX-16 || !admit(candidate,16) ||
+           !read(candidate+8,&parent,8) || !parent)return false;
+        context=candidate;physical=parent;return true;
+    }
+};
+
+template<class PhysicalLease,class Read,class Write,class Admit,class Qualify,class Executable,
+         class ParentBinding=TglNativeVeboxParentView,class FrameBinding=TglNativeContextFrameBinding>
 class TglOwnedNativeCodecContextOwner {
+    using FrameTable=TglOwnedContextFrameVtableFor<FrameBinding>;
     struct State {
         PhysicalLease physicalPin;
         uintptr_t image,physical,context,os,wrapper;uint64_t generation;
         Read read;Write write;Admit admit;Qualify qualify;Executable executable;
-        TglOwnedContextFrameVtable table;
+        FrameTable table;
         std::atomic<bool> busy{false};bool removed=false;
         State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c,uintptr_t o,uintptr_t wptr,
             Read r,Write w,Admit a,Qualify q,Executable e) noexcept
             :image(i),physical(p),context(c),os(o),wrapper(wptr),generation(g),read(r),write(w),admit(a),qualify(q),executable(e) {}
         bool retainedIdentity() const noexcept {return physicalPin.matches(image,physical,generation);}
         bool nativeParentMatches() noexcept {
-            TglNativeVeboxParentView parent;
+            ParentBinding parent;
             return parent.resolve(context,read,admit) && parent.physical==physical && parent.os==os && parent.wrapper==wrapper;
         }
     };
@@ -26333,7 +26348,7 @@ public:
         static_assert(std::is_nothrow_copy_constructible_v<Read> && std::is_nothrow_copy_constructible_v<Write> &&
             std::is_nothrow_copy_constructible_v<Admit> && std::is_nothrow_copy_constructible_v<Qualify> &&
             std::is_nothrow_copy_constructible_v<Executable>);
-        TglNativeVeboxParentView parent;TglNativeContextFrameBinding frame;
+        ParentBinding parent;FrameBinding frame;
         if(!dependency.matches(image,physical,generation) || !parent.resolve(context,read,admit) ||
             parent.physical!=physical || !frame.resolve(image,context,read,qualify,executable))return nullptr;
         auto* state=new(std::nothrow) State(image,physical,generation,context,parent.os,parent.wrapper,read,write,admit,qualify,executable);
@@ -26352,6 +26367,9 @@ public:
     uintptr_t context() const noexcept {return state_?state_->context:0;}
     template<class OwnerLease>
     bool excludesPublishedContextWritableSpan(const OwnerLease& lease,uintptr_t address,size_t bytes) noexcept {
+        // This allocation graph is exact VP1370 only. Native-other property
+        // routing must not manufacture an OS-data graph from common parent+8.
+        if constexpr(!std::is_same_v<ParentBinding,TglNativeVeboxParentView>)return false;
         if(!state_ || lease.get()!=this || !lease.exclusive() || !address || !bytes ||
             address>UINTPTR_MAX-bytes || !enter())return false;
         Unlock unlock{state_->busy};
@@ -26399,7 +26417,7 @@ public:
             finalRoots.parent.os==roots.parent.os && finalRoots.parent.wrapper==roots.parent.wrapper &&
             finalRoots.input==roots.input && finalRoots.sources==roots.sources && finalRoots.targets==roots.targets;
     }
-    const TglOwnedContextFrameVtable& frameTable() const noexcept {return state_->table;}
+    const FrameTable& frameTable() const noexcept {return state_->table;}
     bool nativeRemovalConfirmed() const noexcept {
         return state_ && state_->removed && !state_->table.requiresRetention();
     }
@@ -26501,9 +26519,9 @@ public:
 template<class Owner> struct TglImplicitContextRelease {
     static bool allowed(const Owner&) noexcept {return true;} // Legacy CPU-only owners.
 };
-template<class PhysicalLease,class Read,class Write,class Admit,class Qualify,class Executable>
-struct TglImplicitContextRelease<TglOwnedNativeCodecContextOwner<PhysicalLease,Read,Write,Admit,Qualify,Executable>> {
-    using Owner=TglOwnedNativeCodecContextOwner<PhysicalLease,Read,Write,Admit,Qualify,Executable>;
+template<class PhysicalLease,class Read,class Write,class Admit,class Qualify,class Executable,class ParentBinding,class FrameBinding>
+struct TglImplicitContextRelease<TglOwnedNativeCodecContextOwner<PhysicalLease,Read,Write,Admit,Qualify,Executable,ParentBinding,FrameBinding>> {
+    using Owner=TglOwnedNativeCodecContextOwner<PhysicalLease,Read,Write,Admit,Qualify,Executable,ParentBinding,FrameBinding>;
     static bool allowed(const Owner& owner) noexcept {return owner.nativeRemovalConfirmed();}
 };
 
