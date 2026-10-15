@@ -25997,6 +25997,29 @@ struct TglNativeOtherContextFrameBinding {
     }
 };
 
+struct TglNativeMixedContextFrameBinding {
+    uintptr_t image=0,vtable=0,frame=0;size_t callbackCount=0;
+    TglNativeContextFamily family=TglNativeContextFamily::Unknown;
+    std::array<uintptr_t,20> original{};
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t base,uintptr_t context,Read read,Qualify qualify,Executable executable) noexcept {
+        *this={};uintptr_t table=0;
+        if(!base || !context || !qualify(base) || !read(context,&table,8))return false;
+        const auto selected=tglNativeContextFamilyFromVtable(base,table);
+        if(selected==TglNativeContextFamily::VeboxVp) {
+            TglNativeContextFrameBinding native;
+            if(!native.resolve(base,context,read,qualify,executable))return false;
+            image=native.image;vtable=native.vtable;frame=native.frame;callbackCount=native.callbackCount;
+            for(size_t i=0;i<native.original.size();++i)original[i]=native.original[i];
+        } else if(selected==TglNativeContextFamily::NativeOther) {
+            TglNativeOtherContextFrameBinding native;
+            if(!native.resolve(base,context,read,qualify,executable))return false;
+            image=native.image;vtable=native.vtable;frame=native.frame;callbackCount=native.callbackCount;original=native.original;
+        } else return false;
+        family=selected;return true;
+    }
+};
+
 template<size_t Capacity=16> struct TglNativeCreatedContextBatch {
     static_assert(Capacity>0 && Capacity<=128,"owned adoption work budget, not native limit");
     std::array<uintptr_t,Capacity> contexts{};
@@ -26316,6 +26339,30 @@ struct TglNativeOtherContextParentView {
     }
 };
 
+struct TglNativeMixedContextParentView {
+    uintptr_t image=0,context=0,physical=0,os=0,wrapper=0;
+    TglNativeContextFamily family=TglNativeContextFamily::Unknown;
+    template<class Read,class Admit> bool resolve(uintptr_t candidate,Read read,Admit admit) noexcept {
+        if(!image)return false;
+        auto selected=family;
+        if(selected==TglNativeContextFamily::Unknown) {
+            uintptr_t table=0;
+            if(!candidate || !read(candidate,&table,8))return false;
+            selected=tglNativeContextFamilyFromVtable(image,table);
+        }
+        if(selected==TglNativeContextFamily::VeboxVp) {
+            TglNativeVeboxParentView parent;
+            if(!parent.resolve(candidate,read,admit))return false;
+            context=parent.context;physical=parent.physical;os=parent.os;wrapper=parent.wrapper;
+        } else if(selected==TglNativeContextFamily::NativeOther) {
+            TglNativeOtherContextParentView parent;
+            if(!parent.resolve(candidate,read,admit))return false;
+            context=parent.context;physical=parent.physical;os=0;wrapper=0;
+        } else return false;
+        family=selected;return true;
+    }
+};
+
 template<class PhysicalLease,class Read,class Write,class Admit,class Qualify,class Executable,
          class ParentBinding=TglNativeVeboxParentView,class FrameBinding=TglNativeContextFrameBinding>
 class TglOwnedNativeCodecContextOwner {
@@ -26323,15 +26370,16 @@ class TglOwnedNativeCodecContextOwner {
     struct State {
         PhysicalLease physicalPin;
         uintptr_t image,physical,context,os,wrapper;uint64_t generation;
+        ParentBinding parentProof;
         Read read;Write write;Admit admit;Qualify qualify;Executable executable;
         FrameTable table;
         std::atomic<bool> busy{false};bool removed=false;
-        State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c,uintptr_t o,uintptr_t wptr,
+        State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c,uintptr_t o,uintptr_t wptr,ParentBinding proof,
             Read r,Write w,Admit a,Qualify q,Executable e) noexcept
-            :image(i),physical(p),context(c),os(o),wrapper(wptr),generation(g),read(r),write(w),admit(a),qualify(q),executable(e) {}
+            :image(i),physical(p),context(c),os(o),wrapper(wptr),generation(g),parentProof(proof),read(r),write(w),admit(a),qualify(q),executable(e) {}
         bool retainedIdentity() const noexcept {return physicalPin.matches(image,physical,generation);}
         bool nativeParentMatches() noexcept {
-            ParentBinding parent;
+            auto parent=parentProof; // Retain family after native vptr becomes the owned clone.
             return parent.resolve(context,read,admit) && parent.physical==physical && parent.os==os && parent.wrapper==wrapper;
         }
     };
@@ -26349,9 +26397,10 @@ public:
             std::is_nothrow_copy_constructible_v<Admit> && std::is_nothrow_copy_constructible_v<Qualify> &&
             std::is_nothrow_copy_constructible_v<Executable>);
         ParentBinding parent;FrameBinding frame;
-        if(!dependency.matches(image,physical,generation) || !parent.resolve(context,read,admit) ||
-            parent.physical!=physical || !frame.resolve(image,context,read,qualify,executable))return nullptr;
-        auto* state=new(std::nothrow) State(image,physical,generation,context,parent.os,parent.wrapper,read,write,admit,qualify,executable);
+        if constexpr(std::is_same_v<ParentBinding,TglNativeMixedContextParentView>)parent.image=image;
+        if(!dependency.matches(image,physical,generation) || !frame.resolve(image,context,read,qualify,executable) ||
+            !parent.resolve(context,read,admit) || parent.physical!=physical)return nullptr;
+        auto* state=new(std::nothrow) State(image,physical,generation,context,parent.os,parent.wrapper,parent,read,write,admit,qualify,executable);
         if(!state)return nullptr;
         auto* owner=new(std::nothrow) TglOwnedNativeCodecContextOwner(state);
         if(!owner){delete state;return nullptr;}
@@ -26365,11 +26414,16 @@ public:
         if(state_ && state_->removed && !state_->table.requiresRetention())delete state_;
     }
     uintptr_t context() const noexcept {return state_?state_->context:0;}
+    TglNativeContextFamily family() const noexcept {
+        if(!state_)return TglNativeContextFamily::Unknown;
+        if constexpr(std::is_same_v<ParentBinding,TglNativeMixedContextParentView>)return state_->parentProof.family;
+        return std::is_same_v<ParentBinding,TglNativeVeboxParentView>?TglNativeContextFamily::VeboxVp:TglNativeContextFamily::NativeOther;
+    }
     template<class OwnerLease>
     bool excludesPublishedContextWritableSpan(const OwnerLease& lease,uintptr_t address,size_t bytes) noexcept {
         // This allocation graph is exact VP1370 only. Native-other property
         // routing must not manufacture an OS-data graph from common parent+8.
-        if constexpr(!std::is_same_v<ParentBinding,TglNativeVeboxParentView>)return false;
+        if(family()!=TglNativeContextFamily::VeboxVp)return false;
         if(!state_ || lease.get()!=this || !lease.exclusive() || !address || !bytes ||
             address>UINTPTR_MAX-bytes || !enter())return false;
         Unlock unlock{state_->busy};
@@ -27994,8 +28048,11 @@ template<size_t N,class Scope,class Registry,class Read,class Write,class Admit,
 int tglAdoptNativeCodecContextBatch(Scope& scope,uintptr_t physical,const TglNativeCreatedContextBatch<N>& batch,
     Registry& registry,std::array<typename Registry::OwnerType*,N>& candidates,
     Read read,Write write,Admit admit,Qualify qualify,Executable executable) noexcept {
-    using Owner=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,Read,Write,Admit,Qualify,Executable>;
-    static_assert(std::is_same_v<typename Registry::OwnerType,Owner> &&
+    using Owner=typename Registry::OwnerType;
+    using VpOwner=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,Read,Write,Admit,Qualify,Executable>;
+    using MixedOwner=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,Read,Write,Admit,Qualify,Executable,
+        TglNativeMixedContextParentView,TglNativeMixedContextFrameBinding>;
+    static_assert((std::is_same_v<Owner,VpOwner> || std::is_same_v<Owner,MixedOwner>) &&
         noexcept(scope.retainPhysicalDependency()) &&
         std::is_same_v<decltype(scope.retainPhysicalDependency()),TglOwnedPhysicalDependencyLease>);
     if(!batch.valid || batch.count>N || !scope.matches(scope.image(),physical,scope.generation()))return 5;

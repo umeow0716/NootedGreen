@@ -15422,7 +15422,8 @@ static void testRetainedVeboxFrames() {
             };
             // Owner type is defined without instantiating any Frame registry.
             using Codec=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,decltype(ownerRead),
-                decltype(writeVptr),decltype(ownerAdmit),decltype(qualify),decltype(executable)>;
+                decltype(writeVptr),decltype(ownerAdmit),decltype(qualify),decltype(executable),
+                TglNativeMixedContextParentView,TglNativeMixedContextFrameBinding>;
             using Physical=TglOwnedVeboxPhysicalFrameRegistry<ItemFrame,1>;
             Physical physicals;const auto ticket=physicals.reserve(base);
             assert(physicals.publish(ticket,base,physical));
@@ -16185,6 +16186,9 @@ static void testRetainedVeboxFrames() {
                 TglNativeOtherContextFrameBinding family;
                 auto resolveFamily=[&]() noexcept {return family.resolve(image,0x8000,readFamily,qualified,executableFamily);};
                 assert(resolveFamily() && family.callbackCount==schema.count && family.frame==image+schema.callbacks[5]);
+                TglNativeMixedContextFrameBinding mixed;
+                assert(mixed.resolve(image,0x8000,readFamily,qualified,executableFamily) &&
+                    mixed.family==TglNativeContextFamily::NativeOther && mixed.original==family.original);
                 for(size_t i=0;i<schema.count+2;++i) {
                     corrupt=int(i);assert(!resolveFamily() && !family.frame && !family.callbackCount);
                 }
@@ -16235,13 +16239,14 @@ static void testRetainedVeboxFrames() {
                 auto admitOwner=[](uintptr_t p,size_t n) noexcept {return p==0x8000 && (n==8 || n==16);};
                 using OtherOwner=TglOwnedNativeCodecContextOwner<FamilyPin,decltype(readFamily),decltype(writeTable),
                     decltype(admitOwner),decltype(qualified),decltype(executableFamily),
-                    TglNativeOtherContextParentView,TglNativeOtherContextFrameBinding>;
+                    TglNativeMixedContextParentView,TglNativeMixedContextFrameBinding>;
                 unsigned drops=0;FamilyPin dependency(image,drops);actualTable=image+schema.table;
                 parentPhysical+=8;
                 assert(!OtherOwner::create(image,0x9000,1,0x8000,dependency,readFamily,writeTable,admitOwner,qualified,executableFamily));
                 assert(dependency.active && !drops);parentPhysical-=8;
                 auto* retained=OtherOwner::create(image,0x9000,1,0x8000,dependency,readFamily,writeTable,admitOwner,qualified,executableFamily);
                 assert(retained && !dependency.active && !TglImplicitContextRelease<OtherOwner>::allowed(*retained));
+                assert(retained->family()==TglNativeContextFamily::NativeOther);
                 struct FamilyLease {OtherOwner* owner;OtherOwner* get() const noexcept {return owner;}bool exclusive() const noexcept {return true;}} lease{retained};
                 auto same=[&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c) noexcept {
                     return i==image && p==0x9000 && g==1 && c==0x8000;

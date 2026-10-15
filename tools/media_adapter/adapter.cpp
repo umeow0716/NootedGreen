@@ -92,7 +92,8 @@ struct NativeTglImageAdmission {
 };
 using NativeCodecOwner=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,
     decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,
-    NativeTglImageAdmission,decltype(&executableMemory)>;
+    NativeTglImageAdmission,decltype(&executableMemory),
+    TglNativeMixedContextParentView,TglNativeMixedContextFrameBinding>;
 struct NativeCodecBackend {
     using Registry=TglOwnedContextOwnerRegistry<NativeCodecOwner,64>;
     using Batch=TglNativeCreatedContextBatch<16>;
