@@ -26827,8 +26827,11 @@ public:
     int captureExpectedFence(typename Registry::Ticket ticket,uintptr_t physical,
         typename Registry::FrameTicket frame,const TglNativeFenceBackingObservation& binding,
         uintptr_t wrapper,FenceRead read,Admit admit,TglNativeFenceBackingObservation::Snapshot& output) noexcept {
-        if(binding.image()!=binding_.image)return 5;
+        if constexpr(std::is_pointer_v<FenceRead>)if(!read)return 5;
+        if(binding.image()!=binding_.image || physical>UINTPTR_MAX-0x58)return 5;
         return withFrame(ticket,physical,[&](auto& pool) noexcept -> int {
+            // Final235e49 output uses physical+50, not the optional+60 path.
+            if(!wrapper && (!read(physical+0x50,&wrapper,8) || !wrapper))return 5;
             return pool.withRetainedFrameObservation(frame,[&](auto& retained,const auto& receipt) noexcept -> int {
                 return retained.captureExpectedFence(binding,receipt,wrapper,read,admit,output)?0:5;
             });
@@ -29256,7 +29259,7 @@ public:
         const TglNativeFrameOutputReceipt& receipt,uintptr_t wrapper,Read read,Admit admit,
         TglNativeFenceBackingObservation::Snapshot& output) noexcept {
         static_assert(std::is_nothrow_invocable_r_v<bool,Read&,uintptr_t,void*,size_t> &&
-            std::is_nothrow_invocable_r_v<bool,Admit&,const Renderer&,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uint64_t,uint32_t>);
+            std::is_nothrow_invocable_r_v<bool,Admit&,Renderer&,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uint64_t,uint32_t>);
         if constexpr(std::is_pointer_v<Read>)if(!read)return false;
         if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
         if(busy_ || flushBusy_ || !renderer_ || retirementStarted_ || retired_ || invalidated() ||
@@ -29266,7 +29269,7 @@ public:
         // the separate wrapper through this retained renderer/physical owner.
         return binding.capture(receipt,wrapper,read,
             [&](uintptr_t codec,uintptr_t object,uintptr_t context,uintptr_t mapping,uint64_t bytes,uint32_t index) noexcept {
-                return codec==codec_ && admit(std::as_const(*renderer_),codec,object,context,mapping,bytes,index);
+                return codec==codec_ && admit(*renderer_,codec,object,context,mapping,bytes,index);
             },output);
     }
     bool requiresRetention() const noexcept {

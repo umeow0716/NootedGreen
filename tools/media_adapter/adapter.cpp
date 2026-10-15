@@ -2769,6 +2769,32 @@ struct NativeRetainedInspectionEntry {
         return frontend.withRetainedInspection(use);
     }
 };
+struct NativeRetainedFenceOwnerAdmission {
+    uintptr_t image=0,physical=0;
+    bool operator()(NativeBorrowedFrontend& frontend,uintptr_t codec,uintptr_t wrapper,
+        uintptr_t framework,uintptr_t mapping,uint64_t bytes,uint32_t index) const noexcept {
+        if(!image || !physical || !codec || !wrapper || !framework || !mapping || !bytes ||
+            mapping>UINTPTR_MAX-bytes || index>=bytes/64 ||
+            !leafMemoryPermissions(mapping,size_t(bytes),VM_PROT_READ,VM_PROT_EXECUTE) ||
+            !leafMemoryPermissions(framework,0x20,VM_PROT_READ,VM_PROT_EXECUTE))return false;
+        bool proved=false;
+        const int status=frontend.withRetainedInspection([&](const auto&,const TglNativeCreatedVeboxRendererView& pinned,
+            const auto&,const auto&,bool) noexcept -> int {
+            TglNativeVeboxParentView parent;uintptr_t creator=0,os=0,currentContext=0,currentMapping=0;
+            uint64_t currentBytes=0;uint32_t count=0;
+            if(pinned.image!=image || !pinned.creator || !pinned.matchesRendererTable(&readMemory) ||
+                !parent.resolve(codec,&readMemory,NativeDataAdmission{}) || parent.physical!=physical || parent.wrapper!=wrapper ||
+                !readMemory(codec+0x12e0,&creator,8) || creator!=pinned.creator ||
+                !readMemory(creator+0x40,&os,8) || os!=parent.os ||
+                !readMemory(wrapper+0x10,&currentContext,8) || currentContext!=framework ||
+                !readMemory(wrapper+0x20,&currentMapping,8) || currentMapping!=mapping ||
+                !readMemory(wrapper+0x38,&currentBytes,8) || currentBytes!=bytes ||
+                !readMemory(wrapper+0x40,&count,4) || count!=bytes/64 || index>=count)return 5;
+            proved=true;return 0;
+        });
+        return !status && proved;
+    }
+};
 struct NativeRendererHistoryInspection {
     static TglNativeHistoryCacheInspection run(NativeBorrowedFrontend& frontend) noexcept {
         TglNativeHistoryCacheInspection result;
@@ -4214,6 +4240,12 @@ struct NativePhysicalBackend {
         return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
             return callbacks.reportFrameEvents(ticket,address,input);
         });
+    }
+    static int captureNativeExpectedFence(void* physical,typename NativePhysicalRegistry::FrameTicket frame,
+        TglNativeFenceBackingObservation::Snapshot& output) noexcept {
+        TglNativePhysicalCallbackBinding native;if(!binding(native))return 5;
+        return captureExpectedFence(physical,frame,0,
+            NativeRetainedFenceOwnerAdmission{native.image,reinterpret_cast<uintptr_t>(physical)},output);
     }
     using RemovedBatch=TglNativeRemovedContextBatch<16>;
     using RemovalScope=typename NativePhysicalRegistry::DependencyAdoptionScope;
