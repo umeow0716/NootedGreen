@@ -4179,6 +4179,32 @@ struct NativePhysicalBackend {
             return callbacks.reportFrameEvents(ticket,address,input);
         });
     }
+    using RemovedBatch=TglNativeRemovedContextBatch<16>;
+    using PrepareRemoval=int(*)(void*,uintptr_t,uintptr_t,uint64_t,const RemovedBatch&) noexcept;
+    static int removePreparedContexts(void* physical,const void* input,void* cleanup,PrepareRemoval prepare) noexcept {
+        TglNativePhysicalCallbackBinding native;
+        if(!input || !cleanup || !prepare || !binding(native) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(prepare),1))return 5;
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.template removePreparedContextsAndReconcileBatch<16>(ticket,address,input,
+                [&](uintptr_t actual,const RemovedBatch& batch) noexcept -> int {
+                    if(actual!=address)return 5;
+                    return prepare(cleanup,native.image,actual,ticket.generation,batch);
+                },[&](uintptr_t actual,const RemovedBatch& batch) noexcept -> int {
+                    if(actual!=address)return 5;
+                    // Coordinator calls this ONLY after the same captured
+                    // batch's native deleting destructors returned success.
+                    // Authenticate metadata membership; never reread freed objects.
+                    return NativeCodecBackend::reconcile(native.image,actual,ticket.generation,batch,
+                        [&](uintptr_t image,uintptr_t parent,uint64_t generation,uintptr_t context) noexcept {
+                            if(image!=native.image || parent!=actual || generation!=ticket.generation || !batch.valid)return false;
+                            for(uint32_t i=0;i<batch.count;++i)if(batch.contexts[i]==context)return true;
+                            return false;
+                        });
+                });
+        });
+    }
     template<class Use> static int withScope(uintptr_t physical,Use use) noexcept {
         if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
         TglNativePhysicalCallbackBinding native;
