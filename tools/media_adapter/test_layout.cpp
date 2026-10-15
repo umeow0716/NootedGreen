@@ -13277,6 +13277,13 @@ static void testVpSfcCpuGraph() {
     avs.fail=false;state.fail=true;
     assert(!initialize() && !state.live && !avs.live && avs.frees==1);
     state.fail=false;assert(initialize() && state.live && avs.live);
+    assert(graph.excludesPrivateWritableSpan(1,1));
+    assert(!graph.excludesPrivateWritableSpan(reinterpret_cast<uintptr_t>(state.bytes.data()),1));
+    assert(!graph.excludesPrivateWritableSpan(reinterpret_cast<uintptr_t>(state.bytes.data())+0xf7,2));
+    assert(!graph.excludesPrivateWritableSpan(reinterpret_cast<uintptr_t>(avs.bytes.data()),1));
+    assert(!graph.excludesPrivateWritableSpan(reinterpret_cast<uintptr_t>(avs.bytes.data())+0xbff,2));
+    assert(!graph.excludesPrivateWritableSpan(reinterpret_cast<uintptr_t>(&graph),1));
+    assert(!graph.excludesPrivateWritableSpan(UINTPTR_MAX,1));
     assert(graph.prepare([&](auto& storage,auto&,auto&) noexcept {
         uintptr_t p=0;uint32_t channel=0;
         std::memcpy(&channel,storage.bytes.data()+0x918,4);
@@ -24195,6 +24202,8 @@ int main() {
                         [](uintptr_t,size_t) noexcept {return true;},resources,4096,TglNativeBufferFillBinding{},
                         typename Backing::PairedRetention{aggregate,second.backing().auxiliary().retention(),{nativeCpu,nativeCpu}});
                     assert(paired.hasVpStorage(0) && paired.hasVpStorage(1));
+                    assert(paired.excludesPrivateVpWritableSpan(1,1)); // Empty graphs remain valid Query state.
+                    assert(!paired.excludesPrivateVpWritableSpan(UINTPTR_MAX,1));
                     assert(&paired.retention()==&aggregate);
                     auto& firstLocal=paired.command().backing().auxiliary().retention();
                     assert(firstLocal.linkedTo(aggregate) && !firstLocal());
@@ -30274,6 +30283,9 @@ int main() {
                                     assert(firstVpAddress!=secondVpAddress);return 0;
                                 });
                             })==0);
+                            assert(frame.backing().excludesPrivateVpWritableSpan(1,1));
+                            assert(!frame.backing().excludesPrivateVpWritableSpan(reinterpret_cast<uintptr_t>(firstVpAddress),1));
+                            assert(!frame.backing().excludesPrivateVpWritableSpan(reinterpret_cast<uintptr_t>(secondVpAddress),1));
                             assert(frame.backing().withVpResources([&](auto&,auto& storage,auto&) noexcept {
                                 uintptr_t vpOs=0,vpRh=0,vpSfc=0;
                                 std::memcpy(&vpOs,storage.bytes.data()+0x10,8);

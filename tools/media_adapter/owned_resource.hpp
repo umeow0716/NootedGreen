@@ -16291,6 +16291,9 @@ template<class Backend> class TglOwnedSfcStateParameters {
 public:
     explicit TglOwnedSfcStateParameters(Backend& backend) : owner(backend) {}
     ~TglOwnedSfcStateParameters() { reset(); }
+    bool excludesBackingWritableSpan(uintptr_t address,size_t bytes) const noexcept {
+        return !mutating && owner.excludesWritableSpan(address,bytes);
+    }
 private:
     template<class ResetView> bool initializeWithReset(ResetView resetView) {
         static_assert(noexcept(resetView()),"VP state reset ABI");
@@ -16443,6 +16446,9 @@ template<class Backend> class TglOwnedSfcAvsParameters {
 public:
     explicit TglOwnedSfcAvsParameters(Backend& backend) : coefficients(backend) {}
     ~TglOwnedSfcAvsParameters() { reset(); }
+    bool excludesBackingWritableSpan(uintptr_t address,size_t bytes) const noexcept {
+        return !mutating && coefficients.excludesWritableSpan(address,bytes);
+    }
     bool initialize() {
         if(leased || mutating) return false;
         if (coefficients.get()) return true;
@@ -16734,6 +16740,12 @@ public:
     TglOwnedVpSfcCpuGraph(const TglOwnedVpSfcCpuGraph&)=delete;
     TglOwnedVpSfcCpuGraph& operator=(const TglOwnedVpSfcCpuGraph&)=delete;
     ~TglOwnedVpSfcCpuGraph(){reset();}
+    bool excludesPrivateWritableSpan(uintptr_t address,size_t bytes) const noexcept {
+        if(busy_ || constructionScope_ || !state_.excludesBackingWritableSpan(address,bytes) ||
+            !avs_.excludesBackingWritableSpan(address,bytes))return false;
+        const uintptr_t self=reinterpret_cast<uintptr_t>(this);
+        return self<=UINTPTR_MAX-sizeof(*this) && (address>=self+sizeof(*this) || self>=address+bytes);
+    }
     bool ownsStorage(const void* child) const noexcept {return ready_ && child==storage_.bytes.data();}
     uint64_t generation() const noexcept {return generation_;}
     // Bind only between frame borrowers, never during initialization or
@@ -22773,6 +22785,11 @@ template<class Invoker=TglNativeTrackedCpuInvoker> class TglNativeVpBackingStora
     TglNativeResourceBinding resourceBinding_{};
     uint64_t pageSize_=0;
 public:
+    bool excludesPrivateWritableSpan(uintptr_t address,size_t bytes) noexcept {
+        if(preparing_ || !cpu_.graph().excludesPrivateWritableSpan(address,bytes))return false;
+        const uintptr_t self=reinterpret_cast<uintptr_t>(this);
+        return self<=UINTPTR_MAX-sizeof(*this) && (address>=self+sizeof(*this) || self>=address+bytes);
+    }
     template<class Read,class Qualify,class Executable>
     TglNativeVpBackingStorage(uintptr_t image,Read read,Qualify qualify,Executable executable,
         const TglOwnedVeboxFrameRetention& retention,Invoker invoke={})
@@ -28822,6 +28839,10 @@ class TglNativeVeboxVpFrameBacking {
         return index==0?&vp_:index==1?secondVp_:nullptr;
     }
 public:
+    bool excludesPrivateVpWritableSpan(uintptr_t address,size_t bytes) noexcept {
+        return vp_.excludesPrivateWritableSpan(address,bytes) &&
+            (!secondVp_ || secondVp_->excludesPrivateWritableSpan(address,bytes));
+    }
     struct PairedRetention {
         TglOwnedVeboxFrameRetention& aggregate;
         const TglOwnedVeboxFrameRetention& second;

@@ -5420,6 +5420,7 @@ struct NativeFactoryContextProperties {
                             NativeTglImageAdmission{image},&executableMemory))return false;
                         if(!owner.excludesPropertyRendererWritableSpan(pin,output,bytes,
                             NativeTglImageAdmission{image},&executableMemory))return false;
+                        if(!cpu.backing().excludesPrivateVpWritableSpan(output,bytes))return false;
                         for(size_t i=0;i<count;++i)
                             if(!leases[i].get()->excludesPublishedContextWritableSpan(leases[i],output,bytes))return false;
                         return output<=UINTPTR_MAX-bytes && NativeDataAdmission{}(output,bytes) &&
