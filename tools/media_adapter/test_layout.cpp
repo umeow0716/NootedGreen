@@ -16635,6 +16635,23 @@ static void testRetainedVeboxFrames() {
             table[13]=image+0x15c0e;table[14]=image+0x15f1f;
             const auto saved=table;
             assert(binding.matchesFactoryTable(table) && table==saved);
+            std::array<uintptr_t,16> replacements{};
+            for(size_t i=0;i<replacements.size();++i)replacements[i]=0xf000+i*0x20;
+            auto owned=[](uintptr_t address,size_t bytes) noexcept -> bool {
+                return bytes==1 && address>=0xf000 && address<0xf200 && !(address&0x1f);
+            };
+            std::array<uintptr_t,17> prepared{};
+            assert(tglBuildOwnedFullFactoryTable(binding,table,replacements,prepared,owned) && prepared[0]==saved[0] && table==saved);
+            for(size_t i=0;i<replacements.size();++i)assert(prepared[i+1]==replacements[i]);
+            for(size_t bad=0;bad<replacements.size();++bad) {
+                auto damaged=replacements;damaged[bad]=0;
+                auto unchanged=prepared;
+                assert(!tglBuildOwnedFullFactoryTable(binding,table,damaged,prepared,owned) && prepared==unchanged);
+                assert(!tglBuildOwnedFullFactoryTable(binding,table,replacements,prepared,
+                    [&](uintptr_t address,size_t bytes) noexcept {return address!=replacements[bad] && owned(address,bytes);}) && prepared==unchanged);
+            }
+            auto alias=table;auto damaged=replacements;damaged[0]=0;
+            assert(!tglBuildOwnedFullFactoryTable(binding,alias,damaged,alias,owned) && alias==saved);
             for(unsigned slot=1;slot<17;++slot) {
                 ++table[slot];assert(!binding.matchesFactoryTable(table));--table[slot];
             }

@@ -4794,6 +4794,7 @@ struct Entry {
             image,address,generation,selected,&readMemory,NativeDataAdmission{},&writableDataMemory,construct);
     }
     std::array<uintptr_t, 17> callbacks{};
+    std::array<uintptr_t, 17> preparedCallbacks{}; // Not selected until final publication audit.
     void *native = nullptr;
 };
 class NativeFactorySource {
@@ -6090,6 +6091,21 @@ struct NativeFactoryLifecycle {
         return result.status;
     }
 };
+bool prepareFullFactoryTable(Entry& entry) noexcept {
+    const std::array<uintptr_t,16> callbacks{
+        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::initialize),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::destroy),
+        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::createContexts),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::removeContexts),
+        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::lookupFormats),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::allocateBacking),
+        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::releaseBacking),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::describeFormats),
+        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::allocatePool),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::releasePool),
+        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::frame),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::reportFrameEvents),
+        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::configureContexts),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::queryContexts),
+        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::setPhysicalProperties),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::queryPhysicalProperties)};
+    return tglBuildOwnedFullFactoryTable(entry.physical,entry.callbacks,callbacks,entry.preparedCallbacks,&ownedExecutableMemory);
+}
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::initialize),int(*)(void**,const void*) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::destroy),int(*)(void*) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::createContexts),int(*)(void*,const void*) noexcept>);
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::frame),int(*)(void*,const void*,void*) noexcept>);
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::lookupFormats),uint64_t(*)(void*,void*) noexcept>);
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::describeFormats),uint64_t(*)(void*,void*) noexcept>);
@@ -6455,6 +6471,10 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
             return 10;
         }
         if(!NativeFactorySource::process().bind(*entry)) {
+            library.destroy(table);
+            return 10;
+        }
+        if(!prepareFullFactoryTable(*entry)) {
             library.destroy(table);
             return 10;
         }

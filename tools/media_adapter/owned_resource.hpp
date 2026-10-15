@@ -28347,6 +28347,20 @@ struct TglNativeFrameBatchInvoker {
         return reinterpret_cast<int(*)(void*,const void*,void*)>(entry)(reinterpret_cast<void*>(physical),input,output);
     }
 };
+// Preparation only; caller publishes the completed table after ALL preflight
+// succeeds. Failure leaves output untouched, including aliased input/output.
+template<class OwnedAdmit>
+bool tglBuildOwnedFullFactoryTable(const TglNativePhysicalCallbackBinding& binding,
+    const std::array<uintptr_t,17>& original,const std::array<uintptr_t,16>& replacements,
+    std::array<uintptr_t,17>& output,OwnedAdmit ownedAdmit) noexcept {
+    if(!binding.matchesFactoryTable(original))return false;
+    auto candidate=original;
+    for(size_t i=0;i<replacements.size();++i) {
+        if(!replacements[i] || !ownedAdmit(replacements[i],size_t{1}))return false;
+        candidate[i+1]=replacements[i];
+    }
+    output=candidate;return true;
+}
 struct TglNativeBackingAllocateInvoker {
     int operator()(uintptr_t entry,uintptr_t physical,const void* input) const noexcept {
         return reinterpret_cast<int(*)(void*,const void*)>(entry)(reinterpret_cast<void*>(physical),input);
