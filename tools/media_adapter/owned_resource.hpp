@@ -27039,6 +27039,54 @@ inline bool tglNativeFormatArithmeticSafe(uint32_t format,uint32_t width,uint32_
     return !roundedHeight || uint64_t(height)+63<=maximum;
 }
 
+// Slot8's descriptor and four output arrays may alias. Keep each overlapping
+// interval in ONE owned component, preserving byte offsets and alignment.
+// This only builds the address map; caller snapshots/rebases the descriptor
+// and publishes the exact native-written footprint under its parent lease.
+class TglNativeFormatAliasStaging {
+    struct Span {uintptr_t begin=0,end=0;size_t offset=0;};
+    std::array<Span,5> components_{};
+    alignas(8) std::array<uint8_t,160> bytes_{};
+    size_t count_=0;
+public:
+    bool prepare(uintptr_t descriptor,const std::array<uintptr_t,4>& outputs,uint32_t planes) noexcept {
+        count_=0;bytes_.fill(0);
+        if(!descriptor || descriptor>UINTPTR_MAX-0x48 || planes>3)return false;
+        std::array<Span,5> spans{};size_t n=1;
+        spans[0]={descriptor,descriptor+0x48,0};
+        if(planes)for(auto output:outputs)if(output) {
+            const size_t length=size_t(planes)*4;
+            if(output>UINTPTR_MAX-length)return false;
+            spans[n++]={output,output+length,0};
+        }
+        for(size_t i=1;i<n;++i)for(size_t j=i;j && spans[j].begin<spans[j-1].begin;--j)
+            std::swap(spans[j],spans[j-1]);
+        for(size_t i=0;i<n;++i) {
+            if(count_ && spans[i].begin<=components_[count_-1].end) {
+                if(spans[i].end>components_[count_-1].end)components_[count_-1].end=spans[i].end;
+            } else components_[count_++]=spans[i];
+        }
+        size_t used=0;
+        for(size_t i=0;i<count_;++i) {
+            auto& span=components_[i];
+            const size_t padding=(size_t(span.begin&7)+8-(used&7))&7;
+            const uintptr_t length=span.end-span.begin;
+            if(padding>bytes_.size()-used || length>bytes_.size()-used-padding) {count_=0;return false;}
+            span.offset=used+padding;used=span.offset+size_t(length);
+        }
+        return true;
+    }
+    uint8_t* translate(uintptr_t address,size_t length) noexcept {
+        if(!address || !length || address>UINTPTR_MAX-length)return nullptr;
+        for(size_t i=0;i<count_;++i) {
+            const auto& span=components_[i];
+            if(address>=span.begin && address+length<=span.end)
+                return bytes_.data()+span.offset+size_t(address-span.begin);
+        }
+        return nullptr;
+    }
+};
+
 class TglNativeFormatLookupTransaction {
     bool attempted_=false;
 public:

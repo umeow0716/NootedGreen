@@ -16166,6 +16166,30 @@ static void testRetainedVeboxFrames() {
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         {
+            TglNativeFormatAliasStaging staging;
+            assert(staging.prepare(0x1000,{0x1020,0x1024,0x1044,0x104c},3));
+            auto* root=staging.translate(0x1000,0x48);assert(root);
+            assert(staging.translate(0x1020,12)==root+0x20);
+            assert(staging.translate(0x1024,12)==root+0x24);
+            assert(staging.translate(0x1044,12)==root+0x44);
+            assert(staging.translate(0x104c,12)==root+0x4c);
+            auto* overlapping=staging.translate(0x1020,12);overlapping[4]=0xa5;
+            assert(staging.translate(0x1024,12)[0]==0xa5);
+            assert(!staging.translate(0x1057,2));
+            // Separate components preserve original alignment, not huge gaps.
+            assert(staging.prepare(0x1003,{0x8001,0xa002,0xc003,0xe004},3));
+            for(uintptr_t p:{uintptr_t{0x1003},uintptr_t{0x8001},uintptr_t{0xa002},uintptr_t{0xc003},uintptr_t{0xe004}})
+                assert((reinterpret_cast<uintptr_t>(staging.translate(p,4))&7)==(p&7));
+            assert(staging.prepare(0x1000,{0x2000,0x2000,0,0},1));
+            assert(staging.translate(0x2000,4) && !staging.translate(0x2000,5));
+            assert(staging.prepare(0x1000,{UINTPTR_MAX,0,0,0},0)); // Unknown format writes no array.
+            assert(!staging.translate(UINTPTR_MAX,1));
+            assert(!staging.prepare(0x1000,{UINTPTR_MAX,0,0,0},1));
+            assert(!staging.translate(0x1000,4));
+            assert(!staging.prepare(UINTPTR_MAX-0x40,{0,0,0,0},0));
+            assert(!staging.prepare(0x1000,{0,0,0,0},4));
+        }
+        {
             for(uint32_t format:{0x42475241U,0x61797576U,0x32767579U,0x79757673U,0x79757630U,0x72617762U})
                 assert(tglNativeFormatPlaneCount(format)==1);
             for(uint32_t format:{0x4e563132U,0x78343230U,0x78663230U})assert(tglNativeFormatPlaneCount(format)==2);
