@@ -204,6 +204,9 @@ class NativeRendererCpuAssembly {
         return binding;
     }
     static int scopedRetirement(void* storage,void* child,uint64_t generation,size_t index) noexcept {
+        // Producer admission never grants retirement. Even an enclosing TLS
+        // authority cannot retire either child while this aggregate is pending.
+        if(!storage || static_cast<NativeRendererCpuAssembly*>(storage)->retention_())return 5;
         auto* context=TglOwnedScopedContext<TglOwnedVphalRetirementContext,TglOwnedVphalRetirementDomain>::get(storage);
         return context && context->scope && context->admit?
             context->admit(context->scope,child,generation,index):5;
@@ -362,7 +365,7 @@ public:
             std::declval<NativeRendererChildLifetime&>())) &&
             std::is_same_v<decltype(use(nullptr,nullptr,std::declval<NativeRendererChildLifetime&>(),
                 std::declval<NativeRendererChildLifetime&>())),int>);
-        if(!cleanupBound_ || backing().retention()())return 5;
+        if(!cleanupBound_ || backing().retention().admissionPending())return 5;
         auto& first=children().first().owner();auto& second=children().second().owner();
         void* a=first.constructedBase();void* b=second.constructedBase();
         if(!a || !b || a==b)return 5;
