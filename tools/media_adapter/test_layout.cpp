@@ -15793,6 +15793,44 @@ static void testRetainedVeboxFrames() {
             }
             assert(batch.resolve(image,batchRead,qualify,exec));
         }
+        for(unsigned scenario=0;scenario<7;++scenario) {
+            uint32_t count=2;uintptr_t secondCodec=0x8000;
+            auto batchRead=[&](uintptr_t at,void* out,size_t n) noexcept {
+                if(at==0x1000 && n==4) {std::memcpy(out,&count,4);return true;}
+                uintptr_t value=0;
+                if(n!=8)return false;
+                if(at==0x1008)value=0x2000;else if(at==0x3008)value=0x4000;
+                else if(at==0x2000)value=0x5000;else if(at==0x2008)value=0x6000;
+                else if(at==0x5018)value=0x7000;else if(at==0x6018)value=secondCodec;
+                else return false;std::memcpy(out,&value,8);return true;
+            };
+            TglNativeFrameBatchRequests<2> items;
+            assert(items.capture(0x1000,0x3000,batchRead) && items.count()==2 && items.context(1)==0x8000);
+            unsigned calls=0;
+            if(scenario==2)count=3;
+            const int first=items.runNext(0x7000,0x5000,scenario==1?0x4008:0x4000,batchRead,[&]() noexcept -> int {
+                ++calls;
+                if(scenario==3)assert(items.runNext(0x8000,0x6000,0x4008,batchRead,[]() noexcept -> int {
+                    assert(false);return 0;
+                })==5);
+                return scenario==4?31:0;
+            });
+            assert(first==(scenario==1 || scenario==2 || scenario==3?5:scenario==4?31:0));
+            if(!scenario || scenario==6) {
+                if(scenario==6)++secondCodec;
+                assert(items.runNext(0x8000,0x6000,0x4008,batchRead,[&]() noexcept -> int {++calls;return 0;})==(scenario==6?5:0));
+            }
+            assert(items.finish(0,batchRead)==(!scenario?0:5));
+            assert(items.finish(4,batchRead)==4); // Preserve native batch failure, never fabricate success.
+            assert(calls==(!scenario?2u:scenario==1 || scenario==2?0u:1u));
+        }
+        {
+            TglNativeFrameBatchRequests<2> empty;
+            auto zero=[](uintptr_t at,void* out,size_t n) noexcept {
+                if(at!=0x1000 || n!=4)return false;std::memset(out,0,4);return true;
+            };
+            assert(empty.capture(0x1000,0,zero) && !empty.count() && empty.finish(0,zero)==0);
+        }
         struct Invoke {
             void** original;uintptr_t produced=0x8000;int status=0;
             unsigned initialized=0,destroyed=0;

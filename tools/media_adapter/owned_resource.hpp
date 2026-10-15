@@ -25978,6 +25978,48 @@ struct TglNativeFrameBatchBinding {
         image=base;entry=base+0x159a4;return true;
     }
 };
+template<size_t Capacity=16> class TglNativeFrameBatchRequests {
+    uintptr_t input_=0,output_=0,inputList_=0,outputList_=0;
+    std::array<uintptr_t,Capacity> requests_{},contexts_{};
+    uint32_t count_=0,next_=0;bool attempted_=false,ready_=false,busy_=false,failed_=false;
+public:
+    template<class Read> bool capture(uintptr_t input,uintptr_t output,Read read) noexcept {
+        if(attempted_)return false;attempted_=true;
+        uint32_t count=0;uintptr_t inputs=0,outputs=0;
+        if(!input || input>UINTPTR_MAX-16 || !read(input,&count,4) || count>Capacity)return false;
+        if(count && (!output || output>UINTPTR_MAX-16 || !read(input+8,&inputs,8) ||
+            !read(output+8,&outputs,8) || !inputs || !outputs ||
+            inputs>UINTPTR_MAX-size_t(count)*8 || outputs>UINTPTR_MAX-size_t(count)*8))return false;
+        for(uint32_t i=0;i<count;++i) {
+            if(!read(inputs+size_t(i)*8,&requests_[i],8) || !requests_[i] || requests_[i]>UINTPTR_MAX-0x20 ||
+                !read(requests_[i]+0x18,&contexts_[i],8) || !contexts_[i])return false;
+        }
+        input_=input;output_=output;inputList_=inputs;outputList_=outputs;count_=count;ready_=true;return true;
+    }
+    uint32_t count() const noexcept {return ready_?count_:0;}
+    uint32_t nextIndex() const noexcept {return next_;}
+    uintptr_t context(size_t index) const noexcept {return ready_ && index<count_?contexts_[index]:0;}
+    template<class Read> bool unchanged(Read read) const noexcept {
+        uint32_t count=0;uintptr_t inputs=0,outputs=0;
+        return ready_ && read(input_,&count,4) && count==count_ && (!count_ ||
+            (read(input_+8,&inputs,8) && inputs==inputList_ && read(output_+8,&outputs,8) && outputs==outputList_));
+    }
+    template<class Read,class Use> int runNext(uintptr_t codec,uintptr_t request,uintptr_t outputSlot,Read read,Use use) noexcept {
+        static_assert(noexcept(use()) && std::is_same_v<decltype(use()),int>);
+        uintptr_t current=0,parent=0;
+        if(busy_ || failed_ || !ready_ || next_>=count_ || !unchanged(read) ||
+            codec!=contexts_[next_] || request!=requests_[next_] || outputSlot!=outputList_+size_t(next_)*8 ||
+            !read(inputList_+size_t(next_)*8,&current,8) || current!=request ||
+            !read(request+0x18,&parent,8) || parent!=codec) {failed_=true;return 5;}
+        busy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{busy_};
+        ++next_;const int status=use();
+        if(status)failed_=true;
+        return status?status:failed_?5:0;
+    }
+    template<class Read> int finish(int native,Read read) const noexcept {
+        return native?native:ready_ && !busy_ && !failed_ && next_==count_ && unchanged(read)?0:5;
+    }
+};
 struct TglNativeFrameBatchInvoker {
     int operator()(uintptr_t entry,uintptr_t physical,const void* input,void* output) const noexcept {
         return reinterpret_cast<int(*)(void*,const void*,void*)>(entry)(reinterpret_cast<void*>(physical),input,output);

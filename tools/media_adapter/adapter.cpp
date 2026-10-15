@@ -50,6 +50,7 @@ bool executableMemory(uintptr_t address,size_t length) noexcept;
 bool writableDataMemory(uintptr_t address,size_t length) noexcept;
 bool leafMemoryPermissions(uintptr_t address,size_t length,vm_prot_t required,vm_prot_t forbidden) noexcept;
 bool ownedExecutableMemory(uintptr_t address,size_t length) noexcept;
+int dispatchOwnedContextFrame(void*,const void*,void**) noexcept;
 struct NativeDataPointerWriter {
     bool operator()(uintptr_t address,uintptr_t value) const noexcept {
         // Caller holds exact owner/physical exclusive admission. A failed write
@@ -98,7 +99,7 @@ struct NativeCodecBackend {
         uintptr_t image=0,physical=0;uint64_t generation=0;
         Batch batch{};
         std::array<NativeCodecOwner*,16> candidates{};
-        bool used=false,adopted=false;
+        bool used=false,adopted=false,framesPublished=false;
     };
     struct Ledger {
         std::atomic_flag gate=ATOMIC_FLAG_INIT;
@@ -113,7 +114,9 @@ struct NativeCodecBackend {
     }
     template<class Scope>
     static int adopt(Scope& scope,uintptr_t physical,const Batch& batch) noexcept {
-        if(!batch.wellFormed() || !scope.matches(scope.image(),physical,scope.generation()))return 5;
+        const auto hook=reinterpret_cast<uintptr_t>(&dispatchOwnedContextFrame);
+        if(!batch.wellFormed() || !scope.matches(scope.image(),physical,scope.generation()) ||
+            !ownedExecutableMemory(hook,1))return 5;
         auto& storage=ledger();
         if(storage.gate.test_and_set(std::memory_order_acquire))return 5;
         struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{storage.gate};
@@ -123,7 +126,7 @@ struct NativeCodecBackend {
             // physical mutation failure is quarantined by the caller's gate.
             if(record.used && record.image==scope.image() && record.physical==physical &&
                 record.generation==scope.generation()) {
-                if(!record.adopted)return 5;
+                if(!record.adopted || !record.framesPublished)return 5;
                 // Successful prior batches may coexist, but never alias an
                 // existing context or erase that batch's deletion obligations.
                 if(batch.overlaps(record.batch))return 5;
@@ -138,7 +141,16 @@ struct NativeCodecBackend {
         const int result=tglAdoptNativeCodecContextBatch(scope,physical,batch,owners(),selected->candidates,
             &readMemory,NativeDataPointerWriter{},NativeDataAdmission{},
             NativeTglImageAdmission{scope.image()},&executableMemory);
-        selected->adopted=result==0;return result;
+        selected->adopted=result==0;if(result)return result;
+        for(uint32_t i=0;i<batch.count;++i) {
+            const auto context=batch.contexts[i];
+            auto lease=owners().pinExclusive(scope.image(),physical,scope.generation(),context);
+            if(!lease.get() || !lease.exclusive() || !lease.get()->publishFrame(lease,hook,
+                [&](uintptr_t image,uintptr_t parent,uint64_t generation,uintptr_t object) noexcept {
+                    return object==context && scope.matches(image,parent,generation) && image==scope.image() && parent==physical;
+                },&ownedExecutableMemory))return 5;
+        }
+        selected->framesPublished=true;return 0;
     }
     // Called ONLY by coordinator after native removal returned success, under
     // the same empty-frame physical mutation gate. Never inspect freed objects.
@@ -4223,17 +4235,17 @@ struct NativePhysicalBackend {
         });
     }
     using BatchFrameInvoke=int(*)(void*,NativePhysicalFrameScope&,const TglNativeFrameBatchBinding&,
-        uintptr_t,const void*,void*) noexcept;
+        uintptr_t,uint64_t,const void*,void*) noexcept;
     static int withBatchFrameScope(void* physical,const void* input,void* output,void* context,BatchFrameInvoke invoke) noexcept {
         TglNativePhysicalCallbackBinding native;TglNativeFrameBatchBinding batch;
-        if(!input || !output || !context || !invoke || !binding(native) ||
+        if(!input || !context || !invoke || !binding(native) ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(invoke),1) ||
             !batch.resolve(native.image,&readMemory,NativeTglImageAdmission{native.image},&executableMemory))return 5;
         const auto address=reinterpret_cast<uintptr_t>(physical);
         // Required owned invoker must route every vtable+28 request through
         // THIS scope. No bare native fallback and no recursive registry entry.
         return withScope(address,[&](NativePhysicalFrameScope& scope,uint64_t generation) noexcept -> int {
-            return scope.matches(native.image,address,generation)?invoke(context,scope,batch,address,input,output):5;
+            return scope.matches(native.image,address,generation)?invoke(context,scope,batch,address,generation,input,output):5;
         });
     }
     template<class Native> static int createContexts(uintptr_t physical,const void* input,Native nativeCreate) noexcept {
@@ -4812,6 +4824,55 @@ struct NativeCreatorPreparation {
         return 0;
     }
 };
+struct NativeFactoryFrameBatch {
+    using Lease=NativeRetainedContextFrameDispatch::Lease;
+    using Dispatch=int(*)(void*,Lease&,NativePhysicalFrameScope&,uintptr_t,uintptr_t) noexcept;
+    struct Request {void* context;Dispatch dispatch;};
+    NativePhysicalFrameScope& physical;uintptr_t image,address;uint64_t generation;
+    Request& request;TglNativeFrameBatchRequests<16> items;
+    std::array<Lease,16> owners;
+    inline static thread_local NativeFactoryFrameBatch* active=nullptr;
+    static int frame(void* codec,const void* input,void** output) noexcept {
+        auto* current=active;if(!current || !current->physical.matches(current->image,current->address,current->generation))return 5;
+        const auto index=current->items.nextIndex();
+        return current->items.runNext(reinterpret_cast<uintptr_t>(codec),reinterpret_cast<uintptr_t>(input),
+            reinterpret_cast<uintptr_t>(output),&readMemory,[&]() noexcept -> int {
+                if(index>=current->owners.size() || !current->owners[index].get() ||
+                    current->owners[index].get()->context()!=reinterpret_cast<uintptr_t>(codec))return 5;
+                return current->request.dispatch(current->request.context,current->owners[index],current->physical,
+                    reinterpret_cast<uintptr_t>(input),reinterpret_cast<uintptr_t>(output));
+            });
+    }
+    static int invoke(void* raw,NativePhysicalFrameScope& scope,const TglNativeFrameBatchBinding& binding,
+        uintptr_t physical,uint64_t generation,const void* input,void* output) noexcept {
+        if(active || !raw)return 5;
+        auto& request=*static_cast<Request*>(raw);
+        if(!request.context || !request.dispatch || !generation ||
+            !scope.matches(binding.image,physical,generation))return 5;
+        NativeFactoryFrameBatch batch{scope,binding.image,physical,generation,request,{}, {}};
+        if(!batch.items.capture(reinterpret_cast<uintptr_t>(input),reinterpret_cast<uintptr_t>(output),&readMemory))return 5;
+        for(uint32_t i=0;i<batch.items.count();++i) {
+            batch.owners[i]=NativeCodecBackend::owners().pin(binding.image,physical,generation,batch.items.context(i));
+            if(!batch.owners[i].get())return 5;
+            const auto& table=batch.owners[i].get()->frameTable();const auto* entries=table.addressPoint();
+            uintptr_t current=0;
+            if(table.publication()!=TglOwnedContextFrameVtable::Publication::Published || !entries ||
+                entries[0x28/8]!=reinterpret_cast<uintptr_t>(&dispatchOwnedContextFrame) ||
+                !readMemory(batch.items.context(i),&current,8) || current!=reinterpret_cast<uintptr_t>(entries))return 5;
+        }
+        active=&batch;struct Reset {~Reset(){active=nullptr;}} reset;
+        const int status=TglNativeFrameBatchInvoker{}(binding.entry,physical,input,output);
+        return batch.items.finish(status,&readMemory);
+    }
+    static int run(void* physical,const void* input,void* output,void* context,Dispatch dispatch) noexcept {
+        if(!context || !dispatch || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(dispatch),1))return 5;
+        Request request{context,dispatch};
+        return NativePhysicalBackend::withBatchFrameScope(physical,input,output,&request,&invoke);
+    }
+};
+int dispatchOwnedContextFrame(void* context,const void* input,void** output) noexcept {
+    return NativeFactoryFrameBatch::frame(context,input,output);
+}
 struct NativeCompositeContextRemoval {
     using Scope=NativePhysicalBackend::RemovalScope;
     using Batch=NativePhysicalBackend::RemovedBatch;
