@@ -5232,6 +5232,7 @@ inline bool tglRestoreExactBorrowedVpLink(uint8_t* field,uintptr_t borrowed,uint
 template<class CpuBackend,class SfcInvoke,class Cleanup,class Destroy>
 class TglOwnedVeboxBaseOwner {
     TglTrackedCpuOwner<CpuBackend> storage_;
+    std::array<uintptr_t,8> transferredShells_{}; // Identity only, no duplicate release authority.
     TglOwnedSfcMhw<SfcInvoke> sfc_;
     TglOwnedVeboxVtable table_;
     Cleanup& cleanup_;
@@ -5244,6 +5245,27 @@ class TglOwnedVeboxBaseOwner {
     uint64_t configuredRendererGeneration_=0;
     bool constructed_=false,ready_=false,busy_=false,tableInstalled_=false;
 public:
+    // Only this owner and its tracked base, NOT shell/helper/SFC/resource closure.
+    // Enclosing parent reservation must retain both through output consumption.
+    bool excludesBaseWritableSpan(uintptr_t address,size_t bytes) const noexcept {
+        if(!storage_.excludesWritableSpan(address,bytes))return false;
+        const uintptr_t self=reinterpret_cast<uintptr_t>(this);
+        if(self>UINTPTR_MAX-sizeof(*this))return false;
+        return address>=self+sizeof(*this) || self>=address+bytes;
+    }
+    bool excludesBaseAndShellWritableSpan(uintptr_t address,size_t bytes) const noexcept {
+        if(busy_ || !excludesBaseWritableSpan(address,bytes))return false;
+        constexpr size_t offsets[8]={0x1b0,0x1b8,0xba8,0xbb0,0x680,0x688,0x690,0x698};
+        for(size_t i=0;i<transferredShells_.size();++i) {
+            const uintptr_t shell=transferredShells_[i];
+            if(!shell)continue;
+            if(!constructed_ || !storage_.get() || storage_.size()<0x1bc0 || shell>UINTPTR_MAX-0x2a8)return false;
+            uintptr_t current=0;
+            std::memcpy(&current,reinterpret_cast<const uint8_t*>(storage_.get())+offsets[i],8);
+            if(current!=shell || (address<shell+0x2a8 && shell<address+bytes))return false;
+        }
+        return true; // Still excludes neither helper nor borrowed resource/SFC allocations.
+    }
     TglOwnedVeboxBaseOwner(CpuBackend& cpu,SfcInvoke& sfc,Cleanup& cleanup,Destroy& destroy)
         :storage_(cpu),sfc_(sfc),cleanup_(cleanup),destroy_(destroy) {
         static_assert(noexcept(cleanup_(nullptr)) && noexcept(destroy_(uintptr_t{},nullptr)),
@@ -5409,8 +5431,11 @@ public:
     bool installCpuShells(TglVeboxCpuShells<ShellBackend>& shells) noexcept {
         if(!ready_ || busy_ || tableInstalled_ || shells.image()!=image_) return false;
         busy_=true;
+        std::array<uintptr_t,8> identities{};
+        for(size_t i=0;i<identities.size();++i)identities[i]=shells.get(i);
         const bool installed=shells.installIntoPrivateBase(
             reinterpret_cast<uint8_t*>(storage_.get()),storage_.size());
+        if(installed)transferredShells_=identities;
         busy_=false;
         return installed;
     }
@@ -5424,8 +5449,11 @@ public:
         } guard(busy_);
         // Guard outlives shells, including failed-allocation unwind callbacks.
         TglVeboxCpuShells<ShellBackend> shells(backend);
-        return shells.allocate() && shells.installIntoPrivateBase(
-            reinterpret_cast<uint8_t*>(storage_.get()),storage_.size());
+        if(!shells.allocate())return false;
+        std::array<uintptr_t,8> identities{};
+        for(size_t i=0;i<identities.size();++i)identities[i]=shells.get(i);
+        if(!shells.installIntoPrivateBase(reinterpret_cast<uint8_t*>(storage_.get()),storage_.size()))return false;
+        transferredShells_=identities;return true;
     }
     // Native Allocate126929 also constructs helper1bb8. It is NOT a raw CPU
     // shell: factory126be0 accounts its allocation, and base destructor calls
@@ -5951,6 +5979,7 @@ private:
             } else cleanup_(object);
             constructed_=false;
             destroy_(destructor_,object);
+            transferredShells_.fill(0);
         }
         destructor_=image_=0;
         configuredRenderer_=0;configuredRendererGeneration_=0;

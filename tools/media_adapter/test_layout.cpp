@@ -28472,6 +28472,14 @@ int main() {
                                 auto* cpuAddress=storageOwner.get();
                                 auto* child0=storage.children().first().owner().constructedBase();
                                 auto* child1=storage.children().second().owner().constructedBase();
+                                for(auto* child:{&storage.children().first().owner(),&storage.children().second().owner()}) {
+                                    const uintptr_t childBase=reinterpret_cast<uintptr_t>(child->constructedBase());
+                                    assert(childBase);
+                                    assert(!child->excludesBaseWritableSpan(childBase,0x4a));
+                                    assert(!child->excludesBaseWritableSpan(childBase+0x1bbf,2));
+                                    assert(!child->excludesBaseWritableSpan(reinterpret_cast<uintptr_t>(child),1));
+                                    assert(!child->excludesBaseWritableSpan(UINTPTR_MAX,0x4a));
+                                }
                                 {
                                     // Codec roots and creator pins are DISTINCT registries/objects.
                                     unsigned codecDeaths=0;
@@ -31189,6 +31197,22 @@ int main() {
                 };
                 assert(owner.allocateCpuShells(shellBackend));
                 shellsTransferred=true;
+                {
+                    const uintptr_t childAddress=reinterpret_cast<uintptr_t>(owner.constructedBase());
+                    constexpr size_t slots[8]={0x1b0,0x1b8,0xba8,0xbb0,0x680,0x688,0x690,0x698};
+                    assert(owner.excludesBaseAndShellWritableSpan(0x10000,1));
+                    for(size_t slot:slots) {
+                        uintptr_t shell=0;
+                        std::memcpy(&shell,reinterpret_cast<const void*>(childAddress+slot),8);
+                        assert(shell && !owner.excludesBaseAndShellWritableSpan(shell,0x4a));
+                        assert(!owner.excludesBaseAndShellWritableSpan(shell+0x2a7,2));
+                        const uintptr_t foreign=0;
+                        std::memcpy(reinterpret_cast<void*>(childAddress+slot),&foreign,8);
+                        assert(!owner.excludesBaseAndShellWritableSpan(0x10000,1));
+                        std::memcpy(reinterpret_cast<void*>(childAddress+slot),&shell,8);
+                    }
+                    assert(owner.excludesBaseAndShellWritableSpan(0x10000,1));
+                }
                 assert(shellBackend.live==8 && shellBackend.releases==11 && !eventCount);
                 shellBackend.reenter=nullptr;
                 uint32_t helperAllocationSize=0xa0;
