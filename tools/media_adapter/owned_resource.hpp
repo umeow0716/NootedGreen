@@ -24356,9 +24356,11 @@ public:
                 return invoke(frame);
             });
         }
+        bool matchesActiveContextRequest(uintptr_t context) const noexcept {
+            return context && context==context_ && entry_.state==State::Live && !frames_.workFaulted();
+        }
         bool matchesActiveContextFrame(uintptr_t context,const Frame* frame) const noexcept {
-            return context && context==context_ && requestFrame_.generation && frame && frame==activeRequestFrame_ &&
-                entry_.state==State::Live && !frames_.workFaulted();
+            return matchesActiveContextRequest(context) && requestFrame_.generation && frame && frame==activeRequestFrame_;
         }
         bool bindContextRootFrameOutput(const TglNativeFrameOutputReceipt& receipt) noexcept {
             return context_ && requestFrame_.generation && receipt.context==context_ &&

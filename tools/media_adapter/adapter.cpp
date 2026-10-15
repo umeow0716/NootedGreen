@@ -4132,6 +4132,8 @@ struct NativeCreatorPreparation {
         // Per-pass retained allocations must never reference a stack backend
         // or the shorter-lived AVD factory Entry. This ledger outlives both.
         std::unique_ptr<NativeRetainedTemporaryTransaction::Backend> passBackend;
+        TglTrackedCpuBinding factoryCpu{};
+        TglNativeResourceCfTypeBinding factoryResourceClass{};
         bool used=false,adopted=false,lifetimePublished=false,childrenReady=false;
         bool publicationAttempted=false,childrenPublished=false;
         bool mainPublicationAttempted=false,mainPublished=false;
@@ -4159,6 +4161,7 @@ struct NativeCreatorPreparation {
                 record->used=true;record->image=image;record->physical=address;
                 record->generation=generation;record->creator=creator;
                 record->selection=selection;
+                record->factoryCpu=factory.nativeCpu;record->factoryResourceClass=factory.resourceClass;
                 record->passBackend.reset(new(std::nothrow) NativeRetainedTemporaryTransaction::Backend(
                     image,&readMemory,NativeTglImageAdmission{image},&executableMemory,TglNativeTrackedCpuInvoker{}));
                 if(!record->passBackend || !record->passBackend->bound() ||
@@ -4342,6 +4345,52 @@ struct NativeCreatorPreparation {
                         view.parent==creator && view.renderer.creator==creator && view.renderer.renderer==renderer;
                 })?0:5;
         })==0;
+    }
+    static bool copyPassFactory(NativePhysicalFrameScope& physical,uintptr_t image,uintptr_t address,
+        uint64_t generation,uintptr_t creator,uintptr_t renderer,Entry& output) noexcept {
+        if(output.nativeCpu.image || output.native || !passBackendFor(physical,image,address,generation,creator,renderer))return false;
+        auto& state=ledger();
+        if(state.gate.test_and_set(std::memory_order_acquire))return false;
+        struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
+        for(const auto& record:state.records)if(record.used && record.image==image && record.physical==address &&
+            record.generation==generation && record.creator==creator && record.renderer==renderer && record.factoryCpu.image==image) {
+            output.nativeCpu=record.factoryCpu;output.resourceClass=record.factoryResourceClass;return true;
+        }
+        return false;
+    }
+    struct LowerBootstrapResult {
+        TglOwnedVeboxCommandTransactionResult work{};
+        NativePhysicalRegistry::FrameTicket frame{};
+    };
+    static LowerBootstrapResult bootstrapFirstLower(NativePhysicalFrameScope& physical,uintptr_t image,
+        uintptr_t address,uint64_t generation,uintptr_t context,uintptr_t creator,uintptr_t renderer,
+        uintptr_t parameters,uintptr_t pass,NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression,
+        const std::array<const TglOwnedSurfaceStorage*,2>& temporal,void* argument) noexcept {
+        LowerBootstrapResult result;
+        if(!physical.matchesActiveContextRequest(context))return result;
+        RuntimeView parent;
+        if(!acquireRuntimeView(physical,image,address,generation,creator,renderer,parent))return result;
+        auto* backend=passBackendFor(physical,image,address,generation,creator,renderer);
+        Entry factory;
+        if(!backend || !copyPassFactory(physical,image,address,generation,creator,renderer,factory))return result;
+        TglNativeContextInputRoots roots;uintptr_t actualCreator=0;
+        TglNativePreparedLowerPassInput input;
+        if(!roots.resolve(context,&readMemory,NativeDataAdmission{}) || roots.parent.physical!=address ||
+            !readMemory(context+0x12e0,&actualCreator,8) || actualCreator!=creator ||
+            !input.capture(roots,renderer,parameters,pass,&readMemory))return result;
+        result.frame=factory.createContextPassRootFrame(physical,address,generation,creator,input.selected);
+        if(!result.frame.generation)return result;
+        result.work=physical.runContextRootFrame([&](NativeContextRendererFrame& frame) noexcept {
+            if(!frame.beginNativeFrame())return TglOwnedVeboxCommandTransactionResult{};
+            TglVeboxPipeAcquisition acquisition;int decompressionStatus=0;
+            TglOwnedVpEntrySet base; // All callbacks come from the real scoped producers.
+            NativeRetainedTemporaryExecution::PassProvider provider{frame,*backend,base,*parent.view(),
+                acquisition,decompressionStatus,decompression,argument,temporal};
+            provider.authority={&physical,address,context,generation};
+            return NativeRetainedTemporaryExecution::PassProvider::produce(&provider,frame,renderer,
+                reinterpret_cast<void*>(parameters),reinterpret_cast<void*>(pass));
+        });
+        return result; // Frame remains pooled; caller must bind receipt/real completion separately.
     }
     // Full synchronous construction handoff, not a component-success alias.
     // Each component keeps its persistent partial state; failure never retries
