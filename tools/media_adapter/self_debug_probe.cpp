@@ -7,7 +7,52 @@
 #include <unistd.h>
 #include <cstdio>
 #include <cstdint>
+#include <sys/wait.h>
+#include <sys/resource.h>
 #include "native_return_observer.hpp"
+
+extern "C" void owned_fatal_target();
+extern "C" const char owned_fatal_site[];
+asm(".text\n.p2align 4\n.globl _owned_fatal_target\n_owned_fatal_target:\n"
+    ".globl _owned_fatal_site\n_owned_fatal_site:\nud2\nretq\n");
+static bool fatalJournalSelfTest() {
+    for(unsigned mode=0;mode<3;++mode) {
+        int channel[2];if(pipe(channel))return false;
+        const pid_t child=fork();if(child<0)return false;
+        if(!child) {
+            close(channel[0]);alarm(5);
+            const struct rlimit noCore{0,0};if(setrlimit(RLIMIT_CORE,&noCore))_exit(73);
+            if(mode==2) {struct sigaction ignore{};ignore.sa_handler=SIG_IGN;sigemptyset(&ignore.sa_mask);if(sigaction(SIGBUS,&ignore,nullptr))_exit(74);}
+            const uintptr_t base=mode==1?1:reinterpret_cast<uintptr_t>(owned_fatal_site);
+            NativeFatalJournal observer(channel[1],base,2);
+            if(mode==2) {
+                struct sigaction actual{};
+                _exit(!observer.isArmed() && !sigaction(SIGBUS,nullptr,&actual) && actual.sa_handler==SIG_IGN?0:75);
+            }
+            if(!observer.isArmed())_exit(76);
+            owned_fatal_target();_exit(77);
+        }
+        close(channel[1]);int status=0;
+        if(waitpid(child,&status,0)!=child)return false;
+        uint32_t record[4]{};const auto bytes=read(channel[0],record,sizeof(record));close(channel[0]);
+        if(mode==2) {if(!WIFEXITED(status) || WEXITSTATUS(status) || bytes)return false;}
+        else if(!WIFSIGNALED(status) || WTERMSIG(status)!=SIGILL || bytes!=sizeof(record) ||
+            record[0]!=0x4e47464a || record[1]!=SIGILL || record[3]!=(mode==1?UINT32_MAX:0))return false;
+    }
+    int channel[2];if(pipe(channel))return false;
+    {
+        NativeFatalJournal observer(channel[1],reinterpret_cast<uintptr_t>(owned_fatal_site),2);
+        if(!observer.isArmed())return false;
+        NativeFatalJournal nested(dup(channel[1]),reinterpret_cast<uintptr_t>(owned_fatal_site),2);
+        if(nested.isArmed())return false;
+    }
+    uint32_t unexpected=0;const auto bytes=read(channel[0],&unexpected,sizeof(unexpected));close(channel[0]);
+    for(int signal:{SIGSEGV,SIGBUS,SIGILL,SIGABRT}) {
+        struct sigaction actual{};if(sigaction(signal,nullptr,&actual) || actual.sa_handler!=SIG_DFL)return false;
+    }
+    std::puts("FATAL_JOURNAL_OWNED_OK native-signal-preserved default-only scope-restored");
+    return bytes==0;
+}
 
 extern "C" int owned_debug_target();
 extern "C" const char owned_debug_site[];
@@ -124,6 +169,7 @@ static void trap(int signal, siginfo_t *, void *context) {
 
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+    if(!fatalJournalSelfTest())return 1;
     thread_t thread = mach_thread_self();
     x86_debug_state64_t original{};
     mach_msg_type_number_t count = x86_DEBUG_STATE64_COUNT;

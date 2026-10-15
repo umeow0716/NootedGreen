@@ -14,6 +14,71 @@
 #include <cerrno>
 #include <pthread.h>
 
+// Fatal-fault evidence only. Default handlers are restored before returning
+// to the SAME faulting instruction; no RIP/flags/result/text modification.
+// State is process-lifetime so a racing signal cannot dereference a dead scope.
+class NativeFatalJournal {
+    inline static std::atomic<bool> active{false};
+    inline static std::atomic<unsigned> readers{0};
+    static_assert(std::atomic<bool>::is_always_lock_free && std::atomic<unsigned>::is_always_lock_free);
+    inline static constexpr std::array<int,4> signals{SIGSEGV,SIGBUS,SIGILL,SIGABRT};
+    inline static std::array<struct sigaction,4> previous{};
+    inline static uintptr_t image=0,extent=0;
+    inline static int descriptor=-1;
+    inline static bool poisoned=false;
+    inline static std::atomic<bool> used{false};
+    int fd=-1;unsigned installed=0;bool armed=false,owns=false;
+    static void fault(int signal,siginfo_t* info,void* raw) noexcept {
+        readers.fetch_add(1,std::memory_order_acquire);
+        const int savedErrno=errno;
+        const auto* context=static_cast<const ucontext_t*>(raw);
+        if(active.load(std::memory_order_acquire) && descriptor>=0) {
+            const uintptr_t rip=context && context->uc_mcontext?context->uc_mcontext->__ss.__rip:0;
+            const uint32_t relative=rip>=image && rip-image<extent?uint32_t(rip-image):UINT32_MAX;
+            const uint32_t record[]{0x4e47464a,uint32_t(signal),uint32_t(info?info->si_code:0),relative};
+            (void)write(descriptor,record,sizeof(record));
+        }
+        for(size_t i=0;i<signals.size();++i)if(signal==signals[i]) {
+            (void)sigaction(signal,&previous[i],nullptr);break;
+        }
+        errno=savedErrno;
+        readers.fetch_sub(1,std::memory_order_release);
+        // Synchronous fault re-delivers under the original SIG_DFL action.
+        // abort() likewise retains its native terminating continuation.
+    }
+public:
+    // Takes ownership of fd, including refusal. Only default native signal
+    // dispositions may be observed; no debugger/exception-handler override.
+    NativeFatalJournal(int ownedFd,uintptr_t base,uintptr_t bytes) noexcept:fd(ownedFd) {
+        if(fd<0 || !base || !bytes || bytes>UINT32_MAX || base>UINTPTR_MAX-bytes ||
+            used.exchange(true,std::memory_order_acq_rel))return;
+        owns=true;
+        // One attempt per process leaves the saved actions/image immutable,
+        // even for a delayed unrelated-thread signal after scope destruction.
+        for(size_t i=0;i<signals.size();++i)
+            if(sigaction(signals[i],nullptr,&previous[i]) || previous[i].sa_handler!=SIG_DFL)return;
+        image=base;extent=bytes;descriptor=fd;
+        struct sigaction action{};action.sa_sigaction=&fault;action.sa_flags=SA_SIGINFO;
+        sigemptyset(&action.sa_mask);
+        for(;installed<signals.size();++installed)
+            if(sigaction(signals[installed],&action,nullptr))return;
+        active.store(true,std::memory_order_release);armed=true;
+    }
+    ~NativeFatalJournal() noexcept {
+        if(owns && installed) {
+            active.store(false,std::memory_order_release);
+            while(installed) {--installed;if(sigaction(signals[installed],&previous[installed],nullptr))poisoned=true;}
+            for(unsigned attempt=0;readers.load(std::memory_order_acquire) && attempt<10000;++attempt)usleep(100);
+            if(readers.load(std::memory_order_acquire)) {poisoned=true;fd=-1;} // Retain fd rather than race its reuse.
+            if(!poisoned)descriptor=-1;
+        }
+        if(fd>=0)close(fd);
+    }
+    NativeFatalJournal(const NativeFatalJournal&)=delete;
+    NativeFatalJournal& operator=(const NativeFatalJournal&)=delete;
+    bool isArmed() const noexcept {return armed;}
+};
+
 struct NativeOwnedCopy {
     uintptr_t source = 0, replacement = 0, bytes = 0;
     int journal = -1;

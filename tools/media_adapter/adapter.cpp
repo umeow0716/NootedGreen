@@ -4632,6 +4632,23 @@ struct NativePhysicalBackend {
     using RemovedBatch=TglNativeRemovedContextBatch<16>;
     using RemovalScope=typename NativePhysicalRegistry::DependencyAdoptionScope;
     using PrepareRemoval=int(*)(void*,RemovalScope&,uintptr_t,uintptr_t,uint64_t,const RemovedBatch&) noexcept;
+    static int invokeRemovalObserved(uintptr_t entry,uintptr_t physical,const void* input) noexcept {
+        auto invoke=[&]() noexcept {return TglNativeBackingAllocateInvoker{}(entry,physical,input);};
+        static std::atomic<bool> attempted{false};
+        if(attempted.exchange(true,std::memory_order_acq_rel))return invoke();
+        TglNativePhysicalCallbackBinding native;
+        char temporary[1024]{},path[1100]{};
+        const size_t bytes=confstr(_CS_DARWIN_USER_TEMP_DIR,temporary,sizeof(temporary));
+        if(!binding(native) || entry!=native.image+0x15128 || bytes<2 || bytes>sizeof(temporary) || temporary[0]!='/') {
+            os_log_error(OS_LOG_DEFAULT,"NGRN_REMOVAL_FAULT_JOURNAL_DENIED preparation native-unchanged");return invoke();
+        }
+        const int n=std::snprintf(path,sizeof(path),"%s%sngreen-removal-fault-XXXXXX",temporary,temporary[bytes-2]=='/'?"":"/");
+        if(n<0 || size_t(n)>=sizeof(path))return invoke();
+        const int fd=mkstemp(path);
+        NativeFatalJournal observer(fd,native.image,8450544);
+        os_log_error(OS_LOG_DEFAULT,"NGRN_REMOVAL_FAULT_JOURNAL armed=%{public}d path=%{public}s",int(observer.isArmed()),fd>=0?path:"denied");
+        return invoke();
+    }
     static int removePreparedContexts(void* physical,const void* input,void* cleanup,PrepareRemoval prepare,PrepareRemoval confirm) noexcept {
         TglNativePhysicalCallbackBinding native;
         if(!input || !cleanup || !prepare || !confirm || !binding(native) ||
@@ -4657,7 +4674,7 @@ struct NativePhysicalBackend {
                             return false;
                         });
                 },[](uintptr_t entry,uintptr_t target,const void* request) noexcept -> int {
-                    const int result=TglNativeBackingAllocateInvoker{}(entry,target,request);
+                    const int result=invokeRemovalObserved(entry,target,request);
                     os_log_info(OS_LOG_DEFAULT,"NGRN_CONTEXT_REMOVAL stage=native result=%{public}d",result);
                     return result;
                 },[&](RemovalScope& scope) noexcept -> bool {
