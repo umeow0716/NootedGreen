@@ -17701,11 +17701,13 @@ int main() {
     {
         using Fresh=TglNativeFreshStampObservation;
         TglNativeFenceBackingObservation::Snapshot fence;fence.valid=true;
+        fence.wrapper=0x8000;uintptr_t wrapperDevice=0x1000;
         fence.expected.fill(UINT64_MAX);fence.expected[0]=(uint64_t(17)<<32)|1;
         uintptr_t mapping=0x2000,table=0x3000,pointer=0x2040;
         uint32_t channels=2,stamp=16;bool deny=false,drift=false;unsigned admissions=0;
         uintptr_t callback=0x6083;bool codeBad=false;
         auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            if(address==0x8000 && size==8){std::memcpy(out,&wrapperDevice,8);return true;}
             if(address==0x41ae && size==11){
                 constexpr uint8_t lea[]={0x48,0x8d,0x05,0xce,0x1e,0,0,0x48,0x89,0x43,0x18};
                 std::memcpy(out,lea,size);return true;}
@@ -17731,6 +17733,7 @@ int main() {
         auto executable=[](uintptr_t,size_t) noexcept{return true;};
         assert(fresh.resolve(0x4000,read,qualify,executable));
         auto pinnedFresh=fresh;assert(pinnedFresh.sameBinding(fresh));
+        wrapperDevice=0x1008;assert(!fresh.capture(0x1000,128,fence,read,admit,result));wrapperDevice=0x1000;
         assert(fresh.capture(0x1000,128,fence,read,admit,result));
         assert(result.valid && result.active[0] && !result.active[1] && result.observed[0]==16);
         auto preserved=result;pointer=0x2044;

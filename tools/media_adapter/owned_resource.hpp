@@ -24467,11 +24467,15 @@ public:
         const TglNativeFenceBackingObservation::Snapshot& fence,
         Read read,Admit admit,Snapshot& output) const noexcept {
         if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
-        if(!callback_ || !fence.valid || !device || device>UINTPTR_MAX-0x34 || !mappingBytes)return false;
+        if(!callback_ || !fence.valid || !fence.wrapper || fence.wrapper>UINTPTR_MAX-8 ||
+            !device || device>UINTPTR_MAX-0x34 || !mappingBytes)return false;
         Snapshot candidate;candidate.device=device;
         auto metadata=[&](Snapshot& value) noexcept {
-            uintptr_t callback=0;
-            return read(device+0x18,&callback,8) && callback==callback_ &&
+            uintptr_t callback=0,currentDevice=0;
+            // TGL22660/226cc loads TestEvent's device argument from the SAME
+            // fence wrapper+0, not from the OS database's unrelated wrapper.
+            return read(fence.wrapper,&currentDevice,8) && currentDevice==device &&
+                read(device+0x18,&callback,8) && callback==callback_ &&
                 read(device+0x20,&value.mapping,8) && value.mapping &&
                 value.mapping<=UINTPTR_MAX-mappingBytes &&
                 read(device+0x28,&value.table,8) && value.table &&
