@@ -26736,6 +26736,11 @@ struct TglNativeCubeLutGeometry {
     uint32_t width=0,height=0,destinationRowBytes=0;
     size_t sourceBytes=0,sourceReadBytes=0,destinationBytes=0;
 };
+inline size_t tglCubeSnapshotBudget(uint64_t freePages,size_t pageBytes) noexcept {
+    // Dynamic memory headroom policy, NOT a hardware cube dimension limit.
+    if(!pageBytes || (pageBytes&(pageBytes-1)) || freePages>SIZE_MAX/pageBytes)return 0;
+    return std::min(size_t(freePages)*pageBytes/4,size_t(PTRDIFF_MAX));
+}
 inline bool tglPlanNativeCubeLutGeometry(uint32_t dimension,uint32_t format,
     TglNativeCubeLutGeometry& output) noexcept {
     // Exact2343d0: width=d, height=d*d; format1 consumes4 bytes/voxel,

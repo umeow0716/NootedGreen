@@ -5309,6 +5309,18 @@ struct NativeLateFactoryBatch {
         return NativeFactoryFrameBatch::run(physical,input,output,&request,&dispatch);
     }
 };
+struct NativeCubeSnapshotBudget {
+    static size_t available() noexcept {
+        const auto host=mach_host_self();if(host==MACH_PORT_NULL)return 0;
+        struct Release {mach_port_t port;~Release(){(void)mach_port_deallocate(mach_task_self(),port);}} release{host};
+        vm_size_t page=0;vm_statistics64_data_t statistics{};
+        mach_msg_type_number_t count=HOST_VM_INFO64_COUNT;
+        if(host_page_size(host,&page)!=KERN_SUCCESS ||
+            host_statistics64(host,HOST_VM_INFO64,reinterpret_cast<host_info64_t>(&statistics),&count)!=KERN_SUCCESS ||
+            count!=HOST_VM_INFO64_COUNT)return 0;
+        return tglCubeSnapshotBudget(statistics.free_count,size_t(page));
+    }
+};
 struct NativeFactoryContextProperties {
     // NOT PUBLISHED: metadata is frozen only for exact VEBOX property families;
     // payload/owned-allocation alias admission remains a publication prerequisite.
@@ -5331,6 +5343,11 @@ struct NativeFactoryContextProperties {
                 if(operation==Operation::Configure && !batch.admitsVeboxConfiguration(frozen))return 5;
                 if(operation==Operation::Configure && !batch.freezeVeboxScalarPayloads(&readMemory,frozen))return 5;
                 if(operation==Operation::Configure && !batch.freezeVeboxInlineConversionPayloads(&readMemory,frozen))return 5;
+                // withNewRequest keeps the process registry gate through
+                // capture AND native consumption, serializing our cube batches.
+                // Refresh VM headroom per call; no cached/guessed GPU cap.
+                if(operation==Operation::Configure && !batch.freezeVeboxCubePayloads(
+                    &readMemory,frozen,NativeCubeSnapshotBudget::available()))return 5;
                 if(operation==Operation::Query && !batch.admitVeboxQueryOutputs(frozen,NativeDataAdmission{}))return 5;
                 using Lease=decltype(NativeCodecBackend::owners().pinExclusive(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{}));
                 std::array<Lease,16> leases;

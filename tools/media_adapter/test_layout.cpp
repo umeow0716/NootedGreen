@@ -13556,6 +13556,11 @@ static void testSfcSetupOrder() {
 }
 
 static void testSfcStateParameterOwnership() {
+    assert(tglCubeSnapshotBudget(16,4096)==16384);
+    assert(!tglCubeSnapshotBudget(0,4096) && !tglCubeSnapshotBudget(1,0));
+    assert(!tglCubeSnapshotBudget(1,3));
+    assert(!tglCubeSnapshotBudget(UINT64_MAX,4096));
+    assert(tglCubeSnapshotBudget(1,16384)==4096);
     {
         std::array<uint8_t,5000> input{};for(size_t i=0;i<input.size();++i)input[i]=uint8_t(i);
         TglOwnedCubeLutSnapshot snapshot;
