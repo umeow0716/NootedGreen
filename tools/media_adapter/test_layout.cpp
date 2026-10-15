@@ -14832,7 +14832,7 @@ static void testRetainedVeboxFrames() {
     }
     {
         struct ReceiptFrame {
-            unsigned* deaths=nullptr;bool ready=false;
+            unsigned* deaths=nullptr;bool ready=false,observing=false;
             explicit ReceiptFrame(unsigned* count=nullptr) noexcept:deaths(count){}
             ~ReceiptFrame() noexcept {if(deaths)++*deaths;}
             bool canDestroy() const noexcept {return ready;}
@@ -14858,9 +14858,51 @@ static void testRetainedVeboxFrames() {
             auto stale=second;++stale.generation;
             assert(!group.bindOutputReceipts(std::array{first,stale},shared));
             assert(group.bindOutputReceipts(std::array{first,second},shared));
+            unsigned scopeCalls=0,groupUses=0;
+            bool denySecond=false,unknownHistory=false;
+            auto observeGroup=[&](auto& frame,const auto& receipt,auto next) noexcept -> bool {
+                const auto ordinal=scopeCalls++;
+                if(denySecond && ordinal==1)return false;
+                assert(!frame.observing);frame.observing=true;
+                struct Reset {bool& value;~Reset(){value=false;}} reset{frame.observing};
+                TglNativeFenceBackingObservation::Snapshot snapshot{};
+                snapshot.expected[0]=receipt.event;
+                NGVfTaskCompletion::Reply reply{};reply.registryId=ordinal+1;
+                TglNativeHistoryCacheInspection history{!unknownHistory,ordinal==1};
+                return next(snapshot,reply,history);
+            };
+            auto consumeGroup=[&](size_t count,const auto& frames,const auto&,
+                const auto&,const auto& snapshots,const auto& replies,const auto& history) noexcept -> int {
+                ++groupUses;assert(count==2);
+                assert(frames[0]->observing && frames[1]->observing);
+                assert(snapshots[0].expected[0]==shared.event && snapshots[1].expected[0]==shared.event);
+                assert(replies[0].registryId==1 && replies[1].registryId==2);
+                assert(history[0].observed && !history[0].referencesFrame);
+                assert(history[1].observed && history[1].referencesFrame);
+                assert(group.withPendingReceiptGroup(noGroup)==5);
+                return 31; // Observation result, never retirement authority.
+            };
+            assert(group.withPendingTaskCompletionGroup(observeGroup,consumeGroup)==31);
+            assert(scopeCalls==2 && groupUses==1);
+            scopeCalls=0;denySecond=true;
+            assert(group.withPendingTaskCompletionGroup(observeGroup,consumeGroup)==5 && groupUses==1);
+            scopeCalls=0;denySecond=false;unknownHistory=true;
+            assert(group.withPendingTaskCompletionGroup(observeGroup,consumeGroup)==5 && groupUses==1);
+            unknownHistory=false;
+            auto omitScope=[](auto&,const auto&,auto) noexcept {return true;};
+            assert(group.withPendingTaskCompletionGroup(omitScope,consumeGroup)==5 && groupUses==1);
+            scopeCalls=0;denySecond=false;
+            auto repeatScope=[&](auto& frame,const auto& receipt,auto next) noexcept {
+                return observeGroup(frame,receipt,[&](const auto& snapshot,const auto& reply,const auto& history) noexcept {
+                    const bool firstCall=next(snapshot,reply,history);
+                    next(snapshot,reply,history);return firstCall;
+                });
+            };
+            assert(group.withPendingTaskCompletionGroup(repeatScope,consumeGroup)==5 && groupUses==2);
             assert(group.withPendingReceiptGroup([&](size_t count,const auto& frames,
                 const auto& receipts,const auto& tickets) noexcept -> int {
                 assert(count==2 && frames[0] && frames[1] && frames[0]!=frames[1]);
+                assert(!frames[0]->observing && !frames[1]->observing);
                 assert(tickets[0].generation==first.generation && tickets[1].generation==second.generation);
                 assert(receipts[0].event==shared.event && receipts[1].event==shared.event);
                 assert(group.withPendingReceiptGroup(noGroup)==5);

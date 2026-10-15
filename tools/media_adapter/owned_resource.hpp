@@ -24770,6 +24770,43 @@ public:
         // remain held. Enumeration is not GPU/history/retirement authority.
         return use(count,std::as_const(frames),std::as_const(receipts),std::as_const(tickets));
     }
+    // Enter each frame's observation scope recursively: the final consumer
+    // runs while ALL frame scopes, pool gate and enclosing physical lease
+    // are live. This grants no retention clear, history edit or detach.
+    template<class Observe,class Use>
+    int withPendingTaskCompletionGroup(Observe observe,Use use) noexcept {
+        if constexpr(std::is_pointer_v<Observe>)if(!observe)return 5;
+        if constexpr(std::is_pointer_v<Use>)if(!use)return 5;
+        return withPendingReceiptGroup([&](size_t count,const auto& frames,
+            const auto& receipts,const auto& tickets) noexcept -> int {
+            std::array<TglNativeFenceBackingObservation::Snapshot,Capacity> expected{};
+            std::array<NGVfTaskCompletion::Reply,Capacity> completion{};
+            std::array<TglNativeHistoryCacheInspection,Capacity> history{};
+            int result=5;
+            auto enter=[&](auto& self,size_t index) noexcept -> bool {
+                if(index==count) {
+                    static_assert(noexcept(use(count,frames,receipts,tickets,
+                        std::as_const(expected),std::as_const(completion),std::as_const(history))));
+                    result=use(count,frames,receipts,tickets,
+                        std::as_const(expected),std::as_const(completion),std::as_const(history));
+                    return true;
+                }
+                bool entered=false,repeated=false;
+                const bool observed=observe(*frames[index],receipts[index],
+                    [&](const TglNativeFenceBackingObservation::Snapshot& snapshot,
+                        const NGVfTaskCompletion::Reply& reply,
+                        const TglNativeHistoryCacheInspection& cache) noexcept -> bool {
+                        if(entered) {repeated=true;return false;}
+                        entered=true;
+                        if(!cache.observed)return false;
+                        expected[index]=snapshot;completion[index]=reply;history[index]=cache;
+                        return self(self,index+1);
+                    });
+                return observed && entered && !repeated;
+            };
+            return enter(enter,0)?result:5;
+        });
+    }
     template<class Prepare> int retirePendingWithReceipt(Ticket ticket,Prepare prepare) noexcept {
         static_assert(std::is_nothrow_invocable_r_v<int,Prepare&,Frame&,const TglNativeFrameOutputReceipt&>);
         if constexpr(std::is_pointer_v<Prepare>)if(!prepare)return 5;
@@ -27043,6 +27080,24 @@ public:
             return pool.withRetainedFrameObservation(frame,[&](auto& retained,const auto& receipt) noexcept -> int {
                 return retained.captureTaskCompletion(binding,receipt,wrapper,read,admit,query,expected,completion)?0:5;
             });
+        });
+    }
+    template<class FenceRead,class Admit,class Query,class History,class Use>
+    int withTaskCompletionGroup(typename Registry::Ticket ticket,uintptr_t physical,
+        const TglNativeFenceBackingObservation& binding,FenceRead read,Admit admit,Query query,History history,Use use) noexcept {
+        if(binding.image()!=binding_.image || physical>UINTPTR_MAX-0x58)return 5;
+        if constexpr(std::is_pointer_v<FenceRead>)if(!read)return 5;
+        if constexpr(std::is_pointer_v<History>)if(!history)return 5;
+        return withFrame(ticket,physical,[&](auto& pool) noexcept -> int {
+            uintptr_t wrapper=0;
+            if(!read(physical+0x50,&wrapper,8) || !wrapper)return 5;
+            return pool.withPendingTaskCompletionGroup([&](auto& retained,const auto& receipt,auto next) noexcept {
+                return retained.withTaskCompletionObservation(binding,receipt,wrapper,read,admit,query,
+                    [&](auto& renderer,const auto& expected,const auto& reply) noexcept {
+                        static_assert(noexcept(history(renderer)));
+                        return next(expected,reply,history(renderer));
+                    });
+            },use);
         });
     }
     template<class FenceRead,class Admit,class Query,class History,class Prepare>

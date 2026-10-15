@@ -4343,6 +4343,36 @@ struct NativePhysicalBackend {
                 NativeRetainedTaskCompletionQuery{native.image,library.resourceCreate},expected,completion);
         });
     }
+    struct NativeTaskCompletionGroupObservation {
+        size_t count=0;
+        std::array<TglNativeFenceBackingObservation::Snapshot,2> expected{};
+        std::array<NGVfTaskCompletion::Reply,2> completion{};
+        std::array<TglNativeHistoryCacheInspection,2> history{};
+    };
+    static int captureNativeTaskCompletionGroup(void* physical,NativeTaskCompletionGroupObservation& output) noexcept {
+        TglNativePhysicalCallbackBinding native;TglNativeFenceBackingObservation fence;
+        if(!binding(native) || !library.resourceCreate || !fence.resolve(native.image,&readMemory,
+            NativeTglImageAdmission{native.image},&executableMemory))return 5;
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        NativeTaskCompletionGroupObservation candidate;
+        const int status=withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.withTaskCompletionGroup(ticket,address,fence,&readMemory,
+                NativeRetainedFenceOwnerAdmission{native.image,address},
+                NativeRetainedTaskCompletionQuery{native.image,library.resourceCreate},
+                [](NativeBorrowedFrontend& frontend) noexcept {return NativeRendererHistoryInspection::run(frontend);},
+                [&](size_t count,const auto&,const auto&,const auto&,
+                    const auto& expected,const auto& completion,const auto& history) noexcept -> int {
+                    if(!count || count>candidate.expected.size())return 5;
+                    for(size_t i=0;i<count;++i) {
+                        candidate.expected[i]=expected[i];candidate.completion[i]=completion[i];
+                        candidate.history[i]=history[i];
+                    }
+                    candidate.count=count;return 0;
+                });
+        });
+        if(!status)output=candidate;
+        return status; // Value observation only; no pending/history clear.
+    }
     static int retireNativeTaskCompletedFrame(void* physical,typename NativePhysicalRegistry::FrameTicket frame,
         NativeFrameHistoryRetirement::Prepare prepare) noexcept {
         if(!prepare || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(prepare),1))return 5;
