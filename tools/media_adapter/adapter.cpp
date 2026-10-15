@@ -4222,6 +4222,20 @@ struct NativePhysicalBackend {
             return use(scope,ticket.generation);
         });
     }
+    using BatchFrameInvoke=int(*)(void*,NativePhysicalFrameScope&,const TglNativeFrameBatchBinding&,
+        uintptr_t,const void*,void*) noexcept;
+    static int withBatchFrameScope(void* physical,const void* input,void* output,void* context,BatchFrameInvoke invoke) noexcept {
+        TglNativePhysicalCallbackBinding native;TglNativeFrameBatchBinding batch;
+        if(!input || !output || !context || !invoke || !binding(native) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(invoke),1) ||
+            !batch.resolve(native.image,&readMemory,NativeTglImageAdmission{native.image},&executableMemory))return 5;
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        // Required owned invoker must route every vtable+28 request through
+        // THIS scope. No bare native fallback and no recursive registry entry.
+        return withScope(address,[&](NativePhysicalFrameScope& scope,uint64_t generation) noexcept -> int {
+            return scope.matches(native.image,address,generation)?invoke(context,scope,batch,address,input,output):5;
+        });
+    }
     template<class Native> static int createContexts(uintptr_t physical,const void* input,Native nativeCreate) noexcept {
         using AdoptionScope=typename NativePhysicalRegistry::DependencyAdoptionScope;
         static_assert(noexcept(nativeCreate(uintptr_t{},uintptr_t{},input,std::declval<AdoptionScope&>())) &&

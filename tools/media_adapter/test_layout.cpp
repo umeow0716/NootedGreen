@@ -15756,18 +15756,42 @@ static void testRetainedVeboxFrames() {
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         {
             std::array<uintptr_t,17> table{};
+            table[0]=0x90000;
             table[1]=image+0x135d9;table[2]=image+0x13c8c;table[3]=image+0x13e43;
             table[9]=image+0x155d1;table[10]=image+0x1580c;
             table[15]=image+0x15f96;table[16]=image+0x161c3;
             table[12]=image+0x15b01;
+            table[4]=image+0x15128;table[5]=image+0x1523b;table[6]=image+0x1541c;
+            table[7]=image+0x154cf;table[8]=image+0x154f8;table[11]=image+0x159a4;
+            table[13]=image+0x15c0e;table[14]=image+0x15f1f;
             const auto saved=table;
             assert(binding.matchesFactoryTable(table) && table==saved);
-            for(unsigned slot:{1U,2U,3U,9U,10U,12U,15U,16U}) {
+            for(unsigned slot=1;slot<17;++slot) {
                 ++table[slot];assert(!binding.matchesFactoryTable(table));--table[slot];
             }
             assert(!TglNativePhysicalCallbackBinding{}.matchesFactoryTable(table));
             auto wrapped=binding;wrapped.image=UINTPTR_MAX;
             assert(!wrapped.matchesFactoryTable(table));
+        }
+        {
+            std::array<uint8_t,19> start{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+                0x41,0x55,0x41,0x54,0x53,0x50,0xb8,5,0,0,0};
+            std::array<uint8_t,3> call{0xff,0x50,0x28},count{0x41,0x8b,0x0f};
+            std::array<uint8_t,4> out{0x49,0x8b,0x56,0x08};
+            auto batchRead=[&](uintptr_t at,void* bytes,size_t n) noexcept {
+                if(at==image+0x159a4 && n==start.size())std::memcpy(bytes,start.data(),n);
+                else if(at==image+0x15aaf && n==call.size())std::memcpy(bytes,call.data(),n);
+                else if(at==image+0x15ab9 && n==count.size())std::memcpy(bytes,count.data(),n);
+                else if(at==image+0x15aa5 && n==out.size())std::memcpy(bytes,out.data(),n);
+                else return false;return true;
+            };
+            TglNativeFrameBatchBinding batch;
+            auto exec=[](uintptr_t,size_t) noexcept {return true;};
+            assert(batch.resolve(image,batchRead,qualify,exec) && batch.entry==image+0x159a4);
+            for(auto* byte:{&start[0],&call[2],&count[2],&out[3]}) {
+                *byte^=1;assert(!batch.resolve(image,batchRead,qualify,exec) && !batch.image && !batch.entry);*byte^=1;
+            }
+            assert(batch.resolve(image,batchRead,qualify,exec));
         }
         struct Invoke {
             void** original;uintptr_t produced=0x8000;int status=0;

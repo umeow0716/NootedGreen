@@ -25932,11 +25932,14 @@ struct TglNativePhysicalCallbackBinding {
             cpu.allocate==image+0x437e0 && cpu.release==image+0x436d0;
     }
     bool matchesFactoryTable(const std::array<uintptr_t,17>& table) const noexcept {
-        return image && image<=UINTPTR_MAX-0x161c3 && initialize && destroy &&
-            table[1]==initialize && table[2]==destroy && table[3]==image+0x13e43 &&
-            table[9]==image+0x155d1 && table[10]==image+0x1580c &&
-            table[12]==image+0x15b01 &&
-            table[15]==image+0x15f96 && table[16]==image+0x161c3;
+        // Exact factory2ba5a..2bb15 publishes all sixteen callbacks together.
+        constexpr std::array<uintptr_t,16> offsets{0x135d9,0x13c8c,0x13e43,0x15128,
+            0x1523b,0x1541c,0x154cf,0x154f8,0x155d1,0x1580c,0x159a4,0x15b01,
+            0x15c0e,0x15f1f,0x15f96,0x161c3};
+        if(!image || image>UINTPTR_MAX-0x161c3 || !table[0] ||
+            initialize!=image+offsets[0] || destroy!=image+offsets[1])return false;
+        for(size_t i=0;i<offsets.size();++i)if(table[i+1]!=image+offsets[i])return false;
+        return true;
     }
     template<class Read,class Qualify,class Executable>
     bool resolve(uintptr_t base,Read read,Qualify qualify,Executable executable) noexcept {
@@ -25954,6 +25957,30 @@ struct TglNativePhysicalCallbackBinding {
         };
         if(!matches(0x135d9,init) || !matches(0x135f6,clear) || !matches(0x13c8c,free)) return false;
         image=base;initialize=base+0x135d9;destroy=base+0x13c8c;return true;
+    }
+};
+struct TglNativeFrameBatchBinding {
+    uintptr_t image=0,entry=0;
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t base,Read read,Qualify qualify,Executable executable) noexcept {
+        *this={};
+        constexpr std::array<uint8_t,19> start{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+            0x41,0x55,0x41,0x54,0x53,0x50,0xb8,5,0,0,0};
+        constexpr std::array<uint8_t,3> frameCall{0xff,0x50,0x28},rereadCount{0x41,0x8b,0x0f};
+        constexpr std::array<uint8_t,4> outputList{0x49,0x8b,0x56,0x08};
+        if(!base || base>UINTPTR_MAX-0x15abc || !qualify(base))return false;
+        auto matches=[&](uintptr_t offset,const auto& expected) noexcept {
+            auto actual=expected;
+            return executable(base+offset,actual.size()) && read(base+offset,actual.data(),actual.size()) && actual==expected;
+        };
+        if(!matches(0x159a4,start) || !matches(0x15aaf,frameCall) ||
+            !matches(0x15aa5,outputList) || !matches(0x15ab9,rereadCount))return false;
+        image=base;entry=base+0x159a4;return true;
+    }
+};
+struct TglNativeFrameBatchInvoker {
+    int operator()(uintptr_t entry,uintptr_t physical,const void* input,void* output) const noexcept {
+        return reinterpret_cast<int(*)(void*,const void*,void*)>(entry)(reinterpret_cast<void*>(physical),input,output);
     }
 };
 struct TglNativeBackingAllocateInvoker {
