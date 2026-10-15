@@ -19226,6 +19226,28 @@ public:
     bool captureRelocationRecords(Read read,Admit admit,RelocationRecords& output) const noexcept {
         RelocationRecords candidate;
         if(!captureRelocationPage(read,admit,candidate.page))return false;
+        //641e0 emits a canonical zero channel or the current context command
+        // resource token(low16)<<1|1. Native selects among16 resources at
+        // record28 + current15a8*158; never infer this token from a pointer.
+        struct ChannelSnapshot {
+            uintptr_t database=0;uint32_t index=0,current=0,token=0;
+            bool same(const ChannelSnapshot& other) const noexcept {
+                return database==other.database && index==other.index && current==other.current && token==other.token;
+            }
+        } beforeChannel;
+        auto channelMatches=[&](ChannelSnapshot& snapshot) noexcept {
+            if(!candidate.hasChannel)return true;
+            if(!(candidate.channel&1))return candidate.channel==0;
+            auto& database=snapshot.database;auto& index=snapshot.index;
+            auto& current=snapshot.current;auto& token=snapshot.token;
+            if(!read(os_,&database,8) || !database || !read(os_+8,&index,4) || index>=16)return false;
+            const uint64_t offset=8+uint64_t{index}*0x15c0;
+            if(database>UINTPTR_MAX-offset-0x15ac)return false;
+            const uintptr_t record=database+uintptr_t(offset);
+            if(!read(record+0x15a8,&current,4) || current>=16 ||
+                !read(record+0x60+uintptr_t{current}*0x158,&token,4))return false;
+            return candidate.channel==((token&0xffffU)<<1|1U);
+        };
         const uintptr_t payload=candidate.page.cursor-candidate.page.begin-8;
         if(payload) {
             if(payload<4 || (payload-4)%0x14)return false;
@@ -19233,6 +19255,7 @@ public:
             if(count>candidate.entries.size() ||
                 !read(candidate.page.begin+8,&candidate.channel,4))return false;
             candidate.hasChannel=true;candidate.count=uint32_t(count);
+            if(!channelMatches(beforeChannel))return false;
             for(uint32_t i=0;i<candidate.count;++i) {
                 auto& record=candidate.entries[i];
                 if(!read(candidate.page.begin+12+uintptr_t{i}*0x14,record.data(),sizeof(record)) ||
@@ -19240,7 +19263,9 @@ public:
             }
         }
         RelocationPage after;
-        if(!captureRelocationPage(read,admit,after) || !candidate.page.same(after))return false;
+        ChannelSnapshot afterChannel;
+        if(!captureRelocationPage(read,admit,after) || !candidate.page.same(after) ||
+            !channelMatches(afterChannel) || !beforeChannel.same(afterChannel))return false;
         output=candidate;return true;
     }
     // Do not invent OS+15b0: that is a field of the DATABASE RECORD used

@@ -33721,8 +33721,9 @@ int main() {
         uintptr_t reserved=end+12,limit=base+0x2030;
         uint32_t sharedSize=0x828,pageHeader=0x04008200;
         uint32_t channel=0;
+        uint32_t currentCommand=0,commandToken=0x42;
         std::array<uint32_t,5> relocation{7,0,8,0,0};
-        bool failRecord=false,driftRecord=false;
+        bool failRecord=false,driftRecord=false,driftCommand=false;
         auto pageRead=[&](uintptr_t p,void* out,size_t n) noexcept {
             auto word=[&](const auto& value) noexcept {std::memcpy(out,&value,n);return true;};
             if(n==8) {
@@ -33736,9 +33737,12 @@ int main() {
             if(n==4 && p==base)return word(sharedSize);
             if(n==4 && p==base+0x18)return word(pageHeader);
             if(n==4 && p==base+0x20)return word(channel);
+            if(n==4 && p==database+8+uintptr_t{index}*0x15c0+0x15a8)return word(currentCommand);
+            if(n==4 && p==database+8+uintptr_t{index}*0x15c0+0x60+uintptr_t{currentCommand}*0x158)return word(commandToken);
             if(n==sizeof(relocation) && p==base+0x24 && !failRecord) {
                 std::memcpy(out,relocation.data(),n);
                 if(driftRecord)cursor+=0x14;
+                if(driftCommand)++currentCommand;
                 return true;
             }
             return observationRead(p,out,n);
@@ -33762,6 +33766,13 @@ int main() {
         assert(binding.captureRelocationRecords(pageRead,admit,inventory) && inventory.count==1 &&
             inventory.channel==0 && inventory.entries[0]==relocation); // token0 is not discarded
         const auto originalCursor=inventory.page.cursor;
+        channel=(commandToken<<1)|1;
+        assert(binding.captureRelocationRecords(pageRead,admit,inventory) && inventory.channel==0x85);
+        channel+=2;assert(!binding.captureRelocationRecords(pageRead,admit,inventory) && inventory.channel==0x85);
+        channel=0x85;currentCommand=16;assert(!binding.captureRelocationRecords(pageRead,admit,inventory));currentCommand=0;
+        driftCommand=true;assert(!binding.captureRelocationRecords(pageRead,admit,inventory));driftCommand=false;currentCommand=0;
+        commandToken=0;channel=1;assert(binding.captureRelocationRecords(pageRead,admit,inventory));
+        commandToken=0x42;channel=2;assert(!binding.captureRelocationRecords(pageRead,admit,inventory));channel=0;
         relocation[0]=0;
         assert(!binding.captureRelocationRecords(pageRead,admit,inventory) && inventory.entries[0][0]==7);
         relocation[0]=7;cursor+=4;
