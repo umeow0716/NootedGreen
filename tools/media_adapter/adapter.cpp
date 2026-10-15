@@ -402,10 +402,13 @@ public:
                 !sfc.resolve(image_,&readMemory,qualify,&executableMemory))return 5;
             const int initialized=tglInitializeRendererChildrenFromCreator(cpu_,view,base,sfc,
                 &readMemory,qualify,&executableMemory);
+            os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CREATOR_HANDOFF stage=native-bases status=%{public}d",initialized);
             if(initialized)return initialized;
             const int shells=cpu_.allocateCpuShellsFromCreator(view,&readMemory,qualify,&executableMemory);
+            os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CREATOR_HANDOFF stage=cpu-shells status=%{public}d",shells);
             if(shells)return shells;
             const int helpers=cpu_.allocateHelpersFromCreator(view,&readMemory,qualify,&executableMemory);
+            os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CREATOR_HANDOFF stage=helpers status=%{public}d",helpers);
             basesReady_=helpers==0;return helpers;
         } catch(...) {return 7;}
     }
@@ -421,8 +424,11 @@ public:
             const int status=cpu_.initializeVpPairFromCreator(view,&readMemory,
                 NativeTglImageAdmission{image_},&executableMemory,
                 [](size_t,auto&) noexcept -> int {return 0;});
+            os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CREATOR_HANDOFF stage=vp-pair status=%{public}d",status);
             if(status)return status; // retain successful first VP on partial failure
-            return bindCleanupContexts()?0:5;
+            const int cleanup=bindCleanupContexts()?0:5;
+            os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CREATOR_HANDOFF stage=cleanup-contexts status=%{public}d",cleanup);
+            return cleanup;
         } catch(...) {return 7;}
     }
     bool bindCleanupContexts() noexcept {
@@ -5313,15 +5319,21 @@ struct NativeCreatorPreparation {
     static int complete(PhysicalScope& physical,const Entry& factory,uintptr_t image,
         uintptr_t address,uint64_t generation,uintptr_t creator,NativeRendererConstructionSelection selection={}) noexcept {
         const int owner=prepareOwner(physical,factory,image,address,generation,creator,selection);
+        os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CREATOR_HANDOFF stage=owner status=%{public}d",owner);
         if(owner)return owner;
         if(!physical.matches(image,address,generation))return 5;
         const int children=initializeChildren(physical,image,address,generation,creator);
+        os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CREATOR_HANDOFF stage=children status=%{public}d",children);
         if(children)return children;
         if(!physical.matches(image,address,generation))return 5;
         const int published=publishChildren(physical,image,address,generation,creator);
+        os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CREATOR_HANDOFF stage=publish-children status=%{public}d",published);
         if(published)return published;
-        if(selection.ownedSend && selection.domain==NativeRendererCallbackDomain::Temporary)
-            return publishMainRenderer(physical,image,address,generation,creator);
+        if(selection.ownedSend && selection.domain==NativeRendererCallbackDomain::Temporary) {
+            const int main=publishMainRenderer(physical,image,address,generation,creator);
+            os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CREATOR_HANDOFF stage=publish-main status=%{public}d",main);
+            return main;
+        }
         return 0;
     }
 };
@@ -5923,7 +5935,11 @@ struct NativeCreatorScopedInvocation {
                 !currentObserver->rearmFromOwnedCallback(1)))return 5;
             return 0;
         };
-        TglNativeCreatorCallInvoker nativeCreate;
+        auto nativeCreate=[](uintptr_t target,void* creator) noexcept -> int {
+            const int status=TglNativeCreatorCallInvoker{}(target,creator);
+            os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CREATOR_HANDOFF stage=native-creator status=%{public}d",status);
+            return status;
+        };
         result.admission="creator-table";
         TglOwnedCreatorCallScope<decltype(nativeCreate),decltype(completeHandoff),decltype(qualifiedCreator),16>
             creatorScope(nativeCreate,completeHandoff,qualifiedCreator);
