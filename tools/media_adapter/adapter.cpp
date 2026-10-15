@@ -5800,6 +5800,7 @@ std::map<void *, std::unique_ptr<Entry>> registry;
 struct NativeCreatorScopedInvocation {
     struct Result {
         int nativeResult=5,handoffResult=5;
+        const char* admission="creator-inputs";
         bool nativeInvoked=false,selected=false,metadataCopied=false,handoffCompleted=false,nativeOtherOnly=false,argumentsCommitted=false;
         std::array<uintptr_t,16> creators{};
         size_t selectedCount=0,metadataCount=0,completedCount=0;
@@ -5809,6 +5810,7 @@ struct NativeCreatorScopedInvocation {
     using HandoffFn=int(*)(void*) noexcept;
     struct BatchResult {
         int status=5;
+        const char* admission="selection";
         Result creator;
     };
     // Join construction to the existing physical dependency-adoption scope.
@@ -5821,15 +5823,19 @@ struct NativeCreatorScopedInvocation {
         uintptr_t physical,const void* input,Admit& admit,NativeRendererConstructionSelection selection={}) noexcept {
         BatchResult result;
         if(!selection.valid())return result;
+        result.admission="binding";
         TglNativePhysicalCallbackBinding selected;
         if(!factory.physical.matchesCreatorInputs(factory.nativeCpu,entry) ||
             !NativePhysicalBackend::binding(selected) || selected.image!=factory.physical.image ||
             selected.initialize!=factory.physical.initialize || selected.destroy!=factory.physical.destroy)
             return result;
+        result.admission="physical-adoption-scope";
         result.status=NativePhysicalBackend::createContexts(physical,input,
             [&](uintptr_t image,uintptr_t actual,const void* request,Scope& scope) noexcept -> int {
+                result.admission="scope-identity";
                 if(actual!=physical || request!=input || scope.image()!=image)return 5;
                 result.creator=runComplete(factory,entry,actual,request,scope,admit,selection);
+                result.admission=result.creator.admission;
                 if(!result.creator.nativeInvoked)return 5;
                 if(result.creator.nativeResult)return result.creator.nativeResult;
                 return result.creator.handoffCompleted || result.creator.nativeOtherOnly?0:5;
@@ -5841,8 +5847,9 @@ struct NativeCreatorScopedInvocation {
         const void* input,Scope& scope,Admit& admit,NativeRendererConstructionSelection selection={}) noexcept {
         const uintptr_t image=scope.image();
         const uint64_t generation=scope.generation();
+        Result result;result.admission="creator-scope-binding";
         if(!selection.valid() || image!=factory.physical.image || !factory.physical.matchesCreatorInputs(factory.nativeCpu,entry))
-            return {};
+            return result;
         // Borrow the mutation capability from the SAME batch adoption scope;
         // never synthesize a second physical owner or let authority escape.
         auto handoff=[&](void* creator) noexcept -> int {
@@ -5854,9 +5861,10 @@ struct NativeCreatorScopedInvocation {
         };
         TglNativeCreatorRequestChains<> chains;
         const auto request=reinterpret_cast<uintptr_t>(input);
-        if(!chains.capture(request,&readMemory))return {};
-        Result result;
+        result.admission="request-chains";
+        if(!chains.capture(request,&readMemory))return result;
         if(chains.avcOnly()) {
+            result.admission="avc-owned-arguments";
             const auto invocation=chains.invokeAvc(&readMemory,
                 [](uintptr_t target,const void* bytes,size_t size) noexcept -> bool {
                     return size==8 && mach_vm_write(mach_task_self(),target,reinterpret_cast<vm_offset_t>(bytes),8)==KERN_SUCCESS;
@@ -5867,6 +5875,7 @@ struct NativeCreatorScopedInvocation {
                 });
             result.nativeInvoked=invocation.invoked;result.nativeResult=invocation.result;
             result.argumentsCommitted=invocation.committed;
+            if(result.nativeInvoked)result.admission="native-return";
         } else result=run(entry,physical,input,scope,admit,handoff);
         if(!result.nativeInvoked || result.nativeResult || !result.argumentsCommitted)return result;
         TglNativeCreatedContextBatch<16> batch,after;
@@ -5910,6 +5919,7 @@ struct NativeCreatorScopedInvocation {
             return 0;
         };
         TglNativeCreatorCallInvoker nativeCreate;
+        result.admission="creator-table";
         TglOwnedCreatorCallScope<decltype(nativeCreate),decltype(completeHandoff),decltype(qualifiedCreator),16>
             creatorScope(nativeCreate,completeHandoff,qualifiedCreator);
         if(!creatorScope.prepare(image,&readMemory,NativeTglImageAdmission{image},
@@ -5921,8 +5931,10 @@ struct NativeCreatorScopedInvocation {
         uint8_t actualCopy[sizeof(copyAnchor)]{};
         uint8_t actualCreator[sizeof(creatorAnchor)]{};
         std::vector<uint8_t> metadata;
+        result.admission="metadata-allocation";
         try { metadata.resize(TglKernelMetadataAdapter::blobBytes); }
         catch (...) { return result; }
+        result.admission="metadata-and-call-anchors";
         if(!executableMemory(image+0x133c0f,sizeof(creatorAnchor)) ||
             !readMemory(image+0x133c0f,actualCreator,sizeof(actualCreator)) ||
             std::memcmp(actualCreator,creatorAnchor,sizeof(creatorAnchor)) ||
@@ -5931,12 +5943,14 @@ struct NativeCreatorScopedInvocation {
             std::memcmp(actualCopy,copyAnchor,sizeof(copyAnchor)) ||
             !readMemory(image+0x531550,metadata.data(),metadata.size()) ||
             !TglKernelMetadataAdapter::translate(metadata))return result;
+        result.admission="native-debug-observer";
         NativeReturnObserver observer({image+0x13260f,image+0x133c0f,0,0},
             0,0,0,0,0,0,
             {image+0x531550,reinterpret_cast<uintptr_t>(metadata.data()),metadata.size()},0,
             {creatorScope.table().source(),creatorScope.table().addressPoint(),1});
         if(!observer.isArmed())return result;
         currentObserver=&observer;
+        result.admission="native-return";
         result.nativeInvoked=true;
         result.nativeResult=reinterpret_cast<int(*)(void*,const void*)>(entry)(
             reinterpret_cast<void*>(physical),input);
@@ -6086,8 +6100,8 @@ struct NativeFactoryLifecycle {
         };
         const auto result=NativeCreatorScopedInvocation::createAndAdopt(*source,image+0x13e43,address,input,admit,
             {NativeRendererCallbackDomain::Temporary,true});
-        os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CONTEXT_CREATE native-called=%{public}d handoff=%{public}d native=%{public}d status=%{public}d",
-            int(result.creator.nativeInvoked),int(result.creator.handoffCompleted),result.creator.nativeResult,result.status);
+        os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CONTEXT_CREATE native-called=%{public}d handoff=%{public}d native=%{public}d status=%{public}d admission=%{public}s",
+            int(result.creator.nativeInvoked),int(result.creator.handoffCompleted),result.creator.nativeResult,result.status,result.admission);
         return result.status;
     }
 };
