@@ -5627,6 +5627,38 @@ template NativeCreatorScopedInvocation::BatchResult NativeCreatorScopedInvocatio
     NativeCreatorScopedInvocation::AdmitFn>(const Entry&,uintptr_t,uintptr_t,const void*,
     NativeCreatorScopedInvocation::AdmitFn&,NativeRendererConstructionSelection) noexcept;
 struct NativeFactoryLifecycle {
+    static uint64_t describeFormats(void* physical,void* descriptor) noexcept {
+        const auto* source=NativeFactorySource::process().get();if(!source || !descriptor)return 1;
+        TglNativePhysicalCallbackBinding native;
+        if(!NativePhysicalBackend::binding(native) || native.image!=source->physical.image)return 1;
+        const uintptr_t image=native.image,address=reinterpret_cast<uintptr_t>(physical),input=reinterpret_cast<uintptr_t>(descriptor);
+        uint64_t result=1;
+        const int scoped=NativePhysicalBackend::withScope(address,[&](NativePhysicalFrameScope& scope,uint64_t generation) noexcept -> int {
+            constexpr std::array<uint8_t,15> anchor{
+                0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x54,0x53,0x48,0x8b,0x47,0x68};
+            auto actual=anchor;uint32_t alignment=0;
+            if(!scope.matches(image,address,generation) || image>UINTPTR_MAX-0x15507 || address>UINTPTR_MAX-0xa840 ||
+               !executableMemory(image+0x154f8,actual.size()) || !readMemory(image+0x154f8,actual.data(),actual.size()) || actual!=anchor ||
+               !readMemory(address+0xa83c,&alignment,4))return 5;
+            auto admit=[&](uintptr_t at,size_t bytes) noexcept {
+                return scope.matches(image,address,generation) && writableDataMemory(at,bytes) &&
+                    native.excludesPhysicalAllocationSpan(address,at,bytes,&readMemory,NativeTglImageAdmission{image},&executableMemory);
+            };
+            auto write=[&](uintptr_t at,const void* bytes,size_t count) noexcept {
+                uint32_t currentAlignment=0;
+                return admit(at,count) && readMemory(address+0xa83c,&currentAlignment,4) && currentAlignment==alignment &&
+                    mach_vm_write(mach_task_self(),at,reinterpret_cast<vm_offset_t>(bytes),
+                        static_cast<mach_msg_type_number_t>(count))==KERN_SUCCESS;
+            };
+            TglNativeFormatDescribeTransaction transaction;
+            result=transaction.run(input,alignment,&readMemory,write,admit,[&](void* owned) noexcept -> uint64_t {
+                using Native=uint64_t(*)(void*,void*);
+                return reinterpret_cast<Native>(image+0x154f8)(physical,owned);
+            });
+            return 0;
+        });
+        return scoped?1:result;
+    }
     static uint64_t lookupFormats(void* physical,void* descriptor) noexcept {
         const auto* source=NativeFactorySource::process().get();if(!source || !descriptor)return 1;
         TglNativePhysicalCallbackBinding native;
@@ -5720,6 +5752,7 @@ struct NativeFactoryLifecycle {
 };
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::frame),int(*)(void*,const void*,void*) noexcept>);
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::lookupFormats),uint64_t(*)(void*,void*) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::describeFormats),uint64_t(*)(void*,void*) noexcept>);
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::reportFrameEvents),int(*)(void*,const void*) noexcept>);
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::removeContexts),int(*)(void*,const void*) noexcept>);
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::allocateBacking),int(*)(void*,const void*) noexcept>);

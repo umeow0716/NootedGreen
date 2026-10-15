@@ -27087,6 +27087,74 @@ public:
     }
 };
 
+class TglNativeFormatDescribeTransaction {
+    bool attempted_=false;
+public:
+    template<class Read,class Write,class Admit,class Invoke>
+    uint64_t run(uintptr_t input,uint32_t alignment,Read read,Write write,Admit admit,Invoke invoke) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<uint64_t,Invoke&,void*>);
+        if(attempted_)return 1;
+        attempted_=true;
+        std::array<uint8_t,0x48> original{},verify{};
+        if(!input || input>UINTPTR_MAX-original.size() || !admit(input,original.size()) ||
+           !read(input,original.data(),original.size()) || !read(input,verify.data(),verify.size()) || original!=verify)return 1;
+        uint32_t format=0,width=0,height=0;
+        std::memcpy(&format,original.data()+0x18,4);
+        std::memcpy(&width,original.data()+0x10,4);std::memcpy(&height,original.data()+0x14,4);
+        std::array<uintptr_t,4> outputs{};bool allPresent=true;
+        for(size_t i=0;i<4;++i) {
+            std::memcpy(&outputs[i],original.data()+0x28+i*8,8);
+            allPresent=allPresent && outputs[i]!=0;
+        }
+        const uint32_t planes=tglNativeFormatPlaneCount(format);
+        const size_t length=size_t(planes)*4;
+        // Native checks all four pointers before any write. Keep NULL/error
+        // semantics; no output-array access is necessary on that path.
+        if(allPresent && !tglNativeFormatArithmeticSafe(format,width,height,alignment))return 1;
+        if(allPresent && planes)for(auto output:outputs) {
+            if(output>UINTPTR_MAX-length || !admit(output,length))return 1;
+            // OPEN: exact sequential arithmetic for aliases into still-live
+            // descriptor inputs. Do not invoke a native rounding loop there.
+            if(output<input+0x20 && input<output+length)return 1;
+        }
+        TglNativeFormatAliasStaging staging;
+        if(!staging.prepare(input,outputs,allPresent?planes:0))return 1;
+        auto* descriptor=staging.translate(input,original.size());
+        if(!descriptor)return 1;
+        std::memcpy(descriptor,original.data(),original.size());
+        if(allPresent && planes)for(size_t i=0;i<4;++i) {
+            const uintptr_t rebased=reinterpret_cast<uintptr_t>(staging.translate(outputs[i],length));
+            if(!rebased)return 1;
+            std::memcpy(descriptor+0x28+i*8,&rebased,8);
+        }
+        const uint64_t result=invoke(descriptor); // Exact154f8 once; no generated format values.
+        if(!admit(input,original.size()) || !read(input,verify.data(),verify.size()) || original!=verify)return 1;
+        if(result)return result; // Unsupported/NULL paths write nothing.
+        if(!allPresent)return 1; // Contradicts the qualified helper's NULL gate.
+        struct Span {uintptr_t begin=0,end=0;};
+        std::array<Span,5> writes{};size_t count=1;
+        writes[0]={input+0x20,input+0x24};
+        if(planes)for(auto output:outputs)writes[count++]={output,output+length};
+        for(size_t i=1;i<count;++i)for(size_t j=i;j && writes[j].begin<writes[j-1].begin;--j)
+            std::swap(writes[j],writes[j-1]);
+        size_t merged=0;
+        for(size_t i=0;i<count;++i) {
+            if(merged && writes[i].begin<=writes[merged-1].end) {
+                if(writes[i].end>writes[merged-1].end)writes[merged-1].end=writes[i].end;
+            } else writes[merged++]=writes[i];
+        }
+        // Validate the entire footprint before first write; sequential native
+        // publication can still fail partway and is NOT claimed atomic.
+        for(size_t i=0;i<merged;++i)if(!admit(writes[i].begin,size_t(writes[i].end-writes[i].begin)))return 1;
+        for(size_t i=0;i<merged;++i) {
+            const auto size=size_t(writes[i].end-writes[i].begin);
+            auto* source=staging.translate(writes[i].begin,size);
+            if(!source || !write(writes[i].begin,source,size))return 1;
+        }
+        return result;
+    }
+};
+
 class TglNativeFormatLookupTransaction {
     bool attempted_=false;
 public:

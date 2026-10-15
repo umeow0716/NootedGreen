@@ -16166,6 +16166,50 @@ static void testRetainedVeboxFrames() {
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         {
+            alignas(8) std::array<uint8_t,0x48> descriptor{};
+            std::array<uint32_t,8> output{};output.fill(0xfeed);
+            const uintptr_t root=reinterpret_cast<uintptr_t>(descriptor.data());
+            const uintptr_t array=reinterpret_cast<uintptr_t>(output.data());
+            const uint32_t format=0x4e563132,width=1920,height=1080;
+            std::memcpy(descriptor.data()+0x10,&width,4);std::memcpy(descriptor.data()+0x14,&height,4);
+            std::memcpy(descriptor.data()+0x18,&format,4);
+            const std::array<uintptr_t,4> pointers{array,array+4,array+8,array+12};
+            std::memcpy(descriptor.data()+0x28,pointers.data(),32);
+            const auto initial=descriptor;
+            auto admit=[&](uintptr_t p,size_t n) noexcept {
+                return (p>=root && p-root<=descriptor.size() && n<=descriptor.size()-(p-root)) ||
+                    (p>=array && p-array<=sizeof(output) && n<=sizeof(output)-(p-array));
+            };
+            auto rd=[&](uintptr_t p,void* out,size_t n) noexcept {
+                if(!admit(p,n))return false;std::memcpy(out,reinterpret_cast<void*>(p),n);return true;
+            };
+            unsigned writes=0,calls=0;
+            auto wr=[&](uintptr_t p,const void* in,size_t n) noexcept {
+                if(!admit(p,n))return false;++writes;std::memcpy(reinterpret_cast<void*>(p),in,n);return true;
+            };
+            auto native=[&](void* raw) noexcept -> uint64_t {
+                ++calls;auto* d=static_cast<uint8_t*>(raw);uint32_t count=2;
+                std::memcpy(d+0x20,&count,4);
+                for(size_t i=0;i<4;++i) {
+                    uintptr_t p=0;std::memcpy(&p,d+0x28+i*8,8);
+                    const std::array<uint32_t,2> values{uint32_t(i*10+1),uint32_t(i*10+2)};
+                    std::memcpy(reinterpret_cast<void*>(p),values.data(),8);
+                }
+                return 0;
+            };
+            TglNativeFormatDescribeTransaction tx;
+            assert(tx.run(root,128,rd,wr,admit,native)==0 && calls==1 && writes==2);
+            assert((output==std::array<uint32_t,8>{1,11,21,31,32,0xfeed,0xfeed,0xfeed}));
+            assert(!std::memcmp(descriptor.data(),initial.data(),0x20));
+            assert(!std::memcmp(descriptor.data()+0x24,initial.data()+0x24,0x24));
+            assert(tx.run(root,128,rd,wr,admit,native)==1 && calls==1);
+            descriptor=initial;TglNativeFormatDescribeTransaction unsupported;
+            assert(unsupported.run(root,128,rd,wr,admit,[](void*) noexcept -> uint64_t {return 3;})==3);
+            const uintptr_t unsafe=root+0x10;std::memcpy(descriptor.data()+0x28,&unsafe,8);
+            TglNativeFormatDescribeTransaction inputAlias;
+            assert(inputAlias.run(root,128,rd,wr,admit,native)==1 && calls==1);
+        }
+        {
             TglNativeFormatAliasStaging staging;
             assert(staging.prepare(0x1000,{0x1020,0x1024,0x1044,0x104c},3));
             auto* root=staging.translate(0x1000,0x48);assert(root);
