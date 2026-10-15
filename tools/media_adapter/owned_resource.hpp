@@ -1662,6 +1662,7 @@ public:
     bool canRelease() const noexcept {
         return !releaseFault_ && !borrowed && !nativeReleaseSlot_ && !nativeAliasSlot_;
     }
+    void quarantineNativePublication() noexcept {releaseFault_=true;}
     bool hasNativeReleaseSlot(const uint8_t* slot) const noexcept {
         if(releaseFault_ || !borrowed || !slot || slot!=nativeReleaseSlot_) return false;
         uintptr_t published=0;std::memcpy(&published,slot,sizeof(published));
@@ -16162,7 +16163,7 @@ public:
 private:
     template<class ResetView> bool initializeWithReset(ResetView resetView) {
         static_assert(noexcept(resetView()),"VP state reset ABI");
-        if(leased || mutating) return false;
+        if(leased || mutating || !owner.canRelease()) return false;
         mutating=true;
         owner.reset();
         resetView();
@@ -16190,7 +16191,7 @@ public:
     bool prepare(const std::array<uint8_t,0xb8>& prefix,
         const TglOwnedSfcGen12Tail& tail,bool rgbAdaptive,bool eightTapChroma,
         bool compressionEnabled,TglOwnedSfcCompressionMode compressionMode) noexcept {
-        if(leased || mutating || !owner.get()) return false;
+        if(leased || mutating || !owner.canRelease() || !owner.get()) return false;
         TglOwnedSfcStateParametersPacket candidate{};
         if(!tglPrepareOwnedSfcGen12Pass(candidate,prefix,tail,rgbAdaptive,
             eightTapChroma,compressionEnabled,compressionMode)) return false;
@@ -16202,12 +16203,12 @@ public:
         mutating=true; owner.reset(); mutating=false;
     }
     uint8_t* data() noexcept {
-        return leased || mutating ? nullptr : reinterpret_cast<uint8_t*>(owner.get());
+        return leased || mutating || !owner.canRelease() ? nullptr : reinterpret_cast<uint8_t*>(owner.get());
     }
     const uint8_t* data() const noexcept {
-        return mutating ? nullptr : reinterpret_cast<const uint8_t*>(owner.get());
+        return mutating || !owner.canRelease() ? nullptr : reinterpret_cast<const uint8_t*>(owner.get());
     }
-    bool hasParametersLease() const noexcept {return leased && !mutating && owner.get();}
+    bool hasParametersLease() const noexcept {return leased && !mutating && owner.canRelease() && owner.get();}
     template<class Use> int withPublishedVpParameters(
         const TglOwnedVpSfcCallerStorage& vp,Use use) const noexcept {
         static_assert(noexcept(use(static_cast<const uint8_t*>(nullptr))),"VP state view ABI");
@@ -16219,7 +16220,7 @@ public:
     template<class Use> int withParameters(Use&& use) noexcept {
         static_assert(noexcept(use(static_cast<const uint8_t*>(nullptr))),
             "SFC state borrower must not throw");
-        if(leased || mutating || !owner.get()) return 5;
+        if(leased || mutating || !owner.canRelease() || !owner.get()) return 5;
         leased=true;
         const int result=use(reinterpret_cast<const uint8_t*>(owner.get()));
         leased=false; return result;
@@ -16238,8 +16239,13 @@ public:
             std::memcpy(vp.bytes.data()+0x938,&published,8);
             const int result=use(packet);
             uintptr_t observed=0;std::memcpy(&observed,vp.bytes.data()+0x938,8);
+            if(observed!=published) {
+                // Unknown consumption/replacement: preserve the actual slot,
+                // never overwrite a foreign pointer or free ambiguous storage.
+                owner.quarantineNativePublication();return 5;
+            }
             std::memcpy(vp.bytes.data()+0x938,&previous,8);
-            return observed==published ? result : 5;
+            return result;
         });
     }
 };

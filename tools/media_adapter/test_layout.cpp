@@ -13616,6 +13616,23 @@ static void testSfcStateParameterOwnership() {
         assert(readOnly.data()==backend.bytes.data());
     }
     assert(!backend.live && backend.allocations==4 && backend.releases==3);
+    for(uintptr_t replacement:{uintptr_t{0},uintptr_t{1}}) {
+        Backend ambiguous;TglOwnedVpSfcCallerStorage vp;
+        {
+            TglOwnedSfcStateParameters<Backend> state(ambiguous);
+            assert(state.initialize());
+            assert(state.withVpParameterPublication(vp,[&](const uint8_t*) noexcept {
+                std::memcpy(vp.bytes.data()+0x938,&replacement,8);return 0;
+            })==5);
+            uintptr_t actual=0;std::memcpy(&actual,vp.bytes.data()+0x938,8);assert(actual==replacement);
+            assert(!state.data() && !std::as_const(state).data() && !state.hasParametersLease());
+            assert(!state.initialize() && !state.initializeVpPass(vp));
+            state.reset();assert(ambiguous.live==1 && !ambiguous.releases);
+            assert(state.withParameters([](const uint8_t*) noexcept {assert(false);return 0;})==5);
+        }
+        assert(ambiguous.live==1 && !ambiguous.releases); // Destructor cannot guess ownership.
+        ambiguous.release(reinterpret_cast<uintptr_t>(ambiguous.bytes.data())); // Fixture-only explicit resolution.
+    }
     {
         TglOwnedVpSfcCallerStorage storage;
         struct VpBackend:Backend {
@@ -22343,9 +22360,6 @@ int main() {
                 })==5);
                 uintptr_t observed=0;std::memcpy(&observed,vp.bytes.data()+0x938,8);assert(observed==foreignState);
                 std::memset(vp.bytes.data()+0x938,0,8);
-                assert(state.withVpParameterPublication(vp,[&](const uint8_t*) noexcept {
-                    std::memset(vp.bytes.data()+0x938,0,8);return 0;
-                })==5);
                 assert(state.withVpParameterPublication(vp,[](const uint8_t*) noexcept {return -17;})==-17);
                 std::memcpy(&observed,vp.bytes.data()+0x938,8);assert(!observed);
                 for(int admission:{31,0}) {
@@ -24974,7 +24988,9 @@ int main() {
                 },peerCpu);
             auto& peerGraph=peerVp.graph();
             assert(peerGraph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
-            for(unsigned mode=0;mode<11;++mode) {
+            // Publication corruption is permanently quarantined, tested on
+            // isolated state instances in testSfcStateParameterOwnership.
+            for(unsigned mode=0;mode<10;++mode) {
                 unsigned stages=0,emissions=0;
                 TglOwnedSfcStateParameters<TglTrackedCpuBackend<NativeCpu>>* observedState=nullptr;
                 TglOwnedVpCscCache callbackCsc;
@@ -25002,7 +25018,6 @@ int main() {
                         uintptr_t published=0;
                         std::memcpy(&published,static_cast<uint8_t*>(child)+0x938,8);
                         assert(published==reinterpret_cast<uintptr_t>(stateCpu.bytes.data()));
-                        if(mode==10) std::memset(static_cast<uint8_t*>(child)+0x938,0,8);
                         ++stages;
                     },
                     [&](void* child,void* d,void* c) noexcept -> int {
@@ -25081,11 +25096,6 @@ int main() {
                             assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==11);
                             assert(send(child,&data,&command)==11);
                             assert(stages==1);return 0;
-                        }
-                        if(mode==10) {
-                            assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==5);
-                            assert(send(child,&data,&command)==5);
-                            assert(stages==3);return 0;
                         }
                         assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
                         assert(stages==3);
