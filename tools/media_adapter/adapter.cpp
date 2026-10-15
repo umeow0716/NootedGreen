@@ -215,13 +215,12 @@ class NativeRendererCpuAssembly {
     NativeRendererRetirementAuthority authority_;
     NativeRendererCleanupContext firstCleanup_,secondCleanup_;
     NativeExecutionBackend executionBackend_;
-    NativeRendererCpu cpu_;
     using CommandStorage=std::remove_reference_t<decltype(std::declval<NativeRendererCpu&>().backing().command())>;
-    // Destroy before cpu_: this child's latch notifies cpu_'s stable aggregate.
-    // Native OS/database callbacks remain the SAME qualified environment.
-    // Qualified storage removal destroys/detaches BOTH children before deleting
-    // this assembly; no direct deletion is permitted for unresolved work.
+    // Root outlives both command storages. cpu_ (children/VP) dies before the
+    // second command storage; all use the SAME qualified OS environment.
+    TglOwnedVeboxFrameRetention retention_;
     CommandStorage secondCommand_;
+    NativeRendererCpu cpu_;
     std::array<NativeExecutionOwner,2> executions_;
     bool cleanupBound_=false,basesAttempted_=false,basesReady_=false,vpAttempted_=false;
 public:
@@ -230,14 +229,15 @@ public:
         :image_(image),authority_{this,&scopedRetirement},firstCleanup_(authority_),secondCleanup_(authority_),
          executionBackend_(executionBinding(image),&readMemory,NativeTglImageAdmission{image},
             TglNativeExecutionInvoker{},&executableMemory),
+         secondCommand_(TglOwnedVeboxFrameRetention::AggregateLink{},retention_,
+            environment.resources,environment.pageSize,environment.fill),
          cpu_(image,&readMemory,NativeTglImageAdmission{image},&executableMemory,
             environment.resources,environment.pageSize,environment.fill,
-            std::array<TglNativeTrackedCpuInvoker,2>{},
+            NativeRendererBacking::PairedRetention{retention_,secondCommand_.backing().auxiliary().retention(),
+                std::array<TglNativeTrackedCpuInvoker,2>{}},
             std::array<NativeRendererCleanup,2>{{{&firstCleanup_},{&secondCleanup_}}},
             std::array<TglNativeTrackedCpuInvoker,2>{},std::array<TglNativeSfcLifetimeInvoker,2>{},
             std::array<TglNativeVeboxDestructorInvoker,2>{}),
-         secondCommand_(TglOwnedVeboxFrameRetention::AggregateLink{},cpu_.backing().retention(),
-            environment.resources,environment.pageSize,environment.fill),
          executions_{{NativeExecutionOwner(executionBackend_),NativeExecutionOwner(executionBackend_)}} {}
     NativeRendererCpuAssembly(const NativeRendererCpuAssembly&)=delete;
     NativeRendererCpuAssembly& operator=(const NativeRendererCpuAssembly&)=delete;

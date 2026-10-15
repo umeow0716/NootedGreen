@@ -22678,6 +22678,30 @@ int main() {
                     bool view(uintptr_t,TglOwnedStmmView&) noexcept {assert(false);return false;}
                 };
                 {
+                    using Backing=TglNativeVeboxVpFrameBacking<UnusedStmmApi,NativeCpu>;
+                    TglOwnedVeboxFrameRetention aggregate,unrelated;
+                    TglNativeVeboxCommandFrameStorage<UnusedStmmApi> second(
+                        TglOwnedVeboxFrameRetention::AggregateLink{},aggregate,resources,4096,TglNativeBufferFillBinding{});
+                    Backing paired(0x100000,allocatorRead,[](uintptr_t) noexcept {return true;},
+                        [](uintptr_t,size_t) noexcept {return true;},resources,4096,TglNativeBufferFillBinding{},
+                        typename Backing::PairedRetention{aggregate,second.backing().auxiliary().retention(),{nativeCpu,nativeCpu}});
+                    assert(paired.hasVpStorage(0) && paired.hasVpStorage(1));
+                    assert(&paired.retention()==&aggregate);
+                    auto& firstLocal=paired.command().backing().auxiliary().retention();
+                    assert(firstLocal.linkedTo(aggregate) && !firstLocal());
+                    TglOwnedVeboxCommandTransactionResult acquired;acquired.acquired=true;
+                    second.backing().auxiliary().retention().observe(acquired);
+                    assert(paired.retention()() && !firstLocal());
+                    assert(paired.withVpResources(0,[](auto&...) noexcept -> int {assert(false);return 0;})==5);
+                    assert(paired.withVpResources(1,[](auto&...) noexcept -> int {assert(false);return 0;})==5);
+                    Backing denied(0x100000,allocatorRead,[](uintptr_t) noexcept {return true;},
+                        [](uintptr_t,size_t) noexcept {return true;},resources,4096,TglNativeBufferFillBinding{},
+                        typename Backing::PairedRetention{aggregate,unrelated,{nativeCpu,nativeCpu}});
+                    assert(!denied.hasVpStorage(0) && !denied.hasVpStorage(1));
+                    assert(denied.initializeVp(binding,resources.context,0x8000,0x3000,noRead,1,0)==5);
+                    assert(!stateCpu.live && !avsCpu.live && !backing.live);
+                }
+                {
                     TglNativeVeboxVpFrameBacking<UnusedStmmApi,NativeCpu> frame(0x100000,allocatorRead,
                         [](uintptr_t) noexcept {return true;},
                         [](uintptr_t,size_t) noexcept {return true;},resources,4096,

@@ -14932,6 +14932,10 @@ public:
     TglOwnedVeboxFrameRetention(const TglOwnedVeboxFrameRetention&)=delete;
     TglOwnedVeboxFrameRetention& operator=(const TglOwnedVeboxFrameRetention&)=delete;
     bool operator()() const noexcept {return pending_;}
+    bool linkedTo(const TglOwnedVeboxFrameRetention& aggregate) const noexcept {
+        return aggregate_==&aggregate;
+    }
+    bool aggregateRoot() const noexcept {return !aggregate_;}
     void observe(const TglOwnedVeboxCommandTransactionResult& result) noexcept {
         retain(result.requiresRetention());
     }
@@ -27124,6 +27128,8 @@ public:
 // physical/context/image, source/target and child pair through GPU retirement.
 template<class Api,class Invoker=TglNativeTrackedCpuInvoker>
 class TglNativeVeboxVpFrameBacking {
+    TglOwnedVeboxFrameRetention* aggregate_=nullptr;
+    bool pairedAdmission_=true;
     const TglNativeResourceBinding resources_;
     const uint64_t pageSize_;
     const TglNativeBufferFillBinding fill_;
@@ -27134,9 +27140,15 @@ class TglNativeVeboxVpFrameBacking {
     // native allocators still create separate allocations per VP.
     TglNativeVpBackingStorage<Invoker>* secondVp_=nullptr;
     TglNativeVpBackingStorage<Invoker>* selectVp(size_t index) noexcept {
+        if(!pairedAdmission_)return nullptr;
         return index==0?&vp_:index==1?secondVp_:nullptr;
     }
 public:
+    struct PairedRetention {
+        TglOwnedVeboxFrameRetention& aggregate;
+        const TglOwnedVeboxFrameRetention& second;
+        std::array<Invoker,2> invokes;
+    };
     template<class Read,class Qualify,class Executable,class... Args>
     TglNativeVeboxVpFrameBacking(uintptr_t image,Read read,Qualify qualify,
         Executable executable,const TglNativeResourceBinding& resources,
@@ -27155,6 +27167,20 @@ public:
          vp_(image,read,qualify,executable,command_.backing().auxiliary().retention(),invokes[0]),
          secondVp_(new(std::nothrow) TglNativeVpBackingStorage<Invoker>(image,read,qualify,
              executable,command_.backing().auxiliary().retention(),invokes[1])) {}
+    template<class Read,class Qualify,class Executable,class... Args>
+    TglNativeVeboxVpFrameBacking(uintptr_t image,Read read,Qualify qualify,
+        Executable executable,const TglNativeResourceBinding& resources,
+        uint64_t pageSize,const TglNativeBufferFillBinding& fill,PairedRetention paired,
+        Args&&... args)
+        :aggregate_(&paired.aggregate),
+         pairedAdmission_(paired.aggregate.aggregateRoot() && paired.second.linkedTo(paired.aggregate)),
+         resources_(resources),pageSize_(pageSize),fill_(fill),
+         command_(TglOwnedVeboxFrameRetention::AggregateLink{},paired.aggregate,
+             resources,pageSize,fill,std::forward<Args>(args)...),
+         vp_(image,read,qualify,executable,command_.backing().auxiliary().retention(),paired.invokes[0]),
+         secondVp_(pairedAdmission_?
+             new(std::nothrow) TglNativeVpBackingStorage<Invoker>(image,read,qualify,
+                 executable,paired.second,paired.invokes[1]):nullptr) {}
     TglNativeVeboxVpFrameBacking(const TglNativeVeboxVpFrameBacking&)=delete;
     TglNativeVeboxVpFrameBacking& operator=(const TglNativeVeboxVpFrameBacking&)=delete;
     ~TglNativeVeboxVpFrameBacking() noexcept {delete secondVp_;}
@@ -27188,19 +27214,19 @@ public:
     int initializeVp(size_t index,const Binding& binding,uintptr_t os,uintptr_t renderHal,
         uintptr_t mhw,Read read,uint32_t channel,uintptr_t performance) {
         auto* vp=selectVp(index);
-        if(!vp || !os || os!=resources_.context) return 5;
+        if(!vp || retention()() || !os || os!=resources_.context) return 5;
         return vp->initialize(binding,resources_,pageSize_,os,renderHal,mhw,read,channel,performance);
     }
     template<class Binding,class Read,class Prepare>
     int initializeVpPrepared(size_t index,const Binding& binding,uintptr_t os,uintptr_t renderHal,
         uintptr_t mhw,Read read,uint32_t channel,uintptr_t performance,Prepare prepare) {
         auto* vp=selectVp(index);
-        if(!vp || !os || os!=resources_.context) return 5;
+        if(!vp || retention()() || !os || os!=resources_.context) return 5;
         return vp->initializePrepared(binding,resources_,pageSize_,os,renderHal,mhw,read,
             channel,performance,prepare);
     }
     bool vpBound() const noexcept {return vp_.bound();}
-    bool hasVpStorage(size_t index) const noexcept {return index==0 || (index==1 && secondVp_);}
+    bool hasVpStorage(size_t index) const noexcept {return pairedAdmission_ && (index==0 || (index==1 && secondVp_));}
     bool vpBound(size_t index) const noexcept {
         return index==0?vp_.bound():index==1 && secondVp_ && secondVp_->bound();
     }
@@ -27208,22 +27234,31 @@ public:
         auto* vp=selectVp(index);return vp?vp->withResources(use):5;
     }
     template<class Retire> int reinitializeVpPass(size_t index,Retire retire) noexcept {
-        auto* vp=selectVp(index);return vp?vp->reinitializePass(retire):5;
+        static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);
+        if(retention()())return 5;
+        auto guarded=[&]() noexcept -> int {const int status=retire();return status?status:(retention()()?5:0);};
+        auto* vp=selectVp(index);return vp?vp->reinitializePass(guarded):5;
     }
     template<class Retire> int retireVpResources(size_t index,Retire retire) noexcept {
-        auto* vp=selectVp(index);return vp?vp->retireResources(retire):5;
+        static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);
+        if(retention()())return 5;
+        auto guarded=[&]() noexcept -> int {const int status=retire();return status?status:(retention()()?5:0);};
+        auto* vp=selectVp(index);return vp?vp->retireResources(guarded):5;
     }
     template<class Retire> int retireVpStorage(size_t index,void* expectedVp,Retire retire) noexcept {
-        auto* vp=selectVp(index);return vp?vp->retireEmbeddedStorage(expectedVp,retire):5;
+        static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);
+        if(retention()())return 5;
+        auto guarded=[&]() noexcept -> int {const int status=retire();return status?status:(retention()()?5:0);};
+        auto* vp=selectVp(index);return vp?vp->retireEmbeddedStorage(expectedVp,guarded):5;
     }
-    template<class Use> int withVpResources(Use use) noexcept {return vp_.withResources(use);}
+    template<class Use> int withVpResources(Use use) noexcept {return withVpResources(0,use);}
     template<class Read,class Retire,class Use>
     int withVpAssemblyView(size_t index,bool avsEnabled,Read& read,Retire& retire,Use use) noexcept {
         auto* vp=selectVp(index);return vp?vp->withAssemblyView(avsEnabled,read,retire,use):5;
     }
     template<class Read,class Retire,class Use>
     int withVpAssemblyView(bool avsEnabled,Read& read,Retire& retire,Use use) noexcept {
-        return vp_.withAssemblyView(avsEnabled,read,retire,use);
+        return withVpAssemblyView(0,avsEnabled,read,retire,use);
     }
     template<class Read,class Retire,class Use>
     int withVpModeAssemblyView(size_t index,bool avsEnabled,Read& read,Retire& retire,
@@ -27236,7 +27271,7 @@ public:
         uintptr_t source,uintptr_t target,uintptr_t settings,Use use) noexcept {
         return withVpModeAssemblyView(0,avsEnabled,read,retire,source,target,settings,use);
     }
-    auto& retention() noexcept {return command_.backing().auxiliary().retention();}
+    auto& retention() noexcept {return aggregate_?*aggregate_:command_.backing().auxiliary().retention();}
 };
 
 // Own child pair and VP/command backing in one stable CPU assembly. Children
