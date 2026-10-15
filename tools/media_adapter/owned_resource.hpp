@@ -26744,6 +26744,7 @@ public:
         alignas(8) std::array<std::array<uint8_t,0x30>,Capacity> scalarPayloads{};
         bool scalarPayloadsFrozen=false;
         alignas(8) std::array<std::array<uint8_t,0x2d0>,Capacity> conversionPayloads{};
+        alignas(8) std::array<std::array<uint8_t,1024>,Capacity> floatLuts{};
         bool conversionPayloadsFrozen=false;
         struct Header {uint32_t count=0,reserved=0;uintptr_t records=0;} header;
         OwnedRecords()=default;
@@ -26815,15 +26816,15 @@ public:
             std::memcpy(&type,owned.records[i].data()+8,8);if(type!=0x200)continue;
             std::memcpy(&payload,owned.records[i].data()+0x28,8);
             if(!payload || payload>UINTPTR_MAX-4 || !read(payload,&flags,4))return false;
-            // Nested cube/float-LUT inputs retain original semantics until
-            // their dynamic backing capture is proved; NOT certified here.
-            if(flags&0x18)continue;
+            // Cube data remains original until dynamic sizing is proved.
+            if(flags&0x10)continue;
             size_t bytes=4;
             if(flags&2)bytes=0x38;
             if(flags&0x104)bytes=0x6c;
+            if(flags&8)bytes=0x28c;
             std::array<uint8_t,0x2d0> first{},second{};
             if(flags&0x80) {
-                bytes=0x25c;
+                if(bytes<0x25c)bytes=0x25c;
                 if(payload>UINTPTR_MAX-bytes || !read(payload,first.data(),bytes))return false;
                 uint32_t selector=0,enabled=0;
                 std::memcpy(&selector,first.data()+0x254,4);std::memcpy(&enabled,first.data()+0x258,4);
@@ -26836,6 +26837,19 @@ public:
                 uint32_t selector=0,enabled=0;
                 std::memcpy(&selector,first.data()+0x254,4);std::memcpy(&enabled,first.data()+0x258,4);
                 if((!selector && enabled==1)!=(bytes==0x2d0))return false;
+            }
+            if(flags&8) {
+                uint32_t count=0,format=0;uintptr_t source=0;
+                std::memcpy(&count,first.data()+0x268,4);std::memcpy(&format,first.data()+0x288,4);
+                std::memcpy(&source,first.data()+0x270,8);
+                // Exact2343d0: 8 rows*32 floats, consumed synchronously before
+                // IOSurfaceUnlock; only the IOSurface is retained in context.
+                std::array<uint8_t,1024> a{},b{};
+                if(count!=0x100 || format!=1 || !source || source>UINTPTR_MAX-a.size() ||
+                    !read(source,a.data(),a.size()) || !read(source,b.data(),b.size()) || a!=b)return false;
+                owned.floatLuts[i]=a;
+                const uintptr_t replacement=reinterpret_cast<uintptr_t>(owned.floatLuts[i].data());
+                std::memcpy(first.data()+0x270,&replacement,8);
             }
             owned.conversionPayloads[i]=first;captured[i]=true;
         }

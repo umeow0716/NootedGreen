@@ -18099,7 +18099,7 @@ int main() {
             }
         }
         contexts[1]=0x4000;assert(!batch.stable(read));contexts[1]=0x3000;
-        for(uint32_t flags:{0u,2u,4u,0x100u,0x80u,0x180u,0x10u})for(bool gamma:{false,true}) {
+        for(uint32_t flags:{0u,2u,4u,0x100u,0x80u,0x180u,8u,0x88u,0x10u,0x18u})for(bool gamma:{false,true}) {
             TglNativeContextPropertyBatch<2>::OwnedRecords conversion;
             assert(batch.freeze(read,conversion));
             const uint64_t conversionType=0x200;const uint32_t operation=4;
@@ -18109,18 +18109,41 @@ int main() {
             }
             std::array<uint8_t,0x2d0> source{};std::memcpy(source.data(),&flags,4);
             const uint32_t enabled=gamma?1:0;std::memcpy(source.data()+0x258,&enabled,4);
-            size_t extent=flags&0x80?(gamma?0x2d0:0x25c):flags&0x104?0x6c:flags&2?0x38:4;
+            const uint32_t lutCount=0x100,lutFormat=1;const uintptr_t nestedSource=0x9000;
+            std::memcpy(source.data()+0x268,&lutCount,4);std::memcpy(source.data()+0x288,&lutFormat,4);
+            std::memcpy(source.data()+0x270,&nestedSource,8);
+            std::array<uint8_t,1024> lut{};lut.fill(0x3c);
+            bool allowNested=false,stableNested=false;unsigned nestedReads=0;
+            size_t extent=flags&0x104?0x6c:flags&2?0x38:4;
+            if(flags&8)extent=0x28c;
+            if(flags&0x80)extent=std::max(extent,size_t(gamma?0x2d0:0x25c));
             auto conversionRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(at==nestedSource) {
+                    assert(bytes==lut.size());if(!allowNested)return false;
+                    std::memcpy(out,lut.data(),bytes);
+                    if(!stableNested && (++nestedReads%2)==0)static_cast<uint8_t*>(out)[0]^=1;
+                    return true;
+                }
                 if(at!=originalOutput)return read(at,out,bytes);
-                assert(bytes==4 || ((flags&0x80) && bytes==0x25c) || bytes==extent);
+                assert(bytes==4 || ((flags&0x80) && bytes==((flags&8)?0x28c:0x25c)) || bytes==extent);
                 std::memcpy(out,source.data(),bytes);return true;
             };
+            if((flags&0x18)==8) {
+                assert(!batch.freezeVeboxInlineConversionPayloads(conversionRead,conversion));allowNested=true;
+                assert(!batch.freezeVeboxInlineConversionPayloads(conversionRead,conversion));stableNested=true;
+            }
             assert(batch.freezeVeboxInlineConversionPayloads(conversionRead,conversion));
             assert(!batch.freezeVeboxInlineConversionPayloads(conversionRead,conversion));
             uintptr_t captured=0;std::memcpy(&captured,conversion.records[0].data()+0x28,8);
-            if(flags&0x18)assert(captured==originalOutput); // Deep LUT still explicitly uncaptured.
+            if(flags&0x10)assert(captured==originalOutput); // Cube still explicitly uncaptured.
             else {
                 assert(captured==reinterpret_cast<uintptr_t>(conversion.conversionPayloads[0].data()));
+                if(flags&8) {
+                    uintptr_t nested=0;std::memcpy(&nested,conversion.conversionPayloads[0].data()+0x270,8);
+                    assert(nested==reinterpret_cast<uintptr_t>(conversion.floatLuts[0].data()));
+                    assert(conversion.floatLuts[0]==lut);
+                    std::memcpy(source.data()+0x270,&nested,8); // Expected owned pointer only.
+                }
                 assert(std::memcmp(conversion.conversionPayloads[0].data(),source.data(),extent)==0);
                 source.fill(0xff);assert(conversion.conversionPayloads[0][0]==uint8_t(flags));
             }
