@@ -15835,6 +15835,25 @@ static void testRetainedVeboxFrames() {
             };
             assert(empty.capture(0x1000,0,zero) && !empty.count() && empty.finish(0,zero)==0);
         }
+        for(unsigned scenario=0;scenario<7;++scenario) {
+            unsigned osReads=0;
+            auto prefixRead=[&](uintptr_t at,void* out,size_t n) noexcept {
+                uintptr_t value=0;if(n!=8)return false;
+                if(at==0x11000)value=image+0x75bb58+(scenario==1?8:0);
+                else if(at==0x11040) {++osReads;value=scenario==4?0:scenario==6 && osReads>1?0x13008:0x13000;}
+                else if(at==0x11048)value=scenario==3?0:0x15000;
+                else if(at==0x12050)value=0x14000;
+                else if(at==0x13008)value=0x14000+(scenario==2?0x50:0x48);
+                else return false; // Renderer68/children do not exist yet.
+                std::memcpy(out,&value,8);return true;
+            };
+            auto prefixAdmit=[&](uintptr_t at,size_t n) noexcept {
+                return (at==0x11000 && n==0x70 && scenario!=5) ||
+                    (at==0x12000 && n==0x58) || (at==0x13000 && n==0x10);
+            };
+            assert(tglAdmitNativeCreatorCall(image,0x12000,0x11000,prefixRead,prefixAdmit)==(scenario==0));
+            assert(!tglAdmitNativeCreatorCall(image,0x12000,0x11001,prefixRead,prefixAdmit));
+        }
         struct Invoke {
             void** original;uintptr_t produced=0x8000;int status=0;
             unsigned initialized=0,destroyed=0;

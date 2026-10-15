@@ -2437,6 +2437,24 @@ inline thread_local const void* tglOwnedCreatorCallScopeActive=nullptr;
 // dispatch itself. Scope/native image/parent resources must outlive the call.
 // Handoff failure must leave no published owned children: the native caller
 // will execute its own failure teardown. This wrapper invents no cleanup.
+// Admission BEFORE native creator+18. Renderer68/children are produced by that
+// call, so require only the proven native prefix and SAME physical OS lineage.
+template<class Read,class Admit>
+bool tglAdmitNativeCreatorCall(uintptr_t image,uintptr_t physical,uintptr_t creator,Read read,Admit admit) noexcept {
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+        noexcept(admit(uintptr_t{},size_t{})));
+    if(!image || image>UINTPTR_MAX-0x75bb58 || !physical || physical>UINTPTR_MAX-0x58 ||
+        !creator || (creator&7) || creator>UINTPTR_MAX-0x70 || !admit(creator,0x70) || !admit(physical,0x58))return false;
+    uintptr_t table=0,os=0,renderHal=0,wrapper=0,embedded=0;
+    if(!read(creator,&table,8) || table!=image+0x75bb58 || !read(creator+0x40,&os,8) ||
+        !os || os>UINTPTR_MAX-0x10 || !admit(os,0x10) || !read(creator+0x48,&renderHal,8) || !renderHal ||
+        !read(physical+0x50,&wrapper,8) || !wrapper || wrapper>UINTPTR_MAX-0x48 ||
+        !read(os+8,&embedded,8) || embedded!=wrapper+0x48)return false;
+    uintptr_t afterTable=0,afterOs=0,afterRenderHal=0,afterWrapper=0;
+    return read(creator,&afterTable,8) && afterTable==table && read(creator+0x40,&afterOs,8) && afterOs==os &&
+        read(creator+0x48,&afterRenderHal,8) && afterRenderHal==renderHal &&
+        read(physical+0x50,&afterWrapper,8) && afterWrapper==wrapper;
+}
 template<class Native,class Handoff,class AdmitCreator> class TglOwnedCreatorCallScope {
     inline static thread_local TglOwnedCreatorCallScope* active_=nullptr;
     Native& native_;Handoff& handoff_;AdmitCreator& admit_;

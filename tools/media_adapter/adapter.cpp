@@ -5113,6 +5113,27 @@ template NativeCreatorScopedInvocation::Result NativeCreatorScopedInvocation::ru
 template NativeCreatorScopedInvocation::BatchResult NativeCreatorScopedInvocation::createAndAdopt<
     NativeCreatorScopedInvocation::AdmitFn>(const Entry&,uintptr_t,uintptr_t,const void*,
     NativeCreatorScopedInvocation::AdmitFn&,NativeRendererConstructionSelection) noexcept;
+struct NativeFactoryLifecycle {
+    static int initialize(void** output,const void* input) noexcept {
+        if(!NativeFactorySource::process().get())return 5;
+        return NativePhysicalBackend::initialize(output,input).status;
+    }
+    static int destroy(void* physical) noexcept {
+        return NativeFactorySource::process().get()?NativePhysicalBackend::destroy(reinterpret_cast<uintptr_t>(physical)):5;
+    }
+    static int createContexts(void* physical,const void* input) noexcept {
+        const auto* source=NativeFactorySource::process().get();if(!source)return 5;
+        const auto address=reinterpret_cast<uintptr_t>(physical);const auto image=source->physical.image;
+        auto admit=[&](void* creator) noexcept {
+            return tglAdmitNativeCreatorCall(image,address,reinterpret_cast<uintptr_t>(creator),&readMemory,NativeDataAdmission{});
+        };
+        const auto result=NativeCreatorScopedInvocation::createAndAdopt(*source,image+0x13e43,address,input,admit,
+            {NativeRendererCallbackDomain::Temporary,true});
+        os_log_info(OS_LOG_DEFAULT,"NGRN_OWNED_CONTEXT_CREATE native-called=%{public}d handoff=%{public}d native=%{public}d status=%{public}d",
+            int(result.creator.nativeInvoked),int(result.creator.handoffCompleted),result.creator.nativeResult,result.status);
+        return result.status;
+    }
+};
 std::atomic<uintptr_t> nativeCreateContexts{0};
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept {
     mach_vm_size_t copied = 0;
