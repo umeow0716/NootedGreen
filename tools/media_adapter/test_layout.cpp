@@ -18536,11 +18536,14 @@ static void testNativeCreatorRequestChains() {
         uintptr_t descriptor=0x2000,auxiliary=0x7000;std::array<uint8_t,0x18> header{};
         const uint32_t count=2;const uintptr_t array=0x2800;
         std::memcpy(header.data(),&count,4);std::memcpy(header.data()+8,&array,8);
+        const uintptr_t outputs=0x6000;std::memcpy(header.data()+0x10,&outputs,8);
         std::array<uintptr_t,2> roots{0x3000,0x3100};
         std::array<std::array<uint8_t,0x40>,3> nodes{};
         auto next=[&](size_t index,uintptr_t target) {std::memcpy(nodes[index].data()+0x38,&target,8);};
         next(0,0x3200);next(1,0x3200); // Shared tail is valid, not a cycle.
         const uint32_t kind=2,property=1003;const uint64_t type=0x200;
+        const uint32_t avcKind=1;
+        for(size_t i=0;i<2;++i){std::memcpy(nodes[i].data(),&avcKind,4);std::memcpy(nodes[i].data()+8,&type,8);}
         std::memcpy(nodes[2].data(),&kind,4);std::memcpy(nodes[2].data()+8,&type,8);
         std::memcpy(nodes[2].data()+0x10,&property,4);
         if(scenario==1)next(2,0x3000);
@@ -18567,6 +18570,49 @@ static void testNativeCreatorRequestChains() {
             uint32_t actualKind=0,actualProperty=0;uint64_t actualType=0;
             assert(snapshot.controls(1,actualKind,actualType,actualProperty) && actualKind==kind && actualType==type && actualProperty==property);
             assert(!snapshot.controls(3,actualKind,actualType,actualProperty) && !actualKind && !actualType && !actualProperty);
+            TglNativeCreatorRequestChains<2,3>::OwnedArguments owned;
+            assert(snapshot.freezeAvc(read,owned)==(scenario!=4));
+            if(scenario!=4) {
+                assert(owned.input[1]==auxiliary && owned.input[0]==reinterpret_cast<uintptr_t>(owned.descriptor.data()));
+                uintptr_t ownedArray=0,ownedOutput=0,leftNext=0,rightNext=0;
+                std::memcpy(&ownedArray,owned.descriptor.data()+8,8);std::memcpy(&ownedOutput,owned.descriptor.data()+0x10,8);
+                assert(ownedArray==reinterpret_cast<uintptr_t>(owned.roots.data()) && ownedOutput==outputs);
+                std::memcpy(&leftNext,reinterpret_cast<void*>(owned.roots[0]+0x38),8);
+                std::memcpy(&rightNext,reinterpret_cast<void*>(owned.roots[1]+0x38),8);
+                assert(leftNext==rightNext && leftNext==reinterpret_cast<uintptr_t>(owned.nodes[1].data()));
+            }
+            if(!scenario) {
+                for(unsigned failure=0;failure<5;++failure) {
+                    TglNativeCreatorRequestChains<2,3> transaction;
+                    assert(transaction.capture(0x1000,read));unsigned calls=0,writes=0;
+                    auto write=[&](uintptr_t at,const void* bytes,size_t size) noexcept -> bool {
+                        ++writes;assert(at==0x1008 && size==8);
+                        if(failure==2)return false;std::memcpy(&auxiliary,bytes,8);return true;
+                    };
+                    auto admit=[&](uintptr_t at,size_t size) noexcept -> bool {return at==0x1008 && size==8 && failure!=3;};
+                    auto native=[&](void* raw) noexcept -> int {
+                        ++calls;auto* args=static_cast<uintptr_t*>(raw);assert(args[1]==0x7000);
+                        args[1]=0x9000;if(failure==4)++header[4];return failure==1?-31:0;
+                    };
+                    const auto invoked=transaction.invokeAvc(read,write,admit,native);
+                    assert(invoked.invoked==(failure!=3) && calls==(failure==3?0U:1U));
+                    assert(invoked.result==(failure==1?-31:failure==3?5:0));
+                    assert(invoked.committed==(failure==0 || failure==1));
+                    assert(writes==((failure==0 || failure==2)?1U:0U));
+                    assert(auxiliary==(failure==0?0x9000U:0x7000U));
+                    assert(!transaction.invokeAvc(read,write,admit,native).invoked && calls==(failure==3?0U:1U));
+                    auxiliary=0x7000;if(failure==4)--header[4];
+                }
+                const uintptr_t alias=0x3000;
+                std::memcpy(header.data()+0x10,&alias,8);
+                TglNativeCreatorRequestChains<2,3> aliased;
+                assert(aliased.capture(0x1000,read) && !aliased.freezeAvc(read,owned) && !owned.input[0]);
+                std::memcpy(header.data()+0x10,&outputs,8);
+                std::memcpy(nodes[0].data(),&kind,4);
+                TglNativeCreatorRequestChains<2,3> vpRoot;
+                assert(vpRoot.capture(0x1000,read) && !vpRoot.avcOnly() && !vpRoot.freezeAvc(read,owned));
+                std::memcpy(nodes[0].data(),&avcKind,4);
+            }
             if(scenario==5)++header[4];else if(scenario==6)++nodes[2][0x10];else if(scenario==7)++auxiliary;else ++roots[0];
             assert(!snapshot.stable(read));
         } else assert(!snapshot.nodeCount());

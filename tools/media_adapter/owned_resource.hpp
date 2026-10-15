@@ -26209,7 +26209,7 @@ struct TglNativeMixedContextFrameBinding {
 
 // Exact13e43 input -> descriptor(count0, request-array8, output-array10).
 // A request's dispatch controls and next38 fit in40 bytes. This is a read-only
-// chain snapshot, NOT a native-only classification or ownership of payloads.
+// chain snapshot plus positive AVC argument freezing, NOT ownership of payloads.
 template<size_t Roots=16,size_t Nodes=64> class TglNativeCreatorRequestChains {
     static_assert(Roots>0 && Roots<=128 && Nodes>0 && Nodes<=128);
     struct Node {uintptr_t address=0;std::array<uint8_t,0x40> bytes{};};
@@ -26217,8 +26217,78 @@ template<size_t Roots=16,size_t Nodes=64> class TglNativeCreatorRequestChains {
     std::array<uint8_t,0x18> header_{};
     std::array<uintptr_t,Roots> roots_{};
     std::array<Node,Nodes> nodes_{};
-    uint32_t count_=0;size_t used_=0;bool attempted_=false,ready_=false;
+    uint32_t count_=0;size_t used_=0;bool attempted_=false,ready_=false,invocationAttempted_=false;
 public:
+    struct Invocation {bool invoked=false,committed=false;int result=5;};
+    struct OwnedArguments {
+        alignas(8) std::array<std::array<uint8_t,0x40>,Nodes> nodes{};
+        std::array<uintptr_t,Roots> roots{};
+        alignas(8) std::array<uint8_t,0x18> descriptor{};
+        std::array<uintptr_t,2> input{};
+        OwnedArguments()=default;
+        OwnedArguments(const OwnedArguments&)=delete;
+        OwnedArguments& operator=(const OwnedArguments&)=delete;
+    };
+    // Positive closed branch13e43: kind1/type200 -> new3b8/227b70,
+    //227d60 ->2180a copies every40-byte node into native-owned storage.
+    // Other roots retain the observer path until independently proven.
+    bool avcOnly() const noexcept {
+        if(!ready_ || !count_)return false;
+        for(uint32_t i=0;i<count_;++i) {
+            size_t n=0;while(n<used_ && nodes_[n].address!=roots_[i])++n;
+            if(n==used_)return false;
+            uint32_t kind=0;uint64_t type=0;
+            std::memcpy(&kind,nodes_[n].bytes.data(),4);std::memcpy(&type,nodes_[n].bytes.data()+8,8);
+            if(kind!=1 || type!=0x200)return false;
+        }
+        return true;
+    }
+    template<class Read> bool freezeAvc(Read read,OwnedArguments& owned) const noexcept {
+        owned.input={};
+        if(!avcOnly() || !stable(read))return false;
+        uintptr_t outputs=0;std::memcpy(&outputs,header_.data()+0x10,8);
+        const size_t outputBytes=size_t(count_)*8;
+        if(!outputs || outputs>UINTPTR_MAX-outputBytes)return false;
+        auto excludes=[&](uintptr_t start,size_t bytes) noexcept {
+            return start<=UINTPTR_MAX-bytes && (outputs>=start+bytes || start>=outputs+outputBytes);
+        };
+        if(!excludes(input_,16) || !excludes(descriptor_,header_.size()) ||
+            !excludes(array_,size_t(count_)*8) || !excludes(reinterpret_cast<uintptr_t>(&owned),sizeof(owned)) ||
+            !excludes(reinterpret_cast<uintptr_t>(this),sizeof(*this)))return false;
+        auto rebased=[&](uintptr_t original) noexcept -> uintptr_t {
+            if(!original)return 0;
+            for(size_t n=0;n<used_;++n)if(nodes_[n].address==original)return reinterpret_cast<uintptr_t>(owned.nodes[n].data());
+            return 0;
+        };
+        for(size_t n=0;n<used_;++n) {
+            if(!excludes(nodes_[n].address,0x40))return false;
+            owned.nodes[n]=nodes_[n].bytes;uintptr_t next=0;
+            std::memcpy(&next,owned.nodes[n].data()+0x38,8);const uintptr_t converted=rebased(next);
+            if(next && !converted)return false;
+            std::memcpy(owned.nodes[n].data()+0x38,&converted,8);
+        }
+        for(uint32_t i=0;i<count_;++i)owned.roots[i]=rebased(roots_[i]);
+        owned.descriptor=header_;const uintptr_t roots=reinterpret_cast<uintptr_t>(owned.roots.data());
+        std::memcpy(owned.descriptor.data()+8,&roots,8);
+        if(!stable(read))return false;
+        owned.input={reinterpret_cast<uintptr_t>(owned.descriptor.data()),auxiliary_};return true;
+    }
+    template<class Read,class Write,class Admit,class Native>
+    Invocation invokeAvc(Read read,Write write,Admit admit,Native native) noexcept {
+        Invocation result;
+        if(invocationAttempted_)return result;invocationAttempted_=true;
+        OwnedArguments owned;
+        if(!freezeAvc(read,owned) || !admit(input_+8,size_t{8}) || !stable(read))return result;
+        result.invoked=true;result.result=native(static_cast<void*>(owned.input.data()));
+        if(result.result){result.committed=true;return result;}
+        // Native13e43 only writes the auxiliary capability output on success.
+        // Native output-array writes remain in-place; never replay native on a
+        // failed post-call writeback. Caller retains/quarantines partial owners.
+        uintptr_t actual=0;
+        result.committed=stable(read) && write(input_+8,&owned.input[1],8) &&
+            read(input_+8,&actual,8) && actual==owned.input[1];
+        return result;
+    }
     template<class Read> bool capture(uintptr_t input,Read read) noexcept {
         if(attempted_)return false;attempted_=true;
         if(!input || input>UINTPTR_MAX-16 || !read(input,&descriptor_,8) || !read(input+8,&auxiliary_,8) ||

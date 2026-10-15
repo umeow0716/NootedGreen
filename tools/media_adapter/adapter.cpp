@@ -5689,7 +5689,7 @@ std::map<void *, std::unique_ptr<Entry>> registry;
 struct NativeCreatorScopedInvocation {
     struct Result {
         int nativeResult=5,handoffResult=5;
-        bool nativeInvoked=false,selected=false,metadataCopied=false,handoffCompleted=false,nativeOtherOnly=false;
+        bool nativeInvoked=false,selected=false,metadataCopied=false,handoffCompleted=false,nativeOtherOnly=false,argumentsCommitted=false;
     };
     using Scope=typename NativePhysicalRegistry::DependencyAdoptionScope;
     using AdmitFn=bool(*)(void*) noexcept;
@@ -5739,11 +5739,25 @@ struct NativeCreatorScopedInvocation {
                     reinterpret_cast<uintptr_t>(creator),selection);
             });
         };
-        auto result=run(entry,physical,input,scope,admit,handoff);
-        if(!result.nativeInvoked || result.nativeResult)return result;
+        TglNativeCreatorRequestChains<> chains;
+        const auto request=reinterpret_cast<uintptr_t>(input);
+        if(!chains.capture(request,&readMemory))return {};
+        Result result;
+        if(chains.avcOnly()) {
+            const auto invocation=chains.invokeAvc(&readMemory,
+                [](uintptr_t target,const void* bytes,size_t size) noexcept -> bool {
+                    return size==8 && mach_vm_write(mach_task_self(),target,reinterpret_cast<vm_offset_t>(bytes),8)==KERN_SUCCESS;
+                },[&](uintptr_t target,size_t size) noexcept -> bool {
+                    return scope.matches(image,physical,generation) && NativeDataAdmission{}(target,size) && executableMemory(entry,1);
+                },[&](void* owned) noexcept -> int {
+                    return reinterpret_cast<int(*)(void*,const void*)>(entry)(reinterpret_cast<void*>(physical),owned);
+                });
+            result.nativeInvoked=invocation.invoked;result.nativeResult=invocation.result;
+            result.argumentsCommitted=invocation.committed;
+        } else result=run(entry,physical,input,scope,admit,handoff);
+        if(!result.nativeInvoked || result.nativeResult || !result.argumentsCommitted)return result;
         TglNativeCreatedContextBatch<16> batch,after;
         TglNativeContextFamilyBatchSnapshot<16> families;
-        const auto request=reinterpret_cast<uintptr_t>(input);
         if(!scope.matches(image,physical,generation) || !batch.capture(request,&readMemory) ||
            !families.capture(batch,image,physical,&readMemory,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory) ||
            !after.capture(request,&readMemory) || after.count!=batch.count || after.contexts!=batch.contexts ||
@@ -5802,6 +5816,7 @@ struct NativeCreatorScopedInvocation {
         result.nativeInvoked=true;
         result.nativeResult=reinterpret_cast<int(*)(void*,const void*)>(entry)(
             reinterpret_cast<void*>(physical),input);
+        result.argumentsCommitted=true; // Original native arguments/output path.
         result.selected=observer.observed(1,1) && creatorScope.consumed();
         result.metadataCopied=observer.observed(0,1);
         result.handoffResult=creatorScope.result();
