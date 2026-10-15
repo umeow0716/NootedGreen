@@ -1490,7 +1490,7 @@ template<class SurfaceOwner> struct NativeSfcPreparationFor {
                 executionOwner.hasExecutionLease(execution) && sourceOwner.hasSurfaceLease(source) &&
                 targetOwner.hasSurfaceLease(target);
         };
-        if(backing.retention()() || !live() ||
+        if(backing.unsubmittedVpPending(index) || !live() ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(state),1) ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(avs),1) ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(ief),1) ||
@@ -1504,7 +1504,7 @@ template<class SurfaceOwner> struct NativeSfcPreparationFor {
                 reinterpret_cast<uintptr_t>(&source),reinterpret_cast<uintptr_t>(&target),execution,mhw,
                 base,original,renderData,read,state,avs,ief,emit,
                 [&](void* actual,const TglOwnedVpEntrySet& entries) noexcept -> int {
-                    if(actual!=expectedVp || !entries.initialize || !entries.prepare || backing.retention()() || !live())return 5;
+                    if(actual!=expectedVp || !entries.initialize || !entries.prepare || backing.unsubmittedVpPending(index) || !live())return 5;
                     const int status=callbacks?callbacks->withAdmittedCatalogue(actual,entries,complete):complete(actual);
                     // The continuation may acquire/submit work. Its retention
                     // is expected and must survive scope unwind, not be called
