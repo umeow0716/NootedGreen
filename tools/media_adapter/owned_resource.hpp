@@ -5233,6 +5233,7 @@ template<class CpuBackend,class SfcInvoke,class Cleanup,class Destroy>
 class TglOwnedVeboxBaseOwner {
     TglTrackedCpuOwner<CpuBackend> storage_;
     std::array<uintptr_t,8> transferredShells_{}; // Identity only, no duplicate release authority.
+    uintptr_t transferredHelper_=0; // Native counted helper owns its release path.
     TglOwnedSfcMhw<SfcInvoke> sfc_;
     TglOwnedVeboxVtable table_;
     Cleanup& cleanup_;
@@ -5265,6 +5266,16 @@ public:
             if(current!=shell || (address<shell+0x2a8 && shell<address+bytes))return false;
         }
         return true; // Still excludes neither helper nor borrowed resource/SFC allocations.
+    }
+    bool excludesBaseShellAndHelperWritableSpan(uintptr_t address,size_t bytes) const noexcept {
+        if(!excludesBaseAndShellWritableSpan(address,bytes))return false;
+        if(!transferredHelper_)return true;
+        if(!constructed_ || !storage_.get() || storage_.size()<0x1bc0 ||
+            transferredHelper_>UINTPTR_MAX-0xa0)return false;
+        uintptr_t current=0;
+        std::memcpy(&current,reinterpret_cast<const uint8_t*>(storage_.get())+0x1bb8,8);
+        return current==transferredHelper_ &&
+            (address>=transferredHelper_+0xa0 || transferredHelper_>=address+bytes);
     }
     TglOwnedVeboxBaseOwner(CpuBackend& cpu,SfcInvoke& sfc,Cleanup& cleanup,Destroy& destroy)
         :storage_(cpu),sfc_(sfc),cleanup_(cleanup),destroy_(destroy) {
@@ -5500,6 +5511,7 @@ public:
         std::memcpy(reinterpret_cast<uint8_t*>(helper)+8,&child,8);
         std::memcpy(reinterpret_cast<uint8_t*>(helper)+0x10,&report,8);
         std::memcpy(field,&helper,8); // Native base destructor now owns it.
+        transferredHelper_=helper; // Keep identity even when report initialization fails.
         // Preserve counted-helper ownership even on report failure, but never
         // let the creator publish an incompletely initialized child as ready.
         uintptr_t linkedReport=0;
@@ -5980,6 +5992,7 @@ private:
             constructed_=false;
             destroy_(destructor_,object);
             transferredShells_.fill(0);
+            transferredHelper_=0;
         }
         destructor_=image_=0;
         configuredRenderer_=0;configuredRendererGeneration_=0;

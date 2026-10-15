@@ -31266,6 +31266,18 @@ int main() {
                 assert(!owner.allocateNativeHelper(helperRead,helperExecutable,createHelper,queryReport));
                 assert(!reportQueries);
                 assert(owner.allocateNativeHelper(helperRead,helperExecutable,createHelper,queryReport));
+                {
+                    const uintptr_t helper=reinterpret_cast<uintptr_t>(nativeHelper.data());
+                    assert(!owner.excludesBaseShellAndHelperWritableSpan(helper,0x4a));
+                    assert(!owner.excludesBaseShellAndHelperWritableSpan(helper+0x9f,2));
+                    assert(owner.excludesBaseShellAndHelperWritableSpan(0x10000,1));
+                    auto* slot=static_cast<uint8_t*>(owner.constructedBase())+0x1bb8;
+                    const uintptr_t missing=0;
+                    std::memcpy(slot,&missing,8);
+                    assert(!owner.excludesBaseShellAndHelperWritableSpan(0x10000,1));
+                    std::memcpy(slot,&helper,8);
+                    assert(owner.excludesBaseShellAndHelperWritableSpan(0x10000,1));
+                }
                 assert(!owner.allocateNativeHelper(helperRead,helperExecutable,createHelper,queryReport));
                 uintptr_t helperChild=0,helperReport=0;
                 std::memcpy(&helperChild,nativeHelper.data()+8,8);
