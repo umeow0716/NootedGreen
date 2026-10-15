@@ -37,6 +37,27 @@ int main() {
         args.scalarInputCount=1;assert(!shape());args.scalarInputCount=0;
         assert(!NGVfTaskCompletion::inlineShape(&args,0,&request,nullptr,nullptr));
         args.selector=NGVfDeviceObservation::selector;assert(!shape());
+        reply.abiVersion=1;reply.bytes=sizeof(reply);reply.registryId=42;reply.recordCount=1;
+        for(unsigned i=0;i<16;++i)reply.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
+        reply.records[0]={1,3,7,0,4};
+        assert(NGVfTaskCompletion::validReply(reply,42,request));
+        auto malformed=reply;malformed.records[0].publishedSerial=0;
+        assert(!NGVfTaskCompletion::validReply(malformed,42,request));
+        malformed=reply;malformed.records[0].stamp=1;
+        assert(!NGVfTaskCompletion::validReply(malformed,42,request));
+        malformed=reply;malformed.records[1].head=4;
+        assert(!NGVfTaskCompletion::validReply(malformed,42,request));
+        malformed=reply;malformed.familyUuid[0]^=1;
+        assert(!NGVfTaskCompletion::validReply(malformed,42,request));
+        assert(!NGVfTaskCompletion::validReply(reply,43,request));
+        NGVfTaskCompletion::Reply output{};output.registryId=999;
+        auto call=[&](uint32_t selector,const auto* input,size_t inputBytes,void* out,size_t* bytes) noexcept {
+            assert(selector==NGVfTaskCompletion::selector && input==&request && inputBytes==sizeof(request));
+            assert(*bytes==sizeof(reply));*static_cast<NGVfTaskCompletion::Reply*>(out)=reply;return 0;
+        };
+        assert(NGVfTaskCompletion::query(42,request,call,output) && output.registryId==42);
+        output.registryId=999;reply.reserved=1;
+        assert(!NGVfTaskCompletion::query(42,request,call,output) && output.registryId==999);
     }
     // Metadata coverage is not GPU completion. Enumerate accepted/rejected
     // transactions and interfering unknown writers against a simple oracle.

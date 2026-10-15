@@ -106,5 +106,36 @@ inline bool validRequest(const Request& request) noexcept {
     }
     return used!=0;
 }
+inline bool validReply(const Reply& reply,uint64_t registryId,const Request& request) noexcept {
+    if(!validRequest(request) || !registryId || reply.registryId!=registryId ||
+        reply.abiVersion!=version || reply.bytes!=sizeof(Reply) || reply.reserved ||
+        !reply.recordCount || reply.recordCount>channels)return false;
+    for(unsigned n=0;n<16;++n)if(reply.familyUuid[n]!=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[n])return false;
+    uint32_t required=0,seen=0;
+    for(auto event:request.expected)if(uint32_t(event)!=UINT32_MAX)required|=1U<<uint32_t(event);
+    for(unsigned n=0;n<reply.recordCount;++n) {
+        const auto& record=reply.records[n];
+        if(record.channel>=channels || record.contextSlot>=65535 || !record.publishedSerial ||
+            (record.head&3) || !(required&(1U<<record.channel)) || (seen&(1U<<record.channel)))return false;
+        for(unsigned previous=0;previous<n;++previous)
+            if(reply.records[previous].contextSlot==record.contextSlot)return false;
+        bool matches=false;
+        for(auto event:request.expected)if(uint32_t(event)==record.channel && uint32_t(event>>32)==record.stamp)matches=true;
+        if(!matches)return false;
+        seen|=1U<<record.channel;
+    }
+    for(unsigned n=reply.recordCount;n<channels;++n) {
+        const auto& record=reply.records[n];
+        if(record.channel || record.contextSlot || record.publishedSerial || record.stamp || record.head)return false;
+    }
+    return seen==required;
+}
+template<class Call> bool query(uint64_t registryId,const Request& request,Call call,Reply& output) noexcept {
+    if(!registryId || !validRequest(request))return false;
+    Reply candidate{};size_t bytes=sizeof(candidate);
+    if(call(selector,&request,sizeof(request),&candidate,&bytes)!=0 || bytes!=sizeof(candidate) ||
+        !validReply(candidate,registryId,request))return false;
+    output=candidate;return true;
+}
 }
 #endif
