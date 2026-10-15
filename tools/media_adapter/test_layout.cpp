@@ -5182,6 +5182,28 @@ static void testExecutionShape() {
     };
     auto qualify = [&](uintptr_t p) { return qualified && p == image; };
     assert(tglExecutionShape(object, image, read, qualify));
+    {
+        constexpr std::array<uintptr_t,4> offsets{0x12e45c,0x12e4bd,0x12e82f,0x12e8ff};
+        std::array<std::array<uint8_t,5>,4> anchors{{
+            {0xe8,0xbf,3,0,0},{0xe8,0x2e,4,0,0},{0xbf,0x20,0,0,0},{0xbf,0x48,0,0,0}}};
+        auto boundedRead=[&](uintptr_t p,void* out,size_t n) {
+            for(size_t i=0;i<offsets.size();++i)if(p==image+offsets[i] && n==5){std::memcpy(out,anchors[i].data(),5);return true;}
+            return read(p,out,n);
+        };
+        bool rx=true;
+        auto exclude=[&](uintptr_t p,size_t n) {
+            return tglExcludeExecutionAllocationSpans(object,image,p,n,boundedRead,qualify,
+                [&](uintptr_t,size_t){return rx;});
+        };
+        assert(exclude(0x6000,0x4a));
+        for(auto span:{std::pair<uintptr_t,size_t>{object,0xd48},{first,0x20},{second,0x48}}) {
+            assert(!exclude(span.first,1) && !exclude(span.first+span.second-1,2));
+            assert(exclude(span.first+span.second,1));
+        }
+        for(auto& anchor:anchors){anchor[1]^=1;assert(!exclude(0x6000,1));anchor[1]^=1;}
+        rx=false;assert(!exclude(0x6000,1));rx=true;
+        assert(!exclude(UINTPTR_MAX,1));
+    }
     qualified = false; assert(!tglExecutionShape(object, image, read, qualify)); qualified = true;
     allowed = false; assert(!tglExecutionShape(object, image, read, qualify)); allowed = true;
     first = 0; assert(!tglExecutionShape(object, image, read, qualify)); first = second;

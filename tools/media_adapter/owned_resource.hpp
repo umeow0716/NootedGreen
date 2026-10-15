@@ -3459,6 +3459,32 @@ bool tglExecutionShape(uintptr_t object, uintptr_t image, Read read, Qualify qua
            read(second, &secondVt, 8) && secondVt == image + 0x757fb8;
 }
 
+// Caller holds the SAME report/base/image lease through output consumption.
+// Factory allocation spans only; nested members inside these children are not covered.
+template<class Read,class Qualify,class Executable>
+bool tglExcludeExecutionAllocationSpans(uintptr_t object,uintptr_t image,uintptr_t address,size_t bytes,
+    Read read,Qualify qualify,Executable executable) {
+    if(!address || !bytes || address>UINTPTR_MAX-bytes ||
+        !tglExecutionShape(object,image,read,qualify))return false;
+    constexpr std::array<uintptr_t,4> offsets{0x12e45c,0x12e4bd,0x12e82f,0x12e8ff};
+    constexpr std::array<std::array<uint8_t,5>,4> anchors{{
+        {0xe8,0xbf,0x03,0,0},{0xe8,0x2e,0x04,0,0},
+        {0xbf,0x20,0,0,0},{0xbf,0x48,0,0,0}}};
+    for(size_t i=0;i<offsets.size();++i) {
+        std::array<uint8_t,5> actual{};
+        if(!executable(image+offsets[i],5) || !read(image+offsets[i],actual.data(),5) || actual!=anchors[i])return false;
+    }
+    uintptr_t first=0,second=0;
+    if(!read(object+0xd38,&first,8) || !read(object+0xd40,&second,8) ||
+        !first || !second || first>UINTPTR_MAX-0x20 || second>UINTPTR_MAX-0x48)return false;
+    const auto disjoint=[&](uintptr_t base,size_t extent) {return address>=base+extent || base>=address+bytes;};
+    if(!disjoint(object,0xd48) || !disjoint(first,0x20) || !disjoint(second,0x48))return false;
+    uintptr_t finalFirst=0,finalSecond=0;
+    return tglExecutionShape(object,image,read,qualify) &&
+        read(object+0xd38,&finalFirst,8) && read(object+0xd40,&finalSecond,8) &&
+        finalFirst==first && finalSecond==second;
+}
+
 // trustedVtable/genericHook/cscSupportHook are addresses in our owned subclass,
 // never values learned from an untrusted native object. Hold its owner lock and
 // image lease throughout. Invoke ABI: bool entry(child, source, target).
