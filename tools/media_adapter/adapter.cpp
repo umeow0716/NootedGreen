@@ -4372,13 +4372,48 @@ struct NativeCreatorPreparation {
         std::unique_ptr<NativeRetainedTemporaryTransaction::Backend> passBackend;
         TglTrackedCpuBinding factoryCpu{};
         TglNativeResourceCfTypeBinding factoryResourceClass{};
-        bool used=false,adopted=false,lifetimePublished=false,childrenReady=false;
+        bool used=false,adopted=false,lifetimePublished=false,childrenReady=false,removing=false;
         bool publicationAttempted=false,childrenPublished=false;
         bool mainPublicationAttempted=false,mainPublished=false;
         NativeRendererConstructionSelection selection;
     };
     struct Ledger {std::atomic_flag gate=ATOMIC_FLAG_INIT;std::array<Record,64> records{};};
     static Ledger& ledger() noexcept {static Ledger value;return value;}
+    static int prepareExternalRemoval(NativePhysicalBackend::RemovalScope& physical,uintptr_t image,
+        uintptr_t address,uint64_t generation,uintptr_t creator) noexcept {
+        if(!physical.matches(image,address,generation))return 5;
+        return tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
+            auto lease=NativeVphalRouter::pinForInitialization(creator);auto* owner=lease.get();
+            if(!owner || !lease.exclusive())return 5;
+            NativeRendererCpuAssembly* storage=nullptr;
+            std::array<uintptr_t,2> children{};std::array<uint64_t,2> childGenerations{};
+            const int captured=owner->withCreatorStorage(lease,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,
+                [&](NativeRendererCpuAssembly& cpu,const TglNativeCreatedVeboxRendererView& view) noexcept -> int {
+                    if(view.image!=image || view.creator!=creator || cpu.backing().retention()())return 5;
+                    storage=&cpu;
+                    auto& a=cpu.children().first().owner();auto& b=cpu.children().second().owner();
+                    children={reinterpret_cast<uintptr_t>(a.constructedBase()),reinterpret_cast<uintptr_t>(b.constructedBase())};
+                    childGenerations={a.allocationGeneration(),b.allocationGeneration()};
+                    return children[0] && children[1] && children[0]!=children[1] && childGenerations[0] &&
+                        childGenerations[1] && children[0]==view.originalChildren[0] && children[1]==view.originalChildren[1]?0:5;
+                });
+            if(captured || !storage)return 5;
+            {
+                auto& state=ledger();if(state.gate.test_and_set(std::memory_order_acquire))return 5;
+                struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
+                Record* selected=nullptr;
+                for(auto& record:state.records)if(record.used && record.image==image && record.physical==address &&
+                    record.generation==generation && record.creator==creator)selected=&record;
+                if(!selected || selected->removing || !selected->adopted || !selected->lifetimePublished ||
+                    selected->owner!=owner || selected->storage!=storage)return 5;
+                selected->removing=true; // BEFORE storage deletion; never reopen on partial failure.
+            }
+            return owner->prepareExternalRemoval(lease,physical,[&](void* child,uint64_t childGeneration,size_t index) noexcept -> int {
+                return index<2 && reinterpret_cast<uintptr_t>(child)==children[index] && childGeneration==childGenerations[index] &&
+                    physical.matches(image,address,generation)?0:5;
+            })?0:5;
+        });
+    }
     // Component status only. Caller MUST initialize/publish complete owned
     // children before returning success from the full native creator handoff.
     template<class PhysicalScope>
@@ -4443,7 +4478,7 @@ struct NativeCreatorPreparation {
         Record* record=nullptr;
         for(auto& candidate:state.records)if(candidate.used && candidate.image==image && candidate.physical==address &&
             candidate.generation==generation && candidate.creator==creator)record=&candidate;
-        if(!record || !record->adopted || !record->lifetimePublished || record->childrenReady)return 5;
+        if(!record || record->removing || !record->adopted || !record->lifetimePublished || record->childrenReady)return 5;
         return tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
             auto lease=NativeVphalRouter::pinForInitialization(creator);
             if(lease.get()!=record->owner || !lease.exclusive())return 5;
@@ -4472,7 +4507,7 @@ struct NativeCreatorPreparation {
         Record* record=nullptr;
         for(auto& candidate:state.records)if(candidate.used && candidate.image==image && candidate.physical==address &&
             candidate.generation==generation && candidate.creator==creator)record=&candidate;
-        if(!record || !record->childrenReady || !record->lifetimePublished || !record->adopted ||
+        if(!record || record->removing || !record->childrenReady || !record->lifetimePublished || !record->adopted ||
             record->publicationAttempted || record->childrenPublished)return 5;
         record->publicationAttempted=true; // Never overwrite a partially installed/pinned pair.
         return tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
@@ -4520,7 +4555,7 @@ struct NativeCreatorPreparation {
         Record* record=nullptr;
         for(auto& candidate:state.records)if(candidate.used && candidate.image==image && candidate.physical==address &&
             candidate.generation==generation && candidate.creator==creator)record=&candidate;
-        if(!record || !record->owner || !record->childrenPublished || !record->lifetimePublished || !record->adopted ||
+        if(!record || record->removing || !record->owner || !record->childrenPublished || !record->lifetimePublished || !record->adopted ||
             record->mainPublicationAttempted || record->mainPublished || !record->selection.ownedSend ||
             record->selection.domain!=NativeRendererCallbackDomain::Temporary)return 5;
         return tglWithVphalRouterIdentity(physical,image,address,generation,creator,[&]() noexcept -> int {
@@ -4541,7 +4576,7 @@ struct NativeCreatorPreparation {
         if(state.gate.test_and_set(std::memory_order_acquire))return nullptr;
         struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
         for(auto& record:state.records) {
-            if(!record.used || record.image!=image || record.physical!=address ||
+            if(!record.used || record.removing || record.image!=image || record.physical!=address ||
                 record.generation!=generation || record.creator!=creator || record.renderer!=renderer)continue;
             if(!record.adopted || !record.lifetimePublished || !record.childrenReady || !record.childrenPublished ||
                 !record.mainPublished || !record.selection.ownedSend ||
@@ -4592,7 +4627,7 @@ struct NativeCreatorPreparation {
         auto& state=ledger();
         if(state.gate.test_and_set(std::memory_order_acquire))return false;
         struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
-        for(const auto& record:state.records)if(record.used && record.image==image && record.physical==address &&
+        for(const auto& record:state.records)if(record.used && !record.removing && record.image==image && record.physical==address &&
             record.generation==generation && record.creator==creator && record.renderer==renderer && record.factoryCpu.image==image) {
             output.nativeCpu=record.factoryCpu;output.resourceClass=record.factoryResourceClass;return true;
         }
@@ -4737,7 +4772,7 @@ bool nativeOwnedSendSelectionMatches(uintptr_t image,uintptr_t creator,uintptr_t
     struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}} unlock{state.gate};
     const auto domain=temporary?NativeRendererCallbackDomain::Temporary:NativeRendererCallbackDomain::Original;
     for(const auto& record:state.records) {
-        if(!record.used || record.image!=image || record.creator!=creator || record.renderer!=renderer)continue;
+        if(!record.used || record.removing || record.image!=image || record.creator!=creator || record.renderer!=renderer)continue;
         if(!record.owner || !record.storage || !record.adopted || !record.lifetimePublished ||
             !record.childrenReady || !record.childrenPublished || !record.selection.valid() ||
             !record.selection.ownedSend || record.selection.domain!=domain)return false;
