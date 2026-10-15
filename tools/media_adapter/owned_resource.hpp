@@ -14993,25 +14993,43 @@ class TglOwnedVeboxFrameRetention {
     bool pending_=false;
     bool workPending_=false,historyPending_=false;
     uint32_t linkedMembers_=0;
-    bool membershipFault_=false,registered_=false;
+    uint64_t revision_=1;
+    bool membershipFault_=false,registered_=false,completionBusy_=false;
     TglOwnedVeboxFrameRetention* const aggregate_=nullptr;
+    void advanceRevision() noexcept {
+        if(revision_==UINT64_MAX) {
+            membershipFault_=true;
+            if(aggregate_)aggregate_->membershipFault_=true;
+        } else ++revision_;
+    }
     void retain(bool work,bool history=false) noexcept {
         if(!work && !history)return;
+        advanceRevision();
         pending_=true;
         workPending_=workPending_ || work;historyPending_=historyPending_ || history;
         if(aggregate_) {
+            aggregate_->advanceRevision();
             aggregate_->pending_=true;
             aggregate_->workPending_=aggregate_->workPending_ || work;
             aggregate_->historyPending_=aggregate_->historyPending_ || history;
         }
     }
 public:
+    class PairSnapshot {
+        friend class TglOwnedVeboxFrameRetention;
+        const TglOwnedVeboxFrameRetention* root_=nullptr;
+        TglOwnedVeboxFrameRetention *first_=nullptr,*second_=nullptr;
+        std::array<uint64_t,3> revisions_{};
+    public:
+        PairSnapshot()=default;
+    };
     struct AggregateLink {};
     TglOwnedVeboxFrameRetention()=default;
     // The aggregate must outlive every child latch. Flatten at construction:
     // publication is bounded, nonrecursive and never touches sibling latches.
     TglOwnedVeboxFrameRetention(AggregateLink,TglOwnedVeboxFrameRetention& aggregate) noexcept
         :aggregate_(aggregate.aggregate_?aggregate.aggregate_:&aggregate) {
+        aggregate_->advanceRevision();
         if(aggregate_->linkedMembers_==UINT32_MAX)aggregate_->membershipFault_=true;
         else {++aggregate_->linkedMembers_;registered_=true;}
     }
@@ -15019,6 +15037,7 @@ public:
         // Existing ownership contract requires root to outlive all children.
         // Dropping a pending member loses its origin, so closure stays faulted.
         if(aggregate_ && registered_) {
+            aggregate_->advanceRevision();
             if(pending_ || !aggregate_->linkedMembers_)aggregate_->membershipFault_=true;
             if(aggregate_->linkedMembers_)--aggregate_->linkedMembers_;
         }
@@ -15036,7 +15055,43 @@ public:
     bool hasExactlyLinkedPair(const TglOwnedVeboxFrameRetention& first,
         const TglOwnedVeboxFrameRetention& second) const noexcept {
         return aggregateRoot() && !membershipFault_ && linkedMembers_==2 &&
-            &first!=&second && first.linkedTo(*this) && second.linkedTo(*this);
+            &first!=&second && !first.membershipFault_ && !second.membershipFault_ &&
+            first.linkedTo(*this) && second.linkedTo(*this);
+    }
+    bool capturePair(TglOwnedVeboxFrameRetention& first,TglOwnedVeboxFrameRetention& second,
+        PairSnapshot& output) const noexcept {
+        if(completionBusy_ || !hasExactlyLinkedPair(first,second) || revision_==UINT64_MAX ||
+            first.revision_==UINT64_MAX || second.revision_==UINT64_MAX)return false;
+        PairSnapshot candidate;candidate.root_=this;candidate.first_=&first;candidate.second_=&second;
+        candidate.revisions_={revision_,first.revision_,second.revision_};output=candidate;return true;
+    }
+    bool pairUnchanged(const PairSnapshot& snapshot) const noexcept {
+        // Root revision is tested BEFORE dereferencing captured children:
+        // child removal/replacement changes it, even if count returns to two.
+        return snapshot.root_==this && snapshot.revisions_[0]==revision_ &&
+            snapshot.first_ && snapshot.second_ &&
+            hasExactlyLinkedPair(*snapshot.first_,*snapshot.second_) &&
+            snapshot.revisions_[1]==snapshot.first_->revision_ &&
+            snapshot.revisions_[2]==snapshot.second_->revision_;
+    }
+    template<class ScopedGroupProof>
+    bool acknowledgeCompletedPairWork(const PairSnapshot& snapshot,ScopedGroupProof proof) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<bool,ScopedGroupProof&>);
+        if constexpr(std::is_pointer_v<ScopedGroupProof>)if(!proof)return false;
+        if(completionBusy_ || !pairUnchanged(snapshot))return false;
+        completionBusy_=true;
+        struct Reset {bool& busy;~Reset(){busy=false;}} reset{completionBusy_};
+        // Caller must supply the LIVE all-frame native completion/history
+        // scope under the SAME parent lease, not saved replies or status0.
+        // Check again: even another observe(true) changes revision and must
+        // not be cleared using the preceding completion observation.
+        if(!proof() || !pairUnchanged(snapshot))return false;
+        for(auto* member:{snapshot.first_,snapshot.second_}) {
+            member->workPending_=false;member->pending_=member->historyPending_;
+            member->advanceRevision();
+        }
+        workPending_=false;pending_=historyPending_;advanceRevision();
+        return true;
     }
     bool admissionPending() const noexcept;
     void observe(const TglOwnedVeboxCommandTransactionResult& result) noexcept {

@@ -238,7 +238,7 @@ class NativeRendererCpuAssembly {
     CommandStorage secondCommand_;
     NativeRendererCpu cpu_;
     std::array<NativeExecutionOwner,2> executions_;
-    std::array<const TglOwnedVeboxFrameRetention*,2> retentionMembers_{};
+    std::array<TglOwnedVeboxFrameRetention*,2> retentionMembers_{};
     bool cleanupBound_=false,basesAttempted_=false,basesReady_=false,vpAttempted_=false;
 public:
     NativeRendererCpuAssembly(uintptr_t image,
@@ -270,6 +270,15 @@ public:
     bool completeRetentionMembership() const noexcept {
         return retentionMembers_[0] && retentionMembers_[1] &&
             retention_.hasExactlyLinkedPair(*retentionMembers_[0],*retentionMembers_[1]);
+    }
+    bool captureRetentionPair(TglOwnedVeboxFrameRetention::PairSnapshot& output) const noexcept {
+        return completeRetentionMembership() &&
+            retention_.capturePair(*retentionMembers_[0],*retentionMembers_[1],output);
+    }
+    template<class ScopedGroupProof>
+    bool acknowledgeCompletedPairWork(const TglOwnedVeboxFrameRetention::PairSnapshot& snapshot,
+        ScopedGroupProof proof) noexcept {
+        return completeRetentionMembership() && retention_.acknowledgeCompletedPairWork(snapshot,proof);
     }
     bool producerPending(size_t index) noexcept {
         auto* command=commandForChild(index);if(!command)return true;

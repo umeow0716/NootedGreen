@@ -18623,6 +18623,64 @@ int main() {
             assert(!b.mayHaveGpuWork() && b.mayHaveNativeHistory());
             assert(root.mayHaveGpuWork() && root.mayHaveNativeHistory());
         }
+        {
+            using Retention=TglOwnedVeboxFrameRetention;
+            Retention root,foreign;
+            Retention a(Retention::AggregateLink{},root),b(Retention::AggregateLink{},root);
+            TglOwnedVeboxCommandTransactionResult work,history;
+            work.nativeEntered=true;history.nativeHistoryPublished=true;
+            a.observe(work);b.observe(history);root.observe(work);
+            Retention::PairSnapshot snapshot;
+            assert(root.capturePair(a,b,snapshot) && root.pairUnchanged(snapshot));
+            a.observe(TglOwnedVeboxCommandTransactionResult{});
+            assert(root.pairUnchanged(snapshot)); // No publication, no new revision.
+            unsigned proofs=0;
+            auto deny=[&]() noexcept {++proofs;return false;};
+            assert(!root.acknowledgeCompletedPairWork(snapshot,deny) && proofs==1);
+            assert(root.pairUnchanged(snapshot) && root.mayHaveGpuWork());
+            assert(!foreign.acknowledgeCompletedPairWork(snapshot,deny) && proofs==1);
+            // CPU fixture proof ONLY: not a native completion certificate.
+            auto completed=[&]() noexcept {
+                ++proofs;
+                assert(!root.acknowledgeCompletedPairWork(snapshot,deny)); // No reentrant consumption.
+                return true;
+            };
+            assert(root.acknowledgeCompletedPairWork(snapshot,completed) && proofs==2);
+            assert(!root.pairUnchanged(snapshot));
+            assert(!root.mayHaveGpuWork() && !a.mayHaveGpuWork() && !b.mayHaveGpuWork());
+            assert(root() && !a() && b()); // History pins survive GPU-work acknowledgement.
+            assert(root.mayHaveNativeHistory() && b.mayHaveNativeHistory() && !a.mayHaveNativeHistory());
+            assert(!root.acknowledgeCompletedPairWork(snapshot,completed) && proofs==2);
+            a.observe(work);
+            assert(root.capturePair(a,b,snapshot));
+            a.observe(work); // Same true flag, NEW work: stale proof cannot clear it.
+            assert(!root.acknowledgeCompletedPairWork(snapshot,completed) && proofs==2);
+            assert(root.capturePair(a,b,snapshot));
+            auto changedDuringProof=[&]() noexcept {b.observe(history);return true;};
+            assert(!root.acknowledgeCompletedPairWork(snapshot,changedDuringProof));
+            assert(root.mayHaveGpuWork() && a.mayHaveGpuWork() && b.mayHaveNativeHistory());
+            assert(root.capturePair(a,b,snapshot));
+            {
+                Retention transient(Retention::AggregateLink{},root);
+                assert(!root.pairUnchanged(snapshot));
+            }
+            assert(root.hasExactlyLinkedPair(a,b) && !root.pairUnchanged(snapshot));
+            assert(!root.acknowledgeCompletedPairWork(snapshot,completed) && proofs==2);
+        }
+        {
+            using Retention=TglOwnedVeboxFrameRetention;
+            Retention root,b(Retention::AggregateLink{},root);
+            auto* first=new(std::nothrow) Retention(Retention::AggregateLink{},root);
+            assert(first);
+            Retention::PairSnapshot old;
+            assert(root.capturePair(*first,b,old));
+            delete first;
+            assert(!root.pairUnchanged(old)); // Root revision rejects BEFORE touching dead child.
+            auto* replacement=new(std::nothrow) Retention(Retention::AggregateLink{},root);
+            assert(replacement && root.hasExactlyLinkedPair(*replacement,b));
+            assert(!root.pairUnchanged(old)); // Count/address reuse cannot restore old proof.
+            delete replacement;
+        }
         struct ModeFrame {
             bool lost=false,ready=true;
             bool invalidated() const noexcept {return lost;}
