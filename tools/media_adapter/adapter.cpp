@@ -2883,8 +2883,8 @@ struct NativeVeboxSendSubmissionStage {
             if(!tail.prepareTail(&readMemory) || !tail.flags(&readMemory,flags))return 5;
             const int post=tail.postWriteback(&readMemory,admitChild);
             if(post)return post;
-            TglNativeOsCommandSubmitBinding::RelocationPage page;
-            if(!frame.captureNativeRelocationPage(binding,&readMemory,admit,page))return 5;
+            TglNativeOsCommandSubmitBinding::RelocationRecords records;
+            if(!frame.captureNativeRelocationRecords(binding,&readMemory,admit,records))return 5;
             const auto observed=frame.observeNativeOsSubmit(binding,scratch.command.data(),flags,&readMemory,admit);
             command.nativeEntered=command.nativeEntered || observed.submit.called;
             const int native=observed.submit.status();

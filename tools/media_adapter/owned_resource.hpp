@@ -19214,6 +19214,35 @@ public:
             wrapper!=again || native!=againNative || !first.same(second))return false;
         output=first;return true;
     }
+    struct RelocationRecords {
+        RelocationPage page{};
+        std::array<std::array<uint32_t,5>,204> entries{};
+        uint32_t channel=0,count=0;bool hasChannel=false;
+    };
+    // Kernel77a6e consumes one channel DWORD, then77b97/77d6c walks
+    // bit0-marked0x14-byte records. Only the current authenticated page is
+    // captured here; previous pages and token ownership are separate proofs.
+    template<class Read,class Admit>
+    bool captureRelocationRecords(Read read,Admit admit,RelocationRecords& output) const noexcept {
+        RelocationRecords candidate;
+        if(!captureRelocationPage(read,admit,candidate.page))return false;
+        const uintptr_t payload=candidate.page.cursor-candidate.page.begin-8;
+        if(payload) {
+            if(payload<4 || (payload-4)%0x14)return false;
+            const uintptr_t count=(payload-4)/0x14;
+            if(count>candidate.entries.size() ||
+                !read(candidate.page.begin+8,&candidate.channel,4))return false;
+            candidate.hasChannel=true;candidate.count=uint32_t(count);
+            for(uint32_t i=0;i<candidate.count;++i) {
+                auto& record=candidate.entries[i];
+                if(!read(candidate.page.begin+12+uintptr_t{i}*0x14,record.data(),sizeof(record)) ||
+                    !(record[0]&1))return false;
+            }
+        }
+        RelocationPage after;
+        if(!captureRelocationPage(read,admit,after) || !candidate.page.same(after))return false;
+        output=candidate;return true;
+    }
     // Do not invent OS+15b0: that is a field of the DATABASE RECORD used
     // for the separate optional fence call. At most one a9dc occurs here,
     // but this raw flags snapshot does not assert that its branch ran.
@@ -28502,6 +28531,17 @@ public:
         if(!busy_ || flushBusy_ || !renderer_ || retirementStarted_ || invalidated())return false;
         flushBusy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{flushBusy_};
         return binding.captureRelocationPage(read,[&](uintptr_t os,uintptr_t wrapper,uintptr_t native) noexcept {
+            return admit(std::as_const(*renderer_),os,wrapper,native);
+        },output);
+    }
+    template<class Read,class Admit>
+    bool captureNativeRelocationRecords(const TglNativeOsCommandSubmitBinding& binding,Read read,Admit admit,
+        TglNativeOsCommandSubmitBinding::RelocationRecords& output) noexcept {
+        if constexpr(std::is_pointer_v<Read>)if(!read)return false;
+        if constexpr(std::is_pointer_v<Admit>)if(!admit)return false;
+        if(!busy_ || flushBusy_ || !renderer_ || retirementStarted_ || invalidated())return false;
+        flushBusy_=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{flushBusy_};
+        return binding.captureRelocationRecords(read,[&](uintptr_t os,uintptr_t wrapper,uintptr_t native) noexcept {
             return admit(std::as_const(*renderer_),os,wrapper,native);
         },output);
     }

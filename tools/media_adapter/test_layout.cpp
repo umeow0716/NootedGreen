@@ -33720,6 +33720,9 @@ int main() {
         uintptr_t writer=0xd0000,base=0x80000,end=base+0x1018,cursor=base+0x20;
         uintptr_t reserved=end+12,limit=base+0x2030;
         uint32_t sharedSize=0x828,pageHeader=0x04008200;
+        uint32_t channel=0;
+        std::array<uint32_t,5> relocation{7,0,8,0,0};
+        bool failRecord=false,driftRecord=false;
         auto pageRead=[&](uintptr_t p,void* out,size_t n) noexcept {
             auto word=[&](const auto& value) noexcept {std::memcpy(out,&value,n);return true;};
             if(n==8) {
@@ -33732,6 +33735,12 @@ int main() {
             }
             if(n==4 && p==base)return word(sharedSize);
             if(n==4 && p==base+0x18)return word(pageHeader);
+            if(n==4 && p==base+0x20)return word(channel);
+            if(n==sizeof(relocation) && p==base+0x24 && !failRecord) {
+                std::memcpy(out,relocation.data(),n);
+                if(driftRecord)cursor+=0x14;
+                return true;
+            }
             return observationRead(p,out,n);
         };
         TglNativeOsCommandSubmitBinding::RelocationPage page;
@@ -33745,6 +33754,22 @@ int main() {
         assert(!binding.captureRelocationPage(pageRead,
             [](uintptr_t,uintptr_t,uintptr_t) noexcept {return false;},page));
         assert(page.same(original) && calls==3);
+        TglNativeOsCommandSubmitBinding::RelocationRecords inventory;
+        assert(binding.captureRelocationRecords(pageRead,admit,inventory) && !inventory.hasChannel && !inventory.count);
+        cursor=base+0x24;
+        assert(binding.captureRelocationRecords(pageRead,admit,inventory) && inventory.hasChannel && !inventory.count);
+        cursor=base+0x38;
+        assert(binding.captureRelocationRecords(pageRead,admit,inventory) && inventory.count==1 &&
+            inventory.channel==0 && inventory.entries[0]==relocation); // token0 is not discarded
+        const auto originalCursor=inventory.page.cursor;
+        relocation[0]=0;
+        assert(!binding.captureRelocationRecords(pageRead,admit,inventory) && inventory.entries[0][0]==7);
+        relocation[0]=7;cursor+=4;
+        assert(!binding.captureRelocationRecords(pageRead,admit,inventory));cursor-=4;
+        failRecord=true;assert(!binding.captureRelocationRecords(pageRead,admit,inventory));failRecord=false;
+        driftRecord=true;assert(!binding.captureRelocationRecords(pageRead,admit,inventory));driftRecord=false;
+        assert(inventory.page.cursor==originalCursor && inventory.count==1 && calls==3);
+        cursor=base+0x20;
         auto observedInvoke=[&](uintptr_t p,uintptr_t o,void* buffer,uint32_t flags) noexcept {
             const int status=invoke(p,o,buffer,flags);rawFlags=0x40000000;
             if(failAfter)failFlags=true;
