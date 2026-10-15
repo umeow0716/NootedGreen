@@ -24,12 +24,14 @@ extern "C" int owned_debug_creator_target(void *, const uintptr_t *);
 extern "C" const char owned_debug_creator_site[];
 static void *expectedCreator;
 static unsigned creatorNativeCalls, creatorOwnedCalls;
+static NativeReturnObserver* creatorRearmObserver;
 static int creatorNative(void *creator) {
     ++creatorNativeCalls;
     return creator == expectedCreator ? 0x1357 : 0x2468;
 }
 static int creatorOwned(void *creator) {
     ++creatorOwnedCalls;
+    if(creatorRearmObserver && !creatorRearmObserver->rearmFromOwnedCallback(0))return -1;
     return creatorNative(creator);
 }
 asm(".text\n.p2align 4\n.globl _owned_debug_creator_target\n"
@@ -173,6 +175,19 @@ int main() {
             !select.observed(0, test == 0 ? 1 : -1) || creatorNativeCalls != 1 ||
             creatorOwnedCalls != (test == 0 ? 1u : 0u) ||
             nativeTable[3] != reinterpret_cast<uintptr_t>(creatorNative) || creator[0] != 0) return 1;
+    }
+    {
+        creatorNativeCalls=creatorOwnedCalls=0;expectedCreator=creator;
+        NativeReturnObserver repeated({reinterpret_cast<uintptr_t>(owned_debug_creator_site),0,0,0},
+            0,0,0,0,0,0,{},0,{reinterpret_cast<uintptr_t>(nativeTable),reinterpret_cast<uintptr_t>(ownedTable)});
+        if(!repeated.isArmed())return 1;
+        creatorRearmObserver=&repeated;
+        for(unsigned i=0;i<4;++i)
+            if(owned_debug_creator_target(creator,nativeTable)!=0x1357 || repeated.observedCount(0)!=i+1)return 1;
+        creatorRearmObserver=nullptr;
+        if(creatorNativeCalls!=4 || creatorOwnedCalls!=4 || creator[0] ||
+            nativeTable[3]!=reinterpret_cast<uintptr_t>(creatorNative))return 1;
+        std::puts("SELF_DEBUG_OWNED_CALLBACK_REARM_OK hits=4 native=4");
     }
     // One observer owns BOTH exact argument substitutions. Exercise either
     // order, partial hit and rejected table without a nested debug owner.

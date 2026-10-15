@@ -12,6 +12,7 @@
 #include <mutex>
 #include <array>
 #include <cerrno>
+#include <pthread.h>
 
 struct NativeOwnedCopy {
     uintptr_t source = 0, replacement = 0, bytes = 0;
@@ -42,6 +43,8 @@ class NativeReturnObserver {
     std::array<uintptr_t, 4> sites{};
     sig_atomic_t wanted = 0;
     volatile sig_atomic_t hitMask = 0;
+    volatile sig_atomic_t hitCounts[4]{};
+    pthread_t owner = pthread_self();
     volatile sig_atomic_t values[4]{};
     unsigned booleanSites = 0;
     unsigned rcxSites = 0;
@@ -127,6 +130,7 @@ class NativeReturnObserver {
         self->values[site] = self->booleanSites & (1u << site)
             ? sig_atomic_t(raw != 0) : static_cast<sig_atomic_t>(raw);
         self->hitMask |= 1 << site;
+        ++self->hitCounts[site];
         auto next = self->programmed;
         for (unsigned i = 0; i != 4; ++i)
             if (self->hitMask & (1 << i)) next.__dr7 &= ~(uint64_t(3) << (2 * i));
@@ -227,6 +231,32 @@ public:
     }
     bool observed(int expected) const { return observed(0, expected); }
     bool isArmed() const { return armed; }
+    unsigned observedCount(unsigned site) const noexcept {return site<4?unsigned(hitCounts[site]):0;}
+    // Normal stack ONLY, after execution has left the watched instruction.
+    // No RF/TF/RIP changes. Never overwrite foreign debugger/signal state.
+    // Not used by production adapter until owned callback rearm is proven.
+    bool rearmFromOwnedCallback(unsigned site) noexcept {
+        if(site>=4 || !armed || !installed || active.load()!=this || !pthread_equal(owner,pthread_self()) ||
+            !(hitMask&(1<<site)) || !hitCounts[site] || hitCounts[site]>=16 || handlerRestore!=KERN_SUCCESS)return false;
+        struct sigaction action{};
+        if(sigaction(SIGTRAP,nullptr,&action) || !(action.sa_flags&SA_SIGINFO) || action.sa_sigaction!=trap)return false;
+        auto expected=programmed;
+        for(unsigned i=0;i<4;++i)if(hitMask&(1<<i))expected.__dr7&=~(uint64_t(3)<<(2*i));
+        if(hitMask==wanted)expected=saved;
+        x86_debug_state64_t actual{};mach_msg_type_number_t count=x86_DEBUG_STATE64_COUNT;
+        const auto same=[](const auto& a,const auto& b) noexcept {
+            return a.__dr0==b.__dr0 && a.__dr1==b.__dr1 && a.__dr2==b.__dr2 && a.__dr3==b.__dr3 &&
+                a.__dr7==canonical(b.__dr7);
+        };
+        if(thread_get_state(thread,x86_DEBUG_STATE64,reinterpret_cast<thread_state_t>(&actual),&count)!=KERN_SUCCESS ||
+            count!=x86_DEBUG_STATE64_COUNT || !same(actual,expected))return false;
+        const auto nextMask=hitMask&~(1<<site);auto next=programmed;
+        for(unsigned i=0;i<4;++i)if(nextMask&(1<<i))next.__dr7&=~(uint64_t(3)<<(2*i));
+        if(thread_set_state(thread,x86_DEBUG_STATE64,reinterpret_cast<thread_state_t>(&next),x86_DEBUG_STATE64_COUNT)!=KERN_SUCCESS)return false;
+        hitMask=nextMask;count=x86_DEBUG_STATE64_COUNT;
+        return thread_get_state(thread,x86_DEBUG_STATE64,reinterpret_cast<thread_state_t>(&actual),&count)==KERN_SUCCESS &&
+            count==x86_DEBUG_STATE64_COUNT && same(actual,next);
+    }
     ~NativeReturnObserver() {
         if (installed && !armed) {
             if (sigaction(SIGTRAP, &previous, nullptr)) _exit(74);
