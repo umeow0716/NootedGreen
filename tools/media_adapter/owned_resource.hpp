@@ -24719,6 +24719,19 @@ public:
         if(!slot.frame || slot.generation!=ticket.generation || !slot.pending || !slot.receipt.valid)return 5;
         return use(*slot.frame,slot.receipt);
     }
+    template<class Prepare> int retirePendingWithReceipt(Ticket ticket,Prepare prepare) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<int,Prepare&,Frame&,const TglNativeFrameOutputReceipt&>);
+        if constexpr(std::is_pointer_v<Prepare>)if(!prepare)return 5;
+        if(gate_.test_and_set(std::memory_order_acquire))return 5;
+        Unlock unlock{gate_};
+        if(physicalTeardownStarted_ || ticket.pool!=this || ticket.index>=Capacity || !ticket.generation)return 5;
+        auto& slot=slots_[ticket.index];
+        if(!slot.frame || slot.generation!=ticket.generation || !slot.pending || !slot.receipt.valid)return 5;
+        const int status=prepare(*slot.frame,slot.receipt);
+        if(status)return status;
+        if(!slot.frame->canDestroy())return 5; // Callback success alone cannot delete.
+        auto* frame=slot.frame;slot={};delete frame;return 0;
+    }
     // Snapshot only under the enclosing physical registry gate. All runtime
     // pool access must stay in that gate; this is not a standalone lease.
     bool emptyForNativeRequest() noexcept {
@@ -26978,6 +26991,20 @@ public:
             if(!read(physical+0x50,&wrapper,8) || !wrapper)return 5;
             return pool.withRetainedFrameObservation(frame,[&](auto& retained,const auto& receipt) noexcept -> int {
                 return retained.captureTaskCompletion(binding,receipt,wrapper,read,admit,query,expected,completion)?0:5;
+            });
+        });
+    }
+    template<class FenceRead,class Admit,class Query,class History,class Prepare>
+    int retireTaskCompletedFrame(typename Registry::Ticket ticket,uintptr_t physical,
+        typename Registry::FrameTicket frame,const TglNativeFenceBackingObservation& binding,
+        FenceRead read,Admit admit,Query query,History history,Prepare prepare) noexcept {
+        if(binding.image()!=binding_.image || physical>UINTPTR_MAX-0x58)return 5;
+        if constexpr(std::is_pointer_v<FenceRead>)if(!read)return 5;
+        return withFrame(ticket,physical,[&](auto& pool) noexcept -> int {
+            uintptr_t wrapper=0;
+            if(!read(physical+0x50,&wrapper,8) || !wrapper)return 5;
+            return pool.retirePendingWithReceipt(frame,[&](auto& retained,const auto& receipt) noexcept -> int {
+                return retained.prepareTaskCompletionRetirement(binding,receipt,wrapper,read,admit,query,history,prepare);
             });
         });
     }

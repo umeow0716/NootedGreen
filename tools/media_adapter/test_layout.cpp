@@ -14831,7 +14831,12 @@ static void testRetainedVeboxFrames() {
         readable=true;count=0;outputs=0;assert(batch.capture(0x1000,read) && batch.valid && batch.count==0);
     }
     {
-        struct ReceiptFrame {ReceiptFrame() noexcept=default;};
+        struct ReceiptFrame {
+            unsigned* deaths=nullptr;bool ready=false;
+            explicit ReceiptFrame(unsigned* count=nullptr) noexcept:deaths(count){}
+            ~ReceiptFrame() noexcept {if(deaths)++*deaths;}
+            bool canDestroy() const noexcept {return ready;}
+        };
         {
             TglOwnedVeboxRetainedFrames<ReceiptFrame> group,other;
             const auto first=group.create(),second=group.create(),outside=other.create();
@@ -14862,7 +14867,8 @@ static void testRetainedVeboxFrames() {
             })==0);
         }
         TglOwnedVeboxRetainedFrames<ReceiptFrame> pool,foreign;
-        auto ticket=pool.create();assert(ticket.generation);
+        unsigned deaths=0;
+        auto ticket=pool.create(&deaths);assert(ticket.generation);
         TglNativeFrameOutputReceipt receipt{0x20000,0x77000,7,true};
         assert(!pool.bindOutputReceipt(ticket,receipt)); // no command acquired yet
         const auto command=pool.run(ticket,[](auto&) noexcept {
@@ -14899,7 +14905,15 @@ static void testRetainedVeboxFrames() {
             assert(pending);return 31; // no real completion certificate
         })==31);
         assert(pool.withOutputReceipt(ticket,observe)==31 && observed==2);
-        assert(pool.retire(ticket,[](const auto&,bool,const auto&) noexcept -> int {return 0;})==0); // CPU fixture cleanup only
+        assert(pool.retirePendingWithReceipt(ticket,[](auto&,const auto&) noexcept -> int {return 31;})==31 && !deaths);
+        assert(pool.retirePendingWithReceipt(ticket,[](auto&,const auto&) noexcept -> int {return 0;})==5 && !deaths);
+        assert(pool.retirePendingWithReceipt(stale,[](auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+        assert(foreign.retirePendingWithReceipt(ticket,[](auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+        assert(pool.retirePendingWithReceipt(ticket,[&](auto& frame,const auto& snapshot) noexcept -> int {
+            assert(snapshot.context==receipt.context && pool.withOutputReceipt(ticket,observe)==5);
+            frame.ready=true;return 0; // CPU fixture authority only.
+        })==0 && deaths==1);
+        assert(pool.retirePendingWithReceipt(ticket,[](auto&,const auto&) noexcept -> int {assert(false);return 0;})==5 && deaths==1);
         assert(pool.withOutputReceipt(ticket,observe)==5 && observed==2);
         assert(pool.withRetainedFrameObservation(ticket,observeFrame)==5 && frameObserved==1);
     }

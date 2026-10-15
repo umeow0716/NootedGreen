@@ -4335,6 +4335,20 @@ struct NativePhysicalBackend {
                 NativeRetainedTaskCompletionQuery{native.image,library.resourceCreate},expected,completion);
         });
     }
+    static int retireNativeTaskCompletedFrame(void* physical,typename NativePhysicalRegistry::FrameTicket frame,
+        NativeFrameHistoryRetirement::Prepare prepare) noexcept {
+        if(!prepare || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(prepare),1))return 5;
+        TglNativePhysicalCallbackBinding native;TglNativeFenceBackingObservation fence;
+        if(!binding(native) || !library.resourceCreate || !fence.resolve(native.image,&readMemory,
+            NativeTglImageAdmission{native.image},&executableMemory))return 5;
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.retireTaskCompletedFrame(ticket,address,frame,fence,&readMemory,
+                NativeRetainedFenceOwnerAdmission{native.image,address},
+                NativeRetainedTaskCompletionQuery{native.image,library.resourceCreate},
+                [](NativeBorrowedFrontend& frontend) noexcept {return NativeRendererHistoryInspection::run(frontend);},prepare);
+        });
+    }
     using RemovedBatch=TglNativeRemovedContextBatch<16>;
     using RemovalScope=typename NativePhysicalRegistry::DependencyAdoptionScope;
     using PrepareRemoval=int(*)(void*,RemovalScope&,uintptr_t,uintptr_t,uint64_t,const RemovedBatch&) noexcept;
