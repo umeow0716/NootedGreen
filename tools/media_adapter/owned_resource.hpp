@@ -24378,16 +24378,33 @@ public:
     // Bind only to the exact retained frame ticket, under its physical scope.
     // Duplicate event identities are ambiguous even if their index changed.
     bool bindOutputReceipt(Ticket ticket,const TglNativeFrameOutputReceipt& receipt) noexcept {
+        return bindOutputReceipts(std::array<Ticket,1>{ticket},receipt);
+    }
+    // One enclosing native request can publish one output event for several
+    // retained passes. Associate the complete group atomically, never infer
+    // completion from the association itself. Foreign/duplicate tickets and
+    // previously associated event identities remain forbidden.
+    // Caller must authenticate request membership under the physical scope;
+    // a pool ticket alone is not that authority.
+    template<size_t Count>
+    bool bindOutputReceipts(const std::array<Ticket,Count>& tickets,
+        const TglNativeFrameOutputReceipt& receipt) noexcept {
+        static_assert(Count>0 && Count<=Capacity,"bounded request receipt group");
         if(gate_.test_and_set(std::memory_order_acquire)) return false;
         Unlock unlock{gate_};
-        if(physicalTeardownStarted_ || ticket.pool!=this || ticket.index>=Capacity ||
-            !ticket.generation || !receipt.valid || !receipt.context || !receipt.event ||
+        if(physicalTeardownStarted_ || !receipt.valid || !receipt.context || !receipt.event ||
             receipt.event>UINTPTR_MAX-8) return false;
-        auto& slot=slots_[ticket.index];
-        if(!slot.frame || slot.generation!=ticket.generation || !slot.pending || slot.receipt.valid) return false;
+        for(size_t i=0;i<Count;++i) {
+            const auto& ticket=tickets[i];
+            if(ticket.pool!=this || ticket.index>=Capacity || !ticket.generation)return false;
+            const auto& slot=slots_[ticket.index];
+            if(!slot.frame || slot.generation!=ticket.generation || !slot.pending || slot.receipt.valid)return false;
+            for(size_t j=0;j<i;++j)if(tickets[j].index==ticket.index)return false;
+        }
         for(const auto& other:slots_)
             if(other.receipt.valid && other.receipt.event==receipt.event) return false;
-        slot.receipt=receipt;return true;
+        for(const auto& ticket:tickets)slots_[ticket.index].receipt=receipt;
+        return true;
     }
     template<class Use> int withOutputReceipt(Ticket ticket,Use use) noexcept {
         static_assert(noexcept(use(std::declval<const TglNativeFrameOutputReceipt&>())) &&

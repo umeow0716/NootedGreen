@@ -14826,6 +14826,35 @@ static void testRetainedVeboxFrames() {
     }
     {
         struct ReceiptFrame {ReceiptFrame() noexcept=default;};
+        {
+            TglOwnedVeboxRetainedFrames<ReceiptFrame> group,other;
+            const auto first=group.create(),second=group.create(),outside=other.create();
+            auto submit=[](auto&) noexcept {
+                TglOwnedVeboxCommandTransactionResult r;r.acquired=true;return r;
+            };
+            group.run(first,submit);
+            const TglNativeFrameOutputReceipt shared{0x20000,0x78000,9,true};
+            assert(!group.bindOutputReceipts(std::array{first,second},shared));
+            assert(group.withOutputReceipt(first,[](const auto&) noexcept -> int {assert(false);return 0;})==5);
+            group.run(second,submit);
+            assert(!group.bindOutputReceipts(std::array{first,first},shared));
+            assert(!group.bindOutputReceipts(std::array{first,outside},shared));
+            auto stale=second;++stale.generation;
+            assert(!group.bindOutputReceipts(std::array{first,stale},shared));
+            assert(group.bindOutputReceipts(std::array{first,second},shared));
+            for(const auto ticket:{first,second}) {
+                assert(group.withOutputReceipt(ticket,[&](const auto& receipt) noexcept -> int {
+                    assert(receipt.context==shared.context && receipt.event==shared.event && receipt.index==9);return 0;
+                })==0);
+                assert(!group.bindOutputReceipt(ticket,shared));
+                assert(group.retire(ticket,[](const auto&,bool pending,const auto&) noexcept -> int {
+                    assert(pending);return 0; // CPU fixture authority only.
+                })==0);
+            }
+            assert(other.retire(outside,[](const auto&,bool pending,const auto&) noexcept -> int {
+                assert(!pending);return 0;
+            })==0);
+        }
         TglOwnedVeboxRetainedFrames<ReceiptFrame> pool,foreign;
         auto ticket=pool.create();assert(ticket.generation);
         TglNativeFrameOutputReceipt receipt{0x20000,0x77000,7,true};
