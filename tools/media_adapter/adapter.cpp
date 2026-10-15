@@ -5322,9 +5322,9 @@ struct NativeCubeSnapshotBudget {
     }
 };
 struct NativePropertyParentMutation {
-    template<class Views,class Use>
+    template<class Views,class AdmitOutputs,class Use>
     static int run(Views& parents,size_t count,size_t index,NativePhysicalFrameScope& physical,
-        uintptr_t image,uintptr_t address,uint64_t generation,Use& use) noexcept {
+        uintptr_t image,uintptr_t address,uint64_t generation,AdmitOutputs& admitOutputs,Use& use) noexcept {
         if(index==count)return use();
         return parents[index].withParentLease([&](const NativeVphalFramePin& pin,const TglNativeVphalMhwView& view) noexcept -> int {
             if(!pin.get())return 5;
@@ -5332,12 +5332,12 @@ struct NativePropertyParentMutation {
               return pin.get()->withNativePropertyMutation(pin,[&]() noexcept -> int {
                 auto healthy=[&]() noexcept {
                     return pin.get()->withPinnedStorage(pin,NativeDataAdmission{},NativeTglImageAdmission{image},
-                        &executableMemory,[](auto& cpu,const auto&) noexcept -> int {
-                            return cpu.backing().retention().admissionPending()?5:0;
+                        &executableMemory,[&](auto& cpu,const auto&) noexcept -> int {
+                            return cpu.backing().retention().admissionPending()?5:admitOutputs(cpu);
                         });
                 };
                 const int before=healthy();if(before)return before;
-                const int result=run(parents,count,index+1,physical,image,address,generation,use);
+                const int result=run(parents,count,index+1,physical,image,address,generation,admitOutputs,use);
                 return result?result:healthy();
               });
             });
@@ -5409,7 +5409,20 @@ struct NativeFactoryContextProperties {
                         !batch.freezeVeboxCubePayloads(&readMemory,frozen,NativeCubeSnapshotBudget::available())))return 5;
                     return batch.stable(&readMemory)?TglNativeBackingAllocateInvoker{}(image+offset,address,frozen.input()):5;
                 };
-                return NativePropertyParentMutation::run(parents,parentCount,0,mutation,image,address,generation,invoke);
+                auto admitOutputs=[&](auto& cpu) noexcept -> int {
+                    if(operation!=Operation::Query)return 0;
+                    // Partial protected graph only: full codec/physical/resource
+                    // coverage remains a prerequisite for table publication.
+                    const uintptr_t storage=reinterpret_cast<uintptr_t>(&cpu);
+                    if(storage>UINTPTR_MAX-sizeof(cpu))return 5;
+                    return batch.admitVeboxQueryOutputs(frozen,[&](uintptr_t output,size_t bytes) noexcept {
+                        return output<=UINTPTR_MAX-bytes && NativeDataAdmission{}(output,bytes) &&
+                            (output>=storage+sizeof(cpu) || storage>=output+bytes) &&
+                            cpu.children().first().owner().excludesBaseShellAndHelperWritableSpan(output,bytes) &&
+                            cpu.children().second().owner().excludesBaseShellAndHelperWritableSpan(output,bytes);
+                    })?0:5;
+                };
+                return NativePropertyParentMutation::run(parents,parentCount,0,mutation,image,address,generation,admitOutputs,invoke);
             });
         });
     }

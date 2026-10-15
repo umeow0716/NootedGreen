@@ -5203,6 +5203,25 @@ static void testExecutionShape() {
         for(auto& anchor:anchors){anchor[1]^=1;assert(!exclude(0x6000,1));anchor[1]^=1;}
         rx=false;assert(!exclude(0x6000,1));rx=true;
         assert(!exclude(UINTPTR_MAX,1));
+        struct BorrowBackend {
+            decltype(read)& r;decltype(qualify)& q;uintptr_t image;
+            bool validate(uintptr_t p) noexcept {return tglExecutionShape(p,image,r,q);}
+            void destroy(uintptr_t) noexcept {assert(false);}
+        } backend{read,qualify,image};
+        TglExecutionOwner owner(backend);
+        auto leasedExclude=[&](uintptr_t p,size_t n) noexcept {
+            return owner.excludesLeasedReportAllocationSpans(object,image,p,n,boundedRead,qualify,
+                [&](uintptr_t,size_t) noexcept {return rx;});
+        };
+        assert(!leasedExclude(0x6000,1));
+        assert(owner.withBorrowedExecution(object,[&](uintptr_t active) noexcept {
+            assert(active==object && leasedExclude(0x6000,1));
+            assert(!leasedExclude(first,1) && !leasedExclude(second,1));
+            rx=false;assert(!leasedExclude(0x6000,1));rx=true;
+            owner.reset();assert(leasedExclude(0x6000,1)); // Reset cannot revoke a live borrow.
+            return 0;
+        })==0);
+        assert(!leasedExclude(0x6000,1) && !owner.get());
     }
     qualified = false; assert(!tglExecutionShape(object, image, read, qualify)); qualified = true;
     allowed = false; assert(!tglExecutionShape(object, image, read, qualify)); allowed = true;

@@ -3899,6 +3899,13 @@ public:
             object>UINTPTR_MAX-0xd48 || !backend.validate(object) || !hasExecutionLease(expected))return false;
         return address>=object+0xd48 || object>=address+bytes;
     }
+    template<class Read,class Qualify,class Executable>
+    bool excludesLeasedReportAllocationSpans(uintptr_t expected,uintptr_t image,uintptr_t address,size_t bytes,
+        Read read,Qualify qualify,Executable executable) noexcept {
+        return excludesLeasedReportWritableSpan(expected,address,bytes) &&
+            tglExcludeExecutionAllocationSpans(expected,image,address,bytes,read,qualify,executable) &&
+            hasExecutionLease(expected);
+    }
     // Synchronous execution-data publication must retain the native object.
     // Reject reset/reinitialize/nested use during the lease. This pins CPU
     // lifetime only: callers still own serialization and GPU fence lifetimes.
