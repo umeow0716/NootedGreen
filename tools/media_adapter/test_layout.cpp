@@ -18164,7 +18164,13 @@ int main() {
             assert(!request.acknowledgeCoverage(receipt,2,pair,live));return true;
         }));
         assert(!request.pending() && !request.acknowledgeCoverage(receipt,2,pair,live) && !proofs);
+        assert(request.matchesCompletedCoverage(receipt,2,reverse));
+        assert(request.matchesCompletedCoverage(receipt,1,pair));
+        assert(!request.matchesCompletedCoverage(receipt,2,foreign));
+        assert(!request.matchesCompletedCoverage(wrong,1,pair));
+        assert(!request.matchesCompletedCoverage(receipt,0,pair));
         request.retain(); // Old coverage cannot certify the next request.
+        assert(!request.matchesCompletedCoverage(receipt,1,pair));
         assert(!request.acknowledgeCoverage(receipt,2,pair,live) && request.pending());
     }
     {

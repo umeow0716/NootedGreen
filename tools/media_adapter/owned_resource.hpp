@@ -26313,7 +26313,23 @@ public:
         // A concurrent retain, including from inside proof, defeats this CAS.
         // Live must enclose all-frame completion/history/parent scopes.
         if(!live() || !state_.compare_exchange_strong(state,state&~uint64_t{1},std::memory_order_acq_rel))return false;
-        coveredState_=0;count_=0;frames_={};receipt_={};return true;
+        // Keep opaque completed keys for a remaining-frame retirement retry.
+        // They authorize neither GPU completion nor resource destruction.
+        coveredState_=state&~uint64_t{1};return true;
+    }
+    template<class Frames> bool matchesCompletedCoverage(const TglNativeFrameOutputReceipt& receipt,
+        size_t count,const Frames& frames) noexcept {
+        if(!validFrames(count,frames) || gate_.test_and_set(std::memory_order_acquire))return false;
+        struct Reset {std::atomic_flag& gate;~Reset(){gate.clear(std::memory_order_release);}} reset{gate_};
+        const auto state=state_.load(std::memory_order_acquire);
+        if((state&1) || !state || state!=coveredState_ || count>count_ || !receipt.valid ||
+            !receipt_.valid || receipt.context!=receipt_.context || receipt.event!=receipt_.event ||
+            receipt.index!=receipt_.index)return false;
+        for(size_t i=0;i<count;++i) {
+            bool found=false;for(size_t j=0;j<count_;++j)if(frames[i]==frames_[j])found=true;
+            if(!found)return false;
+        }
+        return state_.load(std::memory_order_acquire)==state;
     }
 };
 template<class Storage,class PhysicalLease,class Read,class Write,
@@ -26408,6 +26424,14 @@ public:
         });
     }
     const TglOwnedPrimaryRendererTable& rendererLifetime() const noexcept {return state_->rendererTable;}
+    template<class OwnerLease,class Frames>
+    bool matchesCompletedNativeRequestCoverage(const OwnerLease& lease,const TglNativeFrameOutputReceipt& receipt,
+        size_t count,const Frames& frames) noexcept {
+        if(!state_ || lease.get()!=this || !state_->storageBusy || state_->frameBusy ||
+            !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
+            !state_->boundRenderer() || !state_->boundPhysicalOs())return false;
+        return state_->nativeRequestPending.matchesCompletedCoverage(receipt,count,frames);
+    }
     template<class OwnerLease,class Frames,class Live>
     bool acknowledgeNativeRequestCoverage(const OwnerLease& lease,const TglNativeFrameOutputReceipt& receipt,
         size_t count,const Frames& frames,Live live) noexcept {

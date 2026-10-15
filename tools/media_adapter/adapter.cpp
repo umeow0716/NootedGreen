@@ -4331,9 +4331,13 @@ struct NativePhysicalBackend {
     }
     static int reportFrameEvents(void* physical,const void* input) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
-        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+        const int result=withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
             return callbacks.reportFrameEvents(ticket,address,input);
         });
+        // Native reporting and its registry locks have fully unwound. Only
+        // the separate kernel-completion proof can retire retained frames.
+        if(!result)(void)serviceNativeCompletedFrames(physical);
+        return result;
     }
     static int captureNativeExpectedFence(void* physical,typename NativePhysicalRegistry::FrameTicket frame,
         TglNativeFenceBackingObservation::Snapshot& output) noexcept {
@@ -4454,20 +4458,28 @@ struct NativePhysicalBackend {
                     // All physical/pool/frame observation scopes remain live.
                     // Re-enter the SAME retained parent's mutable storage gate;
                     // consume revisions there, never via a const_cast or cache.
-                    return first->acknowledgeCompletedGroupWork(group,count,history,
+                    const int acknowledged=first->acknowledgeCompletedGroupWork(group,count,history,
                         [&](const auto& cpu,const auto& view) noexcept {
                             if(!healthy() || !group.unchanged(cpu) || !sameView(view))return false;
                             if(drained && !emptyCache(view))return false;
                             return healthy() && group.unchanged(cpu) && sameView(view);
                         },[&](const auto& pin,auto& cpu,const auto& view,auto transition) noexcept {
                             if(!drained)return transition(); // Keep request pin for nonempty history.
-                            return pin.get() && pin.get()->acknowledgeNativeRequestCoverage(pin,receipts[0],count,frames,
+                            if(!pin.get())return false;
+                            // A previous event may have retired only a subset.
+                            // Current all-frame GPU/cache proof is STILL required.
+                            if(pin.get()->matchesCompletedNativeRequestCoverage(pin,receipts[0],count,frames))
+                                return transition();
+                            return pin.get()->acknowledgeNativeRequestCoverage(pin,receipts[0],count,frames,
                                 [&]() noexcept {
                                     if(!transition())return false;
                                     return !cpu.backing().retention().admissionPending() && healthy() &&
                                         sameView(view) && emptyCache(view) && healthy() && sameView(view);
                                 });
                         });
+                    // Work-only acknowledgement is NOT private-retirement
+                    // admission. Leave nonempty history retryable, not failed.
+                    return acknowledged?acknowledged:drained?0:5;
                 });
         });
     }
@@ -4484,6 +4496,24 @@ struct NativePhysicalBackend {
                 NativeRetainedTaskCompletionQuery{native.image,library.resourceCreate},
                 [](NativeBorrowedFrontend& frontend) noexcept {return NativePrivateFrameRetirementInspection::run(frontend);},prepare);
         });
+    }
+    static int serviceNativeCompletedFrames(void* physical) noexcept {
+        const auto address=reinterpret_cast<uintptr_t>(physical);
+        std::array<typename NativePhysicalRegistry::FrameTicket,2> frames{};size_t count=0;
+        const int captured=withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+            return callbacks.withFrame(ticket,address,[&](auto& pool) noexcept -> int {
+                return pool.withPendingReceiptGroup([&](size_t n,const auto&,const auto&,const auto& tickets) noexcept -> int {
+                    if(!n || n>frames.size())return 5;
+                    count=n;for(size_t i=0;i<n;++i)frames[i]=tickets[i];return 0;
+                });
+            });
+        });
+        if(captured || !count || acknowledgeNativeCompletedGroupWork(physical))return 5;
+        // Each retirement revalidates kernel completion + native history under
+        // its live frame scope; saved tickets are identity, NOT free authority.
+        for(size_t i=0;i<count;++i)
+            if(retireNativeTaskCompletedFrame(physical,frames[i],&NativePrivateFrameRetirementInspection::prepare))return 5;
+        return 0;
     }
     using RemovedBatch=TglNativeRemovedContextBatch<16>;
     using RemovalScope=typename NativePhysicalRegistry::DependencyAdoptionScope;
