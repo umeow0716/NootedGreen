@@ -22267,6 +22267,24 @@ int main() {
                                 return 0; // Fixture checks error internally; real mutation error quarantines physical epoch.
                             })==0 && retirementProofs==1);
                             assert(!RetirementLookup::get(storageIdentity));
+                            for(int nativeStatus:{0,31}) {
+                                assert(physicalOwners.withDependencyAdoption(ticket,image,0x90000,[&](auto& physicalScope) noexcept -> int {
+                                    const int result=owner->withChildAdmissionAuthority(initialization,physicalScope,childProof,[&]() noexcept -> int {
+                                        return owner->withRetirementAuthority(initialization,physicalScope,proof,[&]() noexcept -> int {
+                                            auto* child=ChildLookup::get(reinterpret_cast<void*>(r));
+                                            auto* retirement=RetirementLookup::get(storageIdentity);
+                                            assert(child && retirement && child->admit && retirement->admit);
+                                            assert(!child->admit(child->scope,reinterpret_cast<void*>(r),ticket.generation+1,0x1110,0x2220));
+                                            assert(child->admit(child->scope,reinterpret_cast<void*>(r),ticket.generation,0x1110,0x2220));
+                                            return nativeStatus;
+                                        });
+                                    });
+                                    assert(result==nativeStatus && !ChildLookup::get(reinterpret_cast<void*>(r)) &&
+                                        !RetirementLookup::get(storageIdentity));
+                                    return 0;
+                                })==0);
+                            }
+                            assert(childProofs==3 && retirementProofs==1);
                             unsigned admissionCalls=0;
                             auto reentrantQualify=[&](uintptr_t address) noexcept {
                                 ++admissionCalls;

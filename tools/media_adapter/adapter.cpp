@@ -4918,6 +4918,7 @@ struct NativeCreatorPreparation {
             auto lease=NativeVphalRouter::pinForInitialization(creator);auto* owner=lease.get();
             if(!owner || !lease.exclusive())return 5;
             NativeRendererCpuAssembly* storage=nullptr;
+            uintptr_t renderer=0;
             std::array<uintptr_t,2> children{};std::array<uint64_t,2> childGenerations{};
             stage="creator-storage";
             const int captured=owner->withCreatorStorage(lease,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,
@@ -4925,6 +4926,7 @@ struct NativeCreatorPreparation {
                     stage="retention-and-view";
                     if(view.image!=image || view.creator!=creator || cpu.backing().retention()())return 5;
                     storage=&cpu;
+                    renderer=view.renderer;
                     auto& a=cpu.children().first().owner();auto& b=cpu.children().second().owner();
                     children={reinterpret_cast<uintptr_t>(a.constructedBase()),reinterpret_cast<uintptr_t>(b.constructedBase())};
                     childGenerations={a.allocationGeneration(),b.allocationGeneration()};
@@ -4945,10 +4947,16 @@ struct NativeCreatorPreparation {
                 selected->removing=true; // BEFORE storage deletion; never reopen on partial failure.
             }
             stage="owned-storage-detach";
-            return owner->prepareExternalRemoval(lease,physical,[&](void* child,uint64_t childGeneration,size_t index) noexcept -> int {
-                return index<2 && reinterpret_cast<uintptr_t>(child)==children[index] && childGeneration==childGenerations[index] &&
-                    physical.matches(image,address,generation)?0:5;
-            })?0:5;
+            return owner->withChildAdmissionAuthority(lease,physical,
+                [&](NativeRendererCpuAssembly& cpu,void* actual,uint64_t epoch,uintptr_t a,uintptr_t b) noexcept -> bool {
+                    return &cpu==storage && reinterpret_cast<uintptr_t>(actual)==renderer && epoch==generation &&
+                        a==children[0] && b==children[1] && physical.matches(image,address,generation);
+                },[&]() noexcept -> int {
+                    return owner->prepareExternalRemoval(lease,physical,[&](void* child,uint64_t childGeneration,size_t index) noexcept -> int {
+                        return index<2 && reinterpret_cast<uintptr_t>(child)==children[index] && childGeneration==childGenerations[index] &&
+                            physical.matches(image,address,generation)?0:5;
+                    })?0:5;
+                });
         });
         os_log_info(OS_LOG_DEFAULT,"NGRN_CONTEXT_REMOVAL stage=creator-detail boundary=%{public}s result=%{public}d",stage,result);
         return result;
