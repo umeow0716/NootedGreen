@@ -25607,6 +25607,7 @@ public:
             std::is_same_v<decltype(proof(static_cast<void*>(nullptr),uint64_t{},size_t{})),int> &&
             noexcept(use()) && std::is_same_v<decltype(use()),int>);
         if(!state_ || lease.get()!=this || !lease.exclusive() || state_->storageBusy || !state_->storage ||
+            state_->nativeRequestPending.pending() ||
             !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
             !physical.matches(state_->image,state_->physical,state_->generation) ||
             !state_->boundRenderer() || !state_->boundPhysicalOs())return 5;
@@ -25616,6 +25617,7 @@ public:
         TglOwnedVphalRetirementContext context{&payload,[](void* value,void* child,uint64_t generation,size_t index) noexcept -> int {
             auto& p=*static_cast<Payload*>(value);
             auto valid=[&]() noexcept {return p.lease.get()==p.owner && p.lease.exclusive() &&
+                !p.owner->state_->nativeRequestPending.pending() &&
                 p.physical.matches(p.image,p.physicalAddress,p.generation);};
             if(!valid())return 5;
             const int status=p.proof(child,generation,index);
@@ -25630,6 +25632,7 @@ public:
             std::is_same_v<decltype(proof(std::declval<Storage&>(),static_cast<void*>(nullptr),uint64_t{},uintptr_t{},uintptr_t{})),bool> &&
             noexcept(use()) && std::is_same_v<decltype(use()),int>);
         if(!state_ || lease.get()!=this || !lease.exclusive() || !state_->storage ||
+            state_->nativeRequestPending.pending() ||
             !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
             !physical.matches(state_->image,state_->physical,state_->generation) ||
             !state_->boundRenderer() || !state_->boundPhysicalOs())return 5;
@@ -25639,7 +25642,8 @@ public:
         TglOwnedVphalChildAdmissionContext context{&payload,[](void* value,void* renderer,uint64_t generation,uintptr_t a,uintptr_t b) noexcept -> bool {
             auto& p=*static_cast<Payload*>(value);
             auto valid=[&]() noexcept {return p.lease.get()==p.owner && p.lease.exclusive() &&
-                p.owner->state_->storage==p.storage && p.physical.matches(p.image,p.physicalAddress,p.generation);};
+                p.owner->state_->storage==p.storage && !p.owner->state_->nativeRequestPending.pending() &&
+                p.physical.matches(p.image,p.physicalAddress,p.generation);};
             if(!a || !b || a==b || reinterpret_cast<uintptr_t>(renderer)!=p.renderer || generation!=p.generation || !valid())return false;
             const bool admitted=p.proof(*p.storage,renderer,generation,a,b);
             return admitted && valid();
