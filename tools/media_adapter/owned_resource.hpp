@@ -26260,11 +26260,61 @@ public:
 // Physical and image identity are NOT inferred from a factory Entry. Concrete
 // retirement admission must cover every outstanding frame/resource dependency.
 class TglOwnedNativeRequestRetention {
-    std::atomic<bool> pending_{false};
+    // Low bit=pending; upper bits distinguish even same-true publications.
+    std::atomic<uint64_t> state_{0};
+    std::atomic_flag gate_=ATOMIC_FLAG_INIT;
+    uint64_t coveredState_=0;
+    std::array<const void*,2> frames_{};
+    size_t count_=0;
+    TglNativeFrameOutputReceipt receipt_{};
+    template<class Frames> static bool validFrames(size_t count,const Frames& frames) noexcept {
+        if(!count || count>2 || count>frames.size())return false;
+        for(size_t i=0;i<count;++i) {
+            if(!frames[i])return false;
+            for(size_t j=0;j<i;++j)if(frames[i]==frames[j])return false;
+        }
+        return true;
+    }
 public:
-    void retain() noexcept {pending_.store(true,std::memory_order_release);}
-    bool pending() const noexcept {return pending_.load(std::memory_order_acquire);}
-    // No clear API: a native return or an empty frame pool proves no drain.
+    void retain() noexcept {
+        auto old=state_.load(std::memory_order_acquire);
+        for(;;) {
+            const auto next=old>=UINT64_MAX-2?UINT64_MAX:((old+2)|uint64_t{1});
+            if(state_.compare_exchange_weak(old,next,std::memory_order_acq_rel))return;
+        }
+    }
+    bool pending() const noexcept {return state_.load(std::memory_order_acquire)&1;}
+    // Caller is the exact live publication scope, never a receipt replay.
+    template<class Frames> bool publishCoverage(const TglNativeFrameOutputReceipt& receipt,
+        size_t count,const Frames& frames) noexcept {
+        if(!receipt.valid || !receipt.context || !receipt.event || !validFrames(count,frames) ||
+            gate_.test_and_set(std::memory_order_acquire))return false;
+        struct Reset {std::atomic_flag& gate;~Reset(){gate.clear(std::memory_order_release);}} reset{gate_};
+        const auto state=state_.load(std::memory_order_acquire);
+        if(!(state&1) || state==UINT64_MAX || coveredState_==state)return false;
+        std::array<const void*,2> candidate{};
+        for(size_t i=0;i<count;++i)candidate[i]=frames[i];
+        if(state_.load(std::memory_order_acquire)!=state)return false;
+        frames_=candidate;count_=count;receipt_=receipt;coveredState_=state;return true;
+    }
+    template<class Frames,class Live> bool acknowledgeCoverage(const TglNativeFrameOutputReceipt& receipt,
+        size_t count,const Frames& frames,Live live) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<bool,Live&>);
+        if constexpr(std::is_pointer_v<Live>)if(!live)return false;
+        if(!validFrames(count,frames) || gate_.test_and_set(std::memory_order_acquire))return false;
+        struct Reset {std::atomic_flag& gate;~Reset(){gate.clear(std::memory_order_release);}} reset{gate_};
+        auto state=state_.load(std::memory_order_acquire);
+        if(!(state&1) || state==UINT64_MAX || coveredState_!=state || count!=count_ || !receipt.valid ||
+            receipt.context!=receipt_.context || receipt.event!=receipt_.event || receipt.index!=receipt_.index)return false;
+        for(size_t i=0;i<count;++i) {
+            bool found=false;for(size_t j=0;j<count;++j)if(frames[i]==frames_[j])found=true;
+            if(!found)return false;
+        }
+        // A concurrent retain, including from inside proof, defeats this CAS.
+        // Live must enclose all-frame completion/history/parent scopes.
+        if(!live() || !state_.compare_exchange_strong(state,state&~uint64_t{1},std::memory_order_acq_rel))return false;
+        coveredState_=0;count_=0;frames_={};receipt_={};return true;
+    }
 };
 template<class Storage,class PhysicalLease,class Read,class Write,
     class TableAdmit,class ChildAdmit,class Native>
@@ -26342,6 +26392,20 @@ public:
     template<class OwnerLease> bool retainNativeRequest(const OwnerLease& lease) noexcept {
         if(!state_ || lease.get()!=this)return false;
         state_->nativeRequestPending.retain();return true;
+    }
+    template<class OwnerLease,class Scope>
+    int publishNativeRequestCoverage(const OwnerLease& lease,Scope& scope,
+        const TglNativeFrameOutputReceipt& receipt) noexcept {
+        uintptr_t creator=0;
+        if(!state_ || lease.get()!=this || !receipt.valid || !receipt.context ||
+            receipt.context>UINTPTR_MAX-0x12e8 || state_->frameBusy ||
+            !scope.matches(state_->image,state_->physical,state_->generation) ||
+            !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
+            !state_->read(receipt.context+0x12e0,&creator,8) || creator!=state_->object ||
+            !state_->boundRenderer() || !state_->boundPhysicalOs())return 5;
+        return scope.withPublishedRequestFrames(receipt,[&](size_t count,const auto& frames,const auto&) noexcept -> int {
+            return state_->nativeRequestPending.publishCoverage(receipt,count,frames)?0:5;
+        });
     }
     const TglOwnedPrimaryRendererTable& rendererLifetime() const noexcept {return state_->rendererTable;}
     //235b00 prepares context12e8 BEFORE VPHAL+10. Consume that exact late

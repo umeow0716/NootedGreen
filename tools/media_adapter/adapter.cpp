@@ -4200,6 +4200,7 @@ struct NativeLateLowerRequestDispatch {
     }
 };
 struct NativePreparedCodecRequestDispatch {
+    using Publish=int(*)(void*,NativePhysicalFrameScope&,const TglNativeFrameOutputReceipt&) noexcept;
     using Consume=TglOwnedVeboxCommandTransactionResult(*)(void*,NativePhysicalFrameScope&,
         uintptr_t,uintptr_t,uintptr_t) noexcept;
     struct Bootstrap {
@@ -4216,11 +4217,12 @@ struct NativePreparedCodecRequestDispatch {
         int status=5,nativeStatus=5;bool nativeInvoked=false,consumed=false;
     };
     static Result run(NativeRetainedContextFrameDispatch::Lease& lease,NativePhysicalFrameScope& physical,
-        uintptr_t input,uintptr_t output,void* context,Consume consume) noexcept {
+        uintptr_t input,uintptr_t output,void* context,Consume consume,Publish publish) noexcept {
         Result result;
         auto* owner=lease.get();
-        if(!owner || !input || !output || !context || !consume ||
-            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(consume),1))return result;
+        if(!owner || !input || !output || !context || !consume || !publish ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(consume),1) ||
+            !ownedExecutableMemory(reinterpret_cast<uintptr_t>(publish),1))return result;
         const uintptr_t codec=owner->context();uintptr_t creator=0;
         if(!codec || codec>UINTPTR_MAX-0x12f0 || !readMemory(codec+0x12e0,&creator,8) || !creator)return result;
         result.status=owner->dispatchScopedFrameWithReceipt(lease,physical,input,output,
@@ -4234,8 +4236,8 @@ struct NativePreparedCodecRequestDispatch {
                 result.nativeStatus=TglNativeContextFrameInvoker{}(entry,codec,input,output);
                 result.consumed=prepared.consumed();result.work=prepared.finish(result.nativeStatus);
                 return result.nativeStatus?result.nativeStatus:result.work.status;
-            },result.receipt,[](NativePhysicalFrameScope& active,const TglNativeFrameOutputReceipt& receipt) noexcept -> int {
-                return active.bindContextRootFrameOutput(receipt)?0:5;
+            },result.receipt,[&](NativePhysicalFrameScope& active,const TglNativeFrameOutputReceipt& receipt) noexcept -> int {
+                return active.bindContextRootFrameOutput(receipt)?publish(context,active,receipt):5;
             });
         return result;
     }
@@ -5130,6 +5132,19 @@ struct NativeCreatorPreparation {
             return self.work;
         }
     };
+    static int publishLateRequestCoverage(void* raw,NativePhysicalFrameScope& active,
+        const TglNativeFrameOutputReceipt& receipt) noexcept {
+        auto& self=*static_cast<LateRequest*>(raw);
+        if(&active!=&self.physical || !self.consumed || self.running || !self.work.nativeEntered ||
+            self.work.status || receipt.context!=self.context ||
+            !active.matches(self.image,self.address,self.generation))return 5;
+        RuntimeView parent;
+        if(!acquireRuntimeView(active,self.image,self.address,self.generation,self.creator,self.renderer,parent))return 5;
+        return parent.withParentLease([&](const NativeVphalFramePin& pin,const TglNativeVphalMhwView& view) noexcept -> int {
+            if(view.parent!=self.creator || view.renderer.renderer!=self.renderer || !pin.get())return 5;
+            return pin.get()->publishNativeRequestCoverage(pin,active,receipt);
+        });
+    }
     struct LateDispatchResult {
         NativePreparedCodecRequestDispatch::Result request{};
         std::array<NativePhysicalRegistry::FrameTicket,2> frames{};
@@ -5148,7 +5163,8 @@ struct NativeCreatorPreparation {
             !readMemory(creator+0x68,&renderer,8) || !renderer ||
             !passBackendFor(physical,image,address,generation,creator,renderer))return result;
         LateRequest state{physical,image,address,context,creator,renderer,generation,decompression,argument};
-        result.request=NativePreparedCodecRequestDispatch::run(lease,physical,input,output,&state,&LateRequest::consume);
+        result.request=NativePreparedCodecRequestDispatch::run(lease,physical,input,output,&state,
+            &LateRequest::consume,&publishLateRequestCoverage);
         result.frames=state.frames;result.frameCount=state.frameCount;
         return result; // Pending native work remains retained; never infer retirement here.
     }

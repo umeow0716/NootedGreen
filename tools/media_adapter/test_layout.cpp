@@ -18139,6 +18139,35 @@ int main() {
         assert(retention.pending());
     }
     {
+        TglOwnedNativeRequestRetention request;
+        int a=0,b=0,c=0;
+        const std::array<const void*,2> pair{&a,&b},foreign{&a,&c},duplicate{&a,&a},reverse{&b,&a};
+        const TglNativeFrameOutputReceipt receipt{1,2,3,true};
+        unsigned proofs=0;auto live=[&]() noexcept {++proofs;return true;}; // CPU fixture, not GPU proof.
+        assert(!request.publishCoverage(receipt,2,pair));
+        request.retain();
+        assert(!request.acknowledgeCoverage(receipt,2,pair,live) && !proofs);
+        assert(!request.publishCoverage(receipt,0,pair));
+        assert(!request.publishCoverage(receipt,2,duplicate));
+        assert(request.publishCoverage(receipt,2,pair));
+        assert(!request.publishCoverage(receipt,2,pair));
+        assert(!request.acknowledgeCoverage(receipt,1,pair,live));
+        assert(!request.acknowledgeCoverage(receipt,2,foreign,live));
+        auto wrong=receipt;++wrong.index;
+        assert(!request.acknowledgeCoverage(wrong,2,pair,live) && !proofs);
+        assert(!request.acknowledgeCoverage(receipt,2,pair,[]() noexcept {return false;}));
+        assert(request.pending());
+        assert(!request.acknowledgeCoverage(receipt,2,pair,[&]() noexcept {request.retain();return true;}));
+        assert(request.pending() && !request.acknowledgeCoverage(receipt,2,pair,live));
+        assert(request.publishCoverage(receipt,2,pair));
+        assert(request.acknowledgeCoverage(receipt,2,reverse,[&]() noexcept {
+            assert(!request.acknowledgeCoverage(receipt,2,pair,live));return true;
+        }));
+        assert(!request.pending() && !request.acknowledgeCoverage(receipt,2,pair,live) && !proofs);
+        request.retain(); // Old coverage cannot certify the next request.
+        assert(!request.acknowledgeCoverage(receipt,2,pair,live) && request.pending());
+    }
+    {
         TglOwnedVeboxFrameRetention aggregate;
         using Link=TglOwnedVeboxFrameRetention::AggregateLink;
         TglOwnedVeboxFrameRetention first(Link{},aggregate),second(Link{},aggregate),nested(Link{},second);
