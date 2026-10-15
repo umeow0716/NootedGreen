@@ -20865,6 +20865,7 @@ public:
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
         return storage()==&surface && owner_.hasSurfaceLease(surface);
     }
+    bool privateLinksQuiescent() const noexcept {return !busy_ && storage();}
     // Bridge retained frontend CF/context pins to native helpers requiring the
     // ORIGINAL owner type. No owner pointer is returned or ownership moved.
     template<class Use> int withOriginalOwner(Use use) noexcept {
@@ -21013,6 +21014,9 @@ public:
         }
         return true;
     }
+    // valid() deliberately remains usable by native per-pass callbacks while
+    // a deferred mode0 reservation is pending. Retirement must be stricter.
+    bool privateLinksQuiescent() const noexcept {return !busy_ && !reconciling_ && valid();}
     // Explicit native mode0 reconnect only: qualify the COMPLETE expected
     // C0 mutation before entering, then commit link stamps atomically. Counts,
     // C8, resource identity and retained membership must remain unchanged.
@@ -28728,6 +28732,12 @@ public:
     bool surfacesReady() const noexcept {return ready_ && parent_.get() && source_.storage() && target_.storage();}
     bool requiresRetention() const noexcept {return retained_;}
     bool requiresHistoryInspection() const noexcept {return historyPublished_;}
+    // Necessary CPU-link condition only. GPU/history/parent lifetime proofs
+    // and actual native detach remain separate; this does NOT grant release.
+    bool privateLinksQuiescent() const noexcept {
+        return !busy_ && ready_ && parent_.get() && parameters_.canRelease() &&
+            source_.privateLinksQuiescent() && target_.privateLinksQuiescent();
+    }
     // Inspection is permitted for pending frames, but only const CPU/graph/
     // target views escape into this synchronous callback. No new Render,
     // retention clear or retirement certificate is manufactured here.
@@ -28877,6 +28887,7 @@ public:
     bool surfacesReady() const noexcept {return frontend_.surfacesReady();}
     bool requiresRetention() const noexcept {return frontend_.requiresRetention();}
     bool requiresHistoryInspection() const noexcept {return frontend_.requiresHistoryInspection();}
+    bool privateLinksQuiescent() const noexcept {return frontend_.privateLinksQuiescent();}
     template<class Use> TglOwnedVeboxCommandTransactionResult withCpuFrontend(Use use) noexcept {
         return frontend_.withCpuFrontend(use);
     }

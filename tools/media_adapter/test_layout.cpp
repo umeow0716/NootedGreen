@@ -19748,20 +19748,21 @@ int main() {
                     assert(!graph.finishDeferredForwardLinks(none) && !graph.cancelDeferredForwardLinks(none));
                     assert(graph.beginDeferredForwardLinks(changes,1,token));
                     const auto oldToken=token;
-                    assert(graph.valid());
+                    assert(graph.valid() && !graph.privateLinksQuiescent());
                     assert(!graph.beginDeferredForwardLinks(changes,1,none));
                     assert(graph.withSelectedOriginalOwners(root,older,[&](auto&,auto&) noexcept -> int {
+                        assert(!graph.privateLinksQuiescent());
                         assert(!graph.cancelDeferredForwardLinks(token));return 0;
                     })==0);
                     std::memcpy(root.prefix.data()+0xc0,&p,8); // Actual late native mode0 write.
                     assert(!graph.valid() && !graph.cancelDeferredForwardLinks(token));
-                    assert(graph.finishDeferredForwardLinks(token) && graph.valid() && refs==heldRefs);
+                    assert(graph.finishDeferredForwardLinks(token) && graph.valid() && graph.privateLinksQuiescent() && refs==heldRefs);
                     assert(!graph.finishDeferredForwardLinks(token));
                     changes[0]={&root,o};
                     assert(graph.beginDeferredForwardLinks(changes,1,token));
                     assert(!graph.finishDeferredForwardLinks(oldToken) && !graph.cancelDeferredForwardLinks(oldToken));
                     assert(!graph.finishDeferredForwardLinks(token) && graph.valid()); // Expected mutation absent.
-                    assert(graph.cancelDeferredForwardLinks(token) && graph.valid());
+                    assert(graph.cancelDeferredForwardLinks(token) && graph.valid() && graph.privateLinksQuiescent());
                     assert(graph.beginDeferredForwardLinks(changes,1,token));
                     std::memcpy(root.prefix.data()+0xc0,&o,8);
                     const uintptr_t unexpected=0;std::memcpy(root.prefix.data()+0xc8,&unexpected,8);
@@ -28223,7 +28224,7 @@ int main() {
                                         TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf,FrameDnBackend,decltype(access)>;
                                     Borrowed frontend(std::move(pin),reinterpret_cast<uintptr_t>(&source),originalResolve,
                                         originalTarget,Cf{refs},11,12,frameDn,access);
-                                    assert(!frontend.surfacesReady());
+                                    assert(!frontend.surfacesReady() && !frontend.privateLinksQuiescent());
                                     if(outcome==3) {
                                         cpu.backing().retention().observe(TglOwnedVeboxCommandTransactionResult{31,0,true,false,false});
                                         assert(!frontend.bindCpu([](auto&&...) noexcept {assert(false);return true;}));
@@ -28231,6 +28232,7 @@ int main() {
                                         continue; // Pending belongs to another frame, not this refused frontend.
                                     }
                                     assert(frontend.bindCpu([](auto&&...) noexcept {return true;}));
+                                    assert(frontend.privateLinksQuiescent());
                                     const auto result=frontend.withCpuFrontend([&](auto&...) noexcept {
                                         if(outcome==0)return TglOwnedVeboxCommandTransactionResult{31,0,true,false,false};
                                         if(outcome==1)return TglOwnedVeboxCommandTransactionResult{0,0,false,true,false};
@@ -28239,11 +28241,13 @@ int main() {
                                     });
                                     assert(result.status==(outcome==1?5:31) && frontend.requiresRetention() && cpu.backing().retention()());
                                     assert(frontend.surfacesReady() && originalSource.borrowed && originalTarget.borrowed);
+                                    assert(frontend.privateLinksQuiescent() && frontend.requiresRetention()); // Not GPU release permission.
                                     assert(frontend.withCpuFrontend([](auto&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
                                         assert(false);return {};
                                     }).status==5 && accessCalls==2);
                                     assert(frontend.withRetainedInspection([&](const auto& inspected,const auto&,
                                         const auto& graph,const auto& destination,bool history) noexcept -> int {
+                                        assert(!frontend.privateLinksQuiescent());
                                         assert(&inspected==&cpu && graph.storage()==&source && destination.storage()==&target);
                                         assert(history==(outcome==4));
                                         assert(frontend.withRetainedInspection([](const auto&...) noexcept -> int {

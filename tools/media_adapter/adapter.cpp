@@ -2895,6 +2895,13 @@ struct NativeRendererHistoryInspection {
         return result;
     }
 };
+struct NativePrivateFrameRetirementInspection {
+    static TglNativeHistoryCacheInspection run(NativeBorrowedFrontend& frontend) noexcept {
+        if(!frontend.privateLinksQuiescent())return {};
+        const auto history=NativeRendererHistoryInspection::run(frontend);
+        return frontend.privateLinksQuiescent()?history:TglNativeHistoryCacheInspection{};
+    }
+};
 using NativeContextRendererFrame=TglNativeContextRendererFrameStorage<NativeCodecBackend::Registry,
     NativeBorrowedFrontend>;
 struct NativeFrameHistoryRetirement {
@@ -2905,14 +2912,14 @@ struct NativeFrameHistoryRetirement {
         if(!gpu || !prepare || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(gpu),1) ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(prepare),1))return 5;
         return frame.prepareRetirement(gpu,[](NativeBorrowedFrontend& frontend) noexcept {
-            return NativeRendererHistoryInspection::run(frontend);
+            return NativePrivateFrameRetirementInspection::run(frontend);
         },prepare);
     }
     static int fault(NativeContextRendererFrame& frame,Quiescent quiescent,Prepare prepare) noexcept {
         if(!quiescent || !prepare || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(quiescent),1) ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(prepare),1))return 5;
         return frame.prepareQuiescentRetirement(quiescent,[](NativeBorrowedFrontend& frontend) noexcept {
-            return NativeRendererHistoryInspection::run(frontend);
+            return NativePrivateFrameRetirementInspection::run(frontend);
         },prepare);
     }
 };
@@ -4447,7 +4454,7 @@ struct NativePhysicalBackend {
             return callbacks.retireTaskCompletedFrame(ticket,address,frame,fence,&readMemory,
                 NativeRetainedFenceOwnerAdmission{native.image,address},
                 NativeRetainedTaskCompletionQuery{native.image,library.resourceCreate},
-                [](NativeBorrowedFrontend& frontend) noexcept {return NativeRendererHistoryInspection::run(frontend);},prepare);
+                [](NativeBorrowedFrontend& frontend) noexcept {return NativePrivateFrameRetirementInspection::run(frontend);},prepare);
         });
     }
     using RemovedBatch=TglNativeRemovedContextBatch<16>;
