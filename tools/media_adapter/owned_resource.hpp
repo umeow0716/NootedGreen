@@ -1839,6 +1839,26 @@ public:
 // This is a borrowed graph, NOT a retain operation. Caller must hold the
 // context/physical/image generation lease throughout resolve and consumption.
 // Do not confuse factory-table metadata0 or physical entries-array78 with OS.
+// Native OS interface and codec OS data are DISTINCT allocations. 63720
+// selects the embedded physical wrapper through interface[0] and DWORD+8.
+// The enclosing caller retains the native owners; this is only a snapshot.
+struct TglNativeOsInterfaceTopology {
+    uintptr_t interface=0,data=0,embeddedWrapper=0;
+    uint32_t index=0,count=0;
+    template<class Read> bool resolve(uintptr_t candidate,Read read) noexcept {
+        *this={};TglNativeOsInterfaceTopology value;
+        if(!candidate || candidate>UINTPTR_MAX-12 ||
+           !read(candidate,&value.data,8) || !value.data ||
+           !read(candidate+8,&value.index,4) ||
+           !read(value.data,&value.count,4) || value.index>=value.count) return false;
+        const uint64_t offset=8+uint64_t(value.index)*0x15c0;
+        if(offset>UINTPTR_MAX-8 || value.data>UINTPTR_MAX-8-offset ||
+           !read(value.data+uintptr_t(offset),&value.embeddedWrapper,8) ||
+           !value.embeddedWrapper) return false;
+        value.interface=candidate;*this=value;return true;
+    }
+};
+
 struct TglNativeVeboxParentView {
     uintptr_t context=0,physical=0,os=0,wrapper=0;
     template<class Read,class Admit>
@@ -2492,11 +2512,12 @@ bool tglAdmitNativeCreatorCall(uintptr_t image,uintptr_t physical,uintptr_t crea
         noexcept(admit(uintptr_t{},size_t{})));
     if(!image || image>UINTPTR_MAX-0x75bb58 || !physical || physical>UINTPTR_MAX-0x58 ||
         !creator || (creator&7) || creator>UINTPTR_MAX-0x70 || !admit(creator,0x70) || !admit(physical,0x58))return false;
-    uintptr_t table=0,os=0,renderHal=0,wrapper=0,embedded=0;
+    uintptr_t table=0,os=0,renderHal=0,wrapper=0;
+    TglNativeOsInterfaceTopology topology;
     if(!read(creator,&table,8) || table!=image+0x75bb58 || !read(creator+0x40,&os,8) ||
         !os || os>UINTPTR_MAX-0x10 || !admit(os,0x10) || !read(creator+0x48,&renderHal,8) || !renderHal ||
         !read(physical+0x50,&wrapper,8) || !wrapper || wrapper>UINTPTR_MAX-0x48 ||
-        !read(os+8,&embedded,8) || embedded!=wrapper+0x48)return false;
+        !topology.resolve(os,read) || topology.embeddedWrapper!=wrapper+0x48)return false;
     uintptr_t afterTable=0,afterOs=0,afterRenderHal=0,afterWrapper=0;
     return read(creator,&afterTable,8) && afterTable==table && read(creator+0x40,&afterOs,8) && afterOs==os &&
         read(creator+0x48,&afterRenderHal,8) && afterRenderHal==renderHal &&
@@ -7152,8 +7173,11 @@ struct TglNativeResourceBinding {
         uintptr_t borrowedOs=0;
         if(!parent.resolve(nativeContext,read,admit) || !renderHal ||
            renderHal>UINTPTR_MAX-8 || !admit(renderHal,size_t{8}) ||
-           !read(renderHal,&borrowedOs,8) || borrowedOs!=parent.os) return false;
-        return resolve(parent.os,image,read,qualify,executable);
+           !read(renderHal,&borrowedOs,8)) return false;
+        TglNativeOsInterfaceTopology topology;
+        if(!topology.resolve(borrowedOs,read) || topology.data!=parent.os ||
+           topology.embeddedWrapper!=parent.wrapper+0x48) return false;
+        return resolve(borrowedOs,image,read,qualify,executable);
     }
     // 132ec0..132ed6: renderer stores RenderHal at +2cc0 and borrows
     // RenderHal[0] as OS at +2cc8. Never acquire ownership of either object.
@@ -25828,9 +25852,10 @@ class TglOwnedCreatorConstructionLease {
         template<class Read> bool matchesNativeParent(const TglNativeVphalMhwView& view,Read read) const noexcept {
             if(!live() || view.parent!=creator || view.renderer.creator!=creator || view.renderer.image!=image ||
                 !view.os || view.os>UINTPTR_MAX-0x10 || physical>UINTPTR_MAX-0x58)return false;
-            uintptr_t wrapper=0,embedded=0;
+            uintptr_t wrapper=0;
+            TglNativeOsInterfaceTopology topology;
             return read(physical+0x50,&wrapper,8) && wrapper && wrapper<=UINTPTR_MAX-0x50 &&
-                read(view.os+8,&embedded,8) && embedded==wrapper+0x48 && live();
+                topology.resolve(view.os,read) && topology.embeddedWrapper==wrapper+0x48 && live();
         }
     };
     std::shared_ptr<State> state_;
@@ -26590,11 +26615,12 @@ class TglOwnedVphalRendererOwner {
             return object<=UINTPTR_MAX-0x70 && read(object+0x68,&actual,sizeof(actual)) && actual==renderer;
         }
         bool boundPhysicalOs() noexcept {
-            uintptr_t os=0,wrapper=0,embedded=0;
+            uintptr_t os=0,wrapper=0;
+            TglNativeOsInterfaceTopology topology;
             return object<=UINTPTR_MAX-0x70 && physical<=UINTPTR_MAX-0x58 &&
                 read(object+0x40,&os,8) && os && os<=UINTPTR_MAX-0x10 &&
                 read(physical+0x50,&wrapper,8) && wrapper && wrapper<=UINTPTR_MAX-0x50 &&
-                read(os+0x8,&embedded,8) && embedded==wrapper+0x48;
+                topology.resolve(os,read) && topology.embeddedWrapper==wrapper+0x48;
         }
         int prepare() noexcept {
             if(frameBusy || nativeRequestPending.pending() ||
@@ -28982,11 +29008,14 @@ public:
         uint32_t channel,uintptr_t performance) {
         TglNativeVeboxParentView parent;
         uintptr_t borrowedOs=0;
+        TglNativeOsInterfaceTopology topology;
         if(!physical || !parent.resolve(nativeContext,read,admit) ||
-           parent.physical!=physical || parent.os!=resources_.context ||
+           parent.physical!=physical ||
            !renderHal || renderHal>UINTPTR_MAX-8 || !admit(renderHal,size_t{8}) ||
-           !read(renderHal,&borrowedOs,8) || borrowedOs!=parent.os) return 5;
-        return initializeVp(binding,parent.os,renderHal,mhw,read,channel,performance);
+           !read(renderHal,&borrowedOs,8) || borrowedOs!=resources_.context ||
+           !topology.resolve(borrowedOs,read) || topology.data!=parent.os ||
+           topology.embeddedWrapper!=parent.wrapper+0x48) return 5;
+        return initializeVp(binding,borrowedOs,renderHal,mhw,read,channel,performance);
     }
     template<class Binding,class Read>
     int initializeVp(const Binding& binding,uintptr_t os,uintptr_t renderHal,

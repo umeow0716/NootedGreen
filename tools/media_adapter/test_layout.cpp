@@ -12264,7 +12264,8 @@ static void testResourceBinding() {
     identity = false; assert(!borrowed()); empty();
     identity=true;
     constexpr uintptr_t nativeContext=0x8000,physical=0xa000,wrapper=0xb000;
-    uintptr_t parentOs=os,embedded=wrapper+0x48;
+    uintptr_t parentOs=0xc000,embedded=wrapper+0x48;
+    uint32_t osIndex=0,osCount=1;
     auto graphRead=[&](uintptr_t address,void* output,size_t size) {
         if(!readable) return false;
         if(size==8) {
@@ -12272,15 +12273,20 @@ static void testResourceBinding() {
             if(address==nativeContext+0x128) value=&physical;
             if(address==nativeContext+0x12f0) value=&parentOs;
             if(address==physical+0x50) value=&wrapper;
-            if(address==os+8) value=&embedded;
+            if(address==os) value=&parentOs;
+            if(address==parentOs+8 || address==parentOs+8+0x15c0) value=&embedded;
             if(value) {std::memcpy(output,value,8);return true;}
+        }
+        if(size==4 && (address==os+8 || address==parentOs)) {
+            const uint32_t value=address==os+8?osIndex:osCount;
+            std::memcpy(output,&value,4);return true;
         }
         return read(address,output,size);
     };
     bool graphAdmitted=true;
     auto admitGraph=[&](uintptr_t address,size_t size) {
         return graphAdmitted && ((address==nativeContext && size==0x12f8) ||
-            (address==physical && size==0x58) || (address==os && size==0x10) ||
+            (address==physical && size==0x58) || (address==parentOs && size==0x10) ||
             (address==wrapper && size==0x50) || (address==renderHal && size==8));
     };
     auto fromContext=[&] {
@@ -12288,6 +12294,11 @@ static void testResourceBinding() {
             admitGraph,qualify,executable);
     };
     assert(fromContext() && binding.context==os && binding.allocate==allocate);
+    osIndex=1;assert(!fromContext());empty();osIndex=0;
+    osCount=0;assert(!fromContext());empty();osCount=1;
+    osCount=2;osIndex=1;
+    assert(fromContext() && binding.context==os); // DWORD index, not a pointer or forced zero.
+    osIndex=0;osCount=1;
     borrowedOs=os+8;assert(!fromContext());empty();borrowedOs=os;
     embedded=wrapper;assert(!fromContext());empty();embedded=wrapper+0x48;
     graphAdmitted=false;assert(!fromContext());empty();graphAdmitted=true;
@@ -16338,12 +16349,17 @@ static void testRetainedVeboxFrames() {
         for(unsigned scenario=0;scenario<7;++scenario) {
             unsigned osReads=0;
             auto prefixRead=[&](uintptr_t at,void* out,size_t n) noexcept {
+                if(n==4 && (at==0x13008 || at==0x16000)) {
+                    const uint32_t value=at==0x13008?0:1;
+                    std::memcpy(out,&value,4);return true;
+                }
                 uintptr_t value=0;if(n!=8)return false;
                 if(at==0x11000)value=image+0x75bb58+(scenario==1?8:0);
                 else if(at==0x11040) {++osReads;value=scenario==4?0:scenario==6 && osReads>1?0x13008:0x13000;}
                 else if(at==0x11048)value=scenario==3?0:0x15000;
                 else if(at==0x12050)value=0x14000;
-                else if(at==0x13008)value=0x14000+(scenario==2?0x50:0x48);
+                else if(at==0x13000)value=0x16000;
+                else if(at==0x16008)value=0x14000+(scenario==2?0x50:0x48);
                 else return false; // Renderer68/children do not exist yet.
                 std::memcpy(out,&value,8);return true;
             };
@@ -21287,9 +21303,16 @@ int main() {
                                 if(!rendererReadable) return false;
                                 std::memcpy(bytes,&actualRenderer,8);return true;
                             }
+                            if(size==8 && address==0x94000) {
+                                const uintptr_t data=0x93000;std::memcpy(bytes,&data,8);return true;
+                            }
+                            if(size==4 && (address==0x94008 || address==0x93000)) {
+                                const uint32_t value=address==0x94008?0:1;
+                                std::memcpy(bytes,&value,4);return true;
+                            }
                             if(size==8 && (address==creatorAddress+0x40 || address==0x90050 ||
                                 address==0x93008)) {
-                                const uintptr_t value=address==creatorAddress+0x40?0x93000:
+                                const uintptr_t value=address==creatorAddress+0x40?0x94000:
                                     address==0x90050?0x91000:embeddedOs;
                                 std::memcpy(bytes,&value,8);return true;
                             }
@@ -24354,12 +24377,17 @@ int main() {
                     static uintptr_t parentOsFixture=0;
                     parentOsFixture=resources.context;
                     auto parentRead=+[](uintptr_t address,void* output,size_t size) noexcept {
+                        if(size==4 && (address==parentOsFixture+8 || address==0x40000)) {
+                            const uint32_t scalar=address==0x40000?1:0;
+                            std::memcpy(output,&scalar,4);return true;
+                        }
                         uintptr_t value=0;
                         if(size!=8) return false;
                         if(address==0x10000+0x128) value=0x20000;
-                        else if(address==0x10000+0x12f0 || address==0x8000) value=parentOsFixture;
+                        else if(address==0x10000+0x12f0 || address==parentOsFixture) value=0x40000;
+                        else if(address==0x8000) value=parentOsFixture;
                         else if(address==0x20000+0x50) value=0x30000;
-                        else if(address==parentOsFixture+8) value=0x30000+0x48;
+                        else if(address==0x40008) value=0x30000+0x48;
                         else return false;
                         std::memcpy(output,&value,8);return true;
                     };
@@ -24367,7 +24395,7 @@ int main() {
                         return (address==0x10000 && size==0x12f8) ||
                             (address==0x20000 && size==0x58) ||
                             (address==0x30000 && size==0x50) ||
-                            (address==resources.context && size==0x10) ||
+                            (address==0x40000 && size==0x10) ||
                             (address==0x8000 && size==8);
                     };
                     assert(frame.initializeVpFromContext(binding,0x10000,0x20001,0x8000,

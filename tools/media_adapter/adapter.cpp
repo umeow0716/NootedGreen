@@ -2802,11 +2802,13 @@ struct NativeRetainedFenceOwnerAdmission {
         const int status=frontend.withRetainedInspection([&](const auto& cpu,const TglNativeCreatedVeboxRendererView& pinned,
             const auto&,const auto&,bool) noexcept -> int {
             TglNativeVeboxParentView parent;uintptr_t creator=0,os=0,currentContext=0,currentMapping=0;
+            TglNativeOsInterfaceTopology topology;
             uint64_t currentBytes=0;uint32_t count=0;
             if(!cpu.completeRetentionMembership() || pinned.image!=image || !pinned.creator || !pinned.matchesRendererTable(&readMemory) ||
                 !parent.resolve(codec,&readMemory,NativeDataAdmission{}) || parent.physical!=physical || parent.wrapper!=wrapper ||
                 !readMemory(codec+0x12e0,&creator,8) || creator!=pinned.creator ||
-                !readMemory(creator+0x40,&os,8) || os!=parent.os ||
+                !readMemory(creator+0x40,&os,8) || !topology.resolve(os,&readMemory) ||
+                topology.data!=parent.os || topology.embeddedWrapper!=wrapper+0x48 ||
                 !readMemory(wrapper+0x10,&currentContext,8) || currentContext!=framework ||
                 !readMemory(wrapper+0x20,&currentMapping,8) || currentMapping!=mapping ||
                 !readMemory(wrapper+0x38,&currentBytes,8) || currentBytes!=bytes ||
