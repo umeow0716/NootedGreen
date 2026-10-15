@@ -26987,6 +26987,32 @@ bool tglDispatchOwnedVphalDestruction(TglOwnedVphalLifetimeTable& table,
     },native);
 }
 
+// Exact12ca2 write footprint, NOT hardware format support or a value producer.
+constexpr uint32_t tglNativeFormatPlaneCount(uint32_t format) noexcept {
+    switch(format) {
+        case 0x42475241:case 0x61797576:case 0x32767579:case 0x79757673:case 0x79757630:case 0x72617762:return 1;
+        case 0x4e563132:case 0x78343230:case 0x78663230:return 2;
+        case 0x72676270:case 0x79757634:case 0x79757631:case 0x79763136:return 3;
+        default:return 0; // Native default writes planeCount0, not nested arrays.
+    }
+}
+inline bool tglNativeFormatArithmeticSafe(uint32_t format,uint32_t width,uint32_t height,uint32_t alignment) noexcept {
+    constexpr uint64_t maximum=UINT32_MAX;
+    if(!tglNativeFormatPlaneCount(format) || format==0x72617762)return true;
+    if(!alignment)return false;
+    if(format==0x4e563132 || format==0x78343230 || format==0x78663230) {
+        if(width==UINT32_MAX || height==UINT32_MAX)return false; // Native ceil-half additions.
+        const uint64_t rounded=((uint64_t(width)+alignment-1)/alignment)*alignment;
+        if(format==0x4e563132)return rounded<=maximum;
+        return uint64_t(alignment)*2<=maximum && rounded*2<=maximum;
+    }
+    const uint32_t multiplier=(format==0x42475241 || format==0x61797576)?4:
+        (format==0x32767579 || format==0x79757673)?2:1;
+    if(uint64_t(width)*multiplier+alignment-1>maximum)return false;
+    const bool roundedHeight=format==0x61797576 || format==0x72676270 || format==0x79757634 || format==0x79763136;
+    return !roundedHeight || uint64_t(height)+63<=maximum;
+}
+
 class TglNativeFormatLookupTransaction {
     bool attempted_=false;
 public:

@@ -16155,6 +16155,33 @@ static void testRetainedVeboxFrames() {
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         {
+            for(uint32_t format:{0x42475241U,0x61797576U,0x32767579U,0x79757673U,0x79757630U,0x72617762U})
+                assert(tglNativeFormatPlaneCount(format)==1);
+            for(uint32_t format:{0x4e563132U,0x78343230U,0x78663230U})assert(tglNativeFormatPlaneCount(format)==2);
+            for(uint32_t format:{0x72676270U,0x79757634U,0x79757631U,0x79763136U})assert(tglNativeFormatPlaneCount(format)==3);
+            assert(!tglNativeFormatPlaneCount(0) && tglNativeFormatArithmeticSafe(0,UINT32_MAX,UINT32_MAX,0));
+            assert(tglNativeFormatArithmeticSafe(0x4e563132,1920,1080,128));
+            assert(tglNativeFormatArithmeticSafe(0x4e563132,0,0,128));
+            assert(!tglNativeFormatArithmeticSafe(0x4e563132,1920,1080,0));
+            assert(!tglNativeFormatArithmeticSafe(0x4e563132,UINT32_MAX,1080,128));
+            assert(!tglNativeFormatArithmeticSafe(0x4e563132,1920,UINT32_MAX,128));
+            assert(!tglNativeFormatArithmeticSafe(0x4e563132,UINT32_MAX-1,1080,128));
+            assert(tglNativeFormatArithmeticSafe(0x4e563132,1,1,0x80000000U)); // DWORD arithmetic only, no invented dimension cap.
+            for(uint32_t format:{0x78343230U,0x78663230U}) {
+                assert(tglNativeFormatArithmeticSafe(format,1920,1080,128));
+                assert(!tglNativeFormatArithmeticSafe(format,0x80000000U,1080,128));
+                assert(!tglNativeFormatArithmeticSafe(format,0,0,0x80000000U));
+            }
+            assert(tglNativeFormatArithmeticSafe(0x42475241,UINT32_MAX/4,UINT32_MAX,1));
+            assert(!tglNativeFormatArithmeticSafe(0x42475241,UINT32_MAX/4+1,1080,1));
+            assert(!tglNativeFormatArithmeticSafe(0x32767579,UINT32_MAX/2+1,1080,1));
+            for(uint32_t format:{0x61797576U,0x72676270U,0x79757634U,0x79763136U}) {
+                assert(tglNativeFormatArithmeticSafe(format,1920,UINT32_MAX-63,128));
+                assert(!tglNativeFormatArithmeticSafe(format,1920,UINT32_MAX-62,128));
+            }
+            assert(tglNativeFormatArithmeticSafe(0x72617762,UINT32_MAX,UINT32_MAX,0)); // rawb uses native VM page size, not this alignment.
+        }
+        {
             constexpr uintptr_t input=0x1000;
             std::array<uint8_t,0x34> caller{};for(size_t i=0;i<caller.size();++i)caller[i]=uint8_t(i);
             const auto original=caller;
