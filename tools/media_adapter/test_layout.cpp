@@ -19546,7 +19546,7 @@ int main() {
         std::array<uintptr_t,15> words{};
         words[1]=image+0x75bc00;
         for(size_t i=0;i<Table::slotCount;++i) words[i+2]=image+Table::offsets[i];
-        words[14]=image+0x811e00;
+        words[14]=16; // exact unrelocated libc++abi RTTI bind addend
         auto read=[&](uintptr_t at,void* out,size_t n) noexcept {
             if(at<image+0x75bb90 || n>sizeof(words) ||
                at-(image+0x75bb90)>sizeof(words)-n) return false;
@@ -19558,6 +19558,24 @@ int main() {
         assert(Table::capture(image,read,executable,output));
         assert(output[Table::temporaryPassSlot]==image+0x1b1ed0);
         const auto saved=output;
+        constexpr uintptr_t importedRtti=0x50000010;
+        struct LoadedRttiAdmission {
+            uintptr_t image,rtti;
+            bool operator()(uintptr_t p) const noexcept {return p==image;}
+            uintptr_t primaryRendererRtti() const noexcept {return rtti;}
+        };
+        words[14]=importedRtti;
+        assert(Table::capture(image,read,executable,output,importedRtti));
+        assert(!Table::capture(image,read,executable,output,0));
+        assert(!Table::capture(image,read,executable,output,importedRtti+8));
+        TglOwnedPrimaryRendererTable loaded;
+        assert(loaded.build(image,0x20000000,read,LoadedRttiAdmission{image,importedRtti},executable,
+            [](uintptr_t p,size_t) noexcept {return p==0x20000000;}));
+        const auto* loadedWords=reinterpret_cast<const uintptr_t*>(loaded.addressPoint());
+        assert(loadedWords[-1]==image+0x75bc00 && loadedWords[10]==0x20000000);
+        words[14]=image+0x811e00; // previous model was not a dyld import
+        assert(!Table::capture(image,read,executable,output,importedRtti));
+        words[14]=16;
         words[12]++;assert(!Table::capture(image,read,executable,output));
         assert(output==saved);words[12]--;
         words[14]++;assert(!Table::capture(image,read,executable,output));
@@ -21833,7 +21851,7 @@ int main() {
                     {
                         TglOwnedPrimaryRendererTable rendererOwner,foreignOwner;
                         std::array<uintptr_t,15> exact{};
-                        exact[1]=image+0x75bc00;exact[14]=image+0x811e00;
+                        exact[1]=image+0x75bc00;exact[14]=16;
                         for(size_t i=0;i<12;++i) exact[i+2]=image+TglNativePrimaryRendererTable::offsets[i];
                         auto mainRead=[&](uintptr_t at,void* out,size_t n) noexcept {
                             const auto start=image+0x75bb90;
@@ -21984,7 +22002,7 @@ int main() {
                         const TglOwnedVphalLifetimeTable* activeOwnerTable=nullptr;
                         const TglOwnedPrimaryRendererTable* activeRendererTable=nullptr;
                         std::array<uintptr_t,15> rendererWords{};
-                        rendererWords[1]=image+0x75bc00;rendererWords[14]=image+0x811e00;
+                        rendererWords[1]=image+0x75bc00;rendererWords[14]=16;
                         for(size_t i=0;i<12;++i)rendererWords[i+2]=image+TglNativePrimaryRendererTable::offsets[i];
                         auto ownerRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
                             if(address==image+0x1e6737 && size==5) {

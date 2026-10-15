@@ -99,6 +99,18 @@ struct NativeTglImageAdmission {
             !executableMemory(reinterpret_cast<uintptr_t>(entry),1))return 0;
         return reinterpret_cast<uintptr_t>(entry);
     }
+    uintptr_t primaryRendererRtti() const noexcept {
+        constexpr const char* symbol="_ZTVN10__cxxabiv120__si_class_type_infoE";
+        void* entry=dlsym(RTLD_DEFAULT,symbol);
+        Dl_info info{};
+        const uintptr_t base=reinterpret_cast<uintptr_t>(entry);
+        uintptr_t readable=0;
+        if(!entry || base>UINTPTR_MAX-24 || !dladdr(entry,&info) || info.dli_saddr!=entry ||
+            !info.dli_sname || !info.dli_fname || std::strcmp(info.dli_sname,symbol) ||
+            std::strcmp(info.dli_fname,"/usr/lib/libc++abi.dylib") ||
+            !readMemory(base+16,&readable,sizeof(readable)))return 0;
+        return base+16;
+    }
 };
 using NativeCodecOwner=TglOwnedNativeCodecContextOwner<TglOwnedPhysicalDependencyLease,
     decltype(&readMemory),NativeDataPointerWriter,NativeDataAdmission,

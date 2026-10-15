@@ -2036,14 +2036,16 @@ struct TglNativePrimaryRendererTable {
         0x1e6890,0x1306a0,0x131520,0x132500,0x1b1ed0,0x133580}};
     template<class Read,class Executable>
     static bool capture(uintptr_t image,Read read,Executable executable,
-        std::array<uintptr_t,slotCount>& output) noexcept {
-        if(!image || image>UINTPTR_MAX-0x811e00) return false;
+        std::array<uintptr_t,slotCount>& output,uintptr_t rttiAddressPoint=16) noexcept {
+        // Disk bind addend is16; loaded callers supply the authenticated
+        // libc++abi __si_class_type_info vtable address point instead.
+        if(!image || image>UINTPTR_MAX-0x811e00 || !rttiAddressPoint) return false;
         std::array<uintptr_t,slotCount> candidate{};
         uintptr_t offsetToTop=1,type=0,next=0;
         if(!read(image+0x75bb90,&offsetToTop,8) || offsetToTop!=0 ||
            !read(image+0x75bb98,&type,8) || type!=image+0x75bc00 ||
            !read(image+0x75bba0,candidate.data(),sizeof(candidate)) ||
-           !read(image+0x75bc00,&next,8) || next!=image+0x811e00) return false;
+           !read(image+0x75bc00,&next,8) || next!=rttiAddressPoint) return false;
         for(size_t i=0;i<slotCount;++i)
             if(candidate[i]!=image+offsets[i] || !executable(candidate[i],1)) return false;
         output=candidate;return true;
@@ -2053,6 +2055,9 @@ struct TglNativePrimaryRendererTable {
 // Same native renderer, same destructors/outer frame. Only temporary-pass
 // dispatch changes. Storage/code/renderer lifetime must be pinned by Admit.
 class TglOwnedPrimaryRendererTable {
+    template<class Qualify> static auto rttiImport(Qualify qualify,int) noexcept
+        -> decltype(qualify.primaryRendererRtti()) {return qualify.primaryRendererRtti();}
+    template<class Qualify> static uintptr_t rttiImport(Qualify,long) noexcept {return 16;}
     std::array<uintptr_t,14> entries_{};
     uintptr_t source_=0,object_=0;
 public:
@@ -2068,7 +2073,7 @@ public:
         Executable executable,OwnedAdmit ownedAdmit) noexcept {
         std::array<uintptr_t,12> original{};
         if(source_ || !temporary || !qualify(image) || !ownedAdmit(temporary,1) ||
-           !TglNativePrimaryRendererTable::capture(image,read,executable,original)) return false;
+           !TglNativePrimaryRendererTable::capture(image,read,executable,original,rttiImport(qualify,0))) return false;
         for(auto entry:original) if(entry==temporary) return false;
         entries_[0]=0;entries_[1]=image+0x75bc00;
         for(size_t i=0;i<original.size();++i) entries_[i+2]=original[i];
