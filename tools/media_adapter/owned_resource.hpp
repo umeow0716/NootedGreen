@@ -14826,6 +14826,31 @@ public:
         pending_=pending_ || result.acquired || result.writtenBack;
     }
 };
+// Admission for mode-local reset of this owner's NEVER-submitted resources.
+// This is not a physical quiescence/completion certificate and cannot clear
+// retention, retire a frame, or authorize a new epoch after this backing has
+// observed owned native render entry/work.
+template<class Scope,class Frame,class Owner,class Backing>
+class TglOwnedUnsubmittedVpRetirement {
+    Scope& scope_;Frame& frame_;Owner& owner_;Backing& backing_;
+    uintptr_t image_,physical_,context_,child_;
+    uint64_t physicalGeneration_,childGeneration_;
+public:
+    TglOwnedUnsubmittedVpRetirement(Scope& scope,Frame& frame,Owner& owner,Backing& backing,
+        uintptr_t image,uintptr_t physical,uint64_t physicalGeneration,uintptr_t context,
+        uintptr_t child,uint64_t childGeneration) noexcept
+        :scope_(scope),frame_(frame),owner_(owner),backing_(backing),image_(image),physical_(physical),
+         context_(context),child_(child),physicalGeneration_(physicalGeneration),childGeneration_(childGeneration) {}
+    TglOwnedUnsubmittedVpRetirement(const TglOwnedUnsubmittedVpRetirement&)=delete;
+    TglOwnedUnsubmittedVpRetirement& operator=(const TglOwnedUnsubmittedVpRetirement&)=delete;
+    int operator()() const noexcept {
+        return image_ && physical_ && physicalGeneration_ && context_ && child_ && childGeneration_ &&
+            scope_.matches(image_,physical_,physicalGeneration_) && scope_.matchesActiveContextFrame(context_,&frame_) &&
+            !frame_.invalidated() && frame_.surfacesReady() && !backing_.retention()() &&
+            owner_.ownsLifecycleAllocation(reinterpret_cast<void*>(child_),childGeneration_) &&
+            owner_.hasPrivateChildLease(child_)?0:5;
+    }
+};
 // Admission's finish callback runs Render INSIDE retained VP/catalogue scopes.
 // The owned outer caller consumes this result instead of calling Render again.
 // Raw native status is preserved separately from post-admission rejection.

@@ -17851,6 +17851,39 @@ int main() {
         assert(!blocked([](auto) noexcept -> bool {assert(false);return true;}) && !blocked.entered());
     }
     {
+        struct ModeFrame {
+            bool lost=false,ready=true;
+            bool invalidated() const noexcept {return lost;}
+            bool surfacesReady() const noexcept {return ready;}
+        } frame;
+        struct ModeOwner {
+            bool leased=true;uint64_t generation=7;
+            bool ownsLifecycleAllocation(void* p,uint64_t g) const noexcept {return p==reinterpret_cast<void*>(0x6000) && g==generation;}
+            bool hasPrivateChildLease(uintptr_t p) const noexcept {return leased && p==0x6000;}
+        } owner;
+        struct ModeBacking {
+            TglOwnedVeboxFrameRetention retained;
+            const TglOwnedVeboxFrameRetention& retention() const noexcept {return retained;}
+        } backing;
+        struct ModeScope {
+            ModeFrame* frame;bool live=true;
+            bool matches(uintptr_t i,uintptr_t p,uint64_t g) const noexcept {return live && i==0x1000 && p==0x2000 && g==3;}
+            bool matchesActiveContextFrame(uintptr_t c,const ModeFrame* f) const noexcept {return live && c==0x4000 && f==frame;}
+        } scope{&frame};
+        TglOwnedUnsubmittedVpRetirement proof(scope,frame,owner,backing,0x1000,0x2000,3,0x4000,0x6000,7);
+        assert(proof()==0);
+        scope.live=false;assert(proof()==5);scope.live=true;
+        owner.leased=false;assert(proof()==5);owner.leased=true;
+        ++owner.generation;assert(proof()==5);--owner.generation;
+        frame.lost=true;assert(proof()==5);frame.lost=false;
+        frame.ready=false;assert(proof()==5);frame.ready=true;
+        ModeFrame foreign;
+        TglOwnedUnsubmittedVpRetirement foreignFrame(scope,foreign,owner,backing,0x1000,0x2000,3,0x4000,0x6000,7);
+        assert(foreignFrame()==5);
+        TglOwnedVeboxCommandTransactionResult entered;entered.nativeEntered=true;backing.retained.observe(entered);
+        assert(backing.retention()() && proof()==5 && proof()==5); // No completion/reset escape hatch.
+    }
+    {
         constexpr uintptr_t os=0x1000,database=0x2000,wrapper=0x5000,device=0x6000,create=0x7000;
         uintptr_t db=database,w=wrapper,d=device;uint32_t index=1,port=42;
         std::array<uint8_t,4> anchor{0x41,0x8b,0x7d,0x18};

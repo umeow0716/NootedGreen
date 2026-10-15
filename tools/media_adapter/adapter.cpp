@@ -2979,6 +2979,27 @@ template struct NativeVeboxRenderSendRequestFor<NativeContextSurfaceOwner>;
 template struct NativeVeboxRenderSendRequestFor<NativeTemporarySurfaceOwner>;
 using NativePhysicalRegistry=TglOwnedVeboxPhysicalFrameRegistry<NativeContextRendererFrame>;
 using NativePhysicalFrameScope=typename NativePhysicalRegistry::Scope;
+struct NativeUnsubmittedModeRetirement {
+    using Proof=TglOwnedUnsubmittedVpRetirement<NativePhysicalFrameScope,NativeContextRendererFrame,
+        NativeRendererChildOwner,NativeRendererBacking>;
+    Proof proof;bool valid_=false;
+    NativeUnsubmittedModeRetirement(NativePhysicalFrameScope& physical,NativeContextRendererFrame& frame,
+        NativeRendererCpuAssembly& cpu,size_t index,const TglNativeVphalMhwView& view,uintptr_t address,
+        uint64_t generation,uintptr_t context) noexcept
+        :proof(physical,frame,index==1?cpu.children().second().owner():cpu.children().first().owner(),cpu.backing(),
+            view.renderer.image,address,generation,context,index<2?view.renderer.originalChildren[index]:0,
+            index==1?cpu.children().second().owner().allocationGeneration():cpu.children().first().owner().allocationGeneration()) {
+        auto& owner=index==1?cpu.children().second().owner():cpu.children().first().owner();
+        valid_=index<2 && view.renderer.originalChildren[index]==reinterpret_cast<uintptr_t>(owner.constructedBase());
+    }
+    static int admit(void* raw) noexcept {
+        auto* self=static_cast<NativeUnsubmittedModeRetirement*>(raw);
+        return self && self->valid_?self->proof():5;
+    }
+    NativeModeRetirementAuthority capability() noexcept {
+        return valid_?NativeModeRetirementAuthority{this,&admit}:NativeModeRetirementAuthority{};
+    }
+};
 using NativePhysicalCallbacks=TglOwnedPhysicalCallbackCoordinator<NativePhysicalRegistry,
     decltype(&readMemory),NativeTglImageAdmission,decltype(&executableMemory)>;
 struct NativeFrontendRuntimeScope {
