@@ -5547,6 +5547,32 @@ template NativeCreatorScopedInvocation::BatchResult NativeCreatorScopedInvocatio
     NativeCreatorScopedInvocation::AdmitFn>(const Entry&,uintptr_t,uintptr_t,const void*,
     NativeCreatorScopedInvocation::AdmitFn&,NativeRendererConstructionSelection) noexcept;
 struct NativeFactoryLifecycle {
+    static int frame(void* physical,const void* input,void* output) noexcept {
+        if(!NativeFactorySource::process().get())return 5;
+        // Exact12c9d0's RSI is unused; existing leased Render preserves NULL.
+        // No speculative context/input alias. Absence is explicit: an actual
+        // compressed-surface branch still refuses missing decompression.
+        NativeTargetDecompressionFor<NativeTemporarySurfaceOwner> decompression{};
+        return NativeLateFactoryBatch::run(physical,input,output,decompression,nullptr);
+    }
+    static int reportFrameEvents(void* physical,const void* input) noexcept {
+        return NativeFactorySource::process().get()?NativePhysicalBackend::reportFrameEvents(physical,input):5;
+    }
+    static int removeContexts(void* physical,const void* input) noexcept {
+        return NativeFactorySource::process().get()?NativeCompositeContextRemoval::run(physical,input):5;
+    }
+    static int allocateBacking(void* physical,const void* input) noexcept {
+        return NativeFactorySource::process().get()?NativePhysicalBackend::allocateBacking(physical,input):5;
+    }
+    static int releaseBacking(void* physical,uint32_t type) noexcept {
+        return NativeFactorySource::process().get()?NativePhysicalBackend::releaseBacking(physical,type):5;
+    }
+    static int allocatePool(void* physical,const void* input) noexcept {
+        return NativeFactorySource::process().get()?NativePhysicalBackend::allocatePool(physical,input):5;
+    }
+    static int releasePool(void* physical,uint32_t type) noexcept {
+        return NativeFactorySource::process().get()?NativePhysicalBackend::releasePool(physical,type):5;
+    }
     static int initialize(void** output,const void* input) noexcept {
         if(!NativeFactorySource::process().get())return 5;
         return NativePhysicalBackend::initialize(output,input).status;
@@ -5567,6 +5593,13 @@ struct NativeFactoryLifecycle {
         return result.status;
     }
 };
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::frame),int(*)(void*,const void*,void*) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::reportFrameEvents),int(*)(void*,const void*) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::removeContexts),int(*)(void*,const void*) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::allocateBacking),int(*)(void*,const void*) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::releaseBacking),int(*)(void*,uint32_t) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::allocatePool),int(*)(void*,const void*) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::releasePool),int(*)(void*,uint32_t) noexcept>);
 std::atomic<uintptr_t> nativeCreateContexts{0};
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept {
     mach_vm_size_t copied = 0;
