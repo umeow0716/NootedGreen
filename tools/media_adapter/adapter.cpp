@@ -5625,6 +5625,21 @@ template NativeCreatorScopedInvocation::BatchResult NativeCreatorScopedInvocatio
     NativeCreatorScopedInvocation::AdmitFn>(const Entry&,uintptr_t,uintptr_t,const void*,
     NativeCreatorScopedInvocation::AdmitFn&,NativeRendererConstructionSelection) noexcept;
 struct NativeFactoryLifecycle {
+    static int configureContexts(void* physical,const void* input) noexcept {
+        return NativeFactorySource::process().get()?NativeFactoryContextProperties::run(
+            physical,input,NativeFactoryContextProperties::Operation::Configure):5;
+    }
+    static int queryContexts(void* physical,const void* input) noexcept {
+        return NativeFactorySource::process().get()?NativeFactoryContextProperties::run(
+            physical,input,NativeFactoryContextProperties::Operation::Query):5;
+    }
+    static int setPhysicalProperties(void* physical,const void* input) noexcept {
+        return NativeFactorySource::process().get()?NativePhysicalBackend::setProperties(physical,input):5;
+    }
+    static int queryPhysicalProperties(void* physical,const void* input) noexcept {
+        // Native161c3 may lazily initialize physical state; preserve coordinator mutation admission.
+        return NativeFactorySource::process().get()?NativePhysicalBackend::queryProperties(physical,input):5;
+    }
     static int frame(void* physical,const void* input,void* output) noexcept {
         if(!NativeFactorySource::process().get())return 5;
         // Exact12c9d0's RSI is unused; existing leased Render preserves NULL.
@@ -5678,6 +5693,10 @@ static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::allocateBacking),
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::releaseBacking),int(*)(void*,uint32_t) noexcept>);
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::allocatePool),int(*)(void*,const void*) noexcept>);
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::releasePool),int(*)(void*,uint32_t) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::configureContexts),int(*)(void*,const void*) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::queryContexts),int(*)(void*,const void*) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::setPhysicalProperties),int(*)(void*,const void*) noexcept>);
+static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::queryPhysicalProperties),int(*)(void*,const void*) noexcept>);
 std::atomic<uintptr_t> nativeCreateContexts{0};
 bool readMemory(uintptr_t address, void *output, size_t length) noexcept {
     mach_vm_size_t copied = 0;
