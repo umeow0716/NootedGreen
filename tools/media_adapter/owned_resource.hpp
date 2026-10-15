@@ -3865,6 +3865,14 @@ public:
     bool hasExecutionLease(uintptr_t expected) const noexcept {
         return leased_ && !admissionError_ && object && object==expected;
     }
+    // Exact report allocation only, not its separately allocated d38/d40 children.
+    // Native backend validates the factory/image/shape; enclosing base pin
+    // and this execution lease must both outlive the caller's output operation.
+    bool excludesLeasedReportWritableSpan(uintptr_t expected,uintptr_t address,size_t bytes) noexcept {
+        if(!hasExecutionLease(expected) || !address || !bytes || address>UINTPTR_MAX-bytes ||
+            object>UINTPTR_MAX-0xd48 || !backend.validate(object) || !hasExecutionLease(expected))return false;
+        return address>=object+0xd48 || object>=address+bytes;
+    }
     // Synchronous execution-data publication must retain the native object.
     // Reject reset/reinitialize/nested use during the lease. This pins CPU
     // lifetime only: callers still own serialization and GPU fence lifetimes.

@@ -325,14 +325,23 @@ static void testTrackedCpuOwner() {
         } backend;
         TglExecutionOwner execution(backend);
         const auto report=backend.pointer();unsigned calls=0;
+        assert(!execution.excludesLeasedReportWritableSpan(report,1,1));
         assert(execution.withBorrowedExecution(report,[&](uintptr_t actual) noexcept {
             ++calls;assert(actual==report && execution.hasExecutionLease(report));
+            assert(!execution.excludesLeasedReportWritableSpan(report,report,0x4a));
+            assert(!execution.excludesLeasedReportWritableSpan(report,report+0xd47,2));
+            assert(execution.excludesLeasedReportWritableSpan(report,report+0xd48,1));
+            assert(execution.excludesLeasedReportWritableSpan(report,report-1,1));
+            assert(!execution.excludesLeasedReportWritableSpan(report+1,1,1));
+            assert(!execution.excludesLeasedReportWritableSpan(report,UINTPTR_MAX,1));
+            backend.valid=false;assert(!execution.excludesLeasedReportWritableSpan(report,1,1));backend.valid=true;
             execution.reset();assert(execution.get()==report && !backend.destroys);
             assert(execution.ensure()==5 && !backend.creates);
             assert(execution.withBorrowedExecution(report,[](uintptr_t) noexcept {assert(false);return 0;})==5);
             return 31;
         })==31);
         assert(calls==1 && !execution.get() && !backend.creates && !backend.destroys);
+        assert(!execution.excludesLeasedReportWritableSpan(report,1,1));
         backend.valid=false;
         assert(execution.withBorrowedExecution(report,[](uintptr_t) noexcept {assert(false);return 0;})==5);
         assert(!execution.get() && !backend.destroys);
