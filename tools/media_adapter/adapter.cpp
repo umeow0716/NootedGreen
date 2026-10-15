@@ -2736,6 +2736,7 @@ struct NativeVeboxSendSubmissionStage {
         TglOwnedVeboxFrameRetention& retention;uintptr_t image;
         Admit admit;AdmitChild admitChild;bool entered=false;int result=5;
         void* buildContext=nullptr;BuildCommand build=nullptr;bool buildAttempted=false;
+        TglNativeOsCommandSubmitBinding::RelocationPage firstPage{};bool firstPageCaptured=false;
     };
     using SendScope=TglOwnedScopedContext<SendContext,SendDomain>;
     template<class SourceOwner,class ChildOwner,class ExecutionOwner,class PacketContext>
@@ -2750,11 +2751,24 @@ struct NativeVeboxSendSubmissionStage {
         }
         context.buildAttempted=true;
         if(!context.entered || &packets.pass!=&context.pass || !context.pass.acceptsProducer() ||
+            !context.admit || !ownedExecutableMemory(reinterpret_cast<uintptr_t>(context.admit),1) ||
             !context.tail.matchesIdentity(reinterpret_cast<uintptr_t>(child),&readMemory))return 5;
+        bool setupAttempted=false;
+        auto setupWithOrigin=[&](uintptr_t entry,void* nativeChild,void* command,void* hints,
+            void* auxiliary,int32_t* consumed) noexcept -> int {
+            if(setupAttempted)return 5;
+            setupAttempted=true;
+            const int status=TglNativeVeboxSetupInvoker{}(entry,nativeChild,command,hints,auxiliary,consumed);
+            if(status)return status;
+            if(context.firstPageCaptured || !context.frame.captureNativeRelocationPage(context.binding,
+                &readMemory,context.admit,context.firstPage) ||
+                !context.firstPage.continuesAcquisition(context.firstPage))return 5;
+            context.firstPageCaptured=true;return 0;
+        };
         context.command=tglWithCapturedOwnedNativeVeboxCommandTransaction(
             sourceOwner,childOwner,executionOwner,child,execution,source,packets,setup,builder,
             context.image,os,context.scratch,&readMemory,NativeTglImageAdmission{context.image},&executableMemory,
-            TglNativeVeboxSetupInvoker{},TglNativeVeboxBuilderInvoker{},TglNativeCommandHeaderWritebackInvoker{},true);
+            setupWithOrigin,TglNativeVeboxBuilderInvoker{},TglNativeCommandHeaderWritebackInvoker{},true);
         context.retention.observe(context.command);
         if(context.command.status) {
             (void)context.pass.record(context.command.status);
@@ -2786,7 +2800,7 @@ struct NativeVeboxSendSubmissionStage {
         }
         context->result=runTail(context->frame,context->pass,context->tail,context->binding,
             context->scratch,context->command,context->retention,context->image,
-            context->admit,context->admitChild);
+            context->admit,context->admitChild,context->firstPage,context->firstPageCaptured);
         return context->result;
     }
     using NativeCall=int(*)(void*) noexcept;
@@ -2871,11 +2885,12 @@ struct NativeVeboxSendSubmissionStage {
     static int runTail(NativeContextRendererFrame& frame,TglOwnedVeboxProducerPass& pass,
         TglNativeVeboxSendTailBinding& tail,const TglNativeOsCommandSubmitBinding& binding,
         TglOwnedVeboxBuilderScratch& scratch,TglOwnedVeboxCommandTransactionResult& command,
-        TglOwnedVeboxFrameRetention& retention,uintptr_t image,Admit admit,AdmitChild admitChild) noexcept {
+        TglOwnedVeboxFrameRetention& retention,uintptr_t image,Admit admit,AdmitChild admitChild,
+        const TglNativeOsCommandSubmitBinding::RelocationPage& firstPage,bool firstPageCaptured) noexcept {
         int prior=command.status;
         if(!prior && (!command.acquired || !command.writtenBack || command.builderStatus))
             prior=command.builderStatus?command.builderStatus:5;
-        if(!prior && (!admit || !admitChild ||
+        if(!prior && (!firstPageCaptured || !admit || !admitChild ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(admit),1) ||
             !ownedExecutableMemory(reinterpret_cast<uintptr_t>(admitChild),1)))prior=5;
         const int status=pass.withSubmission(prior,[&]() noexcept -> int {
@@ -2884,7 +2899,8 @@ struct NativeVeboxSendSubmissionStage {
             const int post=tail.postWriteback(&readMemory,admitChild);
             if(post)return post;
             TglNativeOsCommandSubmitBinding::RelocationRecords records;
-            if(!frame.captureNativeRelocationRecords(binding,&readMemory,admit,records))return 5;
+            if(!frame.captureNativeRelocationRecords(binding,&readMemory,admit,records) ||
+                !records.page.continuesAcquisition(firstPage))return 5;
             const auto observed=frame.observeNativeOsSubmit(binding,scratch.command.data(),flags,&readMemory,admit);
             command.nativeEntered=command.nativeEntered || observed.submit.called;
             const int native=observed.submit.status();

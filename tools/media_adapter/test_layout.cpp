@@ -33750,6 +33750,14 @@ int main() {
         TglNativeOsCommandSubmitBinding::RelocationPage page;
         assert(binding.captureRelocationPage(pageRead,admit,page) && page.begin==base+0x18 && page.cursor==cursor);
         const auto original=page;
+        assert(page.continuesAcquisition(original));
+        auto later=page;later.begin+=0x1000;later.end+=0x1000;later.cursor=later.begin+12;later.reserved+=0x1000;
+        assert(later.continuesAcquisition(original));
+        ++later.writer;assert(!later.continuesAcquisition(original));--later.writer;
+        ++later.limit;assert(!later.continuesAcquisition(original));--later.limit;
+        ++later.end;assert(!later.continuesAcquisition(original));--later.end;
+        --later.reserved;assert(!later.continuesAcquisition(original));++later.reserved;
+        auto usedOrigin=original;usedOrigin.cursor+=4;assert(!later.continuesAcquisition(usedOrigin));
         pageHeader=0;assert(!binding.captureRelocationPage(pageRead,admit,page) && page.same(original));pageHeader=0x04008200;
         cursor=end;assert(!binding.captureRelocationPage(pageRead,admit,page));cursor=base+0x20;
         --limit;assert(!binding.captureRelocationPage(pageRead,admit,page));++limit;

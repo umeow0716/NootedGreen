@@ -19176,6 +19176,16 @@ public:
             return writer==other.writer && begin==other.begin && cursor==other.cursor &&
                 end==other.end && reserved==other.reserved && limit==other.limit;
         }
+        bool continuesAcquisition(const RelocationPage& first) const noexcept {
+            //129a10 invokes646a0 with param3=0: fresh cursor is header+8.
+            //641e0 extends both end/reserved by1000, never resets the origin.
+            return writer && writer==first.writer && limit==first.limit &&
+                first.begin<=UINTPTR_MAX-0x1000 && first.end==first.begin+0x1000 &&
+                first.cursor==first.begin+8 && first.end<=UINTPTR_MAX-12 && first.reserved==first.end+12 &&
+                end>=first.end && (end-first.end)%0x1000==0 && begin==end-0x1000 &&
+                end<=UINTPTR_MAX-12 && reserved==end+12 && reserved<=limit &&
+                cursor>=begin+8 && cursor<=end-4 && !(cursor&3);
+        }
     };
     //646a0 reserves100c bytes, writes8-byte8200/0400 header, advances writer0
     // by1000;641e0 may extend by another1000. a893 derives limit68 from the
