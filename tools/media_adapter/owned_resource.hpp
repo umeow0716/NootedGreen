@@ -26987,6 +26987,27 @@ bool tglDispatchOwnedVphalDestruction(TglOwnedVphalLifetimeTable& table,
     },native);
 }
 
+class TglNativeFormatLookupTransaction {
+    bool attempted_=false;
+public:
+    template<class Read,class Write,class Admit,class Invoke>
+    uint64_t run(uintptr_t input,Read read,Write write,Admit admit,Invoke invoke) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<uint64_t,Invoke&,void*>);
+        if(attempted_)return 1;
+        attempted_=true;
+        alignas(8) std::array<uint8_t,0x34> original{},scratch{},verify{};
+        if(!input || input>UINTPTR_MAX-original.size() || !admit(input,original.size()) ||
+            !read(input,original.data(),original.size()) || !read(input,verify.data(),verify.size()) || original!=verify)return 1;
+        scratch=original;
+        const uint64_t result=invoke(scratch.data()); // Native1523b exactly once, full native return width.
+        if(std::memcmp(original.data(),scratch.data(),0x1c) || !admit(input,original.size()) ||
+            !read(input,verify.data(),verify.size()) || original!=verify)return 1;
+        // Only native output DWORD7..12. No-op/error paths preserve untouched caller bytes.
+        if(!std::memcmp(original.data()+0x1c,scratch.data()+0x1c,0x18))return result;
+        return write(input+0x1c,scratch.data()+0x1c,size_t{0x18})?result:1;
+    }
+};
+
 struct TglNativePhysicalCallbackBinding {
     uintptr_t image=0,initialize=0,destroy=0;
     // Caller retains the registered SAME physical generation/empty-frame scope.

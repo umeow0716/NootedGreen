@@ -16155,6 +16155,58 @@ static void testRetainedVeboxFrames() {
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         {
+            constexpr uintptr_t input=0x1000;
+            std::array<uint8_t,0x34> caller{};for(size_t i=0;i<caller.size();++i)caller[i]=uint8_t(i);
+            const auto original=caller;
+            unsigned reads=0,writes=0,nativeCalls=0;bool drift=false,allowWrite=true;
+            auto lookupRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                assert(at==input && bytes==caller.size());++reads;std::memcpy(out,caller.data(),bytes);
+                if(drift && reads==2)static_cast<uint8_t*>(out)[0]^=1;
+                return true;
+            };
+            auto lookupWrite=[&](uintptr_t at,const void* data,size_t bytes) noexcept {
+                assert(at==input+0x1c && bytes==0x18);++writes;
+                if(!allowWrite)return false;
+                std::memcpy(caller.data()+0x1c,data,bytes);return true;
+            };
+            auto admit=[](uintptr_t at,size_t bytes) noexcept {return at==input && bytes==0x34;};
+            auto never=[](void*) noexcept -> uint64_t {assert(false);return 0;};
+            TglNativeFormatLookupTransaction lookup;
+            const uint64_t wide=0xfedcba9876543210ULL;
+            auto invoke=[&](void* owned) noexcept -> uint64_t {
+                ++nativeCalls;assert(owned!=caller.data());
+                assert(lookup.run(input,lookupRead,lookupWrite,admit,never)==1);
+                for(size_t word=7;word<13;++word){const uint32_t value=0x100+uint32_t(word);std::memcpy(static_cast<uint8_t*>(owned)+word*4,&value,4);}
+                return wide;
+            };
+            assert(lookup.run(input,lookupRead,lookupWrite,admit,invoke)==wide && nativeCalls==1 && writes==1);
+            assert(!std::memcmp(original.data(),caller.data(),0x1c));
+            for(size_t word=7;word<13;++word) {
+                uint32_t actual=0;std::memcpy(&actual,caller.data()+word*4,4);assert(actual==0x100+word);
+            }
+            assert(lookup.run(input,lookupRead,lookupWrite,admit,never)==1 && nativeCalls==1 && writes==1);
+            TglNativeFormatLookupTransaction unchanged;
+            assert(unchanged.run(input,lookupRead,lookupWrite,admit,[](void*) noexcept -> uint64_t {return 1;})==1 && writes==1);
+            const auto before=caller;
+            TglNativeFormatLookupTransaction badPrefix;
+            assert(badPrefix.run(input,lookupRead,lookupWrite,admit,[](void* p) noexcept -> uint64_t {
+                static_cast<uint8_t*>(p)[0]^=1;return 0;
+            })==1 && caller==before && writes==1);
+            TglNativeFormatLookupTransaction postDrift;
+            assert(postDrift.run(input,lookupRead,lookupWrite,admit,[&](void* p) noexcept -> uint64_t {
+                caller[0]^=1;static_cast<uint8_t*>(p)[0x1c]^=1;return 0;
+            })==1 && writes==1 && caller[0]==uint8_t(before[0]^1));
+            assert(!std::memcmp(caller.data()+1,before.data()+1,caller.size()-1));caller=before;
+            reads=0;drift=true;TglNativeFormatLookupTransaction unstable;
+            assert(unstable.run(input,lookupRead,lookupWrite,admit,never)==1 && caller==before && writes==1);drift=false;
+            allowWrite=false;TglNativeFormatLookupTransaction denied;
+            assert(denied.run(input,lookupRead,lookupWrite,admit,[](void* p) noexcept -> uint64_t {
+                static_cast<uint8_t*>(p)[0x1c]^=1;return 0;
+            })==1 && caller==before && writes==2);
+            TglNativeFormatLookupTransaction wrapped;
+            assert(wrapped.run(UINTPTR_MAX,lookupRead,lookupWrite,admit,never)==1);
+        }
+        {
             constexpr std::array<uintptr_t,3> sites{0x135fd,0x13602,0x13607};
             std::array<std::array<uint8_t,5>,3> anchors{{
                 {0xbf,1,0,0,0},{0xbe,0xc0,0xaa,0,0},{0xe8,0x5c,0xad,0x22,0}}};
