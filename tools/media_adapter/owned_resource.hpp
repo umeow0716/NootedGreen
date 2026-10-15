@@ -5215,6 +5215,12 @@ struct TglOwnedVeboxAllocationTail {
 // deleting destruction. The owned VP27 table belongs under this child's80,
 // never directly at renderer910/918. Owned allocation must remain outside
 // native132bb0 accounting; a borrowed publication must be detached first.
+inline bool tglRestoreExactBorrowedVpLink(uint8_t* field,uintptr_t borrowed,uintptr_t previous) noexcept {
+    if(!field || !borrowed || previous)return false;
+    uintptr_t actual=0;std::memcpy(&actual,field,8);
+    if(actual!=borrowed)return false;
+    std::memcpy(field,&previous,8);return true;
+}
 template<class CpuBackend,class SfcInvoke,class Cleanup,class Destroy>
 class TglOwnedVeboxBaseOwner {
     TglTrackedCpuOwner<CpuBackend> storage_;
@@ -5245,7 +5251,7 @@ private:
     TglOwnedBaseConstruction initializeDependencies(const TglVeboxLifetimeBinding& binding,
         const TglSfcLifetimeBinding& sfcLifetime,const TglSfcMhwBinding& sfcBinding,
         void* os,Read read,Build build,uintptr_t borrowedSfc=0,std::atomic_flag* sharedGate=nullptr) {
-        if(busy_ || publishedRenderer_ || allocationGeneration_==UINT64_MAX) return TglOwnedBaseConstruction::NotCalled;
+        if(busy_ || publishedRenderer_ || !storage_.canRelease() || allocationGeneration_==UINT64_MAX) return TglOwnedBaseConstruction::NotCalled;
         reset();busy_=true;
         if(binding.image!=sfcLifetime.image || !(borrowedSfc?
            sfc_.initializeBorrowed(sfcLifetime,sfcBinding,borrowedSfc,reinterpret_cast<uintptr_t>(os),read,sharedGate):
@@ -5528,9 +5534,10 @@ public:
         const uintptr_t borrowed=reinterpret_cast<uintptr_t>(child);
         std::memcpy(field,&borrowed,8);
         const int result=use(parent,child);
-        uintptr_t observed=0;std::memcpy(&observed,field,8);
-        std::memcpy(field,&previous,8);
-        return observed==borrowed ? result : 5;
+        if(!tglRestoreExactBorrowedVpLink(field,borrowed,previous)) {
+            ready_=false;storage_.quarantineNativePublication();return 5;
+        }
+        return result;
     }
     template<class Scope>
     int withBorrowedVpCpuScope(Scope scope) noexcept {
@@ -5572,7 +5579,10 @@ public:
                 result=use(parent,&Callback::create);
         }
         const bool admitted=published();
-        std::memcpy(field,&previous,8);
+        uintptr_t observed=0;std::memcpy(&observed,field,8);
+        if(observed && !tglRestoreExactBorrowedVpLink(field,c,previous)) {
+            ready_=false;storage_.quarantineNativePublication();return result?result:5;
+        }
         if(result) return result;
         return admitted ? 0 : 5;
     }
@@ -5895,7 +5905,7 @@ public:
     void reset() noexcept {(void)teardown(true);}
 private:
     bool teardown(bool releaseAllocation) noexcept {
-        if(busy_ || publishedRenderer_) return false;
+        if(busy_ || publishedRenderer_ || !storage_.canRelease()) return false;
         if constexpr(std::is_same_v<decltype(cleanup_(nullptr)),bool>) {
             if(constructed_) {
                 // Owned VP factory scopes admit only a NULL prior child80 and
