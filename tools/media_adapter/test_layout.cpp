@@ -18531,7 +18531,49 @@ static void testRetainedVeboxFrames() {
     }
 }
 
+static void testNativeCreatorRequestChains() {
+    for(unsigned scenario=0;scenario<7;++scenario) {
+        uintptr_t descriptor=0x2000;std::array<uint8_t,0x18> header{};
+        const uint32_t count=2;const uintptr_t array=0x2800;
+        std::memcpy(header.data(),&count,4);std::memcpy(header.data()+8,&array,8);
+        std::array<uintptr_t,2> roots{0x3000,0x3100};
+        std::array<std::array<uint8_t,0x40>,3> nodes{};
+        auto next=[&](size_t index,uintptr_t target) {std::memcpy(nodes[index].data()+0x38,&target,8);};
+        next(0,0x3200);next(1,0x3200); // Shared tail is valid, not a cycle.
+        const uint32_t kind=2,property=1003;const uint64_t type=0x200;
+        std::memcpy(nodes[2].data(),&kind,4);std::memcpy(nodes[2].data()+8,&type,8);
+        std::memcpy(nodes[2].data()+0x10,&property,4);
+        if(scenario==1)next(2,0x3000);
+        if(scenario==2)next(2,0x4000);
+        if(scenario==3)next(2,UINTPTR_MAX-15);
+        if(scenario==4)roots[1]=0; // NULL roots are native-permitted.
+        unsigned reads=0;
+        auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept -> bool {
+            ++reads;
+            if(at==0x1000 && bytes==8){std::memcpy(out,&descriptor,8);return true;}
+            if(at==0x2000 && bytes==header.size()){std::memcpy(out,header.data(),bytes);return true;}
+            if(at==array && bytes==sizeof(roots)){std::memcpy(out,roots.data(),bytes);return true;}
+            for(size_t i=0;i<nodes.size();++i)if(at==0x3000+i*0x100 && bytes==0x40){
+                std::memcpy(out,nodes[i].data(),bytes);return true;}
+            return false;
+        };
+        TglNativeCreatorRequestChains<2,3> snapshot;
+        const bool expected=scenario==0 || scenario>=4;
+        assert(snapshot.capture(0x1000,read)==expected && reads<24);
+        if(!scenario){TglNativeCreatorRequestChains<2,1> limited;assert(!limited.capture(0x1000,read));}
+        if(expected) {
+            assert(snapshot.stable(read) && snapshot.rootCount()==2 && snapshot.nodeCount()==(scenario==4?2U:3U));
+            uint32_t actualKind=0,actualProperty=0;uint64_t actualType=0;
+            assert(snapshot.controls(1,actualKind,actualType,actualProperty) && actualKind==kind && actualType==type && actualProperty==property);
+            assert(!snapshot.controls(3,actualKind,actualType,actualProperty) && !actualKind && !actualType && !actualProperty);
+            if(scenario==5)++header[4];else if(scenario==6)++nodes[2][0x10];else ++roots[0];
+            assert(!snapshot.stable(read));
+        } else assert(!snapshot.nodeCount());
+        assert(!snapshot.capture(0x1000,read));
+    }
+}
 static void testActualNv12LayoutSnapshot() {
+    testNativeCreatorRequestChains();
     // Exact native-other query callbacks; no synthetic native result and no
     // success inferred from the zero-write branches.
     for(auto callback:{uintptr_t{0x2283e0},uintptr_t{0x22ae00},uintptr_t{0x10966},uintptr_t{0x23c0a0},

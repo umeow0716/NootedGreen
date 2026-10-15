@@ -26207,6 +26207,63 @@ struct TglNativeMixedContextFrameBinding {
     }
 };
 
+// Exact13e43 input -> descriptor(count0, request-array8, output-array10).
+// A request's dispatch controls and next38 fit in40 bytes. This is a read-only
+// chain snapshot, NOT a native-only classification or ownership of payloads.
+template<size_t Roots=16,size_t Nodes=64> class TglNativeCreatorRequestChains {
+    static_assert(Roots>0 && Roots<=128 && Nodes>0 && Nodes<=128);
+    struct Node {uintptr_t address=0;std::array<uint8_t,0x40> bytes{};};
+    uintptr_t input_=0,descriptor_=0,array_=0;
+    std::array<uint8_t,0x18> header_{};
+    std::array<uintptr_t,Roots> roots_{};
+    std::array<Node,Nodes> nodes_{};
+    uint32_t count_=0;size_t used_=0;bool attempted_=false,ready_=false;
+public:
+    template<class Read> bool capture(uintptr_t input,Read read) noexcept {
+        if(attempted_)return false;attempted_=true;
+        if(!input || input>UINTPTR_MAX-8 || !read(input,&descriptor_,8) ||
+            !descriptor_ || descriptor_>UINTPTR_MAX-header_.size() ||
+            !read(descriptor_,header_.data(),header_.size()))return false;
+        std::memcpy(&count_,header_.data(),4);std::memcpy(&array_,header_.data()+8,8);
+        if(count_>Roots || (count_ && (!array_ || array_>UINTPTR_MAX-size_t(count_)*8 ||
+            !read(array_,roots_.data(),size_t(count_)*8))))return false;
+        for(uint32_t root=0;root<count_;++root) {
+            std::array<bool,Nodes> visited{};uintptr_t current=roots_[root];
+            while(current) {
+                size_t index=0;while(index<used_ && nodes_[index].address!=current)++index;
+                if(index==used_) {
+                    if(used_==Nodes || current>UINTPTR_MAX-0x40 ||
+                        !read(current,nodes_[index].bytes.data(),0x40))return false;
+                    nodes_[index].address=current;++used_;
+                }
+                if(visited[index])return false;visited[index]=true;
+                std::memcpy(&current,nodes_[index].bytes.data()+0x38,8);
+            }
+        }
+        input_=input;ready_=true;
+        if(!stable(read)){ready_=false;return false;}return true;
+    }
+    template<class Read> bool stable(Read read) const noexcept {
+        if(!ready_)return false;
+        uintptr_t descriptor=0;std::array<uint8_t,0x18> header{};std::array<uintptr_t,Roots> roots{};
+        if(!read(input_,&descriptor,8) || descriptor!=descriptor_ ||
+            !read(descriptor_,header.data(),header.size()) || header!=header_ ||
+            (count_ && (!read(array_,roots.data(),size_t(count_)*8) || roots!=roots_)))return false;
+        for(size_t i=0;i<used_;++i) {
+            std::array<uint8_t,0x40> bytes{};
+            if(!read(nodes_[i].address,bytes.data(),bytes.size()) || bytes!=nodes_[i].bytes)return false;
+        }
+        return true;
+    }
+    size_t nodeCount() const noexcept {return ready_?used_:0;}
+    uint32_t rootCount() const noexcept {return ready_?count_:0;}
+    bool controls(size_t index,uint32_t& kind,uint64_t& type,uint32_t& property) const noexcept {
+        kind=0;type=0;property=0;if(!ready_ || index>=used_)return false;
+        std::memcpy(&kind,nodes_[index].bytes.data(),4);
+        std::memcpy(&type,nodes_[index].bytes.data()+8,8);
+        std::memcpy(&property,nodes_[index].bytes.data()+0x10,4);return true;
+    }
+};
 template<size_t Capacity=16> struct TglNativeCreatedContextBatch {
     static_assert(Capacity>0 && Capacity<=128,"owned adoption work budget, not native limit");
     std::array<uintptr_t,Capacity> contexts{};
