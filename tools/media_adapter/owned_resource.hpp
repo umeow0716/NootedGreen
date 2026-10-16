@@ -25,6 +25,28 @@ struct TglAvcSequenceConsumedFields {
     uint32_t level=0,chroma=0,frameOnly=0,mbaff=0,direct8x8=0;
     uint32_t log2MaxFrameNumMinus4=0;
 };
+struct TglOwnedAvcSliceHeaderPacket {
+    std::array<uint32_t,258> data{};
+    size_t words=0;
+};
+// Exact2618d inline slice-header profile: owned input only, no resource or
+// original request mutation. Not wired into native submission/index selection.
+inline bool tglBuildOwnedAvcSliceHeaderPacket(const void* source,size_t extent,
+    uint32_t bitCount,TglOwnedAvcSliceHeaderPacket& output) noexcept {
+    if(!source || !bitCount || bitCount>8192 || extent>1024)return false;
+    const size_t bytes=(bitCount+7U)/8U,payloadWords=(bytes+3U)/4U;
+    const uintptr_t start=reinterpret_cast<uintptr_t>(source);
+    const uintptr_t target=reinterpret_cast<uintptr_t>(&output);
+    if(bytes>extent || start>UINTPTR_MAX-bytes || target>UINTPTR_MAX-sizeof(output) ||
+       (start<target+sizeof(output) && target<start+bytes))return false;
+    TglOwnedAvcSliceHeaderPacket candidate;
+    const uint32_t lastBits=bitCount%32U?bitCount%32U:32U;
+    candidate.words=payloadWords+2;
+    candidate.data[0]=0x70480000U|static_cast<uint32_t>(payloadWords);
+    candidate.data[1]=0x404cU|(lastBits<<8);
+    std::memcpy(candidate.data.data()+2,source,bytes);
+    output=candidate;return true;
+}
 inline bool tglProjectTahoeAvcSequenceConsumedFields(const void* source,size_t bytes,
     uint32_t width,uint32_t height,TglAvcSequenceConsumedFields& output) noexcept {
     if(!source || bytes!=0xc18 || !width || width>4096 || !height || height>4096 ||

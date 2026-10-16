@@ -18929,6 +18929,27 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        std::array<unsigned char,1024> source{};
+        const unsigned char first[]={0,0,1,0x25,0xb8,0,0x40,0,3,0x9c};
+        std::memcpy(source.data(),first,sizeof(first));
+        TglOwnedAvcSliceHeaderPacket packet;
+        assert(tglBuildOwnedAvcSliceHeaderPacket(source.data(),10,78,packet));
+        const uint32_t native[]={1883766787,20044,620822528,4194488,39939};
+        assert(packet.words==5 && std::memcmp(packet.data.data(),native,sizeof(native))==0);
+        for(uint32_t bits:{1U,32U,78U,98U,100U,102U,8192U}){
+            assert(tglBuildOwnedAvcSliceHeaderPacket(source.data(),source.size(),bits,packet));
+            assert(packet.words==2+(bits+31)/32);
+            assert(((packet.data[1]>>8)&63)==(bits%32?bits%32:32));
+        }
+        packet.data.fill(0xdeadbeef);packet.words=77;const auto before=packet;
+        auto denied=[&](const void* data,size_t extent,uint32_t bits){
+            assert(!tglBuildOwnedAvcSliceHeaderPacket(data,extent,bits,packet));
+            assert(packet.words==before.words && packet.data==before.data);};
+        denied(nullptr,10,78);denied(source.data(),10,0);denied(source.data(),1024,8193);
+        denied(source.data(),9,78);denied(source.data(),1025,78);
+        denied(packet.data.data(),10,78);
+    }
+    {
         std::array<uint32_t,0xc18/4> source{};
         source[0]=1;source[0x24/4]=40;source[0x2c/4]=1;
         source[0x828/4]=119;source[0x82c/4]=67;
