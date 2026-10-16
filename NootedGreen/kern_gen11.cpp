@@ -174,6 +174,7 @@ bool gVfDeviceObservationAbiVerified = false;
 bool gVfTaskCompletionAbiVerified = false;
 static mach_vm_address_t gVfRootObservationVtable = 0;
 static mach_vm_address_t gVfRootObservationGetter = 0;
+static mach_vm_address_t gVfLeafObservationReader = 0;
 // Optional AVC producer integration handles. Resolving these does not enable
 // a route, map memory, invoke a getter, or authorize a command-buffer write.
 bool gVfMediaPublicationAbiVerified = false;
@@ -3045,6 +3046,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// Failure disables diagnostics, never changes submission admission.
 		if (vfActive) {
 			gVfRootObservationVtable = gVfRootObservationGetter = 0;
+			gVfLeafObservationReader = 0;
 			const auto rootTable = patcher.solveSymbol(index,
 				"__ZTV31IGHardwarePerProcessPageTable64", address, size);
 			const auto rootGetter = patcher.solveSymbol(index,
@@ -3063,6 +3065,39 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			if (rootLeafMatches) {
 				gVfRootObservationVtable = rootTable + 16;
 				gVfRootObservationGetter = rootGetter;
+				const auto reader = patcher.solveSymbol(index,
+					"__ZNK31IGHardwarePerProcessPageTable644readEyRyS0_", address, size);
+				const auto walker = patcher.solveSymbol(index,
+					"__ZNK31IGHardwarePerProcessPageTable649pageWalk3E19GTTVirtualAddress64RPNS_10LevelEntryILm9E17GTTPageTableEntryEE", address, size);
+				// Entire fixed CPU-only read/walk bodies, including their one
+				// relative call. No trampoline, MMIO, allocation or PTE writes.
+				static constexpr uint8_t readBody[] = {
+					0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x53,0x50,0x49,0x89,0xce,0x49,0x89,0xd7,
+					0x48,0x89,0xf3,0x48,0x8d,0x55,0xe0,0x48,0xc7,0x02,0,0,0,0,0xe8,0x89,
+					0x07,0,0,0x84,0xc0,0x74,0x36,0x48,0x8b,0x45,0xe0,0x48,0x8b,0,0x48,0x8b,
+					0x40,0x20,0x48,0xc1,0xeb,0x09,0x81,0xe3,0xf8,0x0f,0,0,0x48,0xb9,0,0xf0,
+					0xff,0xff,0x7f,0,0,0,0x48,0x23,0x0c,0x18,0x49,0x89,0x0f,0x48,0x8b,0x04,
+					0x18,0x25,0xff,0x0f,0,0,0x49,0x89,0x06,0xb0,0x01,0xeb,0x02,0x31,0xc0,0x48,
+					0x83,0xc4,0x08,0x5b,0x41,0x5e,0x41,0x5f,0x5d,0xc3};
+				static constexpr uint8_t walkBody[] = {
+					0x55,0x48,0x89,0xe5,0x48,0x83,0x7f,0x40,0,0x74,0x59,0x48,0x8b,0x47,0x48,0x48,
+					0x89,0xf1,0x48,0xc1,0xe9,0x27,0x81,0xe1,0xff,0x01,0,0,0x48,0xc1,0xe1,0x05,
+					0x48,0x83,0x3c,0x08,0,0x74,0x3d,0x48,0x8b,0x44,0x08,0x08,0x48,0x89,0xf1,0x48,
+					0xc1,0xe9,0x1e,0x81,0xe1,0xff,0x01,0,0,0x48,0xc1,0xe1,0x05,0x48,0x83,0x3c,
+					0x08,0,0x74,0x20,0x48,0x8b,0x44,0x08,0x08,0x48,0xc1,0xee,0x10,0x81,0xe6,0xe0,
+					0x3f,0,0,0x48,0x8d,0x0c,0x30,0x48,0x89,0x0a,0x48,0x83,0x3c,0x30,0,0x0f,
+					0x95,0xc0,0xeb,0x02,0x31,0xc0,0x5d,0xc3};
+				const auto matches = [address,size](mach_vm_address_t target, const uint8_t *expected, size_t length) {
+					if (!target || target < address || target - address > size ||
+					    length > size - (target - address)) return false;
+					const auto *bytes = reinterpret_cast<const volatile uint8_t *>(target);
+					for (size_t i = 0; i < length; ++i) if (bytes[i] != expected[i]) return false;
+					return true;
+				};
+				if (matches(reader,readBody,sizeof(readBody)) && matches(walker,walkBody,sizeof(walkBody)) &&
+				    reader + 0x23U + 0x789U == walker)
+					gVfLeafObservationReader = reader;
+				SYSLOG("ngreen", "V375: bounded native CPU leaf observation bound=%u", gVfLeafObservationReader ? 1U : 0U);
 			}
 			patcher.clearError();
 		}
@@ -9575,6 +9610,68 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		vfReleaseRetiredContextBacking(gucId);
 }
 
+// Called only inside the existing PT lock, before CTB queue acquisition.
+// Borrow retained ring/image only under the context lock, then query the
+// exact native CPU leaf reader after releasing that spinlock. No GPU VA is
+// dereferenced; these are first-page translations, not batch-content capture.
+static void vfObserveBatchLeafMapping(void *task, void *pageTable,
+                                     NGContextDescriptor::Value descriptor,
+                                     uint32_t tail, mach_vm_address_t getter) {
+	if (!gVfLeafObservationReader || !getter || gVfDeviceStopping || gVfContextShutdownStarted)
+		return;
+	uint32_t words[48] {};
+	bool captured = false;
+	using Getter = void *(*)(void *);
+	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	const int32_t slot = vfFindContextLocked(descriptor.low & NGContextDescriptor::addressMask);
+	if (slot >= 0) {
+		const auto &entry = gVfContexts[slot];
+		if (entry.refCount && entry.task == task && entry.descriptorLo == descriptor.low &&
+		    entry.descriptorHi == descriptor.high && entry.state != kVfGucContextEmpty &&
+		    entry.state != kVfGucContextTombstone && entry.contextBacking && entry.ringBacking &&
+		    getMember<uint64_t>(entry.contextBacking,kVfMappedBufferLengthOffset) >= kVfContextMinimumImageBytes) {
+			auto *image = static_cast<volatile uint8_t *>(reinterpret_cast<Getter>(getter)(entry.contextBacking));
+			if (image) {
+				const uint32_t control = *reinterpret_cast<volatile uint32_t *>(image + 0x102C);
+				const uint32_t head = *reinterpret_cast<volatile uint32_t *>(image + 0x1014);
+				const uint32_t bytes = (control & 0x001FF000U) + PAGE_SIZE;
+				if ((control & 1U) && NGVfTimeoutObservation::ringPrefixAdmitted(bytes,
+				    getMember<uint64_t>(entry.ringBacking,kVfMappedBufferLengthOffset),tail,head)) {
+					auto *ring = static_cast<volatile uint32_t *>(reinterpret_cast<Getter>(getter)(entry.ringBacking));
+					if (ring) {
+						for (uint32_t i = 0; i < tail / 4U; ++i) words[i] = ring[i];
+						captured = true;
+					}
+				}
+			}
+		}
+	}
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock,saved);
+	const auto targets = NGVfTimeoutObservation::cpuRingBatchTargets(captured ? words : nullptr,tail/4U);
+	SYSLOG("ngreen", "V375: CPU ring targets desc=%08x:%08x retained=%u complete=%u count=%u tail=%x atomic=0",
+	       descriptor.high,descriptor.low,captured ? 1U : 0U,targets.complete ? 1U : 0U,targets.count,tail);
+	if (!targets.complete) return;
+	void *bootstrapTask = getMember<void *>(gVfAccelerator,0x150);
+	void *bootstrapTable = bootstrapTask ? getMember<void *>(bootstrapTask,0x260) : nullptr;
+	using Reader = bool (*)(const void *,uint64_t,uint64_t &,uint64_t &);
+	for (uint32_t index = 0; index < targets.count; ++index) {
+		for (uint32_t role = 0; role < 2; ++role) {
+			void *table = role ? bootstrapTable : pageTable;
+			const bool exact = table && getMember<mach_vm_address_t>(table,0) == gVfRootObservationVtable &&
+				getMember<mach_vm_address_t>(reinterpret_cast<void *>(gVfRootObservationVtable),0x140) ==
+				gVfLeafObservationReader;
+			uint64_t physical = 0, flags = 0;
+			const bool read = exact && reinterpret_cast<Reader>(gVfLeafObservationReader)(
+				table,targets.addresses[index],physical,flags);
+			SYSLOG("ngreen", "V375: batch first-page desc=%08x:%08x index=%u offset=%x role=%u exact=%u read=%u va=%08x:%08x physical=%08x:%08x flags=%llx same-task=%u atomic=0",
+			       descriptor.high,descriptor.low,index,targets.offsets[index],role,exact ? 1U : 0U,read ? 1U : 0U,
+			       static_cast<uint32_t>(targets.addresses[index]>>32),static_cast<uint32_t>(targets.addresses[index]),
+			       static_cast<uint32_t>(physical>>32),static_cast<uint32_t>(physical),
+			       static_cast<unsigned long long>(flags),bootstrapTask == task ? 1U : 0U);
+		}
+	}
+}
+
 bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	                         const uint32_t *descriptor, IGHwCsType hwCsType,
 	                         unsigned int channelId, unsigned int ringSequence,
@@ -9640,6 +9737,9 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			SYSLOG("ngreen", "V374: task root prequeue desc=%08x:%08x exact=%u present=%u children=%d physical=%08x:%08x atomic=0",
 			       descriptorHi, descriptorLo, exactTable ? 1U : 0U, root ? 1U : 0U,
 			       children, static_cast<uint32_t>(physical >> 32), static_cast<uint32_t>(physical));
+			if (exactTable && gVfAccelerator)
+				vfObserveBatchLeafMapping(task,pageTable,descriptorValue,ringTail,
+				    callback->vfSharedMappedBufferGetVirtualAddress);
 		}
 		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 	}
