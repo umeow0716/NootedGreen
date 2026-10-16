@@ -2,11 +2,49 @@
 
 #include <array>
 #include <cassert>
+#include <cstdio>
+#include <cstring>
 #include "../NootedGreen/kern_vf_device_observation.hpp"
 
 using NGVfContextShutdown::Action;
 
 int main() {
+    {
+        using NGVfTimeoutObservation::Reference;
+        Reference reference{};
+        assert(!reference.matches(7,0x100319,0x20000020,1));
+        reference={7,0x100319,0x20000020,99,true};
+        assert(reference.matches(7,0x100319,0x20000020,99));
+        assert(!reference.matches(8,0x100319,0x20000020,99));
+        assert(!reference.matches(7,0x101319,0x20000020,99));
+        assert(!reference.matches(7,0x100319,0x60000020,99));
+        assert(!reference.matches(7,0x100319,0x20000020,100));
+        for(unsigned bit=0;bit<32;++bit) {
+            assert(!reference.matches(7^(1U<<bit),0x100319,0x20000020,99));
+            assert(!reference.matches(7,0x100319^(1U<<bit),0x20000020,99));
+            assert(!reference.matches(7,0x100319,0x20000020^(1U<<bit),99));
+        }
+        for(unsigned bit=0;bit<64;++bit)
+            assert(!reference.matches(7,0x100319,0x20000020,99^(uint64_t(1)<<bit)));
+        reference.valid=false;
+        assert(!reference.matches(7,0x100319,0x20000020,99));
+        reference={7,0x100319,0x20000020,0,true};
+        assert(!reference.matches(7,0x100319,0x20000020,0));
+        // Six fixed frames (id/flags/state/expectedStamp/observedStamp/
+        // expectedHead/reportedHead/LRCAhead/LRCAtail), no pointer payload.
+        char message[1024]{};
+        size_t used=std::snprintf(message,sizeof(message),
+            "V267: refusing VF event timeout recovery channel=%d V364: capture=%x",INT32_MIN,UINT32_MAX);
+        for(unsigned engine=0;engine<NGVfTimeoutObservation::engineCount;++engine) {
+            int count=std::snprintf(message+used,sizeof(message)-used,
+                " T%u=%x/%x/%x/%x/%x/%x/%x/%x/%x",engine,
+                UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,
+                UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX);
+            assert(count>0 && static_cast<size_t>(count)<sizeof(message)-used);
+            used+=static_cast<size_t>(count);
+        }
+        assert(used<950 && std::strlen(message)==used && std::strstr(message," T5="));
+    }
     {
         NGVfTaskCompletion::Request request{NGVfTaskCompletion::version,sizeof(NGVfTaskCompletion::Request),{}};
         for(auto& event:request.expected)event=UINT64_MAX;

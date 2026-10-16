@@ -465,6 +465,7 @@ IOSimpleLock *gVfContextLock = nullptr;
 VfGucContext *gVfContexts = nullptr;
 uint32_t gVfContextCapacity = 0;
 uint32_t gVfContextLifecycleLogs = 0;
+NGVfTimeoutObservation::Reference gVfTimeoutReferences[NGVfTimeoutObservation::engineCount] {};
 
 constexpr uint32_t kVfContextEventTimeoutMs = 1000;
 constexpr uint32_t kVfCtbBackpressureTimeoutMs = 1000;
@@ -662,6 +663,8 @@ bool vfInitContextBridge()
 	gVfContextLock = lock;
 	gVfContexts = contexts;
 	gVfContextCapacity = gVfContextCount;
+	for (auto &reference : gVfTimeoutReferences)
+		reference = {};
 	IOLockUnlock(gVfGucLock);
 	SYSLOG("ngreen", "V230: initialized direct GuC context namespace with %u IDs",
 	       gVfContextCapacity);
@@ -9297,6 +9300,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 				entry.descriptorHi == descriptorHi &&
 				entry.submissionCoverage.publish(
 					submissionToken, submissionOwner, ringSequence, ringTail);
+			if (coveragePublished && static_cast<size_t>(hwCsType) < NGVfTimeoutObservation::engineCount)
+				gVfTimeoutReferences[static_cast<size_t>(hwCsType)] = {
+					static_cast<uint32_t>(publishedSlot), descriptorLo, descriptorHi,
+					entry.submissionCoverage.serial, true};
 		}
 		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 		if (!coveragePublished) {
@@ -10122,16 +10129,91 @@ void Gen11::vfSuppressPhysicalDebugCapture(void *that, uint32_t reason) {
 	(void)reason;
 }
 
+struct VfTimeoutContextFrame {
+	uint32_t id = 0, flags = 0, state = 0;
+	uint32_t expectedStamp = 0, observedStamp = 0;
+	uint32_t expectedHead = 0, reportedHead = 0, ringHead = 0, ringTail = 0;
+};
+static_assert(sizeof(VfTimeoutContextFrame) == 36, "six bounded CPU frames");
+
+static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
+	VfTimeoutContextFrame (&frames)[NGVfTimeoutObservation::engineCount]) {
+	VfContextOperationGuard operation;
+	if (!operation || gVfIdentity != VfIdentity::Virtual || !getter ||
+	    !gVfAccelerator || !gVfContextLock || !gVfContexts ||
+	    gVfContextShutdownStarted || gVfDeviceStopping)
+		return 0;
+	using Getter = void *(*)(void *);
+	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	OSSynchronizeIO();
+	const bool softwareBefore = getMember<volatile UInt32>(gVfAccelerator, 0xDC8) != 0;
+	for (uint32_t engine = 0; engine < NGVfTimeoutObservation::engineCount; ++engine) {
+		const auto &reference = gVfTimeoutReferences[engine];
+		auto &frame = frames[engine];
+		if (!reference.valid || reference.id >= gVfContextCapacity)
+			continue;
+		frame.id = reference.id;
+		frame.flags = 1;
+		const auto &entry = gVfContexts[reference.id];
+		if (!reference.matches(reference.id, entry.descriptorLo, entry.descriptorHi,
+		                       entry.submissionCoverage.serial) ||
+		    entry.state == kVfGucContextEmpty || entry.state == kVfGucContextTombstone)
+			continue;
+		frame.flags |= 2;
+		frame.state = static_cast<uint32_t>(entry.state);
+		frame.expectedStamp = entry.submissionCoverage.coveredStamp;
+		frame.expectedHead = entry.submissionCoverage.coveredHead;
+		if (entry.submissionCoverage.hasMarkerCoverage()) frame.flags |= 4;
+		if (!entry.contextBacking || !entry.stampBacking ||
+		    getMember<uint64_t>(entry.contextBacking, kVfMappedBufferLengthOffset) < 0x1030 ||
+		    !NGVfContextShutdown::validPacketBacking(static_cast<int32_t>(entry.stampIndex),
+		        getMember<uint64_t>(entry.stampBacking, kVfMappedBufferLengthOffset), sizeof(uint64_t)))
+			continue;
+		// Same UUID-pinned ten-byte leaf and retained CPU mappings as the
+		// existing completion query. No MMIO, native capture or GPU command read.
+		auto *image = static_cast<volatile uint8_t *>(reinterpret_cast<Getter>(getter)(entry.contextBacking));
+		auto *stamps = static_cast<volatile uint8_t *>(reinterpret_cast<Getter>(getter)(entry.stampBacking));
+		if (!image || !stamps) continue;
+		frame.flags |= 8;
+		frame.observedStamp = *reinterpret_cast<volatile uint32_t *>(stamps + static_cast<size_t>(entry.stampIndex) * 64U);
+		frame.reportedHead = *reinterpret_cast<volatile uint32_t *>(image + 0x10);
+		frame.ringHead = *reinterpret_cast<volatile uint32_t *>(image + 0x1014);
+		frame.ringTail = *reinterpret_cast<volatile uint32_t *>(image + 0x101C);
+		if (entry.submissionCoverage.gpuComplete(frame.observedStamp, frame.reportedHead, softwareBefore))
+			frame.flags |= 16;
+	}
+	OSSynchronizeIO();
+	const bool softwareAfter = getMember<volatile UInt32>(gVfAccelerator, 0xDC8) != 0;
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+	if (softwareAfter)
+		for (auto &frame : frames) frame.flags &= ~16U;
+	return 1U | (softwareBefore ? 2U : 0U) | (softwareAfter ? 4U : 0U);
+}
+
+#define NG_TIMEOUT_FRAME_FORMAT "%x/%x/%x/%x/%x/%x/%x/%x/%x"
+#define NG_TIMEOUT_FRAME_ARGS(f) (f).id,(f).flags,(f).state,(f).expectedStamp,(f).observedStamp,(f).expectedHead,(f).reportedHead,(f).ringHead,(f).ringTail
+
 void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	(void)that;
 	// V267: inherited restart clears its software error and restarts the timer
 	// even when eventTimeout returns null. Do not return into that retry or
 	// fabricate completion while a direct GuC context may still DMA. Guest
 	// fail-stop is not PF containment; the independent host watcher is required.
+	VfTimeoutContextFrame frames[NGVfTimeoutObservation::engineCount] {};
+	const uint32_t capture = vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames);
 	vfMarkProtocolFault("VF native event timeout without verified GPU quiescence");
-	PANIC_COND(true, "ngreen", "V267: refusing VF event timeout recovery channel=%d", channel);
+	PANIC_COND(true, "ngreen", "V267: refusing VF event timeout recovery channel=%d V364: capture=%x"
+		" T0=" NG_TIMEOUT_FRAME_FORMAT " T1=" NG_TIMEOUT_FRAME_FORMAT
+		" T2=" NG_TIMEOUT_FRAME_FORMAT " T3=" NG_TIMEOUT_FRAME_FORMAT
+		" T4=" NG_TIMEOUT_FRAME_FORMAT " T5=" NG_TIMEOUT_FRAME_FORMAT,
+		channel,capture,NG_TIMEOUT_FRAME_ARGS(frames[0]),NG_TIMEOUT_FRAME_ARGS(frames[1]),
+		NG_TIMEOUT_FRAME_ARGS(frames[2]),NG_TIMEOUT_FRAME_ARGS(frames[3]),
+		NG_TIMEOUT_FRAME_ARGS(frames[4]),NG_TIMEOUT_FRAME_ARGS(frames[5]));
 	return nullptr;
 }
+
+#undef NG_TIMEOUT_FRAME_ARGS
+#undef NG_TIMEOUT_FRAME_FORMAT
 
 // A zero signature is the native no-diagnosis result consumed by
 // IGAccelFIFOChannel::getHardwareDiagnosisReport.

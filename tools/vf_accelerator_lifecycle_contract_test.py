@@ -6629,10 +6629,38 @@ def source_contract(path):
     fail_stop = timeout_reject.find("PANIC_COND(true")
     if not (0 <= fault < fail_stop < timeout_reject.find("return nullptr;")):
         raise AssertionError(f"{path}: VF event timeout returns before admission closure/fail-stop")
+    capture_call = "vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames)"
+    if timeout_reject.count(capture_call) != 1 or timeout_reject.find(capture_call) >= fault:
+        raise AssertionError(f"{path}: timeout snapshot must precede unchanged fail-stop exactly once")
+    # Permit only the already UUID-pinned CPU-mapping leaf, not arbitrary
+    # callback/native timeout recovery or physical debug capture.
+    timeout_without_capture = timeout_reject.replace(capture_call, "BOUNDED_CPU_CAPTURE")
     for forbidden in ("FunctionCast", "callback->", "getMember", "OSSynchronizeIO",
                       "vfSend", "vfRelease", "OSObject", "0x1240"):
-        if forbidden in timeout_reject:
+        if forbidden in timeout_without_capture:
             raise AssertionError(f"{path}: VF timeout fail-stop gained unsafe side effects: {forbidden}")
+    capture = function_body(source, "static uint32_t vfCaptureTimeoutFrames(")
+    for required in (
+            "VfContextOperationGuard operation;", "!operation", "gVfContextShutdownStarted || gVfDeviceStopping",
+            "IOSimpleLockLockDisableInterrupt(gVfContextLock)",
+            "engine < NGVfTimeoutObservation::engineCount", "reference.id >= gVfContextCapacity",
+            "reference.matches(reference.id, entry.descriptorLo, entry.descriptorHi,",
+            "entry.submissionCoverage.serial", "entry.state == kVfGucContextEmpty",
+            "entry.state == kVfGucContextTombstone", "kVfMappedBufferLengthOffset) < 0x1030",
+            "NGVfContextShutdown::validPacketBacking(static_cast<int32_t>(entry.stampIndex)",
+            "if (!image || !stamps) continue;", "entry.stampIndex) * 64U",
+            "image + 0x10);", "image + 0x1014);", "image + 0x101C);",
+            "const bool softwareBefore", "const bool softwareAfter",
+            "IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved)",
+            "if (softwareAfter)", "frame.flags &= ~16U"):
+        if required not in capture:
+            raise AssertionError(f"{path}: timeout CPU snapshot lost bound/lifetime/race gate: {required}")
+    for forbidden in ("FunctionCast", "callback->", "vfSend", "vfRelease", "SafeForceWake",
+                      "ReadRegister32(", "WriteRegister32(", "IOSleep(", "IOMalloc", "->retain(", "->release("):
+        if forbidden in capture:
+            raise AssertionError(f"{path}: timeout CPU snapshot gained side effect: {forbidden}")
+    if capture.count("reinterpret_cast<Getter>(getter)") != 2:
+        raise AssertionError(f"{path}: timeout snapshot getter inventory changed")
     debug_noop = function_body(
         source, "void Gen11::vfSuppressPhysicalDebugCapture(")
     hang_analysis = function_body(
@@ -7727,12 +7755,62 @@ def event_collection_admission_model():
     print(f"PASS: {cases} selected event-omission states; legal skip/alias and same-count substitution (offline model, not runtime admission)")
 
 
+def timeout_capture_mutations(path):
+    from unittest.mock import patch
+    original_read = pathlib.Path.read_text
+    source = original_read(pathlib.Path(path))
+    capture = function_body(source, "static uint32_t vfCaptureTimeoutFrames(")
+    cases = [
+        ("!operation", "false"),
+        ("gVfContextShutdownStarted || gVfDeviceStopping", "false"),
+        ("engine < NGVfTimeoutObservation::engineCount", "engine < gVfContextCapacity"),
+        ("reference.id >= gVfContextCapacity", "false"),
+        ("reference.matches(reference.id, entry.descriptorLo, entry.descriptorHi,", "reference.matches(reference.id, 0, entry.descriptorHi,"),
+        ("entry.submissionCoverage.serial", "uint64_t(0)"),
+        ("entry.state == kVfGucContextEmpty", "false"),
+        ("entry.state == kVfGucContextTombstone", "false"),
+        ("kVfMappedBufferLengthOffset) < 0x1030", "kVfMappedBufferLengthOffset) < 0x1000"),
+        ("NGVfContextShutdown::validPacketBacking(static_cast<int32_t>(entry.stampIndex)", "NGVfContextShutdown::validPacketBacking(0"),
+        ("if (!image || !stamps) continue;", "if (false) continue;"),
+        ("entry.stampIndex) * 64U", "entry.stampIndex) * 4U"),
+        ("image + 0x10", "image + 0x14"),
+        ("image + 0x1014", "image + 0x1000"),
+        ("image + 0x101C", "image + 0x1000"),
+        ("const bool softwareBefore", "const bool ignoredBefore"),
+        ("const bool softwareAfter", "const bool ignoredAfter"),
+        ("if (softwareAfter)", "if (false)"),
+        ("frame.flags &= ~16U", "frame.flags |= 16U"),
+    ]
+    mutants = []
+    for old, new in cases:
+        assert old in capture
+        mutants.append(source.replace(capture, capture.replace(old, new, 1), 1))
+    for forbidden in ("ReadRegister32(0);", "WriteRegister32(0,0);", "vfSendCtbFastAction();", "IOSleep(1);", "IOMalloc(64);", "backing->release();"):
+        mutants.append(source.replace(capture, capture[:1] + "\n" + forbidden + capture[1:], 1))
+    # The only permitted callback remains the exact leaf mapping accessor.
+    mutants.append(source.replace("vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames)",
+                                  "vfCaptureTimeoutFrames(callback ? callback->oIOAccelGetCommandBufferPtrNoInc : 0, frames)", 1))
+    source_contract(path)
+    for mutation_index, mutated in enumerate(mutants):
+        def read(self, *args, **kwargs):
+            return mutated if self == pathlib.Path(path) else original_read(self, *args, **kwargs)
+        with patch.object(pathlib.Path, "read_text", read):
+            try:
+                source_contract(path)
+            except AssertionError as error:
+                assert "timeout" in str(error), str(error)
+            else:
+                raise AssertionError(f"unsafe timeout observation mutation accepted: {mutation_index}")
+    print(f"PASS: {len(mutants)} timeout snapshot lifetime/bounds/side-effect mutations rejected")
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(f"usage: {sys.argv[0]} kern_gen11.cpp TGL-production TGL-debug")
     direct_branch_candidate_contract()
     event_collection_admission_model()
     source_contract(sys.argv[1])
+    timeout_capture_mutations(sys.argv[1])
     v321_edram_dispatch_source_mutations(sys.argv[1])
     v323_native_publication_source_mutations(sys.argv[1])
     legacy_gpu_producer_containment_mutations(sys.argv[1])

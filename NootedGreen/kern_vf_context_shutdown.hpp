@@ -293,3 +293,21 @@ inline void clearReleasedIdentity(Context &context) {
 }
 
 } // namespace NGVfContextEvent
+
+// Diagnostic identity only, never an admission/completion authority. Keep one
+// last published native context per IGHwCsType instead of scanning a 57K table
+// during fail-stop. The production table lock protects publication and capture.
+namespace NGVfTimeoutObservation {
+constexpr uint32_t engineCount = 6;
+struct Reference {
+	uint32_t id, descriptorLo, descriptorHi;
+	uint64_t serial;
+	bool valid;
+	bool matches(uint32_t candidateId, uint32_t low, uint32_t high,
+	             uint64_t candidateSerial) const {
+		return valid && serial && id == candidateId && descriptorLo == low &&
+			descriptorHi == high && serial == candidateSerial;
+	}
+};
+static_assert(__is_trivial(Reference), "zero-initialized observation identity");
+} // namespace NGVfTimeoutObservation
