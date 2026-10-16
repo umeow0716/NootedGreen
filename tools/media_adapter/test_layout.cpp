@@ -19039,6 +19039,11 @@ int main() {
         input[mode+1]=0xa2;rejected();input=good;
         input[pipe+7]=0x1000;rejected();input=good;
         input[pipe+12]=1U<<9;rejected();input=good;
+        input[pipe+1]=1;rejected();input=good;
+        input[pipe+2]=0x10000;rejected();input=good;
+        input[pipe+3]=1U<<11;rejected();input=good;
+        input[pipe+3]=1U<<15;rejected();input=good;
+        input[pipe+36]=1U<<31;rejected();input=good;
         input[walker+2]=69;rejected();input=good;
         input[source+3]=0x20000003;rejected();input=good;
         input[source+3]=0x48000003;rejected();input=good; // One-byte pitch.

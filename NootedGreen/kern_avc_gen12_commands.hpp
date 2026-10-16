@@ -134,8 +134,15 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
         }
         if(op==0x70840000U){++pipe;emitted=71;
             if(input[at+7] || input[at+8]){r.reason="legacy-bwd-reference";return r;}
-            for(size_t k=3;k<37;k+=3)if(input[at+k]&(1U<<9)){
-                r.reason="compressed-resource";return r;}}
+            for(size_t k=3;k<37;k+=3){
+                if(input[at+k]&(1U<<9)){
+                    r.reason="compressed-resource";return r;}
+                // Gen12 VDENC address triplets: 64B-aligned lower address,
+                // 16-bit upper address, control reserved bit11/bits15..31.
+                if((input[at+k-2]&0x3fU) || (input[at+k-1]&0xffff0000U) ||
+                   (input[at+k]&0xffff8800U)){
+                    r.reason="resource-reserved-bits";return r;}
+            }}
         if(op==0x70870000U){++walkers;emitted=27;
             if(input[at+1]!=nextRow || input[at+2]<=nextRow ||
                input[at+2]>(height+15)/16 || input[at+3]!=0){r.reason="walker-profile";return r;}
