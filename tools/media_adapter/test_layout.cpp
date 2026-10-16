@@ -7,6 +7,7 @@
 #include "tgl_capability_adapter.hpp"
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
+#include "avc_gen12_commands.hpp"
 #include <memory>
 
 // Gate fixture only: deliberately does NOT clear any retention state.
@@ -18926,6 +18927,36 @@ static void testActualNv12LayoutSnapshot() {
     assert(uvRow==32);
 }
 int main() {
+    {
+        std::array<uint32_t,256> input{},output{};size_t used=0;
+        auto add=[&](uint32_t header,size_t n){size_t start=used;input[used++]=header;
+            used+=n-1;return start;};
+        add(0x70000003,5);auto mode=add(0x70800000,2);input[mode+1]=0x82;
+        add(0x70830004,6);auto pipe=add(0x70840023,37);input[pipe+9]=14;
+        auto walker=add(0x70870002,4);input[walker+2]=68;
+        for(uint32_t reg:{0x128a0U,0x128a4U,0x128b4U,0x128b8U}) {
+            auto at=add(0x12000002,4);input[at+1]=reg;input[at+2]=0x1000+reg;
+        }
+        used+=2;
+        auto result=NgreenAvcGen12::produce(input.data(),used,1920,1080,output.data(),output.size());
+        assert(result.ok && result.words==used+67);
+        assert(output[0]==0x68000100 && output[6]==0x68000100 && output[7]==0x70800004);
+        assert(output[8]==0x82 && output[9]==0x2b030a && output[10]==0x7000303);
+        const auto good=input;output.fill(0xdeadbeef);
+        auto rejected=[&](){auto r=NgreenAvcGen12::produce(input.data(),used,1920,1080,
+            output.data(),output.size());assert(!r.ok);for(auto v:output)assert(v==0xdeadbeef);};
+        input[mode+1]=0xa2;rejected();input=good;
+        input[pipe+7]=0x1000;rejected();input=good;
+        input[pipe+12]=1U<<9;rejected();input=good;
+        input[walker+2]=69;rejected();input=good;
+        input[used-1]=1;rejected();input=good;
+        input[walker+5]=0x128a4;rejected();input=good;
+        for(size_t at=0;at<used;++at){auto saved=input[at];input[at]=0xffffffff;
+            if(at==0 || at==mode || at==pipe || at==walker)rejected();input[at]=saved;}
+        assert(!NgreenAvcGen12::produce(input.data(),used,1920,1080,output.data(),1).ok);
+        assert(!NgreenAvcGen12::produce(input.data(),used,1920,1080,input.data(),input.size()).ok);
+        assert(!NgreenAvcGen12::produce(input.data(),used,1919,1080,output.data(),output.size()).ok);
+    }
     for(uint32_t count:{uint32_t{0},uint32_t{17},uint32_t{1}})for(bool nonzero:{false,true}) {
         TglNativeContextPropertyBatch<16> batch;
         TglNativeContextPropertyBatch<16>::CaptureDiagnostic diagnostic;
