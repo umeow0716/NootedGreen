@@ -9795,6 +9795,17 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		SYSLOG("ngreen", "V234: LRCA image desc=%08x:%08x ctrl=%08x head=%08x tail=%08x start=%08x ctl=%08x",
 		       descriptorHi, descriptorLo, state[3], state[5], state[7],
 		       state[9], state[11]);
+		// V374: bounded retained CPU image only, not a page walk or a GPU
+		// completion claim. Native init copies its four roots into these exact
+		// register/value pairs; include register selectors to detect a layout
+		// mismatch rather than silently interpreting unrelated words as PDPs.
+		// The existing minimum image length covers all reads through 0x33.
+		SYSLOG("ngreen", "V374: LRCA roots desc=%08x:%08x p3=%08x:%08x/%08x:%08x p2=%08x:%08x/%08x:%08x p1=%08x:%08x/%08x:%08x p0=%08x:%08x/%08x:%08x",
+		       descriptorHi, descriptorLo,
+		       state[0x24], state[0x25], state[0x26], state[0x27],
+		       state[0x28], state[0x29], state[0x2A], state[0x2B],
+		       state[0x2C], state[0x2D], state[0x2E], state[0x2F],
+		       state[0x30], state[0x31], state[0x32], state[0x33]);
 	}
 
 	queue.unlock();
