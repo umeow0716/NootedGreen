@@ -28690,9 +28690,14 @@ public:
         // request list, including lists needed by later batch items.
         const size_t listBytes=size_t(count)*8;
         if(count && inputs<outputs+listBytes && outputs<inputs+listBytes)return false;
+        if(count && ((outputs<input+16 && input<outputs+listBytes) ||
+                     (outputs<output+16 && output<outputs+listBytes)))return false;
         for(uint32_t i=0;i<count;++i) {
             if(!read(inputs+size_t(i)*8,&requests_[i],8) || !requests_[i] || requests_[i]>UINTPTR_MAX-0x20 ||
                 !read(requests_[i]+0x18,&contexts_[i],8) || !contexts_[i])return false;
+            // Protect only the proven 0x20-byte request identity prefix;
+            // nested payload extents/ownership require separate admission.
+            if(outputs<requests_[i]+0x20 && requests_[i]<outputs+listBytes)return false;
         }
         input_=input;output_=output;inputList_=inputs;outputList_=outputs;count_=count;ready_=true;return true;
     }
