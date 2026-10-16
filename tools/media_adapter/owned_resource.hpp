@@ -51,6 +51,10 @@ inline bool tglProjectTahoeAvcSequenceConsumedFields(const void* source,size_t b
     uint32_t width,uint32_t height,TglAvcSequenceConsumedFields& output) noexcept {
     if(!source || bytes!=0xc18 || !width || width>4096 || !height || height>4096 ||
        (width&1U) || (height&1U))return false;
+    const uintptr_t start=reinterpret_cast<uintptr_t>(source);
+    const uintptr_t target=reinterpret_cast<uintptr_t>(&output);
+    if(start>UINTPTR_MAX-bytes || target>UINTPTR_MAX-sizeof(output) ||
+       (start<target+sizeof(output) && target<start+bytes))return false;
     const auto* data=static_cast<const unsigned char*>(source);
     auto word=[&](size_t offset) noexcept {uint32_t value=0;
         std::memcpy(&value,data+offset,sizeof(value));return value;};

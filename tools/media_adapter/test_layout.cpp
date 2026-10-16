@@ -18960,6 +18960,14 @@ int main() {
         source[0x404/4]=8;
         const auto original=source;
         TglAvcSequenceConsumedFields fields;
+        // Live output object inside the input extent: rejection must precede
+        // all reads/writes, not merely restore the scalar result afterwards.
+        struct Overlap {TglAvcSequenceConsumedFields out;std::array<unsigned char,0xc18> tail;};
+        Overlap overlap{};overlap.out={7,7,7,7,7,7};
+        assert(!tglProjectTahoeAvcSequenceConsumedFields(&overlap,0xc18,1920,1080,overlap.out));
+        assert(overlap.out.level==7 && overlap.out.log2MaxFrameNumMinus4==7);
+        assert(!tglProjectTahoeAvcSequenceConsumedFields(
+            reinterpret_cast<const void*>(UINTPTR_MAX-0xc17),0xc18,1920,1080,fields));
         assert(tglProjectTahoeAvcSequenceConsumedFields(source.data(),sizeof(source),1920,1080,fields));
         assert(fields.level==40 && fields.chroma==1 && fields.frameOnly==1 &&
             fields.mbaff==0 && fields.direct8x8==1 && fields.log2MaxFrameNumMinus4==8 && source==original);
