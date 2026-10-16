@@ -17,6 +17,34 @@
 #include <dlfcn.h>
 #endif
 
+// Proven Tahoe SPS-writer -> TGL frame-consumer field correspondence.
+// NOT a complete native sequence structure and NOT wired into runtime.
+// Caller must first obtain an authenticated, stable owned snapshot; no
+// pointer dereference, Apple text change or blanket eight-byte shift here.
+struct TglAvcSequenceConsumedFields {
+    uint32_t level=0,chroma=0,frameOnly=0,mbaff=0,direct8x8=0;
+};
+inline bool tglProjectTahoeAvcSequenceConsumedFields(const void* source,size_t bytes,
+    uint32_t width,uint32_t height,TglAvcSequenceConsumedFields& output) noexcept {
+    if(!source || bytes!=0xc18 || !width || width>4096 || !height || height>4096 ||
+       (width&1U) || (height&1U))return false;
+    const auto* data=static_cast<const unsigned char*>(source);
+    auto word=[&](size_t offset) noexcept {uint32_t value=0;
+        std::memcpy(&value,data+offset,sizeof(value));return value;};
+    if(word(0)!=1 || word(0x828)!=(width+15U)/16U-1U ||
+       word(0x82c)!=(height+15U)/16U-1U)return false;
+    TglAvcSequenceConsumedFields candidate;
+    candidate.level=word(0x24);candidate.chroma=word(0x2c);
+    candidate.frameOnly=word(0x830);candidate.mbaff=word(0x834);
+    candidate.direct8x8=word(0x838);
+    // Current owned AVC path is eight-bit NV12. Preserve input unchanged
+    // and reject noncanonical flags, rather than truncate width into bool.
+    if(candidate.level>255 || candidate.chroma!=1 || word(0x34) || word(0x38) ||
+       candidate.frameOnly>1 || candidate.mbaff>1 || candidate.direct8x8>1 ||
+       (candidate.frameOnly && candidate.mbaff))return false;
+    output=candidate;return true;
+}
+
 // Tahoe TGL Ief 125e90/126210. Tables must come from the authenticated
 // native image (741e50..742350), not from a different GPU generation.
 // This is a CPU data producer only; it does not issue an SFC command.

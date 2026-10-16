@@ -18929,6 +18929,33 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        std::array<uint32_t,0xc18/4> source{};
+        source[0]=1;source[0x24/4]=40;source[0x2c/4]=1;
+        source[0x828/4]=119;source[0x82c/4]=67;
+        source[0x830/4]=1;source[0x838/4]=1;
+        const auto original=source;
+        TglAvcSequenceConsumedFields fields;
+        assert(tglProjectTahoeAvcSequenceConsumedFields(source.data(),sizeof(source),1920,1080,fields));
+        assert(fields.level==40 && fields.chroma==1 && fields.frameOnly==1 &&
+            fields.mbaff==0 && fields.direct8x8==1 && source==original);
+        auto reject=[&](size_t bytes=sizeof(source)){
+            TglAvcSequenceConsumedFields out{7,7,7,7,7};
+            assert(!tglProjectTahoeAvcSequenceConsumedFields(source.data(),bytes,1920,1080,out));
+            assert(out.level==7 && out.chroma==7 && out.frameOnly==7 && out.mbaff==7 && out.direct8x8==7);
+        };
+        reject(sizeof(source)-1);reject(sizeof(source)+1);
+        for(size_t at:{size_t(0),size_t(0x828/4),size_t(0x82c/4)}){
+            source[at]^=1;reject();source=original;}
+        for(size_t at:{size_t(0x830/4),size_t(0x834/4),size_t(0x838/4)}){
+            source[at]=2;reject();source=original;}
+        source[0x834/4]=1;reject();source=original;
+        source[0x24/4]=256;reject();source=original;
+        source[0x2c/4]=2;reject();source=original;
+        source[0x34/4]=1;reject();source=original;
+        source[0x38/4]=1;reject();source=original;
+        assert(!tglProjectTahoeAvcSequenceConsumedFields(nullptr,sizeof(source),1920,1080,fields));
+    }
+    {
         NGVfAvcPublication::Reply ready{};
         ready.abiVersion=NGVfAvcPublication::version;ready.bytes=sizeof(ready);ready.registryId=19;
         ready.commandProfile=NGVfAvcPublication::profile;
