@@ -311,6 +311,22 @@ int main() {
         assert(!tracker.coveredSerial);
         assert(!tracker.completionEvidence(token,7,4,false,evidence));
         assert(!unmarked.completionEvidence(unmarkedToken,7,4,false,evidence));
+        // Exact same stamp/head/tail after slot reuse must not resurrect the
+        // old invocation serial. This models local reuse, NOT a host reset.
+        for(unsigned cycle=0;cycle<256;++cycle) {
+            const auto previous=tracker.serial;
+            const auto current=tracker.begin(1,7,8,4,true);
+            assert(current>previous && current!=token && current!=rejected);
+            assert(tracker.claim(current,1,7,8) && tracker.publish(current,1,7,8));
+            assert(tracker.finish(current,1,true));
+            const auto before=evidence;
+            assert(!tracker.completionEvidence(token,7,4,false,evidence));
+            assert(!tracker.completionEvidence(previous,7,4,false,evidence));
+            assert(evidence.observationSerial==before.observationSerial &&
+                   evidence.stamp==before.stamp && evidence.head==before.head);
+            assert(tracker.completionEvidence(current,7,4,false,evidence));
+            assert(evidence.observationSerial==current && tracker.resetForReuse());
+        }
     }
 
     // Independent contexts may reuse the same numeric token. The production
