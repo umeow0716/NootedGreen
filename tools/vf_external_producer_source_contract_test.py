@@ -309,7 +309,7 @@ def contract(source, path="<source>"):
     assert "isLockedByCurrentThread" not in stop, \
         f"{path}: always-true Tahoe ownership stub used as a lock proof"
     media_abi = block(source,
-        'if (gVfIdentity == VfIdentity::Virtual && checkKernelArgument("-ngreenmediaadapter") &&',
+        '// Read-only AVC ABI binding may precede TGL VF classification.',
         'KernelPatcher::SolveRequest lifecycle[]')
     for token in ('checkKernelArgument("-ngreenavcgen12")',
                   'gVfMediaPublicationAbiVerified = false;',
@@ -337,6 +337,26 @@ def contract(source, path="<source>"):
         f"{path}: media ABI readiness published before native handles"
     assert 'routeMultiple' not in media_abi and 'FunctionCast' not in media_abi, \
         f"{path}: binding-only stage installed/invoked a media submission route"
+    for token in ('containsAnchor(submit,0xe2,sizeof(classBase))',
+                  'anchorMatches(submit+0x106,usedStore,sizeof(usedStore))',
+                  'anchorMatches(submit+0x13e,resourceBound,sizeof(resourceBound))',
+                  'anchorMatches(submit+0x32a,nativeLock,sizeof(nativeLock))'):
+        assert token in media_abi, f"{path}: unpinned native used-byte/lock ABI"
+    media_install=block(source,'if (vfActive) {\n\t\t\tPANIC_COND(!this->ioPciConfigureInterrupts',
+                        "// Tahoe's telemetry manager")
+    for token in ('checkKernelArgument("-ngreenmediaadapter") && checkKernelArgument("-ngreenavcgen12")',
+                  'gVfMediaPublicationRouteReady=false;',
+                  'const bool qualified=gVfMediaPublicationAbiVerified && mediaEnd && videoEnd && videoTable',
+                  'matches(mediaEnd,mediaThunk,sizeof(mediaThunk))',
+                  'matches(videoEnd+0x124,descriptor,sizeof(descriptor))',
+                  'matches(videoEnd+0x15f,countMinusEnd,sizeof(countMinusEnd))',
+                  'matches(videoEnd+0x22e,nativeSubmit,sizeof(nativeSubmit))',
+                  '0xA48)==videoEnd', '))==videoTable',
+                  'PANIC_COND(!qualified', '!this->oVfMediaEnd',
+                  'gVfMediaPublicationRouteReady=true;'):
+        assert token in media_install, f"{path}: unsafe AVC hook readiness: {token}"
+    assert media_install.index('PANIC_COND(!qualified')<media_install.index('patcher.routeMultiple(index,mediaRoute')<\
+        media_install.index('OSSynchronizeIO();')<media_install.index('gVfMediaPublicationRouteReady=true;')
     media_submit = function_body(source, "IOReturn Gen11::vfContextSubmit(")
     assert media_submit.index('VfExternalProducerGuard guard') < \
         media_submit.index('VfMediaSubmissionScope mediaScope(that,accelerator,mediaEnabled);') < \
@@ -418,6 +438,9 @@ def contract(source, path="<source>"):
 
 def mutation_contract(source, path):
     mutations = (
+        ('gVfMediaPublicationRouteReady=true;','gVfMediaPublicationRouteReady=false;',1),
+        ('0xA48)==videoEnd','0xA48)!=videoEnd',1),
+        ('matches(videoEnd+0x22e,nativeSubmit,sizeof(nativeSubmit))','true',1),
         ('getMember<void *>(context,0x708)!=resource','false',1),
         ('getMember<uint8_t>(resource,0x14)!=0x0A','getMember<uint8_t>(resource,0x14)!=0x0B',1),
         ('!getMember<uint32_t>(mapped,0x38)','false',1),

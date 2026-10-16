@@ -24,6 +24,19 @@ def task_identity_anchors(image):
                for site, anchor in sites.items()), sites
 
 
+def media_submission_anchors(image):
+    # Static native relocation->Media thunk->descriptor->submit evidence only.
+    sites = {
+        0x40d62: bytes.fromhex('554889e5488d05c39609005dffa0480a0000'),
+        0xdae78: struct.pack('<Q', 0x775f2),
+        0x775f2: bytes.fromhex('554889e5415741564155415453504989f6'),
+        0x77716: bytes.fromhex('4d8ba5e00f0000418b5e3089d883e0fc49034608498b8d1806000048894120'),
+        0x77751: bytes.fromhex('418b463483c0fe894130'),
+        0x77820: bytes.fromhex('ff9030010000'),
+    }
+    return all(image[site:site+len(anchor)] == anchor for site,anchor in sites.items()),sites
+
+
 def run(image, success, candidate=False, outer=False):
     uc = Uc(UC_ARCH_X86, UC_MODE_64)
     uc.mem_map(0, (len(image) + 0xfff) & ~0xfff)
@@ -172,9 +185,19 @@ for site, anchor in identity_sites.items():
         assert not task_identity_anchors(mutated)[0], 'task identity mutation accepted'
         mutated[site + byte] ^= 1
 del mutated
+media_ok,media_sites=media_submission_anchors(image)
+assert media_ok,'native AVC Media submission ABI drift'
+mutated=bytearray(image)
+for site,anchor in media_sites.items():
+    for byte in range(len(anchor)):
+        mutated[site+byte]^=1
+        assert not media_submission_anchors(mutated)[0],'Media submission mutation accepted'
+        mutated[site+byte]^=1
+del mutated
 if sys.argv[2:] == ['--task-identity-only']:
     print('PASS exact native VEBOX context598->hardwareContext58 identity; '
           f'{sum(map(len, identity_sites.values()))} changed-byte mutations rejected; '
+          f'native Media submission {sum(map(len,media_sites.values()))} byte mutations rejected; '
           'static identity only, no constructor/GPU/completion execution')
     sys.exit(0)
 assert hashlib.sha256(image[0x7cebc:0x7cfb0]).hexdigest() == \

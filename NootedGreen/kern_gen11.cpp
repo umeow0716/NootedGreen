@@ -2776,7 +2776,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			containsAnchor(sharedMethod,0x44,sizeof(methodLease)) && anchorMatches(sharedMethod+0x44,methodLease,sizeof(methodLease)) &&
 			containsAnchor(sharedMethod,0x58,sizeof(methodClosing)) && anchorMatches(sharedMethod+0x58,methodClosing,sizeof(methodClosing));
 		patcher.clearError();
-		if (gVfIdentity == VfIdentity::Virtual && checkKernelArgument("-ngreenmediaadapter") &&
+		// Read-only AVC ABI binding may precede TGL VF classification. The
+		// actual submission hook is installed only in the classified VF branch.
+		if (checkKernelArgument("-ngreenmediaadapter") &&
 		    checkKernelArgument("-ngreenavcgen12")) {
 			gVfMediaPublicationAbiVerified = false;
 			gVfMediaEndCaller = 0;
@@ -2785,6 +2787,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			gVfMediaMapAddress = gVfMediaMapLength = gVfMediaMapDescriptor = gVfMediaMapOptions = 0;
 			const auto process = patcher.solveSymbol(index,
 				"__ZN15IOAccelContext218processDataBuffersEj", address, size);
+			const auto submit = patcher.solveSymbol(index,
+				"__ZN15IOAccelContext219submit_data_buffersEP33IOAccelContextSubmitDataBuffersInP34IOAccelContextSubmitDataBuffersOutyPy",
+				address,size);
 			const auto table = patcher.solveSymbol(index,
 				"__ZTV25IOAccelKernelMappedMemory", address, size);
 			const auto length = patcher.solveSymbol(index,
@@ -2799,6 +2804,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				"__ZN11IOMemoryMap13getMapOptionsEv");
 			constexpr uint8_t parseCall[] = {0xff,0x90,0x08,0x0a,0,0};
 			constexpr uint8_t endCall[] = {0xff,0x90,0x38,0x0a,0,0};
+			constexpr uint8_t classBase[] = {0x4c,0x8d,0xbb,0xe0,0x06,0,0};
+			constexpr uint8_t usedStore[] = {0x41,0x89,0x74,0x17,0x14,0x41,0xf6,0x44,0x17,0x70,0x01};
+			constexpr uint8_t resourceBound[] = {0x48,0x3b,0xb1,0xc8,0,0,0,0x77,0x7e};
+			constexpr uint8_t nativeLock[] = {0x49,0x8b,0xbc,0x24,0x88,0,0,0,0xe8,0x09,0x45,0x4a,0xeb};
 			constexpr uint8_t lengthLeaf[] = {
 				0x55,0x48,0x89,0xe5,0x48,0x8b,0x7f,0x28,0x48,0x8b,0x07,0x5d,
 				0xff,0xa0,0xc8,0x01,0,0};
@@ -2807,7 +2816,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			constexpr uint8_t mapDescriptorLeaf[] = {0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x10,0x5d,0xc3};
 			constexpr uint8_t mapOptionsLeaf[] = {0x55,0x48,0x89,0xe5,0x8b,0x47,0x0c,0x5d,0xc3};
 			const bool verified = gVfTaskCompletionAbiVerified && process && table && length &&
-				mapAddress && mapLength && mapDescriptor && mapOptions &&
+				submit && mapAddress && mapLength && mapDescriptor && mapOptions &&
+				containsAnchor(submit,0xe2,sizeof(classBase)) && anchorMatches(submit+0xe2,classBase,sizeof(classBase)) &&
+				containsAnchor(submit,0x106,sizeof(usedStore)) && anchorMatches(submit+0x106,usedStore,sizeof(usedStore)) &&
+				containsAnchor(submit,0x13e,sizeof(resourceBound)) && anchorMatches(submit+0x13e,resourceBound,sizeof(resourceBound)) &&
+				containsAnchor(submit,0x32a,sizeof(nativeLock)) && anchorMatches(submit+0x32a,nativeLock,sizeof(nativeLock)) &&
 				containsAnchor(process,0x57,sizeof(parseCall)) && anchorMatches(process+0x57,parseCall,sizeof(parseCall)) &&
 				containsAnchor(process,0x7b,sizeof(endCall)) && anchorMatches(process+0x7b,endCall,sizeof(endCall)) &&
 				containsAnchor(table,0,24) && containsAnchor(length,0,sizeof(lengthLeaf)) &&
@@ -2826,7 +2839,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			OSSynchronizeIO();
 			gVfMediaPublicationAbiVerified = verified;
 			patcher.clearError();
-			SYSLOG("ngreen", "Gen12 AVC native publication ABI verified=%u (no submission route installed)",
+			SYSLOG("ngreen", "Gen12 AVC native publication ABI verified=%u (binding only)",
 			       gVfMediaPublicationAbiVerified ? 1U : 0U);
 		}
 		KernelPatcher::SolveRequest lifecycle[] = {
@@ -3039,6 +3052,50 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		if (vfActive) {
 			PANIC_COND(!this->ioPciConfigureInterrupts, "ngreen",
 				"Cannot resolve the exported Tahoe PCI MSI configurator");
+			if (checkKernelArgument("-ngreenmediaadapter") && checkKernelArgument("-ngreenavcgen12")) {
+				gVfMediaPublicationRouteReady=false;
+				const auto mediaEnd=patcher.solveSymbol(index,
+					"__ZN24IGAccelVideoContextMedia16endCommandStreamER24IOAccelCommandStreamInfo",address,size);
+				const auto videoEnd=patcher.solveSymbol(index,
+					"__ZN19IGAccelVideoContext16endCommandStreamER24IOAccelCommandStreamInfo",address,size);
+				const auto videoTable=patcher.solveSymbol(index,"__ZTV19IGAccelVideoContext",address,size);
+				const auto contains=[address,size](mach_vm_address_t symbol,size_t offset,size_t bytes) {
+					return symbol>=address && symbol-address<=size && offset<=size-(symbol-address) &&
+						bytes<=size-(symbol-address)-offset;
+				};
+				const auto matches=[](mach_vm_address_t site,const uint8_t *expected,size_t bytes) {
+					const auto *actual=reinterpret_cast<const volatile uint8_t *>(site);
+					for(size_t i=0;i<bytes;++i)if(actual[i]!=expected[i])return false;
+					return true;
+				};
+				static constexpr uint8_t mediaThunk[]={0x55,0x48,0x89,0xe5,0x48,0x8d,0x05,0xc3,0x96,0x09,0,
+					0x5d,0xff,0xa0,0x48,0x0a,0,0};
+				static constexpr uint8_t videoEntry[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+					0x41,0x55,0x41,0x54,0x53,0x50,0x49,0x89,0xf6};
+				static constexpr uint8_t descriptor[]={0x4d,0x8b,0xa5,0xe0,0x0f,0,0,0x41,0x8b,0x5e,0x30,
+					0x89,0xd8,0x83,0xe0,0xfc,0x49,0x03,0x46,0x08,0x49,0x8b,0x8d,0x18,0x06,0,0,0x48,0x89,0x41,0x20};
+				static constexpr uint8_t countMinusEnd[]={0x41,0x8b,0x46,0x34,0x83,0xc0,0xfe,0x89,0x41,0x30};
+				static constexpr uint8_t nativeSubmit[]={0xff,0x90,0x30,0x01,0,0};
+				const bool qualified=gVfMediaPublicationAbiVerified && mediaEnd && videoEnd && videoTable &&
+					contains(mediaEnd,0,sizeof(mediaThunk)) && matches(mediaEnd,mediaThunk,sizeof(mediaThunk)) &&
+					contains(videoEnd,0,sizeof(videoEntry)) && matches(videoEnd,videoEntry,sizeof(videoEntry)) &&
+					contains(videoEnd,0x124,sizeof(descriptor)) && matches(videoEnd+0x124,descriptor,sizeof(descriptor)) &&
+					contains(videoEnd,0x15f,sizeof(countMinusEnd)) && matches(videoEnd+0x15f,countMinusEnd,sizeof(countMinusEnd)) &&
+					contains(videoEnd,0x22e,sizeof(nativeSubmit)) && matches(videoEnd+0x22e,nativeSubmit,sizeof(nativeSubmit)) &&
+					contains(videoTable,0xA48,sizeof(mach_vm_address_t)) &&
+					getMember<mach_vm_address_t>(reinterpret_cast<void *>(videoTable),0xA48)==videoEnd &&
+					mediaEnd+11+static_cast<int32_t>(getMember<uint32_t>(reinterpret_cast<void *>(mediaEnd),7))==videoTable;
+				PANIC_COND(!qualified,"ngreen","Unreviewed native AVC Media end submission ABI");
+				KernelPatcher::RouteRequest mediaRoute[]={
+					{"__ZN24IGAccelVideoContextMedia16endCommandStreamER24IOAccelCommandStreamInfo",vfMediaEnd,this->oVfMediaEnd}
+				};
+				patcher.clearError();
+				PANIC_COND(!patcher.routeMultiple(index,mediaRoute,address,size) || !this->oVfMediaEnd,
+					"ngreen","Cannot install owned AVC post-relocation publication route");
+				OSSynchronizeIO();
+				gVfMediaPublicationRouteReady=true;
+				SYSLOG("ngreen","Gen12 AVC post-relocation publication route ready=1 profile=1");
+			}
 			// Tahoe's telemetry manager and per-stamp usage objects are created
 			// before startGraphicsEngine(). TelemetryDisable only gates the trace
 			// stream and context-image patchers; native manager initialization,
