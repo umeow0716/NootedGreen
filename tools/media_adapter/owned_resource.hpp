@@ -143,7 +143,8 @@ inline bool tglValidateOwnedAvcSliceVariableLoops(const void* source,size_t byte
 // Dry-run of exact Tahoe57dd00 and its three variable CPU writers. Requires
 // authenticated stable OWNED inputs; NOT full AVC semantics or runtime admission.
 // Does not perform native PPS-default writeback. Caller must preserve that
-// separate native effect when using owned snapshots. Output is atomic-on-success.
+// separate native effect when using owned snapshots. Rejection leaves output
+// unchanged; success publishes only after counting, not a thread-atomic store.
 inline bool tglBudgetOwnedTahoeAvcSlice(const void* sequence,size_t sequenceBytes,
     const void* picture,size_t pictureBytes,const void* control,size_t controlBytes,
     const void* slice,size_t sliceBytes,TglOwnedAvcNalBudget& output) noexcept {
