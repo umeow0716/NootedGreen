@@ -1,0 +1,28 @@
+name: Build native media smoke only
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/tahoe-sriov-vf]
+    paths: ["tools/metal_smoke/**", ".github/workflows/media-smoke.yml"]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: macos-26-intel
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build only; never execute GPU workload in CI
+        run: |
+          set -eu
+          test "$(uname -m)" = x86_64
+          case "$(xcrun --sdk macosx --show-sdk-version)" in 26.*) ;; *) exit 1;; esac
+          mkdir -p output
+          xcrun clang -arch x86_64 -mmacosx-version-min=13.0 -fobjc-arc -Wall -Wextra -Werror tools/metal_smoke/main.m -framework Foundation -framework Metal -framework VideoToolbox -framework CoreMedia -framework CoreVideo -o output/media-smoke
+          codesign --force --sign - output/media-smoke
+          shasum -a 256 output/media-smoke > output/sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NativeMediaSmoke-Tahoe-x86_64
+          path: output/
+          if-no-files-found: error

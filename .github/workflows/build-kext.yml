@@ -16,6 +16,7 @@ on:
       - "Lilu.kext/**"
       - "MacKernelSDK/**"
       - "tools/**"
+      - "!tools/metal_smoke/**"
       - ".github/workflows/build-kext.yml"
 
 permissions:

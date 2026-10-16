@@ -259,7 +259,8 @@ static bool validateDecodedNV12(CVPixelBufferRef pixelBuffer,
 	       average <= (double)expectedLuma + 16.0;
 }
 
-static int mediaSmoke(void) {
+static int mediaSmoke(bool lowLatency) {
+	stage(lowLatency ? "media-mode: h264-low-latency" : "media-mode: h264-default");
 	const int32_t width = 1920;
 	const int32_t height = 1080;
 	const uint8_t expectedLuma = 0x5a;
@@ -280,11 +281,15 @@ static int mediaSmoke(void) {
 		.called = false,
 	};
 
-	NSDictionary *encoderSpecification = @{
+	NSMutableDictionary *encoderSpecification = [@{
 		(__bridge NSString *)
 			kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder:
 			@YES,
-	};
+	} mutableCopy];
+	if (lowLatency) {
+		encoderSpecification[(__bridge NSString *)
+			kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = @YES;
+	}
 	NSDictionary *pixelAttributes = @{
 		(__bridge NSString *)kCVPixelBufferPixelFormatTypeKey:
 			@(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
@@ -428,7 +433,10 @@ static int mediaSmoke(void) {
 		goto cleanup;
 	}
 	stage("media-hardware-decode-frame: complete");
-	puts("PASS: VideoToolbox hardware H.264 encode/decode completed for 1920x1080 NV12");
+	if (lowLatency)
+		puts("PASS: VideoToolbox hardware low-latency H.264 encode/decode completed for 1920x1080 NV12");
+	else
+		puts("PASS: VideoToolbox hardware H.264 encode/decode completed for 1920x1080 NV12");
 	result = 0;
 
 cleanup:
@@ -452,10 +460,12 @@ cleanup:
 int main(int argc, const char *argv[]) {
 	@autoreleasepool {
 		if (argc == 2 && strcmp(argv[1], "--media-smoke") == 0)
-			return mediaSmoke();
+			return mediaSmoke(false);
+		if (argc == 2 && strcmp(argv[1], "--media-low-latency") == 0)
+			return mediaSmoke(true);
 		if (argc > 2 ||
 		    (argc == 2 && strncmp(argv[1], "--stop-after=", 13) != 0))
-			return fail("usage: metal-smoke [--stop-after=stage|--media-smoke]");
+			return fail("usage: metal-smoke [--stop-after=stage|--media-smoke|--media-low-latency]");
 		return metalSmoke(argc, argv);
 	}
 }
