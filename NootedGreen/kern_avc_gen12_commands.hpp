@@ -150,9 +150,9 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
         for(size_t k=0;k<emitted;++k)output[out++]=k<n?input[at+k]:0;
         if(emitted!=n)output[start]=(input[at]&~0xfffU)|static_cast<uint32_t>(emitted-2);
         if(op==0x70800000U){output[start+2]=0x002b030aU;output[start+3]=0x07000303U;}
-        // Gen12 AddVdencImgStateCmd unconditionally enables extended PAK.
-        // Gen9 reserved this bit; it is not a user feature flag to preserve.
-        if(op==0x70850000U)output[start+1]|=0x20U;
+        // Extended PAK is DW1 bit6 in BOTH pinned Gen9 and Gen12 layouts.
+        // Gen12 bit5 is UltraMode, not Extended PAK; never enable it here.
+        if(op==0x70850000U)output[start+1]|=0x40U;
         if(op==0x70810000U || op==0x70820000U || op==0x70830000U)
             output[start+3]=(input[at+3]&0x000fffffU)|(4U<<27);
         if(op==0x70830000U)output[start+7]=3;

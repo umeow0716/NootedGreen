@@ -19011,7 +19011,13 @@ int main() {
         assert(output[0]==0x68000100 && output[6]==0x68000100 && output[75]==0x70800004);
         assert(output[76]==0x82 && output[77]==0x2b030a && output[78]==0x7000303);
         assert(output[84]==0x20000003 && output[90]==0x20000003 && output[96]==0x20000003);
-        assert(output[196]==0x20);
+        assert(output[196]==0x40 && !(output[196]&0x20));
+        // Captured native AVC DW1=0xc0 already enables Extended PAK.
+        // Preserve it exactly; the previous 0x20 OR incorrectly enabled UltraMode.
+        input[image+1]=0xc0;
+        result=NgreenAvcGen12::produce(input.data(),used,1920,1080,output.data(),output.size());
+        assert(result.ok && output[196]==0xc0);
+        input[image+1]=0;
         const auto good=input;output.fill(0xdeadbeef);
         auto rejected=[&](){auto r=NgreenAvcGen12::produce(input.data(),used,1920,1080,
             output.data(),output.size());assert(!r.ok);for(auto v:output)assert(v==0xdeadbeef);};
