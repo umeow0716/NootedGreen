@@ -105,7 +105,6 @@ INDIRECT_OR_EXTERNAL_PROGRAMS = {
     "tools/vf_command_pool_free_test.py": "manual pinned KC Unicorn execution",
 }
 EXPECTED_TOOL_DATA = {
-    "tools/media_adapter/avc_gen12_commands.hpp",
     "tools/media_adapter/tgl_capability_adapter.hpp",
     "tools/media_adapter/descriptor_bridge.hpp",
     "tools/media_adapter/owned_resource.hpp",

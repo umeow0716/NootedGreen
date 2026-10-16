@@ -318,11 +318,53 @@ def contract(source, path="<source>"):
         f"{path}: media ABI readiness published before native handles"
     assert 'routeMultiple' not in media_abi and 'FunctionCast' not in media_abi, \
         f"{path}: binding-only stage installed/invoked a media submission route"
+    media_submit = function_body(source, "IOReturn Gen11::vfContextSubmit(")
+    assert media_submit.index('VfExternalProducerGuard guard') < \
+        media_submit.index('VfMediaSubmissionScope mediaScope(that,accelerator,mediaEnabled);') < \
+        media_submit.index('callback->oVfContextSubmit'), f"{path}: media scope escapes outer producer lease"
+    for token in ('gVfIdentity == VfIdentity::Virtual', 'accelerator == gVfAccelerator',
+                  'checkKernelArgument("-ngreenmediaadapter")', 'checkKernelArgument("-ngreenavcgen12")',
+                  'if (!mediaScope)', 'return kIOReturnNoResources;'):
+        assert token in media_submit, f"{path}: incomplete media outer scope gate: {token}"
+    media_scope = function_body(source, 'VfMediaSubmissionScope(void *context, void *accelerator, bool enabled)')
+    assert 'static VfMediaSubmission gVfMediaSubmissions[32] {};' in source, \
+        f"{path}: unbounded media submission scratch slots"
+    for token in ('if (!enabled) return;', '!gVfMediaPublicationAbiVerified', 'entry.thread == owner',
+                  'OSCompareAndSwapPtr(nullptr,owner,&entry.thread)',
+                  'IOMallocZero(sizeof(NgreenAvcGen12::PublishScratch))',
+                  'static_cast<OSObject *>(context)->retain();',
+                  'static_cast<OSObject *>(accelerator)->retain();'):
+        assert token in media_scope, f"{path}: lost real kernel submission scope ownership: {token}"
+    assert media_scope.index('if (!enabled) return;') < media_scope.index('current_thread()') < \
+        media_scope.index('IOMallocZero('), f"{path}: PF/pass-through allocated media scratch"
+    assert 'getMember<void *>(shared,' not in media_scope, f"{path}: shared followed before native lock"
+    locked_media = function_body(source, 'static bool bindLocked(')
+    for token in ('caller != gVfMediaEndCaller', 'entry.translating',
+                  'stream != static_cast<uint8_t *>(entry.context)+0x650',
+                  'entry.thread != reinterpret_cast<void *>(current_thread())',
+                  'getMember<void *>(entry.context,0x578)',
+                  'getMember<void *>(entry.context,0x5A0)',
+                  'getMember<void *>(shared,0x80) != task', '!getMember<void *>(shared,0x88)',
+                  'entry.gpuTask != gpuTask'):
+        assert token in locked_media, f"{path}: missing locked media identity gate: {token}"
+    media_exit = function_body(source, '~VfMediaSubmissionScope()')
+    for token in ('slot->thread != owner || slot->translating', 'bzero(slot->scratch',
+                  'IOFree(slot->scratch', 'OSCompareAndSwapPtr(owner,nullptr,&slot->thread)',
+                  'static_cast<OSObject *>(context)->release();',
+                  'static_cast<OSObject *>(accelerator)->release();'):
+        assert token in media_exit, f"{path}: incomplete media scope exit: {token}"
     print("PASS counted VF external-producer source/route/teardown contract")
 
 
 def mutation_contract(source, path):
     mutations = (
+        ('getMember<void *>(entry.context,0x578)', 'getMember<void *>(entry.context,0x580)'),
+        ('getMember<void *>(shared,0x80) != task', 'false'),
+        ('VfMediaSubmissionScope mediaScope(that,accelerator,mediaEnabled);',
+         'VfMediaSubmissionScope mediaScope(nullptr,accelerator,mediaEnabled);'),
+        ('IOMallocZero(sizeof(NgreenAvcGen12::PublishScratch))', 'nullptr'),
+        ('caller != gVfMediaEndCaller', 'false'),
+        ('stream != static_cast<uint8_t *>(entry.context)+0x650', 'false'),
         ('gVfMediaEndCaller = process + 0x81;', 'gVfMediaEndCaller = process + 0x80;'),
         ('gVfMediaKernelMappedMemoryVtable = table + 16;', 'gVfMediaKernelMappedMemoryVtable = table;'),
         ('checkKernelArgument("-ngreenavcgen12")', 'true'),

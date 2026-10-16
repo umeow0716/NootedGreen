@@ -7,7 +7,7 @@
 #include "tgl_capability_adapter.hpp"
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
-#include "avc_gen12_commands.hpp"
+#include "../../NootedGreen/kern_avc_gen12_commands.hpp"
 #include <memory>
 
 // Gate fixture only: deliberately does NOT clear any retention state.

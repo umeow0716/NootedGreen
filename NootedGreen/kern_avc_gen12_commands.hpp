@@ -1,8 +1,8 @@
 #pragma once
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
 
-// Candidate CPU producer, deliberately NOT wired to adapter/kernel submission.
+// Shared kernel/CPU producer; not yet wired to a native submission route.
 // Callers must independently prove writable extent, task/physical ownership,
 // generation, relocation completion and native descriptor/count publication.
 // Intel generated Gen12 definitions: media-driver 2a32c7fafd8fa169112e962587777969cc8c654f.

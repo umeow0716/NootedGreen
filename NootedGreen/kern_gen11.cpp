@@ -12,6 +12,7 @@
 #include "kern_vf_accelerator_stop.hpp"
 #include "kern_vf_context_shutdown.hpp"
 #include "kern_vf_submission_gate.hpp"
+#include "kern_avc_gen12_commands.hpp"
 #include "kern_vf_runtime.hpp"
 #include "kern_vf_device_observation.hpp"
 #include "kern_vf_runtime_patch.hpp"
@@ -1113,6 +1114,116 @@ public:
 
 private:
 	bool admitted;
+};
+
+struct VfMediaSubmission {
+	void *volatile thread;
+	void *context;
+	void *accelerator;
+	void *task;
+	void *shared;
+	void *gpuTask;
+	NgreenAvcGen12::PublishScratch *scratch;
+	bool translating;
+};
+static VfMediaSubmission gVfMediaSubmissions[32] {};
+static_assert(sizeof(NgreenAvcGen12::PublishScratch) == 16U*1024U,
+              "owned AVC per-submission scratch budget changed");
+
+// The existing outer producer lease encloses this scope and its destruction.
+// No allocation occurs inside the native accelerator IOLock-held interval.
+class VfMediaSubmissionScope {
+public:
+	VfMediaSubmissionScope(void *context, void *accelerator, bool enabled) :
+		slot(nullptr), admitted(true), refusal("passthrough") {
+		if (!enabled) return;
+		admitted = false;
+		refusal="family-abi";
+		if (!gVfMediaPublicationAbiVerified || !context || !accelerator ||
+		    accelerator != gVfAccelerator || getMember<void *>(context,0x5A8) != accelerator)
+			return;
+		refusal="thread";
+		void *owner = reinterpret_cast<void *>(current_thread());
+		if (!owner) return;
+		// Recursive submission would not own a distinct native locked interval.
+		refusal="reentry";
+		for (auto &entry : gVfMediaSubmissions)
+			if (entry.thread == owner) return;
+		refusal="slot-capacity";
+		for (auto &entry : gVfMediaSubmissions) {
+			if (!OSCompareAndSwapPtr(nullptr,owner,&entry.thread)) continue;
+			auto *scratch = static_cast<NgreenAvcGen12::PublishScratch *>(
+				IOMallocZero(sizeof(NgreenAvcGen12::PublishScratch)));
+			if (!scratch) {
+				refusal="scratch-allocation";
+				OSCompareAndSwapPtr(owner,nullptr,&entry.thread);
+				return;
+			}
+			static_cast<OSObject *>(context)->retain();
+			static_cast<OSObject *>(accelerator)->retain();
+			entry.context=context;entry.accelerator=accelerator;entry.task=nullptr;
+			entry.shared=nullptr;entry.gpuTask=nullptr;
+			entry.scratch=scratch;entry.translating=false;
+			OSSynchronizeIO();
+			slot=&entry;admitted=true;refusal="admitted";
+			return;
+		}
+	}
+	~VfMediaSubmissionScope() {
+		if (!slot) return;
+		void *owner=reinterpret_cast<void *>(current_thread());
+		PANIC_COND(slot->thread != owner || slot->translating,"ngreen",
+		           "Invalid owned AVC submission scope exit");
+		void *context=slot->context,*accelerator=slot->accelerator;
+		bzero(slot->scratch,sizeof(NgreenAvcGen12::PublishScratch));
+		IOFree(slot->scratch,sizeof(NgreenAvcGen12::PublishScratch));
+		slot->scratch=nullptr;slot->context=nullptr;slot->accelerator=nullptr;
+		slot->task=nullptr;slot->shared=nullptr;slot->gpuTask=nullptr;
+		OSSynchronizeIO();
+		PANIC_COND(!OSCompareAndSwapPtr(owner,nullptr,&slot->thread),"ngreen",
+		           "Lost owned AVC submission thread slot");
+		static_cast<OSObject *>(context)->release();
+		static_cast<OSObject *>(accelerator)->release();
+	}
+	VfMediaSubmissionScope(const VfMediaSubmissionScope &)=delete;
+	VfMediaSubmissionScope &operator=(const VfMediaSubmissionScope &)=delete;
+	explicit operator bool() const { return admitted; }
+	const char *reason() const { return refusal; }
+	// Only the UUID/anchor-pinned processDataBuffers caller carries the native
+	// accelerator IOLock. Never follow shared/task pointers in the outer scope.
+	static bool bindLocked(VfMediaSubmission &entry, void *stream, mach_vm_address_t caller) {
+		if (!gVfMediaPublicationAbiVerified || caller != gVfMediaEndCaller || !entry.context ||
+		    stream != static_cast<uint8_t *>(entry.context)+0x650 || entry.translating ||
+		    entry.thread != reinterpret_cast<void *>(current_thread()) ||
+		    entry.accelerator != gVfAccelerator ||
+		    getMember<void *>(entry.context,0x5A8) != entry.accelerator)
+			return false;
+		void *task=getMember<void *>(entry.context,0x578);
+		void *shared=getMember<void *>(entry.context,0x5A0);
+		if (!task || !shared || getMember<void *>(shared,0x78) != entry.accelerator ||
+		    getMember<void *>(shared,0x80) != task || !getMember<void *>(shared,0x88))
+			return false;
+		void *gpuTask=getMember<void *>(shared,0x88);
+		if ((entry.task && entry.task != task) || (entry.shared && entry.shared != shared) ||
+		    (entry.gpuTask && entry.gpuTask != gpuTask))return false;
+		entry.task=task;entry.shared=shared;entry.gpuTask=gpuTask;
+		return true;
+	}
+	static VfMediaSubmission *find(void *context) {
+		void *owner=reinterpret_cast<void *>(current_thread());
+		VfMediaSubmission *found=nullptr;
+		OSSynchronizeIO();
+		for (auto &entry : gVfMediaSubmissions) {
+			if (entry.thread != owner || entry.context != context) continue;
+			if (found) return nullptr;
+			found=&entry;
+		}
+		return found;
+	}
+private:
+	VfMediaSubmission *slot;
+	bool admitted;
+	const char *refusal;
 };
 
 bool vfCloseContextOperationGateAndWait(void *guc)
@@ -5745,6 +5856,14 @@ IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
 	VfExternalProducerGuard guard(accelerator);
 	if (!guard)
 		return kIOReturnOffline;
+	const bool mediaEnabled = gVfIdentity == VfIdentity::Virtual && accelerator &&
+		accelerator == gVfAccelerator && checkKernelArgument("-ngreenmediaadapter") &&
+		checkKernelArgument("-ngreenavcgen12");
+	VfMediaSubmissionScope mediaScope(that,accelerator,mediaEnabled);
+	if (!mediaScope) {
+		SYSLOG("ngreen", "Gen12 AVC submission scope refused reason=%s",mediaScope.reason());
+		return kIOReturnNoResources;
+	}
 	return FunctionCast(vfContextSubmit, callback->oVfContextSubmit)(
 		that, input, output, options, stamp);
 }
