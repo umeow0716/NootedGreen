@@ -116,6 +116,11 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
                 if(input[at+k]&0x600U){r.reason="mfx-compression";return r;}
             if(input[at+61]){r.reason="reference-compression";return r;}}
         if(op==0x71000000U){++mfxImage;
+            const uint32_t mbWidth=(width+15U)/16U,mbHeight=(height+15U)/16U;
+            const uint32_t mbCount=mbWidth*mbHeight;
+            if(input[at+1]!=(mbCount>0xffffU?0xffffU:mbCount) ||
+               input[at+2]!=((mbHeight-1U)<<16|(mbWidth-1U))){
+                r.reason="mfx-image-geometry";return r;}
             if(input[at+17]&0x3fU){r.reason="fractional-qp";return r;}}
         if(op==0x70850000U){++image;
             if(input[at+1]&0x20U || input[at+24] || input[at+34]&0x4000U){

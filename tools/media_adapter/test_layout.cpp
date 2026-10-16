@@ -19004,6 +19004,7 @@ int main() {
         auto downscaled=surface(0x70830004,480,272);
         auto pipe=add(0x70840023,37);input[pipe+9]=14;
         auto mfxImage=add(0x71000013,21);auto image=add(0x70850021,35);
+        input[mfxImage+1]=120U*68U;input[mfxImage+2]=(67U<<16)|119U;
         auto walker=add(0x70870002,4);input[walker+2]=68;
         for(uint32_t reg:{0x128a0U,0x128a4U,0x128b4U,0x128b8U}) {
             auto at=add(0x12000002,4);input[at+1]=reg;input[at+2]=0x1000+reg;
@@ -19053,6 +19054,9 @@ int main() {
         input[source+2]^=16;rejected();input=good;
         input[mfxPipe+3]=0x400;rejected();input=good;
         input[mfxImage+17]=1;rejected();input=good;
+        input[mfxImage+1]=0;rejected();input=good;
+        input[mfxImage+2]^=1;rejected();input=good;
+        input[mfxImage+2]|=1U<<8;rejected();input=good;
         input[image+1]=0x20;rejected();input=good;
         input[image+24]=1;rejected();input=good;
         input[image+34]=0x4000;rejected();input=good;
