@@ -18966,6 +18966,28 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        std::array<uint8_t,0xc18> sequence{};
+        std::array<uint8_t,0x488> picture{};
+        std::array<uint8_t,16> control{};control[12]=1;
+        alignas(TglOwnedAvcNalBudget) std::array<uint8_t,0xe10> slice{};
+        TglOwnedAvcNalBudget result{123,456};
+        auto budget=[&](size_t extent) noexcept {
+            return tglBudgetOwnedTahoeAvcSlice(sequence.data(),sequence.size(),picture.data(),picture.size(),
+                control.data(),control.size(),slice.data(),extent,result);
+        };
+        assert(budget(slice.size()) && result.meaningfulBits==46 && result.physicalBytes==8);
+        result={123,456};
+        assert(!budget(slice.size()-1) && result.meaningfulBits==123 && result.physicalBytes==456);
+        const uint32_t overflow=UINT32_MAX;
+        std::memcpy(slice.data()+4,&overflow,4);
+        assert(!budget(slice.size()) && result.meaningfulBits==123 && result.physicalBytes==456);
+        slice.fill(0);
+        auto& alias=*reinterpret_cast<TglOwnedAvcNalBudget*>(slice.data());
+        assert(!tglBudgetOwnedTahoeAvcSlice(sequence.data(),sequence.size(),picture.data(),picture.size(),
+            control.data(),control.size(),slice.data(),slice.size(),alias));
+        for(uint8_t value:slice)assert(value==0);
+    }
+    {
         std::array<uint32_t,0xc18/4> sps{};
         sps[0]=1;sps[1]=100;sps[0x24/4]=40;sps[0x2c/4]=1;
         sps[0x404/4]=8;sps[0x40c/4]=10;sps[0x820/4]=4;

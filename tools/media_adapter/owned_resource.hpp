@@ -140,6 +140,100 @@ inline bool tglValidateOwnedAvcSliceVariableLoops(const void* source,size_t byte
     }
     return true;
 }
+// Dry-run of exact Tahoe57dd00 and its three variable CPU writers. Requires
+// authenticated stable OWNED inputs; NOT full AVC semantics or runtime admission.
+// Does not perform native PPS-default writeback. Caller must preserve that
+// separate native effect when using owned snapshots. Output is atomic-on-success.
+inline bool tglBudgetOwnedTahoeAvcSlice(const void* sequence,size_t sequenceBytes,
+    const void* picture,size_t pictureBytes,const void* control,size_t controlBytes,
+    const void* slice,size_t sliceBytes,TglOwnedAvcNalBudget& output) noexcept {
+    struct Source {const void* pointer;size_t bytes,required;};
+    const Source sources[]={{sequence,sequenceBytes,0xc18},{picture,pictureBytes,0x488},
+        {control,controlBytes,16},{slice,sliceBytes,0xe10}};
+    const uintptr_t target=reinterpret_cast<uintptr_t>(&output);
+    if(target>UINTPTR_MAX-sizeof(output))return false;
+    for(const auto& source:sources){
+        const uintptr_t at=reinterpret_cast<uintptr_t>(source.pointer);
+        if(!at || source.bytes!=source.required || at>UINTPTR_MAX-source.bytes ||
+           (at<target+sizeof(output) && target<at+source.bytes))return false;
+    }
+    auto word=[](const void* data,size_t at) noexcept {uint32_t value=0;
+        std::memcpy(&value,static_cast<const uint8_t*>(data)+at,4);return value;};
+    auto s=[&](size_t at) noexcept {return word(sequence,at);};
+    auto p=[&](size_t at) noexcept {return word(picture,at);};
+    auto r=[&](size_t at) noexcept {return word(slice,at);};
+    struct Counter {
+        uint32_t bits=32;bool valid=true;
+        void add(uint32_t n) noexcept {if(n>8192-bits)valid=false;else bits+=n;}
+        void fixed(uint32_t v,uint32_t n) noexcept {
+            if(!n || n>32 || (n<32 && v>=(uint32_t{1}<<n)))valid=false;else add(n);
+        }
+        void ue(uint32_t v) noexcept {
+            if(v==UINT32_MAX){valid=false;return;}
+            uint32_t width=0;for(++v;v;v>>=1)++width;add(2*width-1);
+        }
+        void se(int32_t v) noexcept {
+            if(v==INT32_MIN){valid=false;return;}
+            ue(v>0?uint32_t(int64_t(v)*2-1):uint32_t(-int64_t(v)*2));
+        }
+    } c;
+    const uint32_t type=r(8),nal=word(control,12),ref=word(control,8);
+    const bool b=type==1 || type==6,intra=type==2 || type==7;
+    if(type>7 || type==3 || type==4 || ref>3 || (nal!=1 && nal!=5) ||
+       s(0x404)>12 || s(0x408)>2 || p(0x10)>1 || p(0xb4)>1 ||
+       p(0xc)>1 || p(0xac)>1 || r(0x14)>1 ||
+       (s(0x408)==1 && s(0x410)>1))return false;
+    c.ue(r(4));c.ue(type);c.ue(r(12));c.fixed(r(0x10),s(0x404)+4);
+    if(nal==5)c.ue(r(0x1c));
+    if(s(0x408)==0){
+        if(s(0x40c)>12)return false;
+        c.fixed(r(0x20),s(0x40c)+4);
+        if(p(0x10) && !r(0x14))c.se(int32_t(r(0x24)));
+    }
+    if(s(0x408)==1 && !s(0x410)){
+        c.se(int32_t(r(0x28)));if(p(0x10) && !r(0x14))c.se(int32_t(r(0x2c)));
+    }
+    if(p(0xb4))c.ue(r(0x30));
+    if(b)c.fixed(r(0x34),1);
+    uint32_t refs0=r(0x3c),refs1=r(0x40);
+    if(!intra){
+        c.fixed(r(0x38),1);
+        if(r(0x38)){c.ue(refs0);if(b)c.ue(refs1);}
+        else{refs0=p(0x90);refs1=p(0x94);}
+    }
+    const bool weighted=(!b && !intra && p(0x98)==1) || (b && p(0x9c)==1);
+    if(!tglValidateOwnedAvcSliceVariableLoops(slice,sliceBytes,weighted,refs0,refs1,ref!=0,nal==5))return false;
+    auto refmod=[&](size_t flag,size_t list) noexcept {
+        c.fixed(r(flag),1);if(!r(flag))return;
+        for(uint32_t i=0;i<32;++i){
+            const size_t at=list+12*i;const uint32_t idc=r(at);c.ue(idc);
+            if(idc==3)break;if(idc<2)c.ue(r(at+4));else if(idc==2)c.ue(r(at+8));
+        }
+    };
+    if(!intra)refmod(0x48,0x4c);if(b)refmod(0x1cc,0x1d0);
+    if(weighted){
+        c.ue(r(0x354));if(s(0x2c))c.ue(r(0x358));
+        for(uint32_t list=0;list<(b?2U:1U);++list)
+            for(uint32_t i=0;i<=(list?refs1:refs0);++i){
+                const size_t at=0x35c+0x40*i+0x20*list;
+                c.fixed(r(at),1);if(r(at)){c.se(int32_t(r(at+4)));c.se(int32_t(r(at+8)));}
+                if(s(0x2c)){c.fixed(r(at+0xc),1);if(r(at+0xc))
+                    for(size_t d:{size_t(0x10),size_t(0x18),size_t(0x14),size_t(0x1c)})c.se(int32_t(r(at+d)));}
+            }
+    }
+    if(ref){
+        if(nal==5){c.fixed(r(0xb60),1);c.fixed(r(0xb64),1);}
+        else{c.fixed(r(0xb68),1);if(r(0xb68))for(uint32_t i=0;i<r(0xdec);++i){
+            const size_t at=0xb6c+20*i;const uint32_t op=r(at);c.ue(op);
+            if(op==1 || op==3)c.ue(r(at+4));if(op==2)c.ue(r(at+8));
+            if(op==3 || op==6)c.ue(r(at+12));if(op==4)c.ue(r(at+16));
+        }}
+    }
+    if(p(0xc) && !intra)c.ue(r(0xdf0));c.se(int32_t(r(0xdf4)));
+    if(p(0xac)){c.ue(r(0xe00));if(r(0xe00)!=1){c.se(int32_t(r(0xe04)));c.se(int32_t(r(0xe08)));}}
+    if(!c.valid)return false;
+    output={c.bits,((c.bits+31)/32)*4};return true;
+}
 // Exact2618d inline slice-header profile: owned input only, no resource or
 // original request mutation. Not wired into native submission/index selection.
 inline bool tglBuildOwnedAvcSliceHeaderPacket(const void* source,size_t extent,
