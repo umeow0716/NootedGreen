@@ -297,11 +297,35 @@ def contract(source, path="<source>"):
         f"{path}: PF pass-through or sole VF native-stop call changed"
     assert "isLockedByCurrentThread" not in stop, \
         f"{path}: always-true Tahoe ownership stub used as a lock proof"
+    media_abi = block(source,
+        'if (gVfIdentity == VfIdentity::Virtual && checkKernelArgument("-ngreenmediaadapter") &&',
+        'KernelPatcher::SolveRequest lifecycle[]')
+    for token in ('checkKernelArgument("-ngreenavcgen12")',
+                  'gVfMediaPublicationAbiVerified = false;',
+                  'const bool verified = gVfTaskCompletionAbiVerified && process && table && length',
+                  'containsAnchor(process,0x57,sizeof(parseCall))',
+                  'anchorMatches(process+0x57,parseCall,sizeof(parseCall))',
+                  'containsAnchor(process,0x7b,sizeof(endCall))',
+                  'anchorMatches(process+0x7b,endCall,sizeof(endCall))',
+                  'anchorMatches(length,lengthLeaf,sizeof(lengthLeaf))',
+                  'gVfMediaEndCaller = process + 0x81;',
+                  'gVfMediaKernelMappedMemoryVtable = table + 16;',
+                  'gVfMediaKernelMappedMemoryLength = length;'):
+        assert token in media_abi, f"{path}: lost media publication ABI gate: {token}"
+    assert media_abi.index('gVfMediaKernelMappedMemoryLength = length;') < \
+        media_abi.index('OSSynchronizeIO();') < \
+        media_abi.index('gVfMediaPublicationAbiVerified = verified;'), \
+        f"{path}: media ABI readiness published before native handles"
+    assert 'routeMultiple' not in media_abi and 'FunctionCast' not in media_abi, \
+        f"{path}: binding-only stage installed/invoked a media submission route"
     print("PASS counted VF external-producer source/route/teardown contract")
 
 
 def mutation_contract(source, path):
     mutations = (
+        ('gVfMediaEndCaller = process + 0x81;', 'gVfMediaEndCaller = process + 0x80;'),
+        ('gVfMediaKernelMappedMemoryVtable = table + 16;', 'gVfMediaKernelMappedMemoryVtable = table;'),
+        ('checkKernelArgument("-ngreenavcgen12")', 'true'),
         ("selector == NGVfDeviceObservation::selector", "selector >= NGVfDeviceObservation::selector", 1),
         ("accelerator && accelerator == gVfAccelerator", "accelerator", 1),
         ('checkKernelArgument("-ngreenmediaadapter"))\n\t\treturn vfReadOwnedDeviceObservation',

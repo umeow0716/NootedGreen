@@ -171,6 +171,12 @@ void *gVfHardwareGuc = nullptr;
 void *gVfAccelerator = nullptr;
 bool gVfDeviceObservationAbiVerified = false;
 bool gVfTaskCompletionAbiVerified = false;
+// Optional AVC producer integration handles. Resolving these does not enable
+// a route, map memory, invoke a getter, or authorize a command-buffer write.
+bool gVfMediaPublicationAbiVerified = false;
+mach_vm_address_t gVfMediaEndCaller = 0;
+mach_vm_address_t gVfMediaKernelMappedMemoryVtable = 0;
+mach_vm_address_t gVfMediaKernelMappedMemoryLength = 0;
 // Tahoe's IntelAccelerator::stop releases and clears +0x1260 before invoking
 // the inherited IOGraphicsAccelerator2::stop.  That inherited body then drops
 // the kernel task, whose stamp/scratch mappings can still enter release_pte and
@@ -2555,6 +2561,39 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			containsAnchor(sharedMethod,0x44,sizeof(methodLease)) && anchorMatches(sharedMethod+0x44,methodLease,sizeof(methodLease)) &&
 			containsAnchor(sharedMethod,0x58,sizeof(methodClosing)) && anchorMatches(sharedMethod+0x58,methodClosing,sizeof(methodClosing));
 		patcher.clearError();
+		if (gVfIdentity == VfIdentity::Virtual && checkKernelArgument("-ngreenmediaadapter") &&
+		    checkKernelArgument("-ngreenavcgen12")) {
+			gVfMediaPublicationAbiVerified = false;
+			gVfMediaEndCaller = 0;
+			gVfMediaKernelMappedMemoryVtable = 0;
+			gVfMediaKernelMappedMemoryLength = 0;
+			const auto process = patcher.solveSymbol(index,
+				"__ZN15IOAccelContext218processDataBuffersEj", address, size);
+			const auto table = patcher.solveSymbol(index,
+				"__ZTV25IOAccelKernelMappedMemory", address, size);
+			const auto length = patcher.solveSymbol(index,
+				"__ZNK25IOAccelKernelMappedMemory9getLengthEv", address, size);
+			constexpr uint8_t parseCall[] = {0xff,0x90,0x08,0x0a,0,0};
+			constexpr uint8_t endCall[] = {0xff,0x90,0x38,0x0a,0,0};
+			constexpr uint8_t lengthLeaf[] = {
+				0x55,0x48,0x89,0xe5,0x48,0x8b,0x7f,0x28,0x48,0x8b,0x07,0x5d,
+				0xff,0xa0,0xc8,0x01,0,0};
+			const bool verified = gVfTaskCompletionAbiVerified && process && table && length &&
+				containsAnchor(process,0x57,sizeof(parseCall)) && anchorMatches(process+0x57,parseCall,sizeof(parseCall)) &&
+				containsAnchor(process,0x7b,sizeof(endCall)) && anchorMatches(process+0x7b,endCall,sizeof(endCall)) &&
+				containsAnchor(table,0,24) && containsAnchor(length,0,sizeof(lengthLeaf)) &&
+				anchorMatches(length,lengthLeaf,sizeof(lengthLeaf));
+			if (verified) {
+				gVfMediaEndCaller = process + 0x81;
+				gVfMediaKernelMappedMemoryVtable = table + 16;
+				gVfMediaKernelMappedMemoryLength = length;
+			}
+			OSSynchronizeIO();
+			gVfMediaPublicationAbiVerified = verified;
+			patcher.clearError();
+			SYSLOG("ngreen", "Gen12 AVC native publication ABI verified=%u (no submission route installed)",
+			       gVfMediaPublicationAbiVerified ? 1U : 0U);
+		}
 		KernelPatcher::SolveRequest lifecycle[] = {
 			{"__ZN22IOGraphicsAccelerator217enableAcceleratorEv",
 			 this->ioGraphicsEnableAccelerator},
