@@ -109,6 +109,7 @@ EXPECTED_TOOL_DATA = {
     "tools/media_adapter/descriptor_bridge.hpp",
     "tools/media_adapter/owned_resource.hpp",
     "tools/media_adapter/native_return_observer.hpp",
+    "tools/media_adapter/native_avc_reservation.hpp",
     "tools/media_adapter/native_runtime_snapshot.hpp",
     "tools/media_adapter/Info.plist",
     "tools/linux_mmio_mapper/README.txt",

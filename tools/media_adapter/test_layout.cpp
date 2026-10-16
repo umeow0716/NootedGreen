@@ -8,6 +8,7 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 #include "../../NootedGreen/kern_avc_gen12_commands.hpp"
+#include "native_avc_reservation.hpp"
 #include <memory>
 
 // Gate fixture only: deliberately does NOT clear any retention state.
@@ -18927,6 +18928,30 @@ static void testActualNv12LayoutSnapshot() {
     assert(uvRow==32);
 }
 int main() {
+    {
+        std::array<unsigned char,0x5c> wrapper{};
+        const uintptr_t argument=0x10000,connection=17,base=0x20000,cursor=base+2728,end=base+4096;
+        const uint32_t classes=1,previous=128;
+        std::memcpy(wrapper.data()+8,&connection,8);std::memcpy(wrapper.data()+0x10,&base,8);
+        std::memcpy(wrapper.data()+0x18,&end,8);std::memcpy(wrapper.data()+0x20,&cursor,8);
+        std::memcpy(wrapper.data()+0x44,&previous,4);std::memcpy(wrapper.data()+0x58,&classes,4);
+        bool readable=true;
+        auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+            if(!readable || at!=argument || bytes!=wrapper.size())return false;
+            std::memcpy(out,wrapper.data(),bytes);return true;
+        };
+        NgreenNativeAvcReservation::Builder captured,after;
+        assert(NgreenNativeAvcReservation::capture(argument,read,captured));
+        auto reserved=NgreenNativeAvcReservation::plan(captured,818);
+        assert(reserved.ok && reserved.extraBytes==544 && reserved.usedBytes==3400);
+        assert(NgreenNativeAvcReservation::capture(argument,read,after) &&
+            NgreenNativeAvcReservation::unchanged(captured,after));
+        ++after.previousUsed;assert(!NgreenNativeAvcReservation::unchanged(captured,after));
+        wrapper[0x58]=2;assert(!NgreenNativeAvcReservation::capture(argument,read,after) && !after.argument);
+        wrapper[0x58]=1;readable=false;assert(!NgreenNativeAvcReservation::capture(argument,read,after));
+        assert(!NgreenNativeAvcReservation::capture(argument+1,read,after));
+        assert(!NgreenNativeAvcReservation::plan(after,818).ok);
+    }
     {
         // Actual captured AVC shape: reserve 544 bytes without rebasing any
         // native sideband token. This is CPU arithmetic, not ownership proof.
