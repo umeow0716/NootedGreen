@@ -28698,6 +28698,10 @@ public:
             // Protect only the proven 0x20-byte request identity prefix;
             // nested payload extents/ownership require separate admission.
             if(outputs<requests_[i]+0x20 && requests_[i]<outputs+listBytes)return false;
+            // Context dispatch authenticates the first vptr word. Event output
+            // is never allowed to replace that live identity.
+            if(contexts_[i]>UINTPTR_MAX-8 ||
+               (outputs<contexts_[i]+8 && contexts_[i]<outputs+listBytes))return false;
         }
         input_=input;output_=output;inputList_=inputs;outputList_=outputs;count_=count;ready_=true;return true;
     }

@@ -508,7 +508,9 @@ static void testTrackedCpuOwner() {
                                uintptr_t(0x1000),uintptr_t(0x1008),uintptr_t(0x2ff8),
                                uintptr_t(0x3000),uintptr_t(0x3008),uintptr_t(0x4ff8),
                                uintptr_t(0x5000),uintptr_t(0x5018),uintptr_t(0x6018),
-                               uintptr_t(0x5020),uintptr_t(0x6020)}) {
+                               uintptr_t(0x5020),uintptr_t(0x6020),uintptr_t(0x6ff8),
+                               uintptr_t(0x7000),uintptr_t(0x7ff8),uintptr_t(0x8000),
+                               uintptr_t(0x7008),uintptr_t(0x8008)}) {
             auto listRead=[&](uintptr_t at,void* out,size_t n) noexcept {
                 if(at==0x1000 && n==4){const uint32_t count=2;std::memcpy(out,&count,4);return true;}
                 if(n!=8)return false;
@@ -521,7 +523,8 @@ static void testTrackedCpuOwner() {
             };
             TglNativeFrameBatchRequests<2> items;
             assert(items.capture(0x1000,0x3000,listRead)==
-                   (outputs==0x1ff0 || outputs==0x2010 || outputs==0x5020 || outputs==0x6020));
+                   (outputs==0x1ff0 || outputs==0x2010 || outputs==0x5020 || outputs==0x6020 ||
+                    outputs==0x7008 || outputs==0x8008));
         }
         for(unsigned scenario=0;scenario<7;++scenario) {
             Policy p;uint32_t height=1081,format=0x19;
