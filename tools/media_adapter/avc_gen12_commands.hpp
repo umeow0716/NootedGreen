@@ -123,4 +123,67 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
     }
     r.ok=true;r.words=out;r.reason="cpu-produced-not-admitted";return r;
 }
+
+// Must be preallocated OFF the kernel stack, before the native locked scope.
+// Neither a valid byte shape nor these callbacks establish kernel ownership;
+// the eventual routed caller must hold independently verified native leases.
+struct PublishScratch {
+    uint32_t source[1024],produced[1536],undo[1536];
+};
+struct Publication {
+    Result preparation{};
+    bool published=false,restored=true,mustStop=false;
+};
+// A targeted candidate with !published MUST NOT be forwarded to native submit,
+// even when restored==true. mustStop additionally marks a post-write failure.
+// CPU release fences do not establish device coherency: the kernel integration
+// still needs its native IO synchronization before invoking the native submit.
+template<class Live,class SamePinnedAllocation>
+inline Publication publish(volatile uint32_t* backing,size_t available,
+                           volatile uint32_t& nativeWords,uint32_t width,uint32_t height,
+                           PublishScratch& scratch,Live live,SamePinnedAllocation canRestore) noexcept {
+    Publication r;
+    const uint32_t original=nativeWords;
+    const uintptr_t start=reinterpret_cast<uintptr_t>(backing);
+    const uintptr_t work=reinterpret_cast<uintptr_t>(&scratch);
+    const uintptr_t counter=reinterpret_cast<uintptr_t>(&nativeWords);
+    if(!backing || (start&3U) || original>1024 || original<2 || available<original ||
+       available>SIZE_MAX/4 || start>UINTPTR_MAX-available*4 ||
+       work>UINTPTR_MAX-sizeof(scratch) || counter>UINTPTR_MAX-4 ||
+       (work<start+available*4 && start<work+sizeof(scratch)) ||
+       (counter<start+available*4 && start<counter+4) ||
+       (counter<work+sizeof(scratch) && work<counter+4) || !live(original))return r;
+    for(size_t i=0;i<original;++i)scratch.source[i]=backing[i];
+    r.preparation=produce(scratch.source,original,width,height,scratch.produced,
+                          available<1536?available:1536);
+    if(!r.preparation.ok || nativeWords!=original || !live(original))return r;
+    const size_t changed=r.preparation.words;
+    // Save the WHOLE overwritten extent, including bytes beyond old count.
+    for(size_t i=0;i<changed;++i)scratch.undo[i]=backing[i];
+    for(size_t i=0;i<original;++i)if(scratch.undo[i]!=scratch.source[i]){
+        r.preparation.reason="source-changed";return r;}
+    if(nativeWords!=original || !live(original))return r;
+    auto restore=[&]() noexcept {
+        r.mustStop=true;r.restored=false;
+        // Do not write through an alias whose allocation pin was lost.
+        if(!canRestore())return;
+        for(size_t i=0;i<changed;++i)backing[i]=scratch.undo[i];
+        __atomic_thread_fence(__ATOMIC_RELEASE);
+        nativeWords=original;
+        bool equal=nativeWords==original;
+        for(size_t i=0;i<changed;++i)if(backing[i]!=scratch.undo[i])equal=false;
+        r.restored=equal;
+    };
+    r.restored=false;
+    for(size_t i=0;i<changed;++i)backing[i]=scratch.produced[i];
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    bool equal=true;
+    for(size_t i=0;i<changed;++i)if(backing[i]!=scratch.produced[i])equal=false;
+    if(!equal || nativeWords!=original || !live(original)){restore();return r;}
+    // Count is published only after all command bytes and validation complete.
+    nativeWords=static_cast<uint32_t>(changed);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    if(nativeWords!=changed || !live(static_cast<uint32_t>(changed))){restore();return r;}
+    r.published=true;return r;
+}
 }
