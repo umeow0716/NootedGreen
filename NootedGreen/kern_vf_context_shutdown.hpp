@@ -298,6 +298,43 @@ inline void clearReleasedIdentity(Context &context) {
 // last published native context per IGHwCsType instead of scanning a 57K table
 // during fail-stop. The production table lock protects publication and capture.
 namespace NGVfTimeoutObservation {
+// Decode ONLY an already pinned short CPU ring copy. Never dereference a
+// decoded GPU address or follow batch contents. Unknown/partial prefixes have
+// no usable targets; a matching opcode in an immediate must not become a BBS.
+struct BatchTargets {
+    uint64_t addresses[2] {};
+    uint32_t offsets[2] {};
+    uint32_t count = 0;
+    bool complete = false;
+};
+inline BatchTargets cpuRingBatchTargets(const uint32_t *words, uint32_t count) {
+    BatchTargets result;
+    if (!words || !count || count > 48) return {};
+    for (uint32_t at = 0; at < count;) {
+        const uint32_t header = words[at];
+        uint32_t length = 0;
+        if (header == 0 || header == 0x03800000U) length = 1;
+        else if ((header & 0xFF800000U) == 0x13000000U &&
+                 (header & 0x3FU) == 3) length = 5;
+        else if (header == 0x11000001U) length = 3;
+        else if (header == 0x0E009002U) length = 4;
+        else if (header == 0x18800101U) length = 3;
+        else return {};
+        if (length > count - at) return {};
+        if (header == 0x18800101U) {
+            const uint64_t address = words[at + 1] |
+                (static_cast<uint64_t>(words[at + 2]) << 32);
+            if (result.count == 2 || !address || (address & 7U) ||
+                (address >= UINT64_C(0x0000800000000000) &&
+                 address < UINT64_C(0xFFFF800000000000))) return {};
+            result.addresses[result.count] = address;
+            result.offsets[result.count++] = static_cast<uint32_t>(at * 4);
+        }
+        at += length;
+    }
+    result.complete = true;
+    return result;
+}
 // Complete short, zero-head ring prefix; never a command walk or batch follow.
 // Caller pins the exact context/ring backing and serial under the context lock.
 inline bool ringPrefixAdmitted(uint32_t bytes, uint64_t backingBytes, uint32_t tail, uint32_t head) {

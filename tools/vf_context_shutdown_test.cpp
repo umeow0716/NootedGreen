@@ -528,6 +528,55 @@ int main() {
         assert(context.disablePending == ((disable != 0) && !handled));
     }
 
+    // Exact retained V374 CPU ring: initial sequence followed by one BBS.
+    // This checks decode only, not GPU execution or valid leaf mappings.
+    uint32_t prefix[] = {
+        0x13044003,0x40000000,0,0,0,0x11000001,0x1c0244,0x80000,
+        0x0e009002,0,0x400010c0,0,0x11000001,0x1c0244,0x80008,
+        0x13004003,0x400020c0,0,2,0,0x0e009002,2,0x40001000,0,
+        0x03800000,0,0x11000001,0x1c0244,0x80000,0x0e009002,0,
+        0x400010c0,0,0x11000001,0x1c0244,0x80008,
+        0x18800101,0x40010000,0,0,0x13004103,0x400010c0,0,1,0,0x03800000
+    };
+    using NGVfTimeoutObservation::cpuRingBatchTargets;
+    auto targets = cpuRingBatchTargets(prefix, sizeof(prefix)/sizeof(prefix[0]));
+    assert(targets.complete && targets.count == 1 &&
+           targets.addresses[0] == 0x40010000 && targets.offsets[0] == 0x90);
+    const uint32_t shortPrefix[] = {
+        0x13044003,0x40000000,0,0,0,0x11000001,0x1c0244,0x80000,
+        0x0e009002,0,0x400010c0,0,0x11000001,0x1c0244,0x80008,
+        0x18800101,0x40010000,0,0,0x13004103,0x400010c0,0,1,0,0x03800000,0
+    };
+    targets = cpuRingBatchTargets(shortPrefix, 26);
+    assert(targets.complete && targets.count == 1 && targets.offsets[0] == 0x3c);
+    assert(!cpuRingBatchTargets(nullptr, 1).complete);
+    assert(!cpuRingBatchTargets(prefix, 49).complete);
+    assert(!cpuRingBatchTargets(prefix, 38).complete); // truncated BBS
+    prefix[38] = 0x8000; // noncanonical 48-bit address
+    assert(!cpuRingBatchTargets(prefix, 46).complete);
+    prefix[38] = 0;
+    prefix[37] |= 1;
+    assert(!cpuRingBatchTargets(prefix, 46).complete);
+    prefix[37] &= ~1U;
+    prefix[36] = 0x18800001; // GGTT BBS is not a PPGTT target
+    assert(!cpuRingBatchTargets(prefix, 46).complete);
+    prefix[36] = 0x18800101;
+    prefix[45] = 0xdeadbeef;
+    targets = cpuRingBatchTargets(prefix, 46);
+    assert(!targets.complete && targets.count == 0); // no partial successes
+    const uint32_t many[] = {0x18800101,0x1000,0,0x18800101,0x2000,0,
+                             0x18800101,0x3000,0};
+    assert(cpuRingBatchTargets(many, 6).count == 2);
+    assert(!cpuRingBatchTargets(many, 9).complete);
+    const uint32_t zeroTarget[] = {0x18800101,0,0};
+    assert(!cpuRingBatchTargets(zeroTarget, 3).complete);
+    const uint32_t upperCanonical[] = {0x18800101,0x1000,0xffff8000};
+    assert(cpuRingBatchTargets(upperCanonical, 3).complete);
+    // A BBS-looking immediate inside a known five-word packet is not parsed.
+    const uint32_t immediate[] = {0x13000003,0x18800101,0x1000,0,0};
+    targets = cpuRingBatchTargets(immediate, 5);
+    assert(targets.complete && targets.count == 0);
+
     Context released {0x12345000U, 0x12345309U, 0xA5A20020U, 0,
                       4, 2, kVfGucContextTombstone, false, false, &task,
                       &backing, &ringBacking,
