@@ -18717,6 +18717,10 @@ static void testNativeCreatorRequestChains() {
         for(size_t i=0;i<2;++i){std::memcpy(nodes[i].data(),&avcKind,4);std::memcpy(nodes[i].data()+8,&type,8);}
         std::memcpy(nodes[2].data(),&kind,4);std::memcpy(nodes[2].data()+8,&type,8);
         std::memcpy(nodes[2].data()+0x10,&property,4);
+        const uint32_t diagnosticFields[]={3,1920,1080,14,15,16,17};
+        const size_t diagnosticOffsets[]={0x14,0x20,0x24,0x28,0x2c,0x30,0x34};
+        for(size_t i=0;i<7;++i)std::memcpy(nodes[0].data()+diagnosticOffsets[i],&diagnosticFields[i],4);
+        const uint64_t diagnosticCount=2;std::memcpy(nodes[0].data()+0x18,&diagnosticCount,8);
         if(scenario==1)next(2,0x3000);
         if(scenario==2)next(2,0x4000);
         if(scenario==3)next(2,UINTPTR_MAX-15);
@@ -18738,6 +18742,18 @@ static void testNativeCreatorRequestChains() {
         if(!scenario){TglNativeCreatorRequestChains<2,1> limited;assert(!limited.capture(0x1000,read));}
         if(expected) {
             assert(snapshot.stable(read) && snapshot.rootCount()==2 && snapshot.nodeCount()==(scenario==4?2U:3U));
+            const auto readsBeforeDiagnostics=reads;
+            decltype(snapshot)::RequestDiagnostic diagnostic;
+            uint32_t rootNode=UINT32_MAX;
+            assert(snapshot.rootNodeIndex(0,rootNode) && rootNode==0);
+            assert(snapshot.rootNodeIndex(1,rootNode) && rootNode==(scenario==4?UINT32_MAX:2U));
+            assert(!snapshot.rootNodeIndex(2,rootNode) && rootNode==UINT32_MAX);
+            assert(snapshot.nodeDiagnostic(0,diagnostic) && diagnostic.kind==avcKind && diagnostic.type==type &&
+                diagnostic.flags==3 && diagnostic.count==2 && diagnostic.width==1920 && diagnostic.height==1080 &&
+                diagnostic.input0==14 && diagnostic.input1==15 && diagnostic.output0==16 && diagnostic.output1==17 && diagnostic.next==1);
+            assert(snapshot.nodeDiagnostic(1,diagnostic) && diagnostic.kind==kind && diagnostic.property==property && diagnostic.next==UINT32_MAX);
+            assert(!snapshot.nodeDiagnostic(snapshot.nodeCount(),diagnostic) && !diagnostic.kind && !diagnostic.type && diagnostic.next==UINT32_MAX);
+            assert(reads==readsBeforeDiagnostics);
             bool present=false;uint32_t rootKind=0,rootProperty=0;uint64_t rootType=0;
             assert(snapshot.rootControls(0,present,rootKind,rootType,rootProperty) && present &&
                 rootKind==avcKind && rootType==type && rootProperty==0);

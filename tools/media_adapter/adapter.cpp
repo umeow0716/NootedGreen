@@ -6142,6 +6142,24 @@ struct NativeCreatorScopedInvocation {
             result.argumentsCommitted=invocation.committed;
             if(result.nativeInvoked)result.admission="native-return";
         } else result=run(entry,physical,input,scope,admit,handoff);
+        if(result.nativeInvoked && result.nativeResult) {
+            static std::atomic<unsigned> rejectionDiagnostics{0};
+            if(rejectionDiagnostics.fetch_add(1,std::memory_order_relaxed)<8) {
+                os_log_info(OS_LOG_DEFAULT,"NGRN_CONTEXT_CREATE_REJECTED native=%{public}d roots=%{public}u nodes=%{public}u",
+                    result.nativeResult,chains.rootCount(),unsigned(chains.nodeCount()));
+                for(size_t i=0;i<chains.rootCount();++i) {
+                    uint32_t node=UINT32_MAX;const bool captured=chains.rootNodeIndex(i,node);
+                    os_log_info(OS_LOG_DEFAULT,"NGRN_CONTEXT_CREATE_REJECTED_ROOT index=%{public}u captured=%{public}d node=%{public}u",
+                        unsigned(i),int(captured),node);
+                }
+                for(size_t i=0;i<chains.nodeCount();++i) {
+                    decltype(chains)::RequestDiagnostic d;const bool captured=chains.nodeDiagnostic(i,d);
+                    os_log_info(OS_LOG_DEFAULT,"NGRN_CONTEXT_CREATE_REJECTED_NODE index=%{public}u captured=%{public}d kind=%{public}u type=%{public}llu property=%{public}u flags=%{public}u count=%{public}llu width=%{public}u height=%{public}u in0=%{public}u in1=%{public}u out0=%{public}u out1=%{public}u next=%{public}u",
+                        unsigned(i),int(captured),d.kind,static_cast<unsigned long long>(d.type),d.property,d.flags,
+                        static_cast<unsigned long long>(d.count),d.width,d.height,d.input0,d.input1,d.output0,d.output1,d.next);
+                }
+            }
+        }
         if(!result.nativeInvoked || result.nativeResult || !result.argumentsCommitted)return result;
         TglNativeCreatedContextBatch<16> batch,after;
         TglNativeContextFamilyBatchSnapshot<16> families;

@@ -26468,6 +26468,38 @@ public:
     }
     size_t nodeCount() const noexcept {return ready_?used_:0;}
     uint32_t rootCount() const noexcept {return ready_?count_:0;}
+    struct RequestDiagnostic {
+        uint32_t kind=0,property=0,flags=0,width=0,height=0;
+        uint32_t input0=0,input1=0,output0=0,output1=0,next=UINT32_MAX;
+        uint64_t type=0,count=0;
+    };
+    // Frozen graph only: no pointer escapes and no additional user reads.
+    bool rootNodeIndex(size_t index,uint32_t& output) const noexcept {
+        output=UINT32_MAX;
+        if(!ready_ || index>=count_)return false;
+        if(!roots_[index])return true;
+        for(size_t n=0;n<used_;++n)if(nodes_[n].address==roots_[index]) {
+            output=uint32_t(n);return true;
+        }
+        return false;
+    }
+    bool nodeDiagnostic(size_t index,RequestDiagnostic& output) const noexcept {
+        output={};
+        if(!ready_ || index>=used_)return false;
+        const auto* bytes=nodes_[index].bytes.data();
+        std::memcpy(&output.kind,bytes,4);std::memcpy(&output.type,bytes+8,8);
+        std::memcpy(&output.property,bytes+0x10,4);std::memcpy(&output.flags,bytes+0x14,4);
+        std::memcpy(&output.count,bytes+0x18,8);std::memcpy(&output.width,bytes+0x20,4);
+        std::memcpy(&output.height,bytes+0x24,4);std::memcpy(&output.input0,bytes+0x28,4);
+        std::memcpy(&output.input1,bytes+0x2c,4);std::memcpy(&output.output0,bytes+0x30,4);
+        std::memcpy(&output.output1,bytes+0x34,4);
+        uintptr_t next=0;std::memcpy(&next,bytes+0x38,8);
+        if(!next)return true;
+        for(size_t n=0;n<used_;++n)if(nodes_[n].address==next) {
+            output.next=uint32_t(n);return true;
+        }
+        output={};return false;
+    }
     // Snapshot-only diagnostics: preserve root index (controls() indexes the
     // deduplicated node graph instead). Never expose an address or read again.
     bool rootControls(size_t index,bool& present,uint32_t& kind,uint64_t& type,uint32_t& property) const noexcept {
