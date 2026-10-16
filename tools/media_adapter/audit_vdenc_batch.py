@@ -27,7 +27,7 @@ def audit(data):
     if not data or len(data) > 65536 or len(data) % 4:
         raise ValueError('bounded nonempty dword-aligned batch required')
     words = struct.unpack('<%dI' % (len(data)//4), data)
-    packets, mapping, registers = [], {}, []
+    packets, mapping, registers, controls = [], {}, [], []
     old = new = 0
     while old < len(words):
         header = words[old]
@@ -54,6 +54,16 @@ def audit(data):
                               'gen12_vcs_relative': None if expected is None else expected & 0x3fff,
                               'native_add_cs_mmio': bool(header & (1 << 19)),
                               'gen12_add_cs_mmio': True if expected is not None else None})
+        if opcode == 0x70840000:
+            # Compiled offsetof checks against pinned Gen9/Gen12 headers prove
+            # words7..9 changed from DsBwdRef0 to RESERVED. Address zeros before
+            # relocation are not a resource absence proof; report, don't clear.
+            controls.append({'offset': old*4,
+                             'old_ds_bwd_becomes_reserved': list(words[old+7:old+10]),
+                             'reserved_triplet_already_zero': not any(words[old+7:old+10]),
+                             'compression_enabled_slots': [i for i in range(3,37,3)
+                                                           if words[old+i] & (1 << 9)],
+                             'cache_indices': [words[old+i] & 0x7f for i in range(3,37,3)]})
         # Hypothetical size-only map includes one WAIT on each side of MFX mode.
         # It intentionally does not supply defaults, headers, or resource fields.
         before = int(opcode == 0x70000000)
@@ -82,7 +92,8 @@ def audit(data):
                              'naive_pre_relocation_compatible': delta == 0x48})
     return {'status': 'AUDIT_ONLY_NOT_SUBMITTABLE', 'native_dwords': len(words),
             'proposed_dwords': new, 'packets': packets,
-            'registers': registers, 'relocation_coupling': coupling}, mapping
+            'registers': registers, 'buffer_controls': controls,
+            'relocation_coupling': coupling}, mapping
 
 def selftest():
     data = struct.pack('<7I', 0x70000003, 0, 0, 0, 0, 0x70800000, 0)
@@ -94,6 +105,13 @@ def selftest():
     report, _ = audit(data)
     assert report['relocation_coupling'] == [{'native_root':0,'native_fixed_delta':72,
         'observed_native_delta':72,'proposed_delta':88,'naive_pre_relocation_compatible':False}]
+    assert report['buffer_controls'][0]['reserved_triplet_already_zero']
+    packet = [0]*37
+    packet[0], packet[9], packet[12] = 0x70840023, 14, (1 << 9) | 42
+    report, _ = audit(struct.pack('<37I', *packet))
+    assert not report['buffer_controls'][0]['reserved_triplet_already_zero']
+    assert report['buffer_controls'][0]['compression_enabled_slots'] == [12]
+    assert report['buffer_controls'][0]['cache_indices'][3] == 42
     for reg, absolute in MFC_REGISTERS.items():
         report, _ = audit(struct.pack('<4I',0x12000002,reg,0,0))
         assert report['registers'][0]['gen12_vcs_relative'] == absolute & 0x3fff
