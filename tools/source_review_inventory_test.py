@@ -118,6 +118,7 @@ EXPECTED_TOOL_DATA = {
     "tools/linux_mmio_mapper/mapping.schema.json",
     "tools/linux_mmio_mapper/sample_mapping.json",
     "tools/parsed.gdt",
+    "tools/vf-dynamic-test.freeze",
 }
 
 EXPECTED_PAYLOAD_BUNDLES = {
