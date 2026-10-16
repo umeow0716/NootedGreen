@@ -18899,6 +18899,28 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        TglOwnedSurfaceStorage shell{};bool changed=false;
+        const uint32_t one=1,width=24,height=8,format=0x32,tile=4;
+        std::memcpy(shell.resource.data()+0x14,&one,4);
+        std::memcpy(shell.prefix.data()+0xd8,&width,4);std::memcpy(shell.prefix.data()+0xdc,&height,4);
+        std::memcpy(shell.prefix.data()+0x130,&format,4);std::memcpy(shell.prefix.data()+0xe4,&tile,4);
+        const auto original=shell;
+        assert(!tglCanonicalizeNativeSfcDescriptorForRemoval(shell,changed) && changed);
+        assert(shell.prefix==original.prefix && shell.tail==original.tail);
+        for(auto byte:shell.resource)assert(!byte);
+        assert(!tglCanonicalizeNativeSfcDescriptorForRemoval(shell,changed) && !changed);
+        for(size_t i=0;i<original.resource.size();++i)if(i<0x14 || i>=0x18) {
+            shell=original;shell.resource[i]=1;const auto before=shell.resource;
+            const int status=tglCanonicalizeNativeSfcDescriptorForRemoval(shell,changed);
+            assert(!changed && shell.resource==before);
+            assert(status==((i>=0x58 && i<0x60)?0:5));
+        }
+        for(size_t offset:{size_t{0xd8},size_t{0xdc},size_t{0x130},size_t{0xe4}}) {
+            shell=original;shell.prefix[offset]^=1;const auto before=shell.resource;
+            assert(tglCanonicalizeNativeSfcDescriptorForRemoval(shell,changed)==5 && !changed && shell.resource==before);
+        }
+    }
+    {
         constexpr uintptr_t image=0x100000,wrapper=0x2000,event=0x3000;
         uintptr_t framework=0x4000,mapping=0x5000;uint64_t bytes=128;uint32_t count=2,index=1;
         std::array<uint64_t,8> expected{};expected[0]=(uint64_t{42}<<32)|3;

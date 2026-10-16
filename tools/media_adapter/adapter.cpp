@@ -4935,7 +4935,7 @@ struct NativeCreatorPreparation {
             auto lease=NativeVphalRouter::pinForInitialization(creator);auto* owner=lease.get();
             if(!owner || !lease.exclusive())return 5;
             NativeRendererCpuAssembly* storage=nullptr;
-            uintptr_t renderer=0;
+            uintptr_t renderer=0,nativeChild=0;
             std::array<uintptr_t,2> children{};std::array<uint64_t,2> childGenerations{};
             stage="creator-storage";
             const int captured=owner->withCreatorStorage(lease,NativeDataAdmission{},NativeTglImageAdmission{image},&executableMemory,
@@ -4943,7 +4943,7 @@ struct NativeCreatorPreparation {
                     stage="retention-and-view";
                     if(view.image!=image || view.creator!=creator || cpu.backing().retention()())return 5;
                     storage=&cpu;
-                    renderer=view.renderer;
+                    renderer=view.renderer;nativeChild=view.originalChildren[2];
                     auto& a=cpu.children().first().owner();auto& b=cpu.children().second().owner();
                     children={reinterpret_cast<uintptr_t>(a.constructedBase()),reinterpret_cast<uintptr_t>(b.constructedBase())};
                     childGenerations={a.allocationGeneration(),b.allocationGeneration()};
@@ -4963,16 +4963,50 @@ struct NativeCreatorPreparation {
                     selected->owner!=owner || selected->storage!=storage)return 5;
                 selected->removing=true; // BEFORE storage deletion; never reopen on partial failure.
             }
+            // Prevalidate the untouched native920 SFC shell under the same
+            // exclusive creator/physical epoch. No backing is discarded.
+            stage="native-sfc-empty-descriptor";
+            constexpr size_t sfcSurface=0x19938;
+            uintptr_t nativeTable=0,nativeRelease=0;
+            TglOwnedSurfaceStorage originalSfc{},retiredSfc{};bool normalizeSfc=false;
+            constexpr std::array<uint8_t,16> releaseAnchor{
+                0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x30,0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8};
+            std::array<uint8_t,16> actualAnchor{};
+            if(!nativeChild || nativeChild>UINTPTR_MAX-sfcSurface-sizeof(originalSfc) ||
+                !readMemory(nativeChild,&nativeTable,8) || nativeTable>UINTPTR_MAX-0x18 ||
+                !readMemory(nativeTable+0x18,&nativeRelease,8) || nativeRelease!=image+0x125280 ||
+                !executableMemory(nativeRelease,releaseAnchor.size()) ||
+                !readMemory(nativeRelease,actualAnchor.data(),actualAnchor.size()) || actualAnchor!=releaseAnchor ||
+                !readMemory(nativeChild+sfcSurface,&originalSfc,sizeof(originalSfc)))return 5;
+            retiredSfc=originalSfc;
+            if(tglCanonicalizeNativeSfcDescriptorForRemoval(retiredSfc,normalizeSfc))return 5;
+            if(normalizeSfc && !writableDataMemory(nativeChild+sfcSurface+0x15c,4))return 5;
             stage="owned-storage-detach";
             return owner->withChildAdmissionAuthority(lease,physical,
                 [&](NativeRendererCpuAssembly& cpu,void* actual,uint64_t epoch,uintptr_t a,uintptr_t b) noexcept -> bool {
                     return &cpu==storage && reinterpret_cast<uintptr_t>(actual)==renderer && epoch==generation &&
                         a==children[0] && b==children[1] && physical.matches(image,address,generation);
                 },[&]() noexcept -> int {
-                    return owner->prepareExternalRemoval(lease,physical,[&](void* child,uint64_t childGeneration,size_t index) noexcept -> int {
+                    if(!owner->prepareExternalRemoval(lease,physical,[&](void* child,uint64_t childGeneration,size_t index) noexcept -> int {
                         return index<2 && reinterpret_cast<uintptr_t>(child)==children[index] && childGeneration==childGenerations[index] &&
                             physical.matches(image,address,generation)?0:5;
-                    })?0:5;
+                    }))return 5;
+                    // Owned910/918 are detached and retired BEFORE the native
+                    // descriptor tag changes. Native920 is still parent-owned.
+                    stage="native-sfc-descriptor-retirement";
+                    uintptr_t linked=0,currentTable=0;TglOwnedSurfaceStorage current{};
+                    if(!physical.matches(image,address,generation) ||
+                        !readMemory(renderer+0x920,&linked,8) || linked!=nativeChild ||
+                        !readMemory(nativeChild,&currentTable,8) || currentTable!=nativeTable ||
+                        !readMemory(nativeChild+sfcSurface,&current,sizeof(current)) ||
+                        std::memcmp(&current,&originalSfc,sizeof(current)))return 5;
+                    if(normalizeSfc) {
+                        if(!writableDataMemory(nativeChild+sfcSurface+0x15c,4))return 5;
+                        std::memcpy(reinterpret_cast<void*>(nativeChild+sfcSurface+0x15c),retiredSfc.resource.data()+0x14,4);
+                        uint32_t tag=1;if(!readMemory(nativeChild+sfcSurface+0x15c,&tag,4) || tag)return 5;
+                    }
+                    os_log_info(OS_LOG_DEFAULT,"NGRN_NATIVE_SFC_DESCRIPTOR_RETIRED changed=%{public}d native-release-unchanged",int(normalizeSfc));
+                    return 0;
                 });
         });
         os_log_info(OS_LOG_DEFAULT,"NGRN_CONTEXT_REMOVAL stage=creator-detail boundary=%{public}s result=%{public}d",stage,result);

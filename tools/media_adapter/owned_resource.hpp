@@ -8997,6 +8997,28 @@ public:
     }
 };
 
+// Exact native125199 SFC descriptor: 4e060(format32,type1,24x8,tile4)
+// takes 4e22c without allocating backing. Native125280 nevertheless passes
+// this inline shell to63c00, whose type1 arm unconditionally CFRelease(+58).
+// Retirement-only projection: clear ONLY the tag of a completely empty
+// descriptor. Never clear a token, CF handle, unknown shape or backed resource.
+inline int tglCanonicalizeNativeSfcDescriptorForRemoval(TglOwnedSurfaceStorage& shell,bool& changed) noexcept {
+    changed=false;
+    uint32_t type=0;uintptr_t backing=0;
+    std::memcpy(&type,shell.resource.data()+0x14,4);
+    std::memcpy(&backing,shell.resource.data()+0x58,8);
+    if(type==0 || (type==1 && backing))return 0; // Native release unchanged.
+    if(type!=1)return 5;
+    uint32_t width=0,height=0,format=0,tile=0;
+    std::memcpy(&width,shell.prefix.data()+0xd8,4);std::memcpy(&height,shell.prefix.data()+0xdc,4);
+    std::memcpy(&format,shell.prefix.data()+0x130,4);std::memcpy(&tile,shell.prefix.data()+0xe4,4);
+    if(width!=24 || height!=8 || format!=0x32 || tile!=4)return 5;
+    for(size_t i=0;i<shell.resource.size();++i)
+        if((i<0x14 || i>=0x18) && shell.resource[i])return 5;
+    const uint32_t zero=0;std::memcpy(shell.resource.data()+0x14,&zero,4);
+    changed=true;return 0;
+}
+
 // Private descriptor-only slot: native49fe0/4a14d does not allocate GPU
 // backing for type1/format!=3d. Never expose withSurface()/resource-token
 // ownership: callers must separately retain the borrowed source resource.
