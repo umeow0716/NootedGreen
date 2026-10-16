@@ -29,6 +29,42 @@ struct TglOwnedAvcSliceHeaderPacket {
     std::array<uint32_t,258> data{};
     size_t words=0;
 };
+// Exact Tahoe57cfc4/57d0a2/57d256 variable-loop bounds only. The caller
+// authenticates a stable OWNED e10-byte record and supplies the effective
+// reference counts after PPS-default resolution, plus actual branch policy.
+// This does not validate all slice syntax, budget bits, or grant dispatch.
+inline bool tglValidateOwnedAvcSliceVariableLoops(const void* source,size_t bytes,
+    bool weighted,uint32_t effectiveL0,uint32_t effectiveL1,
+    bool referenceMarked,bool idr) noexcept {
+    if(!source || bytes!=0xe10 || reinterpret_cast<uintptr_t>(source)>UINTPTR_MAX-bytes)return false;
+    const auto* data=static_cast<const unsigned char*>(source);
+    auto word=[&](size_t offset) noexcept {uint32_t value=0;
+        std::memcpy(&value,data+offset,4);return value;};
+    const uint32_t type=word(8);
+    const bool intra=type==2 || type==7,b=type==1 || type==6;
+    auto refmod=[&](size_t flag,size_t list) noexcept {
+        if(word(flag)>1)return false;
+        if(!word(flag))return true;
+        for(size_t index=0;index<32;++index){
+            const uint32_t idc=word(list+12*index);
+            if(idc==3)return true;
+            if(idc>3)return false;
+        }
+        return false;
+    };
+    if((!intra && !refmod(0x48,0x4c)) || (b && !refmod(0x1cc,0x1d0)))return false;
+    if(weighted && (effectiveL0>31 || (b && effectiveL1>31)))return false;
+    if(referenceMarked){
+        if(idr)return word(0xb60)<=1 && word(0xb64)<=1;
+        if(word(0xb68)>1)return false;
+        if(word(0xb68)){
+            const uint32_t count=word(0xdec);
+            if(count>32)return false;
+            for(size_t index=0;index<count;++index)if(word(0xb6c+20*index)>6)return false;
+        }
+    }
+    return true;
+}
 // Exact2618d inline slice-header profile: owned input only, no resource or
 // original request mutation. Not wired into native submission/index selection.
 inline bool tglBuildOwnedAvcSliceHeaderPacket(const void* source,size_t extent,

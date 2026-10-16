@@ -18942,6 +18942,25 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        std::array<uint32_t,0xe10/4> slice{};
+        auto valid=[&](bool weighted=false,uint32_t l0=0,uint32_t l1=0,bool marked=false,bool idr=false){
+            return tglValidateOwnedAvcSliceVariableLoops(slice.data(),sizeof(slice),weighted,l0,l1,marked,idr);};
+        slice[8/4]=1;slice[0x48/4]=1;slice[0x1cc/4]=1;
+        assert(!valid()); // Missing terminator in either 32-record region.
+        slice[(0x4c+31*12)/4]=3;
+        assert(!valid());
+        slice[(0x1d0+31*12)/4]=3;
+        const auto original=slice;
+        assert(valid(true,31,31));assert(slice==original);
+        assert(!valid(true,32,31) && !valid(true,31,32));
+        slice[0xb68/4]=1;
+        for(uint32_t count:{33U,65535U,UINT32_MAX}){slice[0xdec/4]=count;assert(!valid(false,0,0,true));}
+        slice[0xdec/4]=32;assert(valid(false,0,0,true));
+        slice[(0xb6c+31*20)/4]=7;assert(!valid(false,0,0,true));
+        slice[0xb60/4]=2;assert(!valid(false,0,0,true,true));
+        assert(!tglValidateOwnedAvcSliceVariableLoops(slice.data(),sizeof(slice)-1,false,0,0,false,false));
+    }
+    {
         std::array<unsigned char,1024> source{};
         const unsigned char first[]={0,0,1,0x25,0xb8,0,0x40,0,3,0x9c};
         std::memcpy(source.data(),first,sizeof(first));
