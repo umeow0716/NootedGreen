@@ -116,6 +116,9 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
                 if(input[at+k]&0x600U){r.reason="mfx-compression";return r;}
             if(input[at+61]){r.reason="reference-compression";return r;}}
         if(op==0x71000000U){++mfxImage;
+            // Gen12 MFX_AVC_IMG_STATE DW3 reserved fields only; preserve
+            // weighted prediction, rho-control and both chroma QP offsets.
+            if(input[at+3]&0xe0e0c0ffU){r.reason="mfx-image-reserved";return r;}
             const uint32_t mbWidth=(width+15U)/16U,mbHeight=(height+15U)/16U;
             const uint32_t mbCount=mbWidth*mbHeight;
             if(input[at+1]!=(mbCount>0xffffU?0xffffU:mbCount) ||

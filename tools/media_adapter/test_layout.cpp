@@ -19057,6 +19057,11 @@ int main() {
         input[mfxImage+1]=0;rejected();input=good;
         input[mfxImage+2]^=1;rejected();input=good;
         input[mfxImage+2]|=1U<<8;rejected();input=good;
+        for(unsigned bit=0;bit<32;++bit)if((1U<<bit)&0xe0e0c0ffU){
+            input[mfxImage+3]=1U<<bit;rejected();input=good;}
+        input[mfxImage+3]=0x3000U;
+        assert(NgreenAvcGen12::produce(input.data(),used,1920,1080,
+            output.data(),output.size()).ok);input=good;output.fill(0xdeadbeef);
         input[image+1]=0x20;rejected();input=good;
         input[image+24]=1;rejected();input=good;
         input[image+34]=0x4000;rejected();input=good;
