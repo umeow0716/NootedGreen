@@ -18966,6 +18966,27 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        TglOwnedAvcScalingDefaults defaults;
+        defaults.intra4.fill(6);defaults.inter4.fill(10);
+        defaults.intra8.fill(7);defaults.inter8.fill(11);
+        alignas(TglOwnedAvcPictureSnapshot) std::array<uint8_t,0x488> picture{};
+        auto put=[&](size_t at,uint32_t value){std::memcpy(picture.data()+at,&value,4);};
+        put(0xbc,1);put(0xb8,1);
+        for(size_t i=0;i<8;++i){put(0xc0+4*i,1);put(i<6?0x460+4*i:0x478+4*(i-6),1);}
+        const auto before=picture;
+        TglOwnedAvcPictureSnapshot result;
+        assert(tglMaterializeOwnedPpsDefaultMatrices(picture.data(),picture.size(),defaults,result));
+        uint32_t first=0;std::memcpy(&first,result.data.data()+0xe0,4);assert(first==6);
+        std::memcpy(&first,result.data.data()+0x1a0,4);assert(first==10);
+        std::memcpy(&first,result.data.data()+0x260,4);assert(first==7);
+        std::memcpy(&first,result.data.data()+0x360,4);assert(first==11);
+        assert(picture==before);
+        const auto expected=result.data;
+        defaults.intra4[0]=0;
+        assert(!tglMaterializeOwnedPpsDefaultMatrices(picture.data(),picture.size(),defaults,result));
+        assert(result.data==expected && picture==before);
+    }
+    {
         std::array<uint8_t,0xc18> sequence{};
         std::array<uint8_t,0x488> picture{};
         std::array<uint8_t,16> control{};control[12]=1;

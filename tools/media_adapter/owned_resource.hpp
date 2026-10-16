@@ -30,6 +30,46 @@ struct TglOwnedAvcSliceHeaderPacket {
     size_t words=0;
 };
 struct TglOwnedAvcNalBudget {uint32_t meaningfulBits=0,physicalBytes=0;};
+struct TglOwnedAvcScalingDefaults {
+    std::array<uint32_t,16> intra4{},inter4{};
+    std::array<uint32_t,64> intra8{},inter8{};
+};
+struct TglOwnedAvcPictureSnapshot {std::array<uint8_t,0x488> data{};};
+// Make declared PPS default flags agree with native raw coefficient copies.
+// Caller authenticates stable owned PPS, active writer profile, and exact
+// constructor-ordered defaults (not an assumed raster-order matrix).
+// Does not implement absent-list/SPS inheritance or validate complete PPS.
+inline bool tglMaterializeOwnedPpsDefaultMatrices(const void* source,size_t bytes,
+    const TglOwnedAvcScalingDefaults& defaults,TglOwnedAvcPictureSnapshot& output) noexcept {
+    if(!source || bytes!=0x488)return false;
+    const uintptr_t at=reinterpret_cast<uintptr_t>(source);
+    const uintptr_t target=reinterpret_cast<uintptr_t>(&output);
+    const uintptr_t tables=reinterpret_cast<uintptr_t>(&defaults);
+    if(at>UINTPTR_MAX-bytes || target>UINTPTR_MAX-sizeof(output) ||
+       tables>UINTPTR_MAX-sizeof(defaults) ||
+       (at<target+sizeof(output) && target<at+bytes) ||
+       (tables<target+sizeof(output) && target<tables+sizeof(defaults)))return false;
+    const auto* data=static_cast<const uint8_t*>(source);
+    auto word=[&](size_t offset) noexcept {uint32_t value=0;std::memcpy(&value,data+offset,4);return value;};
+    if(word(0xbc)>1 || word(0xb8)>1)return false;
+    TglOwnedAvcPictureSnapshot candidate;
+    std::memcpy(candidate.data.data(),data,bytes);
+    if(word(0xbc))for(uint32_t i=0;i<6+2*word(0xb8);++i){
+        const uint32_t present=word(0xc0+4*i);
+        if(present>1)return false;
+        if(!present)continue;
+        const uint32_t useDefault=word(i<6?0x460+4*i:0x478+4*(i-6));
+        if(useDefault>1)return false;
+        if(!useDefault)continue;
+        const uint32_t* coefficients=i<3?defaults.intra4.data():i<6?defaults.inter4.data():
+            i==6?defaults.intra8.data():defaults.inter8.data();
+        const size_t count=i<6?16:64;
+        for(size_t j=0;j<count;++j)if(!coefficients[j] || coefficients[j]>255)return false;
+        const size_t destination=i<6?0xe0+0x40*i:0x260+0x100*(i-6);
+        std::memcpy(candidate.data.data()+destination,coefficients,count*4);
+    }
+    output=candidate;return true;
+}
 // Dry-run of exact Tahoe57d748/57d4a0/57d3c6, not a full SPS semantic
 // validator. Stable owned source and caller identity are prerequisites.
 // Scaling-present is not implemented by that SPS writer and stays refused.
