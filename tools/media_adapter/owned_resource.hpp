@@ -28686,6 +28686,10 @@ public:
         if(count && (!output || output>UINTPTR_MAX-16 || !read(input+8,&inputs,8) ||
             !read(output+8,&outputs,8) || !inputs || !outputs ||
             inputs>UINTPTR_MAX-size_t(count)*8 || outputs>UINTPTR_MAX-size_t(count)*8))return false;
+        // Native output events must not overwrite the authenticated input
+        // request list, including lists needed by later batch items.
+        const size_t listBytes=size_t(count)*8;
+        if(count && inputs<outputs+listBytes && outputs<inputs+listBytes)return false;
         for(uint32_t i=0;i<count;++i) {
             if(!read(inputs+size_t(i)*8,&requests_[i],8) || !requests_[i] || requests_[i]>UINTPTR_MAX-0x20 ||
                 !read(requests_[i]+0x18,&contexts_[i],8) || !contexts_[i])return false;

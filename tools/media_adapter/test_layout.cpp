@@ -502,6 +502,22 @@ static void testTrackedCpuOwner() {
             uint32_t sfc() noexcept {assert(false);return 0;}
             bool fastFill() noexcept {assert(false);return false;}
         };
+        // Batch event writes cannot overlap any authenticated input-list byte.
+        for(uintptr_t outputs:{uintptr_t(0x1ff0),uintptr_t(0x1ff8),uintptr_t(0x2000),
+                               uintptr_t(0x2008),uintptr_t(0x2010)}) {
+            auto listRead=[&](uintptr_t at,void* out,size_t n) noexcept {
+                if(at==0x1000 && n==4){const uint32_t count=2;std::memcpy(out,&count,4);return true;}
+                if(n!=8)return false;
+                uintptr_t value=0;
+                if(at==0x1008)value=0x2000;else if(at==0x3008)value=outputs;
+                else if(at==0x2000)value=0x5000;else if(at==0x2008)value=0x6000;
+                else if(at==0x5018)value=0x7000;else if(at==0x6018)value=0x8000;
+                else return false;
+                std::memcpy(out,&value,8);return true;
+            };
+            TglNativeFrameBatchRequests<2> items;
+            assert(items.capture(0x1000,0x3000,listRead)==(outputs==0x1ff0 || outputs==0x2010));
+        }
         for(unsigned scenario=0;scenario<7;++scenario) {
             Policy p;uint32_t height=1081,format=0x19;
             if(scenario==0) p.mode=2; // ADI: no BOB rejection
