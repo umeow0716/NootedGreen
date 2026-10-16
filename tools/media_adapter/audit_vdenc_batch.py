@@ -20,12 +20,14 @@ SIZES = {0x13000000: 5, 0x10000000: 5, 0x12000000: 4,
          0x70860000: 61, 0x70870000: 4, 0x77800000: 2}
 EXPANSIONS = {0x70800000: 6, 0x70830000: 10,
               0x70840000: 71, 0x70870000: 27}
+MFC_REGISTERS = {0x128a0: 0x1c08a0, 0x128a4: 0x1c08a4,
+                 0x128b4: 0x1c08b4, 0x128b8: 0x1c08b8}
 
 def audit(data):
     if not data or len(data) > 65536 or len(data) % 4:
         raise ValueError('bounded nonempty dword-aligned batch required')
     words = struct.unpack('<%dI' % (len(data)//4), data)
-    packets, mapping = [], {}
+    packets, mapping, registers = [], {}, []
     old = new = 0
     while old < len(words):
         header = words[old]
@@ -44,6 +46,14 @@ def audit(data):
             raise ValueError('unreviewed opcode at %#x' % (old*4))
         if old + size > len(words):
             raise ValueError('truncated packet at %#x' % (old*4))
+        if opcode == 0x12000000:
+            reg = words[old+1]
+            expected = MFC_REGISTERS.get(reg)
+            registers.append({'offset': old*4, 'native_register': reg,
+                              'gen12_absolute': expected,
+                              'gen12_vcs_relative': None if expected is None else expected & 0x3fff,
+                              'native_add_cs_mmio': bool(header & (1 << 19)),
+                              'gen12_add_cs_mmio': True if expected is not None else None})
         # Hypothetical size-only map includes one WAIT on each side of MFX mode.
         # It intentionally does not supply defaults, headers, or resource fields.
         before = int(opcode == 0x70000000)
@@ -56,14 +66,39 @@ def audit(data):
                         'proposed_offset': new*4})
         old += size
         new += proposed + before
+    # process_token_VDENC uses source-root+0x48 for PIPE_BUF, not an offset
+    # supplied for that packet. Preserve this constraint in every proposal.
+    roots = [p for p in packets if p['header'] == '70810004']
+    pipes = [p for p in packets if p['header'] == '70840023']
+    coupling = []
+    for root in roots:
+        following = [p for p in pipes if p['offset'] > root['offset']]
+        if following:
+            pipe = following[0]
+            delta = pipe['proposed_offset'] - root['proposed_offset']
+            coupling.append({'native_root': root['offset'], 'native_fixed_delta': 0x48,
+                             'observed_native_delta': pipe['offset']-root['offset'],
+                             'proposed_delta': delta,
+                             'naive_pre_relocation_compatible': delta == 0x48})
     return {'status': 'AUDIT_ONLY_NOT_SUBMITTABLE', 'native_dwords': len(words),
-            'proposed_dwords': new, 'packets': packets}, mapping
+            'proposed_dwords': new, 'packets': packets,
+            'registers': registers, 'relocation_coupling': coupling}, mapping
 
 def selftest():
     data = struct.pack('<7I', 0x70000003, 0, 0, 0, 0, 0x70800000, 0)
     report, mapping = audit(data)
     assert report['proposed_dwords'] == 13
     assert mapping[0] == 1 and mapping[5] == 7 and mapping[6] == 8
+    shapes = [(0x70810004,6),(0x70820004,6),(0x70830004,6),(0x70840023,37)]
+    data = b''.join(struct.pack('<%dI' % n, h, *([0]*(n-1))) for h,n in shapes)
+    report, _ = audit(data)
+    assert report['relocation_coupling'] == [{'native_root':0,'native_fixed_delta':72,
+        'observed_native_delta':72,'proposed_delta':88,'naive_pre_relocation_compatible':False}]
+    for reg, absolute in MFC_REGISTERS.items():
+        report, _ = audit(struct.pack('<4I',0x12000002,reg,0,0))
+        assert report['registers'][0]['gen12_vcs_relative'] == absolute & 0x3fff
+        assert not report['registers'][0]['native_add_cs_mmio']
+    data = struct.pack('<7I', 0x70000003, 0, 0, 0, 0, 0x70800000, 0)
     for bad in (b'', b'1', struct.pack('<I', 0xffffffff), data[:-4]):
         try:
             audit(bad)
