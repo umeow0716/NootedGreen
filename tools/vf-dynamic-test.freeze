@@ -1,0 +1,1 @@
+VF/GPU testing frozen by user after V377 PF/GT hang; release requires closure of build/diagnostics/pf-safety-static-checklist.txt, not a green preflight or static suite. Do not remove automatically.

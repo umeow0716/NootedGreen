@@ -32,6 +32,17 @@ readonly script_dir="$(dirname "$script_path")"
 readonly preflight_path="${script_dir}/host_vf_runtime_preflight.sh"
 readonly manifest_verifier="${script_dir}/host_vf_runtime_manifest.py"
 readonly trace_analyzer="${script_dir}/host_vf_trace_analyzer.py"
+readonly dynamic_freeze_path="${script_dir}/vf-dynamic-test.freeze"
+
+require_dynamic_test_not_frozen() {
+	# Check both entry points: a previously armed service must not bypass a
+	# review hold added before it starts. Deadline/cleanup remain available.
+	if [[ -e $dynamic_freeze_path || -L $dynamic_freeze_path ]]; then
+		printf 'FAIL: VF/GPU dynamic testing is frozen pending PF safety review: %s\n' \
+			"$dynamic_freeze_path" >&2
+		return 1
+	fi
+}
 
 usage() {
 	printf 'This command is dangerous and is not authorized by a passing preflight alone.\n' >&2
@@ -303,6 +314,7 @@ postflight() {
 }
 
 internal_run_mode() {
+	require_dynamic_test_not_frozen
 	local evidence_dir=${1:-}
 	local guard_unit=${2:-}
 	local run_mode=${3:-}
@@ -352,6 +364,7 @@ internal_run_mode() {
 
 	# This is the only VM start in the controller. The kernel watcher, private
 	# trace collector and independent deadline must all be live first.
+	require_dynamic_test_not_frozen
 	if ! virsh -c "$libvirt_uri" start "$domain_name" \
 		>>"${evidence_dir}/virsh-start.log" 2>&1; then
 		log_line "$evidence_dir" "FAIL one-shot domain start returned failure"
@@ -408,6 +421,7 @@ internal_run_mode() {
 }
 
 arm_mode() {
+	require_dynamic_test_not_frozen
 	local manifest_path=$1
 	local run_mode=$2
 	local runtime_seconds
