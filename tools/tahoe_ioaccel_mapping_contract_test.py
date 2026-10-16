@@ -2782,6 +2782,23 @@ def check(path, boot_path=None):
             f"changed external-producer accelerator owner: {method}"
     print("PASS all counted outer-route receiver-to-accelerator fields")
 
+    # AVC data translation must occur AFTER all token relocation and BEFORE
+    # the video endCommandStream override submits its descriptor. Never assume
+    # that returning from processDataBuffers leaves the batch unsubmitted.
+    # These KC anchors cover ordering and descriptor construction only; they
+    # do not authorize a CPU write or infer backing capacity/task ownership.
+    for address, encoded in (
+            (0x14b6ed70, "48 8b b3 18 06 00 00 48 8b 03 48 89 df ff 90 08 0a 00 00"),
+            (0x14b6ed98, "48 8b 03 48 89 df 4c 89 fe ff 90 38 0a 00 00"),
+            (0x14b6ea46, "44 89 f9 83 e1 fc 48 03 8b 58 06 00 00 49 89 4e 20"),
+            (0x14b6ea69, "49 c7 46 20 00 00 00 00 31 c0"),
+            (0x14b6ea73, "49 89 46 18 8b 83 84 06 00 00 41 89 46 30"),
+            (0x14b6ee39, "48 83 bb 58 06 00 00 00 74 10 e8 32 e1 01 00")):
+        expected = bytes.fromhex(encoded)
+        assert read(address, len(expected)) == expected, \
+            f"changed post-relocation AVC boundary/lifetime anchor: {address:#x}"
+    print("PASS exact sideband-before-endCommandStream and nullable CPU descriptor anchors")
+
     for table, slot, method in (
             ("__ZTV21IOAccelDisplayMachine", 0x8b8,
              "__ZN21IOAccelDisplayMachine26framebuffer_will_power_offEj"),
