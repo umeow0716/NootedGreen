@@ -43,25 +43,31 @@ int main() {
             assert(count>0 && static_cast<size_t>(count)<sizeof(message)-used);
             used+=static_cast<size_t>(count);
         }
-        int extra=std::snprintf(message+used,sizeof(message)-used," V365: W=%x/%x/",UINT32_MAX,UINT32_MAX);
-        assert(extra>0);used+=size_t(extra);
-        for(unsigned i=0;i<16;++i) {
-            extra=std::snprintf(message+used,sizeof(message)-used,"%s%08x",i==8?"/":"",UINT32_MAX);
-            assert(extra>0 && size_t(extra)<sizeof(message)-used);used+=size_t(extra);
-        }
-        assert(used<950 && std::strlen(message)==used && std::strstr(message," T5=") && std::strstr(message," V365: W="));
-        uint32_t offsets[16]{};
-        for(uint32_t bytes=64;bytes<=0x200000;bytes*=2)
-            for(uint32_t tail=32;tail<bytes;tail+=8) {
-                assert(NGVfTimeoutObservation::ringWindowOffsets(bytes,bytes,tail,offsets));
-                for(unsigned i=0;i<16;++i)assert(offsets[i]<=bytes-4 && !(offsets[i]&3));
-                assert(offsets[0]==0 && offsets[7]==28 && offsets[8]==tail-32 && offsets[15]==tail-4);
+        uint32_t words[48]{};char encoded[257]{};
+        for(unsigned i=0;i<48;++i)words[i]=0x03020100U+i*0x04040404U;
+        NGVfTimeoutObservation::encodeRingPrefix(words,encoded);
+        assert(std::strlen(encoded)==256 && std::memcmp(encoded,"AAECAwQF",8)==0);
+        constexpr char alphabet[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for(unsigned i=0;i<64;++i) {
+            uint32_t value=0;
+            for(unsigned j=0;j<4;++j) {
+                const char* at=std::strchr(alphabet,encoded[i*4+j]);assert(at && *at);
+                value=(value<<6)|uint32_t(at-alphabet);
             }
-        for(auto bad: {0U,1U,31U,32U,63U,65U,0x400000U})
-            assert(!NGVfTimeoutObservation::ringWindowOffsets(bad,UINT64_MAX,32,offsets));
-        for(auto bad: {0U,1U,24U,31U,33U,60U,64U,UINT32_MAX})
-            assert(!NGVfTimeoutObservation::ringWindowOffsets(64,64,bad,offsets));
-        assert(!NGVfTimeoutObservation::ringWindowOffsets(64,63,32,offsets));
+            for(unsigned j=0;j<3;++j)assert(((value>>((2-j)*8))&255U)==i*3+j);
+        }
+        int extra=std::snprintf(message+used,sizeof(message)-used," V366: P=%x/%x/%.256s",UINT32_MAX,UINT32_MAX,encoded);
+        assert(extra>0 && size_t(extra)<sizeof(message)-used);used+=size_t(extra);
+        assert(used<950 && std::strlen(message)==used && std::strstr(message," T5=") && std::strstr(message," V366: P="));
+        for(uint32_t bytes=256;bytes<=0x200000;bytes*=2)
+            for(uint32_t tail=32;tail<=192;tail+=8)
+                assert(NGVfTimeoutObservation::ringPrefixAdmitted(bytes,bytes,tail,0));
+        for(auto bad: {0U,1U,32U,64U,192U,255U,257U,0x400000U})
+            assert(!NGVfTimeoutObservation::ringPrefixAdmitted(bad,UINT64_MAX,32,0));
+        for(auto bad: {0U,1U,24U,31U,33U,60U,193U,200U,256U,UINT32_MAX})
+            assert(!NGVfTimeoutObservation::ringPrefixAdmitted(256,256,bad,0));
+        assert(!NGVfTimeoutObservation::ringPrefixAdmitted(256,255,184,0));
+        assert(!NGVfTimeoutObservation::ringPrefixAdmitted(256,256,184,4));
     }
     {
         NGVfTaskCompletion::Request request{NGVfTaskCompletion::version,sizeof(NGVfTaskCompletion::Request),{}};

@@ -6662,9 +6662,11 @@ def source_contract(path):
     for required in ("engine == 3 && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking",
                      "image + 0x102C);", "(control & 0x001FF000U) + PAGE_SIZE", "(control & 1U)",
                      "frame.ringTail == entry.submissionCoverage.coveredTail",
-                     "NGVfTimeoutObservation::ringWindowOffsets(bytes,",
+                     "NGVfTimeoutObservation::ringPrefixAdmitted(bytes,",
                      "getMember<uint64_t>(entry.ringBacking, kVfMappedBufferLengthOffset)",
-                     "if (ring)", "i < 16", "ring + offsets[i]", "frame.windowFlags = 1;"):
+                     "frame.ringTail, frame.ringHead)", "uint32_t words[48] {}",
+                     "if (ring)", "i < frame.ringTail / 4U", "ring + i * 4U",
+                     "NGVfTimeoutObservation::encodeRingPrefix(words, frame.windowBase64)", "frame.windowFlags = 1;"):
         if required not in capture:
             raise AssertionError(f"{path}: timeout VCS fixed window lost bound/identity gate: {required}")
     if capture.count("reinterpret_cast<Getter>(getter)") != 3:
@@ -7774,11 +7776,13 @@ def timeout_capture_mutations(path):
         ("(control & 1U)", "true"),
         ("engine == 3 && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking", "entry.ringBacking"),
         ("frame.ringTail == entry.submissionCoverage.coveredTail", "true"),
-        ("NGVfTimeoutObservation::ringWindowOffsets(bytes,", "NGVfTimeoutObservation::ringWindowOffsets(64,"),
+        ("NGVfTimeoutObservation::ringPrefixAdmitted(bytes,", "NGVfTimeoutObservation::ringPrefixAdmitted(256,"),
         ("getMember<uint64_t>(entry.ringBacking, kVfMappedBufferLengthOffset)", "UINT64_MAX"),
         ("if (ring)", "if (true)"),
-        ("i < 16", "i < 256"),
-        ("ring + offsets[i]", "ring + 4096 + offsets[i]"),
+        ("frame.ringTail, frame.ringHead)", "frame.ringTail, 0)"),
+        ("uint32_t words[48] {}", "uint32_t words[48]"),
+        ("i < frame.ringTail / 4U", "i < 256"),
+        ("ring + i * 4U", "ring + 4096 + i * 4U"),
         ("!operation", "false"),
         ("gVfContextShutdownStarted || gVfDeviceStopping", "false"),
         ("engine < NGVfTimeoutObservation::engineCount", "engine < gVfContextCapacity"),

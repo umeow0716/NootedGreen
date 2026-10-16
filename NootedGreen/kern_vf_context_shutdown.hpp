@@ -298,18 +298,27 @@ inline void clearReleasedIdentity(Context &context) {
 // last published native context per IGHwCsType instead of scanning a 57K table
 // during fail-stop. The production table lock protects publication and capture.
 namespace NGVfTimeoutObservation {
-// Two fixed 32-byte windows, never a command walk or a batch-pointer follow.
+// Complete short, zero-head ring prefix; never a command walk or batch follow.
 // Caller pins the exact context/ring backing and serial under the context lock.
-inline bool ringWindowOffsets(uint32_t bytes, uint64_t backingBytes, uint32_t tail,
-                              uint32_t (&offsets)[16]) {
-    if (bytes < 64 || bytes > 0x200000U || (bytes & (bytes - 1U)) ||
-        backingBytes < bytes || tail < 32 || tail >= bytes || (tail & 7U))
-        return false;
-    for (uint32_t i = 0; i < 8; ++i) {
-        offsets[i] = i * 4U;
-        offsets[i + 8] = tail - 32U + i * 4U;
+inline bool ringPrefixAdmitted(uint32_t bytes, uint64_t backingBytes, uint32_t tail, uint32_t head) {
+    return bytes >= 256 && bytes <= 0x200000U && !(bytes & (bytes - 1U)) &&
+        backingBytes >= bytes && head == 0 && tail >= 32 && tail <= 192 &&
+        tail < bytes && !(tail & 7U);
+}
+inline void encodeRingPrefix(const uint32_t (&words)[48], char (&output)[257]) {
+    constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (uint32_t byte = 0, out = 0; byte < 192; byte += 3, out += 4) {
+        uint32_t value = 0;
+        for (uint32_t i = 0; i < 3; ++i) {
+            const uint32_t at = byte + i;
+            value = (value << 8) | ((words[at / 4] >> ((at & 3U) * 8U)) & 255U);
+        }
+        output[out] = alphabet[(value >> 18) & 63U];
+        output[out + 1] = alphabet[(value >> 12) & 63U];
+        output[out + 2] = alphabet[(value >> 6) & 63U];
+        output[out + 3] = alphabet[value & 63U];
     }
-    return true;
+    output[256] = 0;
 }
 constexpr uint32_t engineCount = 6;
 struct Reference {
