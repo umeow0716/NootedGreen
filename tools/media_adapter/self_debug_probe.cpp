@@ -451,6 +451,48 @@ int main() {
         if (owned_debug_target_c() != 0x369c || !partial.observed(2, 0x369c) ||
             partial.observed(0, 0x1357)) return 1;
     } // Restore the other three armed slots after an early native failure.
+    {
+        NativeRuntimeSnapshot snapshot(1024*1024,2);
+        if(!snapshot.ready())return 1;
+        alignas(8) unsigned char wrapper[0x88]{};
+        unsigned char data[8]{},sideband[8]{};
+        const uintptr_t fields[]{reinterpret_cast<uintptr_t>(data),reinterpret_cast<uintptr_t>(data+8),
+            reinterpret_cast<uintptr_t>(data+8),reinterpret_cast<uintptr_t>(sideband+8),reinterpret_cast<uintptr_t>(sideband)};
+        const size_t offsets[]{0x10,0x18,0x20,0x60,0x80};
+        for(unsigned i=0;i<5;++i)std::memcpy(wrapper+offsets[i],&fields[i],8);
+        const auto originalCreator=expectedCreator;expectedCreator=wrapper;
+        {
+            NativeReturnObserver capture({reinterpret_cast<uintptr_t>(owned_debug_site),reinterpret_cast<uintptr_t>(owned_debug_creator_site),0,0},
+                0,0,0,0,0,0,{},0,{},0,{&snapshot,reinterpret_cast<uintptr_t>(expectedCreator),1,0});
+            uintptr_t table[4]{0,0,0,reinterpret_cast<uintptr_t>(&creatorNative)};
+            if(!capture.isArmed() || owned_debug_creator_target(expectedCreator,table)!=0x1357 ||
+                capture.observed(1,1) || owned_debug_target()!=0x1357 ||
+                owned_debug_creator_target(expectedCreator,table)!=0x1357 || !capture.observed(1,1))return 1;
+        }
+        expectedCreator=originalCreator;snapshot.wait();
+        const int fd=open(snapshot.path(),O_RDONLY|O_NOFOLLOW);
+        struct stat metadata{};
+        if(fd<0 || fstat(fd,&metadata) || (metadata.st_mode&0777)!=0600)return 1;
+        uint32_t format[4]{};
+        if(read(fd,format,sizeof(format))!=sizeof(format) || format[0]!=0x4e47534e || format[1]!=1)return 1;
+        struct Packet {uint32_t kind,bytes;uint64_t address,detail;};
+        bool interrupted=false,terminal=false;uint64_t memoryBytes=0;
+        for(unsigned records=0;records<8192;++records) {
+            Packet packet{};if(read(fd,&packet,sizeof(packet))!=sizeof(packet))break;
+            if(packet.bytes>65536)return 1;
+            if(packet.kind==1)interrupted=true;
+            if(packet.kind==4)memoryBytes+=packet.bytes;
+            if(packet.kind==6) {
+                uint64_t footer[5]{};
+                if(packet.bytes!=sizeof(footer) || read(fd,footer,sizeof(footer))!=sizeof(footer) ||
+                   footer[0]!=1 || footer[1]!=1024*1024 || footer[1]!=memoryBytes)return 1;
+                terminal=true;break;
+            }
+            if(lseek(fd,packet.bytes,SEEK_CUR)<0)return 1;
+        }
+        close(fd);if(unlink(snapshot.path()) || !interrupted || !terminal)return 1;
+        std::puts("RUNTIME_SNAPSHOT_OWNED_OK native-result-preserved private-stream byte-limit-marked");
+    }
     alarm(0);
     std::puts("SELF_DEBUG_OWNED_CODE_OK no-gpu no-apple-text-write scoped-observer=1");
     return 0;

@@ -13,6 +13,7 @@
 #include <array>
 #include <cerrno>
 #include <pthread.h>
+#include "native_runtime_snapshot.hpp"
 
 // Fatal-fault evidence only. Default handlers are restored before returning
 // to the SAME faulting instruction; no RIP/flags/result/text modification.
@@ -96,6 +97,13 @@ struct NativeOwnedCallTable {
     }
 };
 
+struct NativeSnapshotTrigger {
+    NativeRuntimeSnapshot* snapshot=nullptr;
+    uintptr_t exactArgument=0;
+    unsigned site=0;
+    unsigned armAfterSite=4;
+};
+
 class NativeReturnObserver {
     inline static std::mutex lock;
     inline static std::atomic<NativeReturnObserver *> active{nullptr};
@@ -121,6 +129,7 @@ class NativeReturnObserver {
     uintptr_t imageBytes = 0;
     NativeOwnedCopy ownedCopy{};
     NativeOwnedCallTable ownedCallTable{};
+    NativeSnapshotTrigger snapshotTrigger{};
     volatile sig_atomic_t handlerRestore = KERN_FAILURE;
     bool installed = false;
     bool armed = false;
@@ -157,6 +166,11 @@ class NativeReturnObserver {
             return;
         }
         auto raw = state->uc_mcontext->__ss.__rax;
+        if(self->snapshotTrigger.snapshot && site==self->snapshotTrigger.site) {
+            // Normal-stack owner qualification; no native register changes.
+            const bool exact=state->uc_mcontext->__ss.__rdi==self->snapshotTrigger.exactArgument;
+            raw=exact && self->snapshotTrigger.snapshot->trigger(state->uc_mcontext->__ss)?1:0;
+        }
         if (self->ownedCopy.bytes && site == 0) {
             // Pinned memcpy_s call arguments only. The owned source remains live
             // until native returns; no Apple code, RIP, flags or result changes.
@@ -215,15 +229,22 @@ public:
     explicit NativeReturnObserver(const std::array<uintptr_t, 4> &selected, unsigned booleans = 0,
         unsigned rcx = 0, unsigned readRax32 = 0, unsigned rdxImage = 0,
         uintptr_t base = 0, uintptr_t bytes = 0, NativeOwnedCopy copy = {}, unsigned rcxImage = 0,
-        NativeOwnedCallTable callTable = {},unsigned rawReturns=0)
+        NativeOwnedCallTable callTable = {},unsigned rawReturns=0,NativeSnapshotTrigger snapshot = {})
         : sites(selected), booleanSites(booleans), rcxSites(rcx), readRax32Sites(readRax32),
-          rdxImageSites(rdxImage), rcxImageSites(rcxImage), imageBase(base), imageBytes(bytes), ownedCopy(copy),ownedCallTable(callTable) {
+          rdxImageSites(rdxImage), rcxImageSites(rcxImage), imageBase(base), imageBytes(bytes), ownedCopy(copy),ownedCallTable(callTable),snapshotTrigger(snapshot) {
         for (unsigned i = 0; i != 4; ++i) {
             if (!sites[i]) continue;
             for (unsigned j = 0; j != i; ++j) if (sites[j] == sites[i]) return;
             wanted |= 1 << i;
         }
         if (!guard.owns_lock() || !wanted ||
+            (snapshotTrigger.snapshot && (snapshotTrigger.site>=4 || !snapshotTrigger.exactArgument ||
+                !snapshotTrigger.snapshot->ready() ||
+                (snapshotTrigger.armAfterSite==4 ? wanted!=(1<<snapshotTrigger.site) :
+                    (snapshotTrigger.armAfterSite>=4 || snapshotTrigger.armAfterSite==snapshotTrigger.site ||
+                     wanted!=((1<<snapshotTrigger.site)|(1<<snapshotTrigger.armAfterSite)))) ||
+                booleanSites || rcxSites || readRax32Sites || rdxImageSites || rcxImageSites ||
+                ownedCopy.bytes || ownedCallTable.replacement || rawReturns)) ||
             ((booleanSites | rcxSites | readRax32Sites | rdxImageSites | rcxImageSites | rawReturns) & ~unsigned(wanted)) ||
             (rawReturns & (booleanSites | rcxSites | readRax32Sites | rdxImageSites | rcxImageSites)) ||
             (ownedCopy.bytes && (rawReturns&1u)) ||
@@ -289,8 +310,11 @@ public:
             programmed.__dr7 &= ~(uint64_t(0xf) << (16 + 4 * i));
             programmed.__dr7 |= uint64_t(1) << (2 * i);
         }
+        auto initial=programmed;
+        if(snapshotTrigger.snapshot && snapshotTrigger.armAfterSite<4)
+            initial.__dr7 &= ~(uint64_t(3) << (2*snapshotTrigger.site));
         const kern_return_t result = thread_set_state(thread, x86_DEBUG_STATE64,
-            reinterpret_cast<thread_state_t>(&programmed), x86_DEBUG_STATE64_COUNT);
+            reinterpret_cast<thread_state_t>(&initial), x86_DEBUG_STATE64_COUNT);
         armed = result == KERN_SUCCESS;
         std::fprintf(stderr, "NGRN_NATIVE_RETURN_OBSERVER_ARM result=%d armed=%d\n", result, armed);
         os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_ARM result=%{public}d armed=%{public}d", result, int(armed));

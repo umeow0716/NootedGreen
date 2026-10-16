@@ -5,6 +5,11 @@ compiler="${CXX:-clang++}"
 task_output="$(mktemp -d "${TMPDIR:-/tmp}/ngreen-static.XXXXXX")"
 printf 'Diagnostic directory: %s\n' "$task_output"
 failed=0
+if python3 -B tools/media_adapter/decode_runtime_snapshot.py --self-test; then
+    printf 'PASS bounded native runtime snapshot parser\n'
+else
+    failed=1
+fi
 if python3 -B tools/vf_command_pool_native_abi_test.py \
     sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
     --task-identity-only; then

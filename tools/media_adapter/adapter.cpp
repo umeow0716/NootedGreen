@@ -5681,7 +5681,35 @@ struct NativeOtherFrameBackend {
         const int result=owner->dispatchScopedFrameWithReceipt(lease,scope,input,output,
             [&](uintptr_t entry,uintptr_t context,uintptr_t request,uintptr_t slot,NativePhysicalFrameScope& active) noexcept -> int {
                 if(!active.matches(image,physical,generation) || entry!=owner->frameTable().nativeFrame() || context!=owner->context())return 5;
-                return TglNativeContextFrameInvoker{}(entry,context,request,slot);
+                const auto invoke=[&]() noexcept {return TglNativeContextFrameInvoker{}(entry,context,request,slot);};
+                // Exact AVC400 frame only. Full self-process capture precedes
+                // native SubmitDataBuffers while the native builder lock is
+                // still held. A refusal never changes native frame behavior.
+                static std::atomic<bool> snapshotAttempted{false};
+                constexpr unsigned char expected[]{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+                    0x41,0x55,0x41,0x54,0x53,0x50,0x49,0x89,0xfe};
+                unsigned char anchor[sizeof(expected)]{};uintptr_t producer=0;
+                constexpr unsigned char finalCall[]{0xe8,0x94,0x81,0xfe,0xff};
+                unsigned char finalAnchor[sizeof(finalCall)]{};
+                if(entry!=image+0x27724 || !readMemory(image+0xa893,anchor,sizeof(anchor)) ||
+                   memcmp(anchor,expected,sizeof(anchor)) || !executableMemory(image+0xa893,sizeof(anchor)) ||
+                   !readMemory(image+0x22843,finalAnchor,sizeof(finalAnchor)) ||
+                   memcmp(finalAnchor,finalCall,sizeof(finalAnchor)) || !executableMemory(image+0x22843,sizeof(finalAnchor)) ||
+                   !readMemory(context+0x10,&producer,sizeof(producer)) || !producer ||
+                   producer>UINTPTR_MAX-0x130 || !writableDataMemory(producer,0x130) ||
+                   snapshotAttempted.exchange(true,std::memory_order_acq_rel))return invoke();
+                NativeRuntimeSnapshot snapshot;
+                if(!snapshot.ready()) {
+                    os_log_error(OS_LOG_DEFAULT,"NGRN_RUNTIME_SNAPSHOT_SKIP native-temp-or-worker-denied");
+                    return invoke();
+                }
+                // Do not capture an earlier capacity flush from22708: only
+                // the final227e0 call at22843 arms the submit observer.
+                NativeReturnObserver observer({image+0x22843,image+0xa893,0,0},0,0,0,0,0,0,{},0,{},0,
+                    {&snapshot,producer+0x48,1,0});
+                os_log_error(OS_LOG_DEFAULT,"NGRN_RUNTIME_SNAPSHOT_ARM armed=%{public}d path=%{public}s non-atomic-other-threads=1",
+                    int(observer.isArmed()),snapshot.path());
+                return invoke();
             },receipt);
         // Any invoked-native failure or missing evidence leaves Reserved/Bound
         // retention in the owner. No synthetic cancellation or implicit free.
