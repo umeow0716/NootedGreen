@@ -58,14 +58,27 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
     if((src&3U) || (dst&3U) || capacity>1536 || src>UINTPTR_MAX-count*4 || dst>UINTPTR_MAX-capacity*4 ||
        (src<dst+capacity*4 && dst<src+count*4)){r.reason="alias";return r;}
     if(input[count-1] || input[count-2]){r.reason="native-end-reserve";return r;}
-    size_t needed=0;unsigned mfx=0,mode=0,srcSurface=0,refSurface=0,ds=0,pipe=0,walkers=0,srm=0;
+    size_t needed=0;unsigned mfx=0,mfxPipe=0,mfxImage=0,image=0,mode=0;
+    unsigned srcSurface=0,refSurface=0,ds=0,pipe=0,walkers=0,srm=0;
     uint32_t nextRow=0,registerMask=0;
     // Entire validation pass precedes the first output write.
     for(size_t at=0;at<count;) {
         const uint32_t op=opcode(input[at]);const size_t n=packetWords(input[at]);
         if(!n || n>count-at){r.reason="packet";return r;}
         size_t emitted=n;
-        if(op==0x70000000U){++mfx;emitted+=2;}
+        if(op==0x70000000U){++mfx;emitted+=2;
+            if(input[at+2]&0x20U || input[at+4]){r.reason="mfx-mode-options";return r;}}
+        if(op==0x70020000U){++mfxPipe;
+            // Legacy compression-mode bits are not Gen12 compression types.
+            const size_t controls[]={3,6,9,12,15,18,54,57,60,64,67};
+            for(size_t k:controls)
+                if(input[at+k]&0x600U){r.reason="mfx-compression";return r;}
+            if(input[at+61]){r.reason="reference-compression";return r;}}
+        if(op==0x71000000U){++mfxImage;
+            if(input[at+17]&0x3fU){r.reason="fractional-qp";return r;}}
+        if(op==0x70850000U){++image;
+            if(input[at+1]&0x20U || input[at+24] || input[at+34]&0x4000U){
+                r.reason="image-options";return r;}}
         if(op==0x70800000U){++mode;emitted=6;
             if(input[at+1]!=0x82U){r.reason="mode-profile";return r;}}
         if(op==0x70810000U || op==0x70820000U || op==0x70830000U) {
@@ -94,7 +107,8 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
             if(registerMask&bit){r.reason="duplicate-srm";return r;}registerMask|=bit;}
         needed+=emitted;at+=n;
     }
-    if(mfx!=1 || mode!=1 || srcSurface!=1 || refSurface!=1 || ds!=1 || pipe!=1 ||
+    if(mfx!=1 || mfxPipe!=1 || mfxImage!=1 || image!=1 || mode!=1 ||
+       srcSurface!=1 || refSurface!=1 || ds!=1 || pipe!=1 ||
        !walkers || walkers>32 || srm!=4 || registerMask!=15 ||
        nextRow!=(height+15)/16){r.reason="frame-profile";return r;}
     if(needed>capacity){r.reason="capacity";return r;}
@@ -111,6 +125,9 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
         for(size_t k=0;k<emitted;++k)output[out++]=k<n?input[at+k]:0;
         if(emitted!=n)output[start]=(input[at]&~0xfffU)|static_cast<uint32_t>(emitted-2);
         if(op==0x70800000U){output[start+2]=0x002b030aU;output[start+3]=0x07000303U;}
+        // Gen12 AddVdencImgStateCmd unconditionally enables extended PAK.
+        // Gen9 reserved this bit; it is not a user feature flag to preserve.
+        if(op==0x70850000U)output[start+1]|=0x20U;
         if(op==0x70810000U || op==0x70820000U || op==0x70830000U)
             output[start+3]=(input[at+3]&0x000fffffU)|(4U<<27);
         if(op==0x70830000U)output[start+7]=3;

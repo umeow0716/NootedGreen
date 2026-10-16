@@ -18928,14 +18928,16 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
-        std::array<uint32_t,256> input{},output{};size_t used=0;
+        std::array<uint32_t,512> input{},output{};size_t used=0;
         auto add=[&](uint32_t header,size_t n){size_t start=used;input[used++]=header;
             used+=n-1;return start;};
-        add(0x70000003,5);auto mode=add(0x70800000,2);input[mode+1]=0x82;
+        add(0x70000003,5);auto mfxPipe=add(0x70020042,68);
+        auto mode=add(0x70800000,2);input[mode+1]=0x82;
         auto surface=[&](uint32_t header,uint32_t width,uint32_t height){auto at=add(header,6);
             input[at+2]=((width-1)<<4)|((height-1)<<18);input[at+3]=0x48000003;return at;};
         auto source=surface(0x70810004,1920,1088);surface(0x70820004,1920,1088);
         surface(0x70830004,480,272);auto pipe=add(0x70840023,37);input[pipe+9]=14;
+        auto mfxImage=add(0x71000013,21);auto image=add(0x70850021,35);
         auto walker=add(0x70870002,4);input[walker+2]=68;
         for(uint32_t reg:{0x128a0U,0x128a4U,0x128b4U,0x128b8U}) {
             auto at=add(0x12000002,4);input[at+1]=reg;input[at+2]=0x1000+reg;
@@ -18943,9 +18945,10 @@ int main() {
         used+=2;
         auto result=NgreenAvcGen12::produce(input.data(),used,1920,1080,output.data(),output.size());
         assert(result.ok && result.words==used+67);
-        assert(output[0]==0x68000100 && output[6]==0x68000100 && output[7]==0x70800004);
-        assert(output[8]==0x82 && output[9]==0x2b030a && output[10]==0x7000303);
-        assert(output[16]==0x20000003 && output[22]==0x20000003 && output[28]==0x20000003);
+        assert(output[0]==0x68000100 && output[6]==0x68000100 && output[75]==0x70800004);
+        assert(output[76]==0x82 && output[77]==0x2b030a && output[78]==0x7000303);
+        assert(output[84]==0x20000003 && output[90]==0x20000003 && output[96]==0x20000003);
+        assert(output[196]==0x20);
         const auto good=input;output.fill(0xdeadbeef);
         auto rejected=[&](){auto r=NgreenAvcGen12::produce(input.data(),used,1920,1080,
             output.data(),output.size());assert(!r.ok);for(auto v:output)assert(v==0xdeadbeef);};
@@ -18955,6 +18958,11 @@ int main() {
         input[walker+2]=69;rejected();input=good;
         input[source+3]=0x20000003;rejected();input=good;
         input[source+2]^=16;rejected();input=good;
+        input[mfxPipe+3]=0x400;rejected();input=good;
+        input[mfxImage+17]=1;rejected();input=good;
+        input[image+1]=0x20;rejected();input=good;
+        input[image+24]=1;rejected();input=good;
+        input[image+34]=0x4000;rejected();input=good;
         input[used-1]=1;rejected();input=good;
         input[walker+5]=0x128a4;rejected();input=good;
         for(size_t at=0;at<used;++at){auto saved=input[at];input[at]=0xffffffff;
@@ -18963,7 +18971,7 @@ int main() {
         assert(!NgreenAvcGen12::produce(input.data(),used,1920,1080,input.data(),input.size()).ok);
         assert(!NgreenAvcGen12::produce(input.data(),used,1919,1080,output.data(),output.size()).ok);
         auto scratch=std::make_unique<NgreenAvcGen12::PublishScratch>();
-        std::array<uint32_t,256> backing=input;
+        std::array<uint32_t,512> backing=input;
         for(size_t i=used;i<backing.size();++i)backing[i]=0xaabbccdd;
         const auto originalBacking=backing;volatile uint32_t count=static_cast<uint32_t>(used);
         auto live=[&](uint32_t expected){return count==expected;};
