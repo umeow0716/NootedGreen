@@ -298,6 +298,19 @@ inline void clearReleasedIdentity(Context &context) {
 // last published native context per IGHwCsType instead of scanning a 57K table
 // during fail-stop. The production table lock protects publication and capture.
 namespace NGVfTimeoutObservation {
+// Two fixed 32-byte windows, never a command walk or a batch-pointer follow.
+// Caller pins the exact context/ring backing and serial under the context lock.
+inline bool ringWindowOffsets(uint32_t bytes, uint64_t backingBytes, uint32_t tail,
+                              uint32_t (&offsets)[16]) {
+    if (bytes < 64 || bytes > 0x200000U || (bytes & (bytes - 1U)) ||
+        backingBytes < bytes || tail < 32 || tail >= bytes || (tail & 7U))
+        return false;
+    for (uint32_t i = 0; i < 8; ++i) {
+        offsets[i] = i * 4U;
+        offsets[i + 8] = tail - 32U + i * 4U;
+    }
+    return true;
+}
 constexpr uint32_t engineCount = 6;
 struct Reference {
 	uint32_t id, descriptorLo, descriptorHi;

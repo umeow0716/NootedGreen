@@ -10133,8 +10133,9 @@ struct VfTimeoutContextFrame {
 	uint32_t id = 0, flags = 0, state = 0;
 	uint32_t expectedStamp = 0, observedStamp = 0;
 	uint32_t expectedHead = 0, reportedHead = 0, ringHead = 0, ringTail = 0;
+	uint32_t windowFlags = 0, windowBytes = 0, windowWords[16] {};
 };
-static_assert(sizeof(VfTimeoutContextFrame) == 36, "six bounded CPU frames");
+static_assert(sizeof(VfTimeoutContextFrame) == 108, "six bounded CPU frames with fixed ring windows");
 
 static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
 	VfTimeoutContextFrame (&frames)[NGVfTimeoutObservation::engineCount]) {
@@ -10179,6 +10180,24 @@ static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
 		frame.reportedHead = *reinterpret_cast<volatile uint32_t *>(image + 0x10);
 		frame.ringHead = *reinterpret_cast<volatile uint32_t *>(image + 0x1014);
 		frame.ringTail = *reinterpret_cast<volatile uint32_t *>(image + 0x101C);
+		// V365: only VCS0's last published, identity/serial-qualified CPU ring.
+		// No MMIO or batch traversal. Saved LRCA head is NOT a live instruction pointer.
+		if (engine == 3 && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking) {
+			const uint32_t control = *reinterpret_cast<volatile uint32_t *>(image + 0x102C);
+			const uint32_t bytes = (control & 0x001FF000U) + PAGE_SIZE;
+			uint32_t offsets[16] {};
+			if ((control & 1U) && frame.ringTail == entry.submissionCoverage.coveredTail &&
+			    NGVfTimeoutObservation::ringWindowOffsets(bytes,
+			        getMember<uint64_t>(entry.ringBacking, kVfMappedBufferLengthOffset), frame.ringTail, offsets)) {
+				auto *ring = static_cast<volatile uint8_t *>(reinterpret_cast<Getter>(getter)(entry.ringBacking));
+				if (ring) {
+					for (uint32_t i = 0; i < 16; ++i)
+						frame.windowWords[i] = *reinterpret_cast<volatile uint32_t *>(ring + offsets[i]);
+					frame.windowBytes = bytes;
+					frame.windowFlags = 1;
+				}
+			}
+		}
 		if (entry.submissionCoverage.gpuComplete(frame.observedStamp, frame.reportedHead, softwareBefore))
 			frame.flags |= 16;
 	}
@@ -10192,6 +10211,8 @@ static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
 
 #define NG_TIMEOUT_FRAME_FORMAT "%x/%x/%x/%x/%x/%x/%x/%x/%x"
 #define NG_TIMEOUT_FRAME_ARGS(f) (f).id,(f).flags,(f).state,(f).expectedStamp,(f).observedStamp,(f).expectedHead,(f).reportedHead,(f).ringHead,(f).ringTail
+#define NG_TIMEOUT_WINDOW_FORMAT "%x/%x/%08x%08x%08x%08x%08x%08x%08x%08x/%08x%08x%08x%08x%08x%08x%08x%08x"
+#define NG_TIMEOUT_WINDOW_ARGS(f) (f).windowFlags,(f).windowBytes,(f).windowWords[0],(f).windowWords[1],(f).windowWords[2],(f).windowWords[3],(f).windowWords[4],(f).windowWords[5],(f).windowWords[6],(f).windowWords[7],(f).windowWords[8],(f).windowWords[9],(f).windowWords[10],(f).windowWords[11],(f).windowWords[12],(f).windowWords[13],(f).windowWords[14],(f).windowWords[15]
 
 void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	(void)that;
@@ -10205,15 +10226,17 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	PANIC_COND(true, "ngreen", "V267: refusing VF event timeout recovery channel=%d V364: capture=%x"
 		" T0=" NG_TIMEOUT_FRAME_FORMAT " T1=" NG_TIMEOUT_FRAME_FORMAT
 		" T2=" NG_TIMEOUT_FRAME_FORMAT " T3=" NG_TIMEOUT_FRAME_FORMAT
-		" T4=" NG_TIMEOUT_FRAME_FORMAT " T5=" NG_TIMEOUT_FRAME_FORMAT,
+		" T4=" NG_TIMEOUT_FRAME_FORMAT " T5=" NG_TIMEOUT_FRAME_FORMAT " V365: W=" NG_TIMEOUT_WINDOW_FORMAT,
 		channel,capture,NG_TIMEOUT_FRAME_ARGS(frames[0]),NG_TIMEOUT_FRAME_ARGS(frames[1]),
 		NG_TIMEOUT_FRAME_ARGS(frames[2]),NG_TIMEOUT_FRAME_ARGS(frames[3]),
-		NG_TIMEOUT_FRAME_ARGS(frames[4]),NG_TIMEOUT_FRAME_ARGS(frames[5]));
+		NG_TIMEOUT_FRAME_ARGS(frames[4]),NG_TIMEOUT_FRAME_ARGS(frames[5]),NG_TIMEOUT_WINDOW_ARGS(frames[3]));
 	return nullptr;
 }
 
 #undef NG_TIMEOUT_FRAME_ARGS
 #undef NG_TIMEOUT_FRAME_FORMAT
+#undef NG_TIMEOUT_WINDOW_ARGS
+#undef NG_TIMEOUT_WINDOW_FORMAT
 
 // A zero signature is the native no-diagnosis result consumed by
 // IGAccelFIFOChannel::getHardwareDiagnosisReport.

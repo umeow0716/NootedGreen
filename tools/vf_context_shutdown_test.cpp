@@ -43,7 +43,25 @@ int main() {
             assert(count>0 && static_cast<size_t>(count)<sizeof(message)-used);
             used+=static_cast<size_t>(count);
         }
-        assert(used<950 && std::strlen(message)==used && std::strstr(message," T5="));
+        int extra=std::snprintf(message+used,sizeof(message)-used," V365: W=%x/%x/",UINT32_MAX,UINT32_MAX);
+        assert(extra>0);used+=size_t(extra);
+        for(unsigned i=0;i<16;++i) {
+            extra=std::snprintf(message+used,sizeof(message)-used,"%s%08x",i==8?"/":"",UINT32_MAX);
+            assert(extra>0 && size_t(extra)<sizeof(message)-used);used+=size_t(extra);
+        }
+        assert(used<950 && std::strlen(message)==used && std::strstr(message," T5=") && std::strstr(message," V365: W="));
+        uint32_t offsets[16]{};
+        for(uint32_t bytes=64;bytes<=0x200000;bytes*=2)
+            for(uint32_t tail=32;tail<bytes;tail+=8) {
+                assert(NGVfTimeoutObservation::ringWindowOffsets(bytes,bytes,tail,offsets));
+                for(unsigned i=0;i<16;++i)assert(offsets[i]<=bytes-4 && !(offsets[i]&3));
+                assert(offsets[0]==0 && offsets[7]==28 && offsets[8]==tail-32 && offsets[15]==tail-4);
+            }
+        for(auto bad: {0U,1U,31U,32U,63U,65U,0x400000U})
+            assert(!NGVfTimeoutObservation::ringWindowOffsets(bad,UINT64_MAX,32,offsets));
+        for(auto bad: {0U,1U,24U,31U,33U,60U,64U,UINT32_MAX})
+            assert(!NGVfTimeoutObservation::ringWindowOffsets(64,64,bad,offsets));
+        assert(!NGVfTimeoutObservation::ringWindowOffsets(64,63,32,offsets));
     }
     {
         NGVfTaskCompletion::Request request{NGVfTaskCompletion::version,sizeof(NGVfTaskCompletion::Request),{}};

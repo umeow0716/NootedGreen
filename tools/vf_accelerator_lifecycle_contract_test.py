@@ -6659,7 +6659,15 @@ def source_contract(path):
                       "ReadRegister32(", "WriteRegister32(", "IOSleep(", "IOMalloc", "->retain(", "->release("):
         if forbidden in capture:
             raise AssertionError(f"{path}: timeout CPU snapshot gained side effect: {forbidden}")
-    if capture.count("reinterpret_cast<Getter>(getter)") != 2:
+    for required in ("engine == 3 && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking",
+                     "image + 0x102C);", "(control & 0x001FF000U) + PAGE_SIZE", "(control & 1U)",
+                     "frame.ringTail == entry.submissionCoverage.coveredTail",
+                     "NGVfTimeoutObservation::ringWindowOffsets(bytes,",
+                     "getMember<uint64_t>(entry.ringBacking, kVfMappedBufferLengthOffset)",
+                     "if (ring)", "i < 16", "ring + offsets[i]", "frame.windowFlags = 1;"):
+        if required not in capture:
+            raise AssertionError(f"{path}: timeout VCS fixed window lost bound/identity gate: {required}")
+    if capture.count("reinterpret_cast<Getter>(getter)") != 3:
         raise AssertionError(f"{path}: timeout snapshot getter inventory changed")
     debug_noop = function_body(
         source, "void Gen11::vfSuppressPhysicalDebugCapture(")
@@ -7761,6 +7769,16 @@ def timeout_capture_mutations(path):
     source = original_read(pathlib.Path(path))
     capture = function_body(source, "static uint32_t vfCaptureTimeoutFrames(")
     cases = [
+        ("image + 0x102C);", "image + 0x1028);"),
+        ("(control & 0x001FF000U) + PAGE_SIZE", "PAGE_SIZE"),
+        ("(control & 1U)", "true"),
+        ("engine == 3 && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking", "entry.ringBacking"),
+        ("frame.ringTail == entry.submissionCoverage.coveredTail", "true"),
+        ("NGVfTimeoutObservation::ringWindowOffsets(bytes,", "NGVfTimeoutObservation::ringWindowOffsets(64,"),
+        ("getMember<uint64_t>(entry.ringBacking, kVfMappedBufferLengthOffset)", "UINT64_MAX"),
+        ("if (ring)", "if (true)"),
+        ("i < 16", "i < 256"),
+        ("ring + offsets[i]", "ring + 4096 + offsets[i]"),
         ("!operation", "false"),
         ("gVfContextShutdownStarted || gVfDeviceStopping", "false"),
         ("engine < NGVfTimeoutObservation::engineCount", "engine < gVfContextCapacity"),
