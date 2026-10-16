@@ -1099,6 +1099,9 @@ def check_boot_atomic(system, path):
                                    b"__ZN15IORegistryEntry18getRegistryEntryIDEv", b"_kernel_debug",
                                    b"_kernel_debug_register_callback",
                                    b"_IOLockLock", b"_IOLockUnlock", b"_task_reference", b"_assert_wait_deadline",
+                                   b"__ZTV11IOMemoryMap", b"__ZN11IOMemoryMap17getVirtualAddressEv",
+                                   b"__ZN11IOMemoryMap9getLengthEv", b"__ZN11IOMemoryMap19getMemoryDescriptorEv",
+                                   b"__ZN11IOMemoryMap13getMapOptionsEv",
                                    b"_thread_block", b"_clock_interval_to_deadline",
                                    b"__ZN10IOWorkLoop8workLoopEv",
                                    b"__ZN10IOWorkLoop14runActionBlockEU13block_pointerFivE",
@@ -1429,6 +1432,17 @@ def check_boot_atomic(system, path):
         assert min(v for v in kernel_defined_addresses if v > address) - address == length, "changed lock/object method boundary"
         assert hashlib.sha256(kernel_read(address, length)).hexdigest() == digest, "changed reviewed null-lock/base-init semantics"
     assert struct.unpack("<Q", kernel_read(symbols[b"__ZTV8OSObject"][0] + 16 + 0x88, 8))[0] == symbols[b"__ZN8OSObject4initEv"][0], "changed OSObject base init virtual"
+    for slot, name, encoded in (
+            (0x118,b"__ZN11IOMemoryMap17getVirtualAddressEv","55 48 89 e5 48 8b 47 28 5d c3"),
+            (0x128,b"__ZN11IOMemoryMap9getLengthEv","55 48 89 e5 48 8b 47 30 5d c3"),
+            (0x138,b"__ZN11IOMemoryMap19getMemoryDescriptorEv","55 48 89 e5 48 8b 47 10 5d c3"),
+            (0x140,b"__ZN11IOMemoryMap13getMapOptionsEv","55 48 89 e5 8b 47 0c 5d c3")):
+        assert struct.unpack("<Q",kernel_read(symbols[b"__ZTV11IOMemoryMap"][0]+16+slot,8))[0] == symbols[name][0], \
+            "changed native existing-alias getter virtual slot"
+        expected=bytes.fromhex(encoded)
+        assert kernel_read(symbols[name][0],len(expected)) == expected, \
+            "changed pure native existing-alias getter body"
+    print("PASS Boot KC pure IOMemoryMap address/length/descriptor/options getters (no map/use-count operation)")
     print("PASS Boot KC spin-lock free requires nonnull lock; base OSObject init returns true")
     object_new = symbols[b"__ZN8OSObjectnwEm"][0]
     allocation = symbols[b"_kalloc_ext"][0]

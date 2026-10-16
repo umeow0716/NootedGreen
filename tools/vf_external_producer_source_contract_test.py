@@ -312,6 +312,14 @@ def contract(source, path="<source>"):
                   'gVfMediaKernelMappedMemoryVtable = table + 16;',
                   'gVfMediaKernelMappedMemoryLength = length;'):
         assert token in media_abi, f"{path}: lost media publication ABI gate: {token}"
+    for token in ('mapAddress && mapLength && mapDescriptor && mapOptions',
+                  'anchorMatches(mapAddress,mapAddressLeaf,sizeof(mapAddressLeaf))',
+                  'anchorMatches(mapLength,mapLengthLeaf,sizeof(mapLengthLeaf))',
+                  'anchorMatches(mapDescriptor,mapDescriptorLeaf,sizeof(mapDescriptorLeaf))',
+                  'anchorMatches(mapOptions,mapOptionsLeaf,sizeof(mapOptionsLeaf))',
+                  'gVfMediaMapAddress = mapAddress;gVfMediaMapLength = mapLength;',
+                  'gVfMediaMapDescriptor = mapDescriptor;gVfMediaMapOptions = mapOptions;'):
+        assert token in media_abi, f"{path}: lost pure existing-alias getter provenance: {token}"
     assert media_abi.index('gVfMediaKernelMappedMemoryLength = length;') < \
         media_abi.index('OSSynchronizeIO();') < \
         media_abi.index('gVfMediaPublicationAbiVerified = verified;'), \
@@ -358,6 +366,8 @@ def contract(source, path="<source>"):
 
 def mutation_contract(source, path):
     mutations = (
+        ('gVfMediaMapAddress = mapAddress;', 'gVfMediaMapAddress = mapLength;'),
+        ('anchorMatches(mapOptions,mapOptionsLeaf,sizeof(mapOptionsLeaf))', 'true'),
         ('getMember<void *>(entry.context,0x578)', 'getMember<void *>(entry.context,0x580)'),
         ('getMember<void *>(shared,0x80) != task', 'false'),
         ('VfMediaSubmissionScope mediaScope(that,accelerator,mediaEnabled);',

@@ -178,6 +178,10 @@ bool gVfMediaPublicationAbiVerified = false;
 mach_vm_address_t gVfMediaEndCaller = 0;
 mach_vm_address_t gVfMediaKernelMappedMemoryVtable = 0;
 mach_vm_address_t gVfMediaKernelMappedMemoryLength = 0;
+mach_vm_address_t gVfMediaMapAddress = 0;
+mach_vm_address_t gVfMediaMapLength = 0;
+mach_vm_address_t gVfMediaMapDescriptor = 0;
+mach_vm_address_t gVfMediaMapOptions = 0;
 // Tahoe's IntelAccelerator::stop releases and clears +0x1260 before invoking
 // the inherited IOGraphicsAccelerator2::stop.  That inherited body then drops
 // the kernel task, whose stamp/scratch mappings can still enter release_pte and
@@ -2678,26 +2682,46 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			gVfMediaEndCaller = 0;
 			gVfMediaKernelMappedMemoryVtable = 0;
 			gVfMediaKernelMappedMemoryLength = 0;
+			gVfMediaMapAddress = gVfMediaMapLength = gVfMediaMapDescriptor = gVfMediaMapOptions = 0;
 			const auto process = patcher.solveSymbol(index,
 				"__ZN15IOAccelContext218processDataBuffersEj", address, size);
 			const auto table = patcher.solveSymbol(index,
 				"__ZTV25IOAccelKernelMappedMemory", address, size);
 			const auto length = patcher.solveSymbol(index,
 				"__ZNK25IOAccelKernelMappedMemory9getLengthEv", address, size);
+			const auto mapAddress = patcher.solveSymbol(KernelPatcher::KernelID,
+				"__ZN11IOMemoryMap17getVirtualAddressEv");
+			const auto mapLength = patcher.solveSymbol(KernelPatcher::KernelID,
+				"__ZN11IOMemoryMap9getLengthEv");
+			const auto mapDescriptor = patcher.solveSymbol(KernelPatcher::KernelID,
+				"__ZN11IOMemoryMap19getMemoryDescriptorEv");
+			const auto mapOptions = patcher.solveSymbol(KernelPatcher::KernelID,
+				"__ZN11IOMemoryMap13getMapOptionsEv");
 			constexpr uint8_t parseCall[] = {0xff,0x90,0x08,0x0a,0,0};
 			constexpr uint8_t endCall[] = {0xff,0x90,0x38,0x0a,0,0};
 			constexpr uint8_t lengthLeaf[] = {
 				0x55,0x48,0x89,0xe5,0x48,0x8b,0x7f,0x28,0x48,0x8b,0x07,0x5d,
 				0xff,0xa0,0xc8,0x01,0,0};
+			constexpr uint8_t mapAddressLeaf[] = {0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x28,0x5d,0xc3};
+			constexpr uint8_t mapLengthLeaf[] = {0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x30,0x5d,0xc3};
+			constexpr uint8_t mapDescriptorLeaf[] = {0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x10,0x5d,0xc3};
+			constexpr uint8_t mapOptionsLeaf[] = {0x55,0x48,0x89,0xe5,0x8b,0x47,0x0c,0x5d,0xc3};
 			const bool verified = gVfTaskCompletionAbiVerified && process && table && length &&
+				mapAddress && mapLength && mapDescriptor && mapOptions &&
 				containsAnchor(process,0x57,sizeof(parseCall)) && anchorMatches(process+0x57,parseCall,sizeof(parseCall)) &&
 				containsAnchor(process,0x7b,sizeof(endCall)) && anchorMatches(process+0x7b,endCall,sizeof(endCall)) &&
 				containsAnchor(table,0,24) && containsAnchor(length,0,sizeof(lengthLeaf)) &&
-				anchorMatches(length,lengthLeaf,sizeof(lengthLeaf));
+				anchorMatches(length,lengthLeaf,sizeof(lengthLeaf)) &&
+				anchorMatches(mapAddress,mapAddressLeaf,sizeof(mapAddressLeaf)) &&
+				anchorMatches(mapLength,mapLengthLeaf,sizeof(mapLengthLeaf)) &&
+				anchorMatches(mapDescriptor,mapDescriptorLeaf,sizeof(mapDescriptorLeaf)) &&
+				anchorMatches(mapOptions,mapOptionsLeaf,sizeof(mapOptionsLeaf));
 			if (verified) {
 				gVfMediaEndCaller = process + 0x81;
 				gVfMediaKernelMappedMemoryVtable = table + 16;
 				gVfMediaKernelMappedMemoryLength = length;
+				gVfMediaMapAddress = mapAddress;gVfMediaMapLength = mapLength;
+				gVfMediaMapDescriptor = mapDescriptor;gVfMediaMapOptions = mapOptions;
 			}
 			OSSynchronizeIO();
 			gVfMediaPublicationAbiVerified = verified;
