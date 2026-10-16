@@ -18942,6 +18942,24 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        std::array<uint32_t,0xc18/4> sps{};
+        sps[0]=1;sps[1]=100;sps[0x24/4]=40;sps[0x2c/4]=1;
+        sps[0x404/4]=8;sps[0x40c/4]=10;sps[0x820/4]=4;
+        sps[0x828/4]=119;sps[0x82c/4]=67;sps[0x830/4]=1;sps[0x838/4]=1;
+        const auto original=sps;TglOwnedAvcNalBudget budget;
+        assert(tglBudgetOwnedTahoeAvcSps(sps.data(),sizeof(sps),budget));
+        assert(budget.meaningfulBits==128 && budget.physicalBytes==16 && sps==original);
+        budget={77,88};
+        sps[0x408/4]=1;sps[0x41c/4]=256;
+        for(size_t i=0;i<256;++i)sps[(0x420+4*i)/4]=INT32_MAX;
+        assert(!tglBudgetOwnedTahoeAvcSps(sps.data(),sizeof(sps),budget));
+        assert(budget.meaningfulBits==77 && budget.physicalBytes==88);
+        sps=original;sps[0x850/4]=1;sps[0x8a8/4]=1;sps[0x8b0/4]=32;
+        assert(!tglBudgetOwnedTahoeAvcSps(sps.data(),sizeof(sps),budget));
+        sps=original;sps[0x40/4]=1;
+        assert(!tglBudgetOwnedTahoeAvcSps(sps.data(),sizeof(sps),budget));
+    }
+    {
         std::array<uint32_t,0xe10/4> slice{};
         auto valid=[&](bool weighted=false,uint32_t l0=0,uint32_t l1=0,bool marked=false,bool idr=false){
             return tglValidateOwnedAvcSliceVariableLoops(slice.data(),sizeof(slice),weighted,l0,l1,marked,idr);};

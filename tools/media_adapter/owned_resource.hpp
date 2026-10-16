@@ -29,6 +29,81 @@ struct TglOwnedAvcSliceHeaderPacket {
     std::array<uint32_t,258> data{};
     size_t words=0;
 };
+struct TglOwnedAvcNalBudget {uint32_t meaningfulBits=0,physicalBytes=0;};
+// Dry-run of exact Tahoe57d748/57d4a0/57d3c6, not a full SPS semantic
+// validator. Stable owned source and caller identity are prerequisites.
+// Scaling-present is not implemented by that SPS writer and stays refused.
+inline bool tglBudgetOwnedTahoeAvcSps(const void* source,size_t bytes,
+    TglOwnedAvcNalBudget& output) noexcept {
+    if(!source || bytes!=0xc18 || reinterpret_cast<uintptr_t>(source)>UINTPTR_MAX-bytes)return false;
+    const uintptr_t start=reinterpret_cast<uintptr_t>(source),target=reinterpret_cast<uintptr_t>(&output);
+    if(target>UINTPTR_MAX-sizeof(output) || (start<target+sizeof(output) && target<start+bytes))return false;
+    const auto* data=static_cast<const unsigned char*>(source);
+    auto word=[&](size_t at) noexcept {uint32_t value=0;std::memcpy(&value,data+at,4);return value;};
+    uint32_t bits=40; // Annex-B prefix32 + NAL header8.
+    auto add=[&](uint32_t n) noexcept {if(n>8192-bits)return false;bits+=n;return true;};
+    auto fixed=[&](size_t at,uint32_t n) noexcept {
+        return (n==32 || word(at)<(uint32_t{1}<<n)) && add(n);};
+    auto ue=[&](size_t at) noexcept {
+        uint32_t value=word(at);if(value==UINT32_MAX)return false;
+        ++value;uint32_t width=0;do{++width;value>>=1;}while(value);
+        return add(2*width-1);};
+    auto se=[&](size_t at) noexcept {
+        int32_t value=0;std::memcpy(&value,data+at,4);if(value==INT32_MIN)return false;
+        uint32_t code=value>0?uint32_t(int64_t(value)*2-1):uint32_t(-int64_t(value)*2);
+        ++code;uint32_t width=0;do{++width;code>>=1;}while(code);
+        return add(2*width-1);};
+    auto flag=[&](size_t at) noexcept {return fixed(at,1);};
+    if(word(0)!=1 || !fixed(4,8))return false;
+    for(size_t at=8;at<=0x1c;at+=4)if(!flag(at))return false;
+    if(!add(2) || !fixed(0x24,8) || !ue(0x28))return false;
+    const uint32_t profile=word(4);
+    const uint32_t delta=profile-100;
+    if(delta<45 && ((uint64_t{0x100000400401}>>delta)&1)){
+        if(word(0x2c)>3 || !ue(0x2c) || (word(0x2c)==3 && !flag(0x30)) ||
+           !ue(0x34) || !ue(0x38) || !flag(0x3c) || !flag(0x40) || word(0x40))return false;
+    }
+    if(!ue(0x404) || word(0x408)>2 || !ue(0x408))return false;
+    if(word(0x408)==1){
+        if(!flag(0x410) || !se(0x414) || !se(0x418) || word(0x41c)>256 || !ue(0x41c))return false;
+        for(uint32_t i=0;i<word(0x41c);++i)if(!se(0x420+4*i))return false;
+    }else if(word(0x408)==0 && !ue(0x40c))return false;
+    if(!ue(0x820) || !flag(0x824) || !ue(0x828) || !ue(0x82c) ||
+       !flag(0x830) || (!word(0x830) && !flag(0x834)) || !flag(0x838) || !flag(0x83c))return false;
+    if(word(0x83c))for(size_t at=0x840;at<=0x84c;at+=4)if(!ue(at))return false;
+    if(!flag(0x850))return false;
+    if(word(0x850)){
+        constexpr size_t v=0x854;
+        if(!flag(v+4))return false;
+        if(word(v+4) && (!fixed(v+8,8) || (word(v+8)==255 && (!fixed(v+0xc,16) || !fixed(v+0x10,16)))))return false;
+        if(!flag(v+0x14) || (word(v+0x14) && !flag(v+0x18)) || !flag(v+0x1c))return false;
+        if(word(v+0x1c)){
+            if(!fixed(v+0x20,3) || !flag(v+0x24) || !flag(v+0x28))return false;
+            if(word(v+0x28))for(size_t at=0x2c;at<=0x34;at+=4)if(!fixed(v+at,8))return false;
+        }
+        if(!flag(v+0x38) || (word(v+0x38) && (!ue(v+0x3c) || !ue(v+0x40))) || !flag(v+0x44))return false;
+        if(word(v+0x44) && (!fixed(v+0x48,32) || !fixed(v+0x4c,32) || !flag(v+0x50)))return false;
+        for(size_t block:{size_t(0x54),size_t(0x1f8)}){
+            if(!flag(v+block))return false;
+            if(!word(v+block))continue;
+            const size_t h=v+block+4;
+            if(word(h+4)>31 || !ue(h+4) || !fixed(h+8,4) || !fixed(h+0xc,4))return false;
+            for(uint32_t i=0;i<=word(h+4);++i)
+                if(!ue(h+0x10+4*i) || !ue(h+0x90+4*i) || !flag(h+0x110+4*i))return false;
+            for(size_t at=0x190;at<=0x19c;at+=4)if(!fixed(h+at,5))return false;
+        }
+        if((word(v+0x54) || word(v+0x1f8)) && !flag(v+0x39c))return false;
+        if(!flag(v+0x3a0) || !flag(v+0x3a4))return false;
+        if(word(v+0x3a4)){
+            if(!flag(v+0x3a8))return false;
+            for(size_t at=0x3ac;at<=0x3c0;at+=4)if(!ue(v+at))return false;
+        }
+    }
+    if(!add(1))return false; // rbsp trailing one, then zero byte padding.
+    const uint32_t meaningful=(bits+7)&~uint32_t{7},physical=((meaningful+31)/32)*4;
+    if(physical>1024)return false;
+    output={meaningful,physical};return true;
+}
 // Exact Tahoe57cfc4/57d0a2/57d256 variable-loop bounds only. The caller
 // authenticates a stable OWNED e10-byte record and supplies the effective
 // reference counts after PPS-default resolution, plus actual branch policy.
