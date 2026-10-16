@@ -125,6 +125,17 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
                input[at+2]!=((mbHeight-1U)<<16|(mbWidth-1U))){
                 r.reason="mfx-image-geometry";return r;}
             if(input[at+17]&0x3fU){r.reason="fractional-qp";return r;}}
+        if(op==0x71030000U){
+            const uint32_t mbWidth=(width+15U)/16U,mbHeight=(height+15U)/16U;
+            const uint32_t start=input[at+4],next=input[at+5];
+            const uint32_t x=(start>>16)&0xffU,y=start>>24;
+            const uint32_t nx=next&0x1ffU,ny=(next>>16)&0x1ffU;
+            if((start&0x8000U) || (next&0xfe00fe00U) || x>=mbWidth ||
+               y>=mbHeight || nx>=mbWidth || ny>mbHeight ||
+               (ny==mbHeight && nx) || ny*mbWidth+nx<=y*mbWidth+x ||
+               (start&0x7fffU)!=((y*mbWidth+x)&0x7fffU)){
+                r.reason="mfx-slice-geometry";return r;}
+        }
         if(op==0x70850000U){++image;
             if(input[at+1]&0x20U || input[at+24] || input[at+34]&0x4000U){
                 r.reason="image-options";return r;}}

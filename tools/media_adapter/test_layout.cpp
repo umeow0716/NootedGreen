@@ -19057,6 +19057,33 @@ int main() {
         input[mfxImage+1]=0;rejected();input=good;
         input[mfxImage+2]^=1;rejected();input=good;
         input[mfxImage+2]|=1U<<8;rejected();input=good;
+        {
+            auto slices=good;
+            const size_t begin=used-2,total=used+44;
+            for(unsigned i=0;i<4;++i){
+                const size_t at=begin+11*i;
+                for(size_t k=0;k<11;++k)slices[at+k]=0;
+                slices[at]=0x71030009;slices[at+1]=2;
+                slices[at+4]=(i*17U<<24)|(i*2040U);
+                slices[at+5]=(i+1)*17U<<16;
+            }
+            slices[total-2]=slices[total-1]=0;
+            assert(NgreenAvcGen12::produce(slices.data(),total,1920,1080,
+                output.data(),output.size()).ok);
+            auto rejectSlice=[&](){output.fill(0xdeadbeef);
+                auto r=NgreenAvcGen12::produce(slices.data(),total,1920,1080,
+                    output.data(),output.size());
+                assert(!r.ok);for(auto v:output)assert(v==0xdeadbeef);};
+            const auto valid=slices;
+            slices[begin+26]=(68U<<24)|8160U;rejectSlice();slices=valid;
+            slices[begin+37]=(102U<<24)|12240U;rejectSlice();slices=valid;
+            slices[begin+5]=69U<<16;rejectSlice();slices=valid;
+            slices[begin+16]=17U<<16;rejectSlice();slices=valid;
+            slices[begin+4]|=0x8000;rejectSlice();slices=valid;
+            slices[begin+5]|=1U<<9;rejectSlice();slices=valid;
+            slices[begin+4]^=1;rejectSlice();
+            output.fill(0xdeadbeef);
+        }
         for(unsigned bit=0;bit<32;++bit)if((1U<<bit)&0xe0e0c0ffU){
             input[mfxImage+3]=1U<<bit;rejected();input=good;}
         input[mfxImage+3]=0x3000U;
