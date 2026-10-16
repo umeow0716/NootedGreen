@@ -5593,16 +5593,25 @@ struct NativeOtherFrameBackend {
                 leafMemoryPermissions(device,0x1c,VM_PROT_READ,VM_PROT_EXECUTE);
         };
         NGVfAvcPublication::Reply candidate{};
+        static std::atomic<bool> reported{false};
+        const bool report=!reported.exchange(true,std::memory_order_acq_rel);
         const auto connection=tglWithNativePhysicalSharedConnectionSnapshot(physical,library.resourceCreate,
             &readMemory,qualifyFramework,admit,[&](uint32_t port) noexcept -> int {
                 uint64_t identity=0,after=0;
                 if(api.identity(port,identity))return 5;
                 const bool queried=NGVfAvcPublication::query(identity,
                     [&](uint32_t selector,void* out,size_t* bytes) noexcept {
-                        return api.readAvcPublication(port,selector,out,bytes);
+                        const int status=api.readAvcPublication(port,selector,out,bytes);
+                        const auto* reply=static_cast<const NGVfAvcPublication::Reply*>(out);
+                        if(report)os_log_error(OS_LOG_DEFAULT,"NGRN_AVC_PUBLICATION_TRANSPORT status=%{public}x bytes=%{public}llu flags=%{public}u profile=%{public}u registry-match=%{public}d",
+                            unsigned(status),static_cast<unsigned long long>(*bytes),reply->flags,
+                            reply->commandProfile,int(reply->registryId==identity));
+                        return status;
                     },candidate);
                 return queried && !api.identity(port,after) && after==identity?0:5;
             });
+        if(report)os_log_error(OS_LOG_DEFAULT,"NGRN_AVC_PUBLICATION_CONNECTION called=%{public}d stable=%{public}d status=%{public}x",
+            int(connection.called),int(connection.stable),unsigned(connection.nativeStatus));
         if(!connection.called || !connection.stable || connection.nativeStatus ||
            !scope.matches(image,physical,generation))return false;
         output=candidate;return true;
