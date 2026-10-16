@@ -18285,8 +18285,11 @@ static void testRetainedVeboxFrames() {
         assert(callbacks.physicalProperties(success.ticket,0x8000,input,static_cast<PropertyOperation>(99),nativeProperty)==5 && propertyCalls==2);
         assert(callbacks.allocateBacking(success.ticket,0x8000,input,typedAllocate)==31);
         assert(callbacks.releaseBacking(success.ticket,0x8000,25,typedRelease)==31 && typedBackingCalls==2);
-        assert(callbacks.releasePool(success.ticket,0x8000,5,poolRelease)==31 && poolCalls==1);
-        assert(callbacks.allocatePool(success.ticket,0x8000,input,poolAllocate)==31 && poolAllocateCalls==1);
+        const char* poolAdmission="unset";
+        assert(callbacks.releasePool(success.ticket,0x8000,5,poolRelease,&poolAdmission)==31 && poolCalls==1);
+        assert(std::strcmp(poolAdmission,"pool-release-anchor")==0);
+        assert(callbacks.allocatePool(success.ticket,0x8000,input,poolAllocate,&poolAdmission)==31 && poolAllocateCalls==1);
+        assert(std::strcmp(poolAdmission,"pool-allocate-anchor")==0);
         {
             bool quiescent=false;unsigned admittedCalls=0,guardCalls=0;
             auto guarded=[&](uintptr_t,uintptr_t physical,auto,auto& scope) noexcept -> int {
@@ -18310,10 +18313,13 @@ static void testRetainedVeboxFrames() {
             operations(5);assert(!admittedCalls && guardCalls==6);
             quiescent=true;operations(-31);assert(admittedCalls==6 && guardCalls==12);
         }
-        assert(callbacks.allocatePool(success.ticket,0x8000,nullptr,poolAllocate)==5 && poolAllocateCalls==1);
-        assert(callbacks.allocatePool(success.ticket,0x8001,input,poolAllocate)==5 && poolAllocateCalls==1);
+        assert(callbacks.allocatePool(success.ticket,0x8000,nullptr,poolAllocate,&poolAdmission)==5 && poolAllocateCalls==1);
+        assert(std::strcmp(poolAdmission,"pool-input")==0);
+        assert(callbacks.allocatePool(success.ticket,0x8001,input,poolAllocate,&poolAdmission)==5 && poolAllocateCalls==1);
+        assert(std::strcmp(poolAdmission,"physical-frame-scope")==0);
         poolAllocateAnchor[0]^=1;
-        assert(callbacks.allocatePool(success.ticket,0x8000,input,poolAllocate)==5 && poolAllocateCalls==1);
+        assert(callbacks.allocatePool(success.ticket,0x8000,input,poolAllocate,&poolAdmission)==5 && poolAllocateCalls==1);
+        assert(std::strcmp(poolAdmission,"pool-allocate-anchor")==0);
         poolAllocateAnchor[0]^=1;
         assert(callbacks.releasePool(success.ticket,0x8001,5,poolRelease)==5 && poolCalls==1);
         poolReleaseAnchor[0]^=1;

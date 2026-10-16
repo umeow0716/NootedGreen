@@ -29300,8 +29300,10 @@ public:
         return withNewRequest(ticket,physical,[&](auto&) noexcept -> int {return mutate();});
     }
     template<class Mutate> int withScopedBackingMutation(typename Registry::Ticket ticket,
-        uintptr_t physical,Mutate mutate) noexcept {
+        uintptr_t physical,Mutate mutate,const char** admission=nullptr) noexcept {
+        if(admission)*admission="physical-frame-scope";
         return withFrameScope(ticket,physical,[&](typename Registry::Scope& scope) noexcept -> int {
+            if(admission)*admission="empty-frame-mutation";
             return scope.withEmptyFrameMutation([&](typename Registry::Scope& active) noexcept -> int {
                 return mutate(active);
             });
@@ -29333,29 +29335,32 @@ public:
     }
     // Slot6 resets/allocates the same pools via960b/9710, before returning handles.
     template<class Native=TglNativeBackingAllocateInvoker> int allocatePool(typename Registry::Ticket ticket,
-        uintptr_t physical,const void* input,Native native=Native{}) noexcept {
+        uintptr_t physical,const void* input,Native native=Native{},const char** admission=nullptr) noexcept {
+        if(admission)*admission="pool-input";
         if(!input)return 5;
         return withScopedBackingMutation(ticket,physical,[&](auto& scope) noexcept -> int {
+            if(admission)*admission="pool-allocate-anchor";
             constexpr std::array<uint8_t,14> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x54,0x53,0x48,0x89,0xf3};
             std::array<uint8_t,14> actual{};
             if(binding_.image>UINTPTR_MAX-0x1541c-anchor.size() ||
                 !executable_(binding_.image+0x1541c,anchor.size()) ||
                 !read_(binding_.image+0x1541c,actual.data(),actual.size()) || actual!=anchor)return 5;
             return tglInvokeScopedPhysicalMutation(native,binding_.image+0x1541c,physical,input,scope);
-        });
+        },admission);
     }
     // Slot7 releases pools at physical+80/+1090 via98b3, independently
     // of slot10's backing groups. Never admit cleanup while frames retain data.
     template<class Native=TglNativeBackingReleaseInvoker> int releasePool(typename Registry::Ticket ticket,
-        uintptr_t physical,uint32_t type,Native native=Native{}) noexcept {
+        uintptr_t physical,uint32_t type,Native native=Native{},const char** admission=nullptr) noexcept {
         return withScopedBackingMutation(ticket,physical,[&](auto& scope) noexcept -> int {
+            if(admission)*admission="pool-release-anchor";
             constexpr std::array<uint8_t,13> anchor{0x55,0x48,0x89,0xe5,0x85,0xf6,0x74,0x0c,0x83,0xfe,0x05,0x75,0x15};
             std::array<uint8_t,13> actual{};
             if(binding_.image>UINTPTR_MAX-0x154cf-anchor.size() ||
                 !executable_(binding_.image+0x154cf,anchor.size()) ||
                 !read_(binding_.image+0x154cf,actual.data(),actual.size()) || actual!=anchor)return 5;
             return tglInvokeScopedPhysicalMutation(native,binding_.image+0x154cf,physical,type,scope);
-        });
+        },admission);
     }
     // Slot15 sets physical+a858/shared-wrapper+130; slot16 queries can lazily
     // initialize physical+8/+10 and call external property callbacks. Neither

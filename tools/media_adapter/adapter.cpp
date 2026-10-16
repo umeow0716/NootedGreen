@@ -222,11 +222,15 @@ template int NativeCodecBackend::reconcile<NativeRemovalProof>(uintptr_t,uintptr
 // live. No check-before-lock permission or fabricated mutation capability.
 struct NativeBackingMutationGuard {
     uintptr_t image=0,physical=0;uint64_t generation=0;
+    const char** admission=nullptr;
     template<class Argument,class Scope>
     int operator()(uintptr_t entry,uintptr_t address,Argument input,Scope& scope) const noexcept {
-        if(address!=physical || !scope.matches(image,physical,generation) ||
-           NativeCodecBackend::withNativeOtherOwners(scope,image,physical,generation,
+        if(admission)*admission="physical-scope";
+        if(address!=physical || !scope.matches(image,physical,generation))return 5;
+        if(admission)*admission="native-other-owners";
+        if(NativeCodecBackend::withNativeOtherOwners(scope,image,physical,generation,
                [](auto& lease) noexcept -> int {return lease.get()->nativeOtherWorkQuiescent()?0:5;}))return 5;
+        if(admission)*admission="native-return";
         if constexpr(std::is_same_v<Argument,uint32_t>)return TglNativeBackingReleaseInvoker{}(entry,address,input);
         else {
             static_assert(std::is_same_v<Argument,const void*>);
@@ -4370,17 +4374,30 @@ struct NativePhysicalBackend {
     }
     static int allocatePool(void* physical,const void* input) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
-        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+        const char* admission="coordinator";
+        const int result=withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
             return callbacks.allocatePool(ticket,address,input,
-                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation});
+                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation,&admission},&admission);
         });
+        static std::atomic<unsigned> observations{0};
+        if(observations.fetch_add(1,std::memory_order_relaxed)<8) {
+            uint32_t type=0;const bool readable=input && readMemory(reinterpret_cast<uintptr_t>(input),&type,4);
+            os_log_info(OS_LOG_DEFAULT,"NGRN_POOL_MUTATION operation=allocate admission=%{public}s result=%{public}d type-readable=%{public}d type=%{public}u",
+                admission,result,int(readable),readable?type:0);
+        }
+        return result;
     }
     static int releasePool(void* physical,uint32_t type) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
-        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+        const char* admission="coordinator";
+        const int result=withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
             return callbacks.releasePool(ticket,address,type,
-                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation});
+                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation,&admission},&admission);
         });
+        static std::atomic<unsigned> observations{0};
+        if(observations.fetch_add(1,std::memory_order_relaxed)<8)
+            os_log_info(OS_LOG_DEFAULT,"NGRN_POOL_MUTATION operation=release admission=%{public}s result=%{public}d type=%{public}u",admission,result,type);
+        return result;
     }
     static int setProperties(void* physical,const void* input) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
