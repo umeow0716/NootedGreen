@@ -1,12 +1,50 @@
 #include "../NootedGreen/kern_ioaccel_command_pool.hpp"
 #include <cassert>
 #include <cstdint>
+#include <cstring>
+#include <cstdio>
 #include <utility>
 #include <vector>
 
 using namespace NGIOAccelCommandPool;
 
 int main() {
+	ControlFrame before {};
+	for (size_t index = 0; index < slotCapacity; ++index)
+		before.slot(index, true, index % 2 == 0, index == slotCapacity - 1);
+	for (size_t word = 0; word < 8; ++word) {
+		assert(before.memory[word] == UINT32_MAX);
+		assert(before.gpu[word] == 0x55555555U);
+		assert(before.cpu[word] == (word == 7 ? 0x80000000U : 0));
+	}
+	ControlFrame after = before;
+	after.slot(31, false, true, true);
+	after.slot(slotCapacity, true, true, true);
+	assert(after.cpu[0] == 0x80000000U && before.cpu[0] == 0);
+	assert(after.cpu[7] == before.cpu[7]);
+	assert(boundedOffset(0x1000, 0x1004, 4) == 4);
+	assert(boundedOffset(0, 0x1004, UINT32_MAX) == UINT64_MAX);
+	assert(boundedOffset(0x1000, 0xffc, UINT32_MAX) == UINT64_MAX);
+	assert(boundedOffset(0x1000, UINTPTR_MAX, UINT32_MAX) == UINT64_MAX);
+	assert(boundedOffset(UINTPTR_MAX - 3, UINTPTR_MAX, 3) == 3);
+	ControlFrame maximal {};
+	maximal.maximum = maximal.count = UINT16_MAX;
+	maximal.current = -1;
+	maximal.bytes = maximal.reserved = maximal.allocationOptions =
+		maximal.mappingOptions = maximal.links = UINT32_MAX;
+	maximal.alignment = UINT64_MAX;
+	for (size_t index = 0; index < slotCapacity; ++index)
+		maximal.slot(index, true, true, true);
+	char panicText[1024] {};
+	const int panicLength = std::snprintf(panicText, sizeof(panicText),
+		"NootedGreen    ngreen: @ V272: refusing inadequate VF command buffer request=%u current=%d count=%u"
+		" V362: reason=%s remaining=%llu BEFORE" NG_POOL_FRAME_FORMAT
+		" AFTER" NG_POOL_FRAME_FORMAT,
+		UINT32_MAX, -32768, UINT16_MAX, "start-mapping-mismatch", ~0ULL,
+		NG_POOL_FRAME_ARGS(maximal), NG_POOL_FRAME_ARGS(maximal));
+	assert(panicLength > 0 && panicLength < 950);
+	assert(std::strlen(panicText) == static_cast<size_t>(panicLength));
+	assert(std::strstr(panicText, " AFTER max=") != nullptr);
 	std::vector<uint8_t> body(reviewedGrowthSize, 0);
 	const uint8_t anchor[] = {
 		0x66, 0x89, 0x83, 0x32, 0x18, 0x00, 0x00,
@@ -125,4 +163,33 @@ int main() {
 	                            end, start, start, start, 1));
 	assert(!hasReturnedCapacity(8, 1, 0, 1, 2, start + 4,
 	                            start, end, start, start, 1));
+	for (uint32_t request = 0; request <= 0x400; ++request) {
+		const char *reason = returnedCapacityRefusal(8, 1, 0, 1, 2, start,
+			start, end, start, start, request);
+		assert(std::strcmp(reason, request <= 0x3fe ? "none" : "capacity") == 0);
+	}
+	struct RefusalCase { uint16_t maximum,count; int16_t current;
+		uintptr_t memory,gpu,cpu,begin,limit,cursor,returned; const char *reason; };
+	const RefusalCase refusals[] = {
+		{0,1,0,1,2,start,start,end,start,start,"slot-state"},
+		{257,1,0,1,2,start,start,end,start,start,"slot-state"},
+		{8,0,0,1,2,start,start,end,start,start,"slot-state"},
+		{8,1,-1,1,2,start,start,end,start,start,"slot-state"},
+		{8,1,1,1,2,start,start,end,start,start,"slot-state"},
+		{8,1,0,0,2,start,start,end,start,start,"memory-missing"},
+		{8,1,0,1,0,start,start,end,start,start,"gpu-mapping-missing"},
+		{8,1,0,1,2,0,start,end,start,start,"cpu-mapping-missing"},
+		{8,1,0,1,2,start,start,end,0,0,"return-null"},
+		{8,1,0,1,2,start+4,start,end,start,start,"start-mapping-mismatch"},
+		{8,1,0,1,2,start,start,end,start,start+4,"return-cursor-mismatch"},
+		{8,1,0,1,2,start,start,end,start-4,start-4,"return-range"},
+		{8,1,0,1,2,start,start,end,end+4,end+4,"return-range"},
+		{8,1,0,1,2,start,start,end,end,end,"capacity"},
+	};
+	for (const auto &item : refusals) {
+		assert(!hasReturnedCapacity(item.maximum,item.count,item.current,
+			item.memory,item.gpu,item.cpu,item.begin,item.limit,item.cursor,item.returned,1));
+		assert(std::strcmp(returnedCapacityRefusal(item.maximum,item.count,item.current,
+			item.memory,item.gpu,item.cpu,item.begin,item.limit,item.cursor,item.returned,1),item.reason)==0);
+	}
 }

@@ -18,6 +18,47 @@ constexpr size_t endOffset = 0x1850;
 constexpr size_t cursorOffset = 0x1858;
 constexpr size_t recordOffset = 0x1860;
 constexpr uint16_t slotCapacity = 256;
+constexpr size_t bufferBytesOffset = 0x1834;
+constexpr size_t allocationOptionsOffset = 0x1838;
+constexpr size_t mappingOptionsOffset = 0x183c;
+constexpr size_t alignmentOffset = 0x1868;
+constexpr size_t reservedBytesOffset = 0x1870;
+
+// Fixed CPU control frame, not command contents. Presence maps cover every
+// slot in the UUID-pinned fixed array; pointer values never leave the wrapper.
+struct ControlFrame {
+	uint16_t maximum = 0, count = 0;
+	int16_t current = -1;
+	uint32_t bytes = 0, reserved = 0, allocationOptions = 0, mappingOptions = 0;
+	uint64_t alignment = 0;
+	uint32_t links = 0;
+	uintptr_t start = 0, end = 0, cursor = 0;
+	uint32_t memory[8] {}, gpu[8] {}, cpu[8] {};
+	void slot(size_t index, bool hasMemory, bool hasGpu, bool hasCpu) {
+		if (index >= slotCapacity) return;
+		const uint32_t bit = uint32_t(1) << (index % 32);
+		memory[index / 32] |= hasMemory ? bit : 0;
+		gpu[index / 32] |= hasGpu ? bit : 0;
+		cpu[index / 32] |= hasCpu ? bit : 0;
+	}
+};
+static_assert(sizeof(ControlFrame) <= 176, "bounded command-pool CPU frame");
+inline uint64_t boundedOffset(uintptr_t base, uintptr_t value, uint32_t bytes) {
+	return base && value >= base && value - base <= bytes ?
+		static_cast<uint64_t>(value - base) : UINT64_MAX;
+}
+
+#define NG_POOL_MASK_FORMAT "%08x%08x%08x%08x%08x%08x%08x%08x"
+#define NG_POOL_MASK_ARGS(frame, member) \
+	frame.member[7], frame.member[6], frame.member[5], frame.member[4], \
+	frame.member[3], frame.member[2], frame.member[1], frame.member[0]
+#define NG_POOL_FRAME_FORMAT " max=%x n=%x i=%x b=%x r=%x o=%x/%x a=%llx l=%x e=%llx c=%llx M=" NG_POOL_MASK_FORMAT " G=" NG_POOL_MASK_FORMAT " C=" NG_POOL_MASK_FORMAT
+#define NG_POOL_FRAME_ARGS(frame) \
+	frame.maximum, frame.count, static_cast<uint16_t>(frame.current), frame.bytes, frame.reserved, \
+	frame.allocationOptions, frame.mappingOptions, static_cast<unsigned long long>(frame.alignment), frame.links, \
+	static_cast<unsigned long long>(NGIOAccelCommandPool::boundedOffset(frame.start, frame.end, frame.bytes)), \
+	static_cast<unsigned long long>(NGIOAccelCommandPool::boundedOffset(frame.start, frame.cursor, frame.bytes)), \
+	NG_POOL_MASK_ARGS(frame, memory), NG_POOL_MASK_ARGS(frame, gpu), NG_POOL_MASK_ARGS(frame, cpu)
 constexpr size_t reviewedGrowthSize = 0x202;
 constexpr size_t reviewedGetBufferSize = 0x10e;
 constexpr size_t reviewedExtendedInitSize = 0xf4;
@@ -204,6 +245,29 @@ inline bool hasReturnedCapacity(uint16_t maximum, uint16_t count,
 		return false;
 	return static_cast<uintptr_t>(dwords) <=
 		(end - returned) / sizeof(uint32_t);
+}
+
+// Failure-only explanation from the exact values already supplied to the
+// postcondition. No dereference, address disclosure or admission change.
+inline const char *returnedCapacityRefusal(uint16_t maximum, uint16_t count,
+                                         int16_t current, uintptr_t memory,
+                                         uintptr_t gpuMapping, uintptr_t cpuMapping,
+                                         uintptr_t start, uintptr_t end,
+                                         uintptr_t cursor, uintptr_t returned,
+                                         uint32_t dwords) {
+	if (maximum == 0 || maximum > slotCapacity || count == 0 ||
+	    count > maximum || current < 0 || static_cast<uint16_t>(current) >= count)
+		return "slot-state";
+	if (!memory) return "memory-missing";
+	if (!gpuMapping) return "gpu-mapping-missing";
+	if (!cpuMapping) return "cpu-mapping-missing";
+	if (!returned) return "return-null";
+	if (start != cpuMapping) return "start-mapping-mismatch";
+	if (returned != cursor) return "return-cursor-mismatch";
+	if (returned < start || returned > end) return "return-range";
+	if (static_cast<uintptr_t>(dwords) > (end - returned) / sizeof(uint32_t))
+		return "capacity";
+	return "none";
 }
 
 } // namespace NGIOAccelCommandPool

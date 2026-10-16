@@ -28,6 +28,11 @@ REQUIRED = (
     '"V271: require full usable VF resolve-HIZ command capacity"',
     '"V272: guarded VF command-pool growth and returned capacity"',
     "NGIOAccelCommandPool::hasReturnedCapacity(",
+    "NGIOAccelCommandPool::returnedCapacityRefusal(",
+    "const NGIOAccelCommandPool::ControlFrame before = target ?",
+    "const NGIOAccelCommandPool::ControlFrame after = vfCommandPoolFrame(pool);",
+    '" AFTER" NG_POOL_FRAME_FORMAT',
+    "NG_POOL_FRAME_ARGS(before), NG_POOL_FRAME_ARGS(after)",
     'vfMarkProtocolFault("VF command-pool getter returned inadequate capacity")',
     '"V272: refusing inadequate VF command buffer request=%u current=%d count=%u"',
     "gVfAccelerator = that;",
@@ -68,6 +73,11 @@ def accepts(source: str) -> bool:
             wrapper.index("publishedCount") < wrapper.index("completedGrowth(")):
         return False
     getter_start = source.index("void *Gen11::vfGetCommandBufferPtrNoInc(")
+    getter_frame = source[getter_start:source.index("#undef NG_POOL_FRAME_ARGS", getter_start)]
+    if not (getter_frame.index("ControlFrame before") < getter_frame.index("FunctionCast(") <
+            getter_frame.index("hasReturnedCapacity(") < getter_frame.index("ControlFrame after") <
+            getter_frame.index("PANIC_COND(true")):
+        return False
     getter_end = source.index("bool Gen11::IGMemoryManagerInitSegments", getter_start)
     getter = source[getter_start:getter_end]
     if any(fragment not in getter for fragment in OWNER) or not (

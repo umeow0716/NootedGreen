@@ -4152,6 +4152,34 @@ bool Gen11::vfAllocMoreCommandBuffers(void *pool)
 	return complete;
 }
 
+static NGIOAccelCommandPool::ControlFrame vfCommandPoolFrame(void *pool)
+{
+	NGIOAccelCommandPool::ControlFrame frame {};
+	frame.maximum = getMember<uint16_t>(pool, NGIOAccelCommandPool::maximumOffset);
+	frame.count = getMember<uint16_t>(pool, NGIOAccelCommandPool::countOffset);
+	frame.current = getMember<int16_t>(pool, NGIOAccelCommandPool::currentOffset);
+	frame.bytes = getMember<uint32_t>(pool, NGIOAccelCommandPool::bufferBytesOffset);
+	frame.reserved = getMember<uint32_t>(pool, NGIOAccelCommandPool::reservedBytesOffset);
+	frame.allocationOptions = getMember<uint32_t>(pool, NGIOAccelCommandPool::allocationOptionsOffset);
+	frame.mappingOptions = getMember<uint32_t>(pool, NGIOAccelCommandPool::mappingOptionsOffset);
+	frame.alignment = getMember<uint64_t>(pool, NGIOAccelCommandPool::alignmentOffset);
+	frame.start = getMember<uintptr_t>(pool, NGIOAccelCommandPool::startOffset);
+	frame.end = getMember<uintptr_t>(pool, NGIOAccelCommandPool::endOffset);
+	frame.cursor = getMember<uintptr_t>(pool, NGIOAccelCommandPool::cursorOffset);
+	frame.links = (getMember<void *>(pool, 0x10) != nullptr ? 1U : 0U) |
+		(getMember<void *>(pool, 0x18) != nullptr ? 2U : 0U) |
+		(getMember<void *>(pool, 0x20) != nullptr ? 4U : 0U) |
+		(getMember<void *>(pool, 0x28) != nullptr ? 8U : 0U) |
+		(getMember<void *>(pool, NGIOAccelCommandPool::recordOffset) != nullptr ? 16U : 0U);
+	for (size_t index = 0; index < NGIOAccelCommandPool::slotCapacity; ++index) {
+		const size_t slot = NGIOAccelCommandPool::slotsOffset + index * NGIOAccelCommandPool::slotStride;
+		frame.slot(index, getMember<void *>(pool, slot) != nullptr,
+			getMember<void *>(pool, slot + sizeof(uintptr_t)) != nullptr,
+			getMember<void *>(pool, slot + 2 * sizeof(uintptr_t)) != nullptr);
+	}
+	return frame;
+}
+
 void *Gen11::vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords)
 {
 	PANIC_COND(!callback || !callback->oIOAccelGetCommandBufferPtrNoInc,
@@ -4160,6 +4188,8 @@ void *Gen11::vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords)
 		gVfAccelerator &&
 		getMember<void *>(pool, NGIOAccelCommandPool::acceleratorOffset) ==
 			gVfAccelerator;
+	const NGIOAccelCommandPool::ControlFrame before = target ?
+		vfCommandPoolFrame(pool) : NGIOAccelCommandPool::ControlFrame {};
 	void *const result = FunctionCast(
 		vfGetCommandBufferPtrNoInc,
 		callback->oIOAccelGetCommandBufferPtrNoInc)(pool, dwords);
@@ -4193,13 +4223,28 @@ void *Gen11::vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords)
 		maximum, count, current, memory, gpuMapping, cpuMapping,
 		start, end, cursor, reinterpret_cast<uintptr_t>(result), dwords);
 	if (!complete) {
+		const NGIOAccelCommandPool::ControlFrame after = vfCommandPoolFrame(pool);
+		const char *const refusal = NGIOAccelCommandPool::returnedCapacityRefusal(
+			maximum, count, current, memory, gpuMapping, cpuMapping,
+			start, end, cursor, reinterpret_cast<uintptr_t>(result), dwords);
+		const uintptr_t returned = reinterpret_cast<uintptr_t>(result);
+		const uint64_t remaining = returned >= start && returned <= end ?
+			static_cast<uint64_t>(end - returned) : 0;
 		vfMarkProtocolFault("VF command-pool getter returned inadequate capacity");
 		PANIC_COND(true, "ngreen",
-		           "V272: refusing inadequate VF command buffer request=%u current=%d count=%u",
-		           dwords, current, count);
+		           "V272: refusing inadequate VF command buffer request=%u current=%d count=%u"
+		           " V362: reason=%s remaining=%llu BEFORE" NG_POOL_FRAME_FORMAT
+		           " AFTER" NG_POOL_FRAME_FORMAT,
+		           dwords, current, count, refusal, remaining,
+		           NG_POOL_FRAME_ARGS(before), NG_POOL_FRAME_ARGS(after));
 	}
 	return result;
 }
+
+#undef NG_POOL_FRAME_ARGS
+#undef NG_POOL_FRAME_FORMAT
+#undef NG_POOL_MASK_ARGS
+#undef NG_POOL_MASK_FORMAT
 
 static bool vfEventVectorGrowChecked(void *vector, size_t requested,
 	bool (*native)(void *, size_t))
