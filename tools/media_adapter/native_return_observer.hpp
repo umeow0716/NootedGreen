@@ -102,6 +102,10 @@ struct NativeSnapshotTrigger {
     uintptr_t exactArgument=0;
     unsigned site=0;
     unsigned armAfterSite=4;
+    // Optional owned-data action, mutually exclusive with process capture.
+    // Runs synchronously at the SAME qualified native instruction/thread.
+    bool (*action)(void*,const x86_thread_state64_t&) noexcept=nullptr;
+    void* actionContext=nullptr;
 };
 
 class NativeReturnObserver {
@@ -166,10 +170,14 @@ class NativeReturnObserver {
             return;
         }
         auto raw = state->uc_mcontext->__ss.__rax;
-        if(self->snapshotTrigger.snapshot && site==self->snapshotTrigger.site) {
+        if((self->snapshotTrigger.snapshot || self->snapshotTrigger.action) && site==self->snapshotTrigger.site) {
             // Normal-stack owner qualification; no native register changes.
             const bool exact=state->uc_mcontext->__ss.__rdi==self->snapshotTrigger.exactArgument;
-            raw=exact && self->snapshotTrigger.snapshot->trigger(state->uc_mcontext->__ss)?1:0;
+            const int savedErrno=errno;
+            raw=exact && (self->snapshotTrigger.snapshot ?
+                self->snapshotTrigger.snapshot->trigger(state->uc_mcontext->__ss) :
+                self->snapshotTrigger.action(self->snapshotTrigger.actionContext,state->uc_mcontext->__ss))?1:0;
+            errno=savedErrno;
         }
         if (self->ownedCopy.bytes && site == 0) {
             // Pinned memcpy_s call arguments only. The owned source remains live
@@ -237,9 +245,10 @@ public:
             for (unsigned j = 0; j != i; ++j) if (sites[j] == sites[i]) return;
             wanted |= 1 << i;
         }
-        if (!guard.owns_lock() || !wanted ||
-            (snapshotTrigger.snapshot && (snapshotTrigger.site>=4 || !snapshotTrigger.exactArgument ||
-                !snapshotTrigger.snapshot->ready() ||
+        if (!guard.owns_lock() || !wanted || (!snapshotTrigger.action && snapshotTrigger.actionContext) ||
+            ((snapshotTrigger.snapshot || snapshotTrigger.action) && (snapshotTrigger.site>=4 || !snapshotTrigger.exactArgument ||
+                (snapshotTrigger.snapshot && (!snapshotTrigger.snapshot->ready() || snapshotTrigger.action || snapshotTrigger.actionContext)) ||
+                (snapshotTrigger.action && !snapshotTrigger.actionContext) ||
                 (snapshotTrigger.armAfterSite==4 ? wanted!=(1<<snapshotTrigger.site) :
                     (snapshotTrigger.armAfterSite>=4 || snapshotTrigger.armAfterSite==snapshotTrigger.site ||
                      wanted!=((1<<snapshotTrigger.site)|(1<<snapshotTrigger.armAfterSite)))) ||
@@ -311,7 +320,7 @@ public:
             programmed.__dr7 |= uint64_t(1) << (2 * i);
         }
         auto initial=programmed;
-        if(snapshotTrigger.snapshot && snapshotTrigger.armAfterSite<4)
+        if((snapshotTrigger.snapshot || snapshotTrigger.action) && snapshotTrigger.armAfterSite<4)
             initial.__dr7 &= ~(uint64_t(3) << (2*snapshotTrigger.site));
         const kern_return_t result = thread_set_state(thread, x86_DEBUG_STATE64,
             reinterpret_cast<thread_state_t>(&initial), x86_DEBUG_STATE64_COUNT);

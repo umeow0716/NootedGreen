@@ -452,6 +452,32 @@ int main() {
             partial.observed(0, 0x1357)) return 1;
     } // Restore the other three armed slots after an early native failure.
     {
+        struct OwnedAction {
+            uintptr_t expected;unsigned calls=0;uint64_t word=0;
+            static bool run(void* raw,const x86_thread_state64_t& state) noexcept {
+                auto& self=*static_cast<OwnedAction*>(raw);
+                if(state.__rdi!=self.expected)return false;
+                const uint64_t value=0x13572468;uint64_t observed=0;mach_vm_size_t copied=0;
+                if(mach_vm_write(mach_task_self(),reinterpret_cast<mach_vm_address_t>(&self.word),
+                    reinterpret_cast<vm_offset_t>(&value),sizeof(value))!=KERN_SUCCESS ||
+                   mach_vm_read_overwrite(mach_task_self(),reinterpret_cast<mach_vm_address_t>(&self.word),
+                    sizeof(observed),reinterpret_cast<mach_vm_address_t>(&observed),&copied)!=KERN_SUCCESS ||
+                   copied!=sizeof(observed) || observed!=value)return false;
+                ++self.calls;return true;
+            }
+        } action{reinterpret_cast<uintptr_t>(expectedCreator)};
+        {
+            NativeReturnObserver invoke({reinterpret_cast<uintptr_t>(owned_debug_site),
+                reinterpret_cast<uintptr_t>(owned_debug_creator_site),0,0},
+                0,0,0,0,0,0,{},0,{},0,{nullptr,action.expected,1,0,&OwnedAction::run,&action});
+            uintptr_t table[4]{0,0,0,reinterpret_cast<uintptr_t>(&creatorNative)};
+            if(!invoke.isArmed() || owned_debug_creator_target(expectedCreator,table)!=0x1357 || action.calls ||
+               owned_debug_target()!=0x1357 || owned_debug_creator_target(expectedCreator,table)!=0x1357 ||
+               action.calls!=1 || action.word!=0x13572468 || !invoke.observed(1,1))return 1;
+        }
+        std::puts("SUBMIT_ACTION_OWNED_OK no-text-or-register-result-modification");
+    }
+    {
         NativeRuntimeSnapshot snapshot(1024*1024,2);
         if(!snapshot.ready())return 1;
         alignas(8) unsigned char wrapper[0x88]{};

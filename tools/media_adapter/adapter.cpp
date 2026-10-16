@@ -1,6 +1,7 @@
 #include "descriptor_bridge.hpp"
 #include "tgl_capability_adapter.hpp"
 #include "native_return_observer.hpp"
+#include "native_avc_reservation.hpp"
 #include "owned_resource.hpp"
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
@@ -5718,13 +5719,14 @@ struct NativeOtherFrameBackend {
                 // Query only through the current owner/physical/shared lease.
                 // Unsupported or not-ready kernels preserve native behavior;
                 // this negotiation alone never writes a producer cursor.
+                NGVfAvcPublication::Reply publication{};
+                const bool publicationReady=entry==image+0x27724 &&
+                    queryPublication(lease,active,image,physical,generation,publication);
                 if(entry==image+0x27724) {
-                    NGVfAvcPublication::Reply publication{};
-                    const bool ready=queryPublication(lease,active,image,physical,generation,publication);
                     static std::atomic<bool> reported{false};
                     if(!reported.exchange(true,std::memory_order_acq_rel))
                         os_log_error(OS_LOG_DEFAULT,"NGRN_AVC_PUBLICATION_NEGOTIATION ready=%{public}d profile=%{public}u",
-                            int(ready),ready?publication.commandProfile:0U);
+                            int(publicationReady),publicationReady?publication.commandProfile:0U);
                 }
                 // Exact AVC400 frame only. Full self-process capture precedes
                 // native SubmitDataBuffers while the native builder lock is
@@ -5740,8 +5742,68 @@ struct NativeOtherFrameBackend {
                    !readMemory(image+0x22843,finalAnchor,sizeof(finalAnchor)) ||
                    memcmp(finalAnchor,finalCall,sizeof(finalAnchor)) || !executableMemory(image+0x22843,sizeof(finalAnchor)) ||
                    !readMemory(context+0x10,&producer,sizeof(producer)) || !producer ||
-                   producer>UINTPTR_MAX-0x130 || !writableDataMemory(producer,0x130) ||
-                   snapshotAttempted.exchange(true,std::memory_order_acq_rel))return invoke();
+                   producer>UINTPTR_MAX-0x130 || !writableDataMemory(producer,0x130))
+                    return publicationReady?5:invoke();
+                if(publicationReady) {
+                    if(!NgreenNativeAvcReservation::abi(image,&readMemory,&executableMemory))return 5;
+                    auto scratch=std::unique_ptr<NgreenAvcGen12::PublishScratch>(new(std::nothrow) NgreenAvcGen12::PublishScratch{});
+                    if(!scratch)return 5;
+                    char temporary[1024]{},path[1100]{};
+                    const size_t bytes=confstr(_CS_DARWIN_USER_TEMP_DIR,temporary,sizeof(temporary));
+                    if(bytes<2 || bytes>sizeof(temporary) || temporary[0]!='/')return 5;
+                    const int length=std::snprintf(path,sizeof(path),"%s%sngreen-avc-reservation-XXXXXX",
+                        temporary,temporary[bytes-2]=='/'?"":"/");
+                    if(length<0 || size_t(length)>=sizeof(path))return 5;
+                    struct Journal {int fd;~Journal(){if(fd>=0)close(fd);}} journal{mkstemp(path)};
+                    if(journal.fd<0)return 5;
+                    struct Pending {
+                        decltype(owner) pinnedOwner;
+                        NativePhysicalFrameScope& physicalScope;
+                        uintptr_t image,physical,context,producer;uint64_t generation;
+                        const NGVfAvcPublication::Reply& capability;
+                        NgreenAvcGen12::PublishScratch& scratch;int journal;
+                        NgreenNativeAvcReservation::CommitResult result{};
+                        bool called=false;
+                        static bool run(void* raw,const x86_thread_state64_t& state) noexcept {
+                            auto& self=*static_cast<Pending*>(raw);self.called=true;
+                            auto live=[&]() noexcept {
+                                uintptr_t producer=0,current=0;
+                                return self.physicalScope.matches(self.image,self.physical,self.generation) &&
+                                    self.pinnedOwner->context()==self.context &&
+                                    self.pinnedOwner->frameTable().publication()==TglContextFramePublication::Published &&
+                                    readMemory(self.context,&current,8) &&
+                                    current==reinterpret_cast<uintptr_t>(self.pinnedOwner->frameTable().addressPoint()) &&
+                                    readMemory(self.context+0x10,&producer,8) && producer==self.producer &&
+                                    state.__rdi==self.producer+0x48;
+                            };
+                            auto writeData=[](uintptr_t address,const void* data,size_t size) noexcept {
+                                return size && size<=6144 && writableDataMemory(address,size) &&
+                                    mach_vm_write(mach_task_self(),address,reinterpret_cast<vm_offset_t>(data),
+                                        static_cast<mach_msg_type_number_t>(size))==KERN_SUCCESS;
+                            };
+                            self.result=NgreenNativeAvcReservation::commit(self.producer+0x48,self.capability,
+                                self.capability.registryId,1920,1080,self.scratch,&readMemory,writeData,
+                                &writableDataMemory,live);
+                            const uint32_t record[]{0x4e475252,uint32_t(self.result.applied),
+                                uint32_t(self.result.mustStop),self.result.usedBytes};
+                            (void)write(self.journal,record,sizeof(record));
+                            // A failed rollback must never resume native submit
+                            // with an unproved cursor. No RIP/result/text edits.
+                            if(self.result.mustStop)_exit(70);
+                            return self.result.applied;
+                        }
+                    } pending{owner,active,image,physical,context,producer,generation,publication,*scratch,journal.fd};
+                    NativeReturnObserver observer({image+0x22843,image+0xa893,0,0},0,0,0,0,0,0,
+                        {0,0,0,journal.fd},0,{},0,{nullptr,producer+0x48,1,0,&Pending::run,&pending});
+                    os_log_error(OS_LOG_DEFAULT,"NGRN_AVC_RESERVATION_ARM armed=%{public}d path=%{public}s",
+                        int(observer.isArmed()),path);
+                    if(!observer.isArmed())return 5;
+                    const int native=invoke();
+                    os_log_error(OS_LOG_DEFAULT,"NGRN_AVC_RESERVATION_DONE called=%{public}d applied=%{public}d used=%{public}u native=%{public}d",
+                        int(pending.called),int(pending.result.applied),pending.result.usedBytes,native);
+                    return native;
+                }
+                if(snapshotAttempted.exchange(true,std::memory_order_acq_rel))return invoke();
                 NativeRuntimeSnapshot snapshot;
                 if(!snapshot.ready()) {
                     os_log_error(OS_LOG_DEFAULT,"NGRN_RUNTIME_SNAPSHOT_SKIP native-temp-or-worker-denied");
