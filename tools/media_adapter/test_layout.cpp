@@ -16309,6 +16309,12 @@ static void testRetainedVeboxFrames() {
             fresh.channels=1;fresh.active[0]=true;fresh.observed[0]=6;
             TglNativeOtherPendingFrames pending;
             const auto ticket=pending.reserve(image,physical,1,context);
+            unsigned unboundObservations=0;
+            auto observeUnbound=[&](const auto&,const auto&,auto&,auto&,auto&,auto&) noexcept -> bool {
+                ++unboundObservations;return true;
+            };
+            assert(ticket.serial && !pending.service(image,physical,1,context,observeUnbound));
+            assert(unboundObservations==0 && pending.pending());
             assert(ticket.serial && pending.pending() && pending.bind(ticket,lineage,fence,fresh));
             NGVfTaskCompletion::Reply reply{};
             reply.abiVersion=NGVfTaskCompletion::version;reply.bytes=sizeof(reply);reply.registryId=99;reply.recordCount=1;
@@ -16324,6 +16330,8 @@ static void testRetainedVeboxFrames() {
             assert(!pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh));
             const auto failed=pending.reserve(image,physical,1,context);
             assert(failed.serial!=ticket.serial && pending.markAmbiguous(failed) && pending.pending());
+            assert(!pending.service(image,physical,1,context,observeUnbound));
+            assert(unboundObservations==0 && pending.pending());
             assert(!pending.reserve(image,physical,1,context).serial);
             assert(!pending.bind(failed,lineage,fence,fresh) &&
                 !pending.complete(failed,image,physical,1,context,99,reply,fence,fresh));
