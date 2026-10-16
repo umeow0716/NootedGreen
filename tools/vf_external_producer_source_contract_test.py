@@ -83,7 +83,7 @@ def contract(source, path="<source>"):
     shared = function_body(source, "IOReturn Gen11::vfSharedExternalMethod(")
     owned = function_body(source, "static IOReturn vfReadOwnedDeviceObservation(")
     diagnostic_branch = shared[shared.index("if (selector == NGVfDeviceObservation::selector"):
-                               shared.index("// Observe the resource-create boundary")]
+                               shared.index("if (selector == NGVfAvcPublication::selector")]
     for token in ("selector == NGVfDeviceObservation::selector",
                   "gVfIdentity == VfIdentity::Virtual", "accelerator == gVfAccelerator",
                   'checkKernelArgument("-ngreenmediaadapter")',
@@ -91,6 +91,17 @@ def contract(source, path="<source>"):
         assert token in diagnostic_branch, f"{path}: lost owned selector admission: {token}"
     assert shared.index("VfExternalProducerGuard guard") < shared.index("return vfReadOwnedDeviceObservation"), \
         f"{path}: owned query must hold native instance lease"
+    avc_branch=shared[shared.index("if (selector == NGVfAvcPublication::selector"):
+                      shared.index("// Observe the resource-create boundary")]
+    for token in ('gVfIdentity == VfIdentity::Virtual','accelerator == gVfAccelerator',
+                  'checkKernelArgument("-ngreenmediaadapter")','return vfReadOwnedAvcPublication('):
+        assert token in avc_branch, f"{path}: lost AVC negotiation instance admission"
+    avc_query=function_body(source,'static IOReturn vfReadOwnedAvcPublication(')
+    for token in ('NGVfAvcPublication::inlineShape(',
+                  'gVfMediaPublicationRouteReady && gVfMediaPublicationAbiVerified',
+                  'checkKernelArgument("-ngreenavcgen12")', '!gVfSubmissionStopped', '!gVfProtocolFault'):
+        assert token in avc_query, f"{path}: premature AVC readiness"
+    assert 'static bool gVfMediaPublicationRouteReady = false;' in source
     for token in ("!gVfDeviceObservationAbiVerified", "return kIOReturnUnsupported;",
                   "selector != NGVfDeviceObservation::selector", "NGVfDeviceObservation::inlineShape(",
                   "return kIOReturnBadArgument;", "getRegistryEntryID()",
@@ -374,6 +385,12 @@ def contract(source, path="<source>"):
 
 def mutation_contract(source, path):
     mutations = (
+        ('gVfMediaPublicationRouteReady && gVfMediaPublicationAbiVerified',
+         'true && gVfMediaPublicationAbiVerified',1),
+        ('static bool gVfMediaPublicationRouteReady = false;',
+         'static bool gVfMediaPublicationRouteReady = true;',1),
+        ('NGVfAvcPublication::inlineShape(args,kIOExternalMethodArgumentsCurrentVersion,',
+         'NGVfDeviceObservation::inlineShape(args,kIOExternalMethodArgumentsCurrentVersion,',1),
         ('gVfMediaMapAddress = mapAddress;', 'gVfMediaMapAddress = mapLength;'),
         ('anchorMatches(mapOptions,mapOptionsLeaf,sizeof(mapOptionsLeaf))', 'true'),
         ('getMember<void *>(entry.context,0x578)', 'getMember<void *>(entry.context,0x580)'),

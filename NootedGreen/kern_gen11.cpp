@@ -175,6 +175,9 @@ bool gVfTaskCompletionAbiVerified = false;
 // Optional AVC producer integration handles. Resolving these does not enable
 // a route, map memory, invoke a getter, or authorize a command-buffer write.
 bool gVfMediaPublicationAbiVerified = false;
+// ABI anchors alone do not make a submission route ready. Only a completely
+// installed native end-command hook may publish this in a future integration.
+static bool gVfMediaPublicationRouteReady = false;
 mach_vm_address_t gVfMediaEndCaller = 0;
 mach_vm_address_t gVfMediaKernelMappedMemoryVtable = 0;
 mach_vm_address_t gVfMediaKernelMappedMemoryLength = 0;
@@ -5986,6 +5989,33 @@ static IOReturn vfReadOwnedDeviceObservation(void *accelerator, uint32_t selecto
 
 static IOReturn vfReadOwnedTaskCompletion(OSObject *target, void *reference, IOExternalMethodArguments *args);
 
+static IOReturn vfReadOwnedAvcPublication(void *accelerator,void *arguments,
+    void *dispatch,void *target,void *reference)
+{
+	if (!gVfDeviceObservationAbiVerified)return kIOReturnUnsupported;
+	auto *args=static_cast<IOExternalMethodArguments *>(arguments);
+	if (!NGVfAvcPublication::inlineShape(args,kIOExternalMethodArgumentsCurrentVersion,
+	    dispatch,target,reference))return kIOReturnBadArgument;
+	NGVfAvcPublication::Reply reply{};
+	reply.abiVersion=NGVfAvcPublication::version;reply.bytes=sizeof(reply);
+	reply.registryId=static_cast<IORegistryEntry *>(accelerator)->getRegistryEntryID();
+	if (!reply.registryId)return kIOReturnOffline;
+	OSSynchronizeIO();
+	if (gVfMediaPublicationRouteReady && gVfMediaPublicationAbiVerified &&
+	    checkKernelArgument("-ngreenavcgen12") && !gVfDeviceStopping &&
+	    !gVfSubmissionStopped && !gVfProtocolFault &&
+	    getMember<volatile UInt32>(accelerator,0xDC8)==0)
+		reply.flags=NGVfAvcPublication::routeReady;
+	reply.commandProfile=NGVfAvcPublication::profile;
+	reply.inputLimit=NGVfAvcPublication::maxInputWords;
+	reply.outputLimit=NGVfAvcPublication::maxOutputWords;
+	for (unsigned i=0;i<16;++i)reply.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
+	const auto *wire=reinterpret_cast<const uint8_t *>(&reply);
+	auto *output=static_cast<volatile uint8_t *>(args->structureOutput);
+	for (size_t i=0;i<sizeof(reply);++i)output[i]=wire[i];
+	return kIOReturnSuccess;
+}
+
 IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	                                  void *arguments, void *dispatch,
 	                                  void *target, void *reference)
@@ -6014,6 +6044,9 @@ IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	    gVfIdentity == VfIdentity::Virtual && accelerator && accelerator == gVfAccelerator &&
 	    checkKernelArgument("-ngreenmediaadapter"))
 		return vfReadOwnedDeviceObservation(accelerator, selector, arguments, dispatch, target, reference);
+	if (selector == NGVfAvcPublication::selector && gVfIdentity == VfIdentity::Virtual &&
+	    accelerator && accelerator == gVfAccelerator && checkKernelArgument("-ngreenmediaadapter"))
+		return vfReadOwnedAvcPublication(accelerator,arguments,dispatch,target,reference);
 	// Observe the resource-create boundary without reading user arguments or
 	// changing native dispatch. Saturation bounds logging across all clients.
 	static volatile UInt32 observedCreates = 0;

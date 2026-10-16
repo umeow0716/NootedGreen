@@ -74,6 +74,42 @@ template<class Call> bool query(uint64_t expectedRegistryId,Call call,Reply& out
     return true;
 }
 }
+// Capability negotiation only, never a completion/ownership certificate.
+// A new adapter MUST NOT reserve producer bytes on an old/unsupported kernel.
+namespace NGVfAvcPublication {
+constexpr uint32_t selector=0x4E470003U,version=1,profile=1;
+constexpr uint32_t routeReady=1,maxInputWords=1024,maxOutputWords=1536;
+struct Reply {
+    uint32_t abiVersion,bytes;
+    uint64_t registryId;
+    uint32_t flags,commandProfile,inputLimit,outputLimit;
+    uint8_t familyUuid[16];
+};
+static_assert(sizeof(Reply)==48,"fixed AVC publication negotiation layout");
+template<class Args> bool inlineShape(const Args* args,uint32_t currentVersion,
+    const void* dispatch,const void* target,const void* reference) noexcept {
+    return args && !dispatch && !target && !reference && args->version==currentVersion &&
+        args->selector==selector && !args->asyncWakePort && !args->asyncReference && !args->asyncReferenceCount &&
+        !args->scalarInput && !args->scalarInputCount && !args->scalarOutput && !args->scalarOutputCount &&
+        !args->structureInput && !args->structureInputSize && !args->structureInputDescriptor &&
+        !args->structureOutputDescriptor && !args->structureOutputDescriptorSize &&
+        !args->structureVariableOutputData && args->structureOutput && args->structureOutputSize==sizeof(Reply);
+}
+inline bool ready(const Reply& r,uint64_t registryId) noexcept {
+    if(!registryId || r.registryId!=registryId || r.abiVersion!=version || r.bytes!=sizeof(Reply) ||
+       r.flags!=routeReady || r.commandProfile!=profile ||
+       r.inputLimit!=maxInputWords || r.outputLimit!=maxOutputWords)return false;
+    for(unsigned i=0;i<16;++i)
+        if(r.familyUuid[i]!=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i])return false;
+    return true;
+}
+template<class Call> bool query(uint64_t registryId,Call call,Reply& output) noexcept {
+    Reply candidate{};size_t bytes=sizeof(candidate);
+    if(!registryId || call(selector,&candidate,&bytes)!=0 || bytes!=sizeof(candidate) ||
+       !ready(candidate,registryId))return false;
+    output=candidate;return true;
+}
+}
 // Separate task-bound request. A response is meaningful only when produced
 // under native SharedUserClient detach admission AND pinned context coverage;
 // these wire types alone do not authorize retirement.

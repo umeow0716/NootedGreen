@@ -18929,6 +18929,31 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        NGVfAvcPublication::Reply ready{};
+        ready.abiVersion=NGVfAvcPublication::version;ready.bytes=sizeof(ready);ready.registryId=19;
+        ready.commandProfile=NGVfAvcPublication::profile;
+        ready.inputLimit=1024;ready.outputLimit=1536;
+        for(unsigned i=0;i<16;++i)ready.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
+        assert(!NGVfAvcPublication::ready(ready,19)); // ABI alone is not readiness.
+        ready.flags=NGVfAvcPublication::routeReady;assert(NGVfAvcPublication::ready(ready,19));
+        assert(!NGVfAvcPublication::ready(ready,20));
+        for(unsigned i=0;i<16;++i) {
+            ready.familyUuid[i]^=1;assert(!NGVfAvcPublication::ready(ready,19));ready.familyUuid[i]^=1;
+        }
+        ready.flags|=2;assert(!NGVfAvcPublication::ready(ready,19));ready.flags=1;
+        ++ready.commandProfile;assert(!NGVfAvcPublication::ready(ready,19));--ready.commandProfile;
+        ++ready.outputLimit;assert(!NGVfAvcPublication::ready(ready,19));--ready.outputLimit;
+        NGVfAvcPublication::Reply output{};
+        auto call=[&](uint32_t selector,void* data,size_t* bytes) noexcept {
+            assert(selector==NGVfAvcPublication::selector && *bytes==sizeof(ready));
+            std::memcpy(data,&ready,sizeof(ready));return 0;
+        };
+        assert(NGVfAvcPublication::query(19,call,output) && output.registryId==19);
+        auto unsupported=[](uint32_t,void*,size_t*) noexcept {return 5;};
+        output={};assert(!NGVfAvcPublication::query(19,unsupported,output) && !output.registryId);
+        ready.flags=0;assert(!NGVfAvcPublication::query(19,call,output) && !output.registryId);
+    }
+    {
         std::array<unsigned char,0x5c> wrapper{};
         const uintptr_t argument=0x10000,connection=17,base=0x20000,cursor=base+2728,end=base+4096;
         const uint32_t classes=1,previous=128;
