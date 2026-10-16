@@ -2,7 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Shared kernel/CPU producer; not yet wired to a native submission route.
+// Shared kernel/CPU producer; native post-relocation submission is separately gated.
 // Callers must independently prove writable extent, task/physical ownership,
 // generation, relocation completion and native descriptor/count publication.
 // Intel generated Gen12 definitions: media-driver 2a32c7fafd8fa169112e962587777969cc8c654f.

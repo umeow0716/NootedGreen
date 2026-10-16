@@ -425,6 +425,16 @@ def contract(source, path="<source>"):
     rejected=media_end[media_end.index('if (!publication.published)'):media_end.index('OSSynchronizeIO();')]
     assert 'entry->failed=true;' in rejected and 'return;' in rejected and 'FunctionCast' not in rejected
     assert media_end.count('FunctionCast(vfMediaEnd,')==2
+    for token in ('static volatile UInt32 publicationRecorded=0;',
+                  'OSCompareAndSwap(0,1,&publicationRecorded)',
+                  'const uint32_t sourceWords=span.count;',
+                  'first<count;first+=48U', 'uint32_t block[48] {};',
+                  'valid=count-first<48U?count-first:48U',
+                  'block[i]=kind?span.commands[first+i]:entry->scratch->source[first+i]',
+                  'NGVfTimeoutObservation::encodeRingPrefix(block,encoded)',
+                  'V372 AVC_CPU_BEGIN', 'V372 AVC_CPU_BLOCK', 'V372 AVC_CPU_END'):
+        assert token in media_end, f'{path}: missing bounded pinned CPU publication record: {token}'
+    assert media_end.index('Lost owned AVC mapping after count publication') < media_end.index('V372 AVC_CPU_BEGIN') < media_end.index('V372 AVC_CPU_END') < media_end.rindex('FunctionCast(vfMediaEnd,')
     assert 'return mediaScope.failed()?kIOReturnBadArgument:result;' in media_submit
     assert 'slot->thread != owner || slot->translating' in media_exit
     assert 'releaseSlot();' in media_exit
@@ -530,6 +540,10 @@ def mutation_contract(source, path):
         ('anchorMatches(submit+0x168,nextRecord,sizeof(nextRecord))','true',1),
         ('this->oVfMediaEnd=videoEnd;', 'this->oVfMediaEnd=mediaEnd;', 1),
         ('Info",vfMediaEnd}', 'Info",vfMediaEnd,this->oVfMediaEnd}', 1),
+        ('OSCompareAndSwap(0,1,&publicationRecorded)', 'true', 1),
+        ('first<count;first+=48U', 'first<count;first+=24U', 1),
+        ('valid=count-first<48U?count-first:48U', 'valid=48U', 1),
+        ('block[i]=kind?span.commands[first+i]:entry->scratch->source[first+i]', 'block[i]=entry->scratch->produced[first+i]', 1),
     )
     for mutation in mutations:
         old, new = mutation[:2]

@@ -6106,6 +6106,30 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 		"Lost owned AVC mapping after count publication");
 	SYSLOG("ngreen","Gen12 AVC native publication words=%u reserved=%u",
 		static_cast<uint32_t>(publication.preparation.words),static_cast<uint32_t>(span.reservedWords));
+	// One complete CPU-side publication record per boot, while the existing
+	// owner/lock/mapping scope is still pinned. Never traverse GPU addresses.
+	// This is not an atomic GPU snapshot or evidence of device execution.
+	static volatile UInt32 publicationRecorded=0;
+	if (OSCompareAndSwap(0,1,&publicationRecorded)) {
+		const uint32_t sourceWords=span.count;
+		const uint32_t publishedWords=static_cast<uint32_t>(publication.preparation.words);
+		SYSLOG("ngreen","V372 AVC_CPU_BEGIN source=%u published=%u offset=%u used=%u bytes=%u mapFlags=%x",
+			sourceWords,publishedWords,span.offset,span.used,span.bytes,span.mapFlags);
+		for (uint32_t kind=0;kind<2;++kind) {
+			const uint32_t count=kind?publishedWords:sourceWords;
+			for (uint32_t first=0;first<count;first+=48U) {
+				uint32_t block[48] {};
+				const uint32_t valid=count-first<48U?count-first:48U;
+				for (uint32_t i=0;i<valid;++i)
+					block[i]=kind?span.commands[first+i]:entry->scratch->source[first+i];
+				char encoded[257] {};
+				NGVfTimeoutObservation::encodeRingPrefix(block,encoded);
+				SYSLOG("ngreen","V372 AVC_CPU_BLOCK kind=%u first=%u words=%u data=%.256s",
+					kind,first,valid,encoded);
+			}
+		}
+		SYSLOG("ngreen","V372 AVC_CPU_END source=%u published=%u",sourceWords,publishedWords);
+	}
 	FunctionCast(vfMediaEnd,callback->oVfMediaEnd)(that,stream);
 }
 

@@ -6,7 +6,9 @@ Gen12 sizes are pinned to intel/media-driver 2a32c7fafd8fa169112e962587777969cc8
 Size differences describe producer ABI, not hardware validity or a hang verdict.
 """
 import argparse
+import base64
 import json
+import re
 import struct
 from pathlib import Path
 
@@ -102,6 +104,46 @@ def audit(data):
             'registers': registers, 'buffer_controls': controls,
             'surface_controls': surfaces, 'relocation_coupling': coupling}, mapping
 
+def publication(lines):
+    counts = None
+    streams = [[], []]
+    terminal = False
+    for line in lines:
+        if len(line) > 4096:
+            raise ValueError('publication line exceeds bound')
+        if 'V372 AVC_CPU_' not in line:
+            continue
+        if terminal:
+            raise ValueError('duplicate publication')
+        match = re.search(r'V372 AVC_CPU_BEGIN source=(\d+) published=(\d+) offset=(\d+) used=(\d+) bytes=(\d+) mapFlags=([0-9a-f]+)', line)
+        if match:
+            if counts is not None:
+                raise ValueError('duplicate begin')
+            counts = [int(match[1]), int(match[2])]
+            offset, used, size = map(int, match.group(3, 4, 5))
+            if not (2 <= counts[0] <= 1024 and counts[0] < counts[1] <= 1536 and
+                    offset <= used <= size and counts[1]*4 <= used-offset):
+                raise ValueError('invalid publication extent')
+            continue
+        match = re.search(r'V372 AVC_CPU_BLOCK kind=(\d+) first=(\d+) words=(\d+) data=([A-Za-z0-9+/=]+)', line)
+        if match and counts:
+            kind, first, valid = map(int, match.group(1, 2, 3))
+            if kind > 1 or first != len(streams[kind]) or valid != min(48, counts[kind]-first) or valid <= 0:
+                raise ValueError('invalid chunk order/extent')
+            raw = base64.b64decode(match[4], validate=True)
+            if len(raw) != 192 or any(raw[valid*4:]):
+                raise ValueError('invalid chunk padding')
+            streams[kind].extend(struct.unpack('<%dI' % valid, raw[:valid*4]))
+            continue
+        match = re.search(r'V372 AVC_CPU_END source=(\d+) published=(\d+)', line)
+        if match and counts == [int(match[1]), int(match[2])] and list(map(len, streams)) == counts:
+            terminal = True
+            continue
+        raise ValueError('malformed/incomplete publication')
+    if not terminal:
+        raise ValueError('missing publication terminal')
+    return {'status': 'CPU_PUBLICATION_ONLY_NOT_GPU_EXECUTION', 'source': streams[0], 'published': streams[1]}
+
 def selftest():
     data = struct.pack('<7I', 0x70000003, 0, 0, 0, 0, 0x70800000, 0)
     report, mapping = audit(data)
@@ -135,14 +177,40 @@ def selftest():
             continue
         raise AssertionError('bad packet accepted')
     print('VDENC_BATCH_AUDIT_SELFTEST_OK')
+    chunks = ['V372 AVC_CPU_BEGIN source=2 published=3 offset=0 used=12 bytes=64 mapFlags=0']
+    for kind, count in enumerate((2, 3)):
+        encoded = base64.b64encode(struct.pack('<48I', *range(count), *([0]*(48-count)))).decode()
+        chunks.append(f'V372 AVC_CPU_BLOCK kind={kind} first=0 words={count} data={encoded}')
+    chunks.append('V372 AVC_CPU_END source=2 published=3')
+    assert publication(chunks)['published'] == [0, 1, 2]
+    for bad in (chunks[:-1], chunks+chunks, chunks[:2]+chunks[1:],
+                [x.replace('first=0', 'first=48') for x in chunks],
+                [x.replace('used=12', 'used=8') for x in chunks],
+                [x.replace('published=3', 'published=1537') for x in chunks],
+                [x.replace('kind=1', 'kind=2') for x in chunks],
+                [x.replace('words=3', 'words=48') for x in chunks],
+                [x.replace('published=3', 'published=4') if 'END' in x else x for x in chunks],
+                [x.replace('data=', 'data=!') for x in chunks]):
+        try:
+            publication(bad)
+        except (ValueError, base64.binascii.Error):
+            continue
+        raise AssertionError('bad publication accepted')
+    print('AVC_CPU_PUBLICATION_DECODER_SELFTEST_OK')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('batch', nargs='?', type=Path)
     parser.add_argument('--self-test', action='store_true')
+    parser.add_argument('--publication-log', type=Path)
     args = parser.parse_args()
     if args.self_test:
         selftest()
+    elif args.publication_log:
+        if args.publication_log.stat().st_size > 2097152:
+            parser.error('publication log exceeds 2MiB')
+        with args.publication_log.open() as source:
+            print(json.dumps(publication(source), separators=(',', ':')))
     elif args.batch:
         if args.batch.stat().st_size > 65536:
             parser.error('batch exceeds 64KiB')
