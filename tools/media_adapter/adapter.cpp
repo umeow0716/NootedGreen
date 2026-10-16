@@ -5598,7 +5598,8 @@ struct NativeOtherFrameBackend {
         const auto connection=tglWithNativePhysicalSharedConnectionSnapshot(physical,library.resourceCreate,
             &readMemory,qualifyFramework,admit,[&](uint32_t port) noexcept -> int {
                 uint64_t identity=0,after=0;
-                if(api.identity(port,identity))return 5;
+                const int identityStatus=api.identity(port,identity);
+                if(identityStatus)return identityStatus;
                 const bool queried=NGVfAvcPublication::query(identity,
                     [&](uint32_t selector,void* out,size_t* bytes) noexcept {
                         const int status=api.readAvcPublication(port,selector,out,bytes);

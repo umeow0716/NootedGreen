@@ -7488,6 +7488,20 @@ struct TglDarwinDeviceObservationApi {
         if(!valid() || !port) return 5;
         uint32_t service=0;uint64_t id=0;
         const int serviceStatus=getService(port,&service);
+        // IOAccelSharedUserClient2 inherits IOUserClient::getService(), which
+        // returns NULL. Its public IOConnectGetService therefore returns
+        // kIOReturnUnsupported, not the accelerator's provider. Only for that
+        // exact result use our existing read-only, VF/instance-qualified RPC
+        // on the SAME lifetime-pinned native shared connection. No new port,
+        // IOService open, entitlement or policy fallback is introduced.
+        if(uint32_t(serviceStatus)==0xe00002c7U && !service) {
+            NGVfDeviceObservation::Reply reply{};size_t bytes=sizeof(reply);
+            const int status=read(port,NGVfDeviceObservation::selector,&reply,&bytes);
+            if(status)return status;
+            if(bytes!=sizeof(reply) || !NGVfDeviceObservation::validReply(reply,reply.registryId) ||
+               reply.terminated)return 5;
+            output=reply.registryId;return 0;
+        }
         if(serviceStatus) return serviceStatus;
         if(!service) return 5;
         const int idStatus=registryId(service,&id);
@@ -7515,7 +7529,8 @@ struct TglDarwinDeviceObservationApi {
         return structMethod(port,selector,&request,sizeof(request),output,bytes);
     }
 };
-// Api::identity uses the shared connection's native IOService registry ID;
+// Api::identity uses the native service registry ID or, only for native
+// Unsupported, the exact owned VF identity RPC on the same shared connection;
 // Api::read is the public synchronous, no-input IOConnect struct-method call.
 // No reply escapes until the retained owner/connection chain revalidates.
 template<class ParentLease,class Read,class Qualify,class Executable,class QualifyFramework,class Api>

@@ -23150,6 +23150,34 @@ int main() {
                             assert(methods==((mode==1 || mode==5 || mode==6)?0U:1U));
                             if(mode==4)assert(observation.transportCalled && !observation.connection.stable);
                         }
+                        // Native SharedUserClient has no getService override.
+                        // Bootstrap only via the same owned identity RPC on
+                        // exact Unsupported; other errors MUST NOT fall back.
+                        api.getService=+[](uint32_t p,uint32_t* service) {
+                            assert(p==42);*service=mode==9?77:0;
+                            return int(mode==8?0xe00002e2U:0xe00002c7U);
+                        };
+                        api.structMethod=+[](uint32_t p,uint32_t selector,const void* input,size_t inputSize,void* out,size_t* size) {
+                            assert(p==42 && selector==NGVfDeviceObservation::selector && !input && !inputSize);
+                            assert(*size==sizeof(NGVfDeviceObservation::Reply));++methods;
+                            auto& reply=*static_cast<NGVfDeviceObservation::Reply*>(out);
+                            reply={1,40,0xabc,7,0,{}};
+                            for(unsigned i=0;i<16;++i)reply.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
+                            if(mode==1)reply.familyUuid[0]^=1;
+                            if(mode==2)reply.terminated=1;
+                            if(mode==3)reply.registryId=0;
+                            if(mode==4)--*size;
+                            if(mode==5)++reply.abiVersion;
+                            if(mode==6)--reply.bytes;
+                            return mode==7?31:0;
+                        };
+                        for(mode=0;mode<10;++mode) {
+                            methods=releases=0;uint64_t observed=999;
+                            const int status=api.identity(42,observed);
+                            assert((status==0)==(mode==0));
+                            assert(observed==(mode==0?0xabcU:999U));
+                            assert(methods==(mode<8?1U:0U) && !releases);
+                        }
                         port=42;sharedPort=nullptr;
                     }
                     assert(!lease.acquire(std::move(pin),image,parent,creatorAddress,borrowedRead,
