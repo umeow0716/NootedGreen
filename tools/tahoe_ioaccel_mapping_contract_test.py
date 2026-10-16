@@ -1098,7 +1098,7 @@ def check_boot_atomic(system, path):
     symbols = {name: [] for name in (b"_OSIncrementAtomic", b"_OSDecrementAtomic", b"_thread_wakeup_prim",
                                    b"__ZN15IORegistryEntry18getRegistryEntryIDEv", b"_kernel_debug",
                                    b"_kernel_debug_register_callback",
-                                   b"_IOLockLock", b"_IOLockUnlock", b"_assert_wait_deadline",
+                                   b"_IOLockLock", b"_IOLockUnlock", b"_task_reference", b"_assert_wait_deadline",
                                    b"_thread_block", b"_clock_interval_to_deadline",
                                    b"__ZN10IOWorkLoop8workLoopEv",
                                    b"__ZN10IOWorkLoop14runActionBlockEU13block_pointerFivE",
@@ -1897,7 +1897,8 @@ def check_boot_atomic(system, path):
         "55 48 89 e5 b8 ff ff ff ff f0 0f c1 07 5d c3"), "changed atomic decrement"
     for stub, name in ((0x101a4, b"__ZN15IORegistryEntry18getRegistryEntryIDEv"),
                        (0x101ce, b"_kernel_debug"), (0x10012, b"_IOLockLock"),
-                       (0x10018, b"_IOLockUnlock"), (0x10c30, b"_assert_wait_deadline"),
+                       (0x10018, b"_IOLockUnlock"), (0x106a8, b"_task_reference"),
+                       (0x10c30, b"_assert_wait_deadline"),
                        (0x10366, b"_thread_block"), (0x100d8, b"_clock_interval_to_deadline")):
         assert system[stub:stub + 2] == b"\xff\x25", "changed lock notification import stub"
         pointer = stub + 6 + struct.unpack_from("<i", system, stub + 2)[0]
@@ -2815,6 +2816,15 @@ def check(path, boot_path=None):
         assert read(address, len(expected)) == expected, \
             f"changed native command alias/extent/retain anchor: {address:#x}"
     print("PASS native command alias length, resource retain and mapping get/release balance anchors")
+    for address, encoded in (
+            (0x14b6c65c, "4c 89 ff e8 44 40 4a eb 4c 89 bb 78 05 00 00"),
+            (0x14b6bafc, "49 8b bc 24 88 00 00 00 e8 09 45 4a eb"),
+            (0x14b6bce4, "48 8b 03 48 89 df 8b 75 c8 ff 90 28 0a 00 00"),
+            (0x14b8ede4, "48 8b 7f 20 5d e9 96 a0 fd ff")):
+        expected = bytes.fromhex(encoded)
+        assert read(address, len(expected)) == expected, \
+            f"changed retained task / real submit lock / shared namespace anchor: {address:#x}"
+    print("PASS context retained task, actual submit mutex and shared-namespace distinction")
 
     for table, slot, method in (
             ("__ZTV21IOAccelDisplayMachine", 0x8b8,
