@@ -5807,6 +5807,7 @@ struct NativeFactoryContextProperties {
     enum class Operation { Configure,Query };
     static int run(void* physical,const void* input,Operation operation,NativeGvaQueryCaller caller={}) noexcept {
         const char* admission="input";bool nativeCalled=false;int nativeResult=5;
+        TglNativeContextPropertyBatch<16>::CaptureDiagnostic captureDiagnostic;
         struct RecordDiagnostic {uint32_t kind=0,property=0,operation=0;uint64_t type=0;};
         std::array<RecordDiagnostic,16> diagnostics{};size_t diagnosticCount=0;
         const int result=[&]() noexcept -> int {
@@ -5824,7 +5825,7 @@ struct NativeFactoryContextProperties {
                 if(!mutation.matches(image,address,generation))return 5;
                 TglNativeContextPropertyBatch<16> batch;
                 admission="batch-capture";
-                if(!batch.capture(reinterpret_cast<uintptr_t>(input),&readMemory))return 5;
+                if(!batch.capture(reinterpret_cast<uintptr_t>(input),&readMemory,&captureDiagnostic))return 5;
                 TglNativeContextPropertyBatch<16>::OwnedRecords frozen;
                 admission="batch-freeze";
                 if(!batch.freeze(&readMemory,frozen))return 5;
@@ -5964,6 +5965,8 @@ struct NativeFactoryContextProperties {
         if(operation==Operation::Configure && observations.fetch_add(1,std::memory_order_relaxed)<8) {
             os_log_info(OS_LOG_DEFAULT,"NGRN_CONTEXT_CONFIGURE admission=%{public}s result=%{public}d native-called=%{public}d native-result=%{public}d records=%{public}u",
                 admission,result,int(nativeCalled),nativeResult,unsigned(diagnosticCount));
+            os_log_info(OS_LOG_DEFAULT,"NGRN_CONTEXT_CONFIGURE_CAPTURE reason=%{public}s count=%{public}u index=%{public}u",
+                captureDiagnostic.reason,captureDiagnostic.count,captureDiagnostic.index);
             for(size_t i=0;i<diagnosticCount;++i) {
                 const auto& d=diagnostics[i];
                 os_log_info(OS_LOG_DEFAULT,"NGRN_CONTEXT_CONFIGURE_RECORD index=%{public}u kind=%{public}u type=%{public}llu property=%{public}u operation=%{public}u",

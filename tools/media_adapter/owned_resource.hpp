@@ -28140,6 +28140,10 @@ template<size_t Capacity=16> class TglNativeContextPropertyBatch {
     std::array<uintptr_t,Capacity> contexts_{};
     bool attempted_=false,ready_=false;
 public:
+    struct CaptureDiagnostic {
+        const char* reason="not-attempted";
+        uint32_t count=0,index=UINT32_MAX;
+    };
     struct OwnedRecords {
         std::array<bool,Capacity> nativeOtherRecords{};
         alignas(8) std::array<std::array<uint8_t,0x30>,Capacity> records{};
@@ -28376,20 +28380,31 @@ public:
         }
         return true;
     }
-    template<class Read> bool capture(uintptr_t input,Read read) noexcept {
+    template<class Read> bool capture(uintptr_t input,Read read,CaptureDiagnostic* diagnostic=nullptr) noexcept {
+        auto reason=[&](const char* value) noexcept {if(diagnostic)diagnostic->reason=value;};
+        reason("already-attempted");
         if(attempted_)return false;
         attempted_=true;
         uint32_t count=0;uintptr_t records=0;
-        if(!input || input>UINTPTR_MAX-16 || !read(input,&count,4) || !count || count>Capacity ||
-            !read(input+8,&records,8) || !records || records>UINTPTR_MAX-size_t(count)*0x30)return false;
+        reason("input-range-or-read");
+        if(!input || input>UINTPTR_MAX-16 || !read(input,&count,4))return false;
+        if(diagnostic)diagnostic->count=count;
+        reason("count-bounds");if(!count || count>Capacity)return false;
+        reason("record-array-range-or-read");
+        if(!read(input+8,&records,8) || !records || records>UINTPTR_MAX-size_t(count)*0x30)return false;
         std::array<uintptr_t,Capacity> contexts{};
-        for(size_t i=0;i<count;++i)
-            if(!read(records+i*0x30+0x18,&contexts[i],8) || !contexts[i])return false;
+        for(size_t i=0;i<count;++i) {
+            if(diagnostic)diagnostic->index=uint32_t(i);
+            reason("context-read");if(!read(records+i*0x30+0x18,&contexts[i],8))return false;
+            reason("context-zero");if(!contexts[i])return false;
+        }
+        reason("header-stability");
         uint32_t finalCount=0;uintptr_t finalRecords=0;
         if(!read(input,&finalCount,4) || !read(input+8,&finalRecords,8) ||
             finalCount!=count || finalRecords!=records)return false;
         input_=input;records_=records;count_=count;contexts_=contexts;ready_=true;
-        if(!stable(read)){ready_=false;return false;}
+        reason("context-stability");if(!stable(read)){ready_=false;return false;}
+        reason("captured");
         return true;
     }
     template<class Read> bool stable(Read read) const noexcept {

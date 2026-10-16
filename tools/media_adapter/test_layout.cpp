@@ -18904,6 +18904,22 @@ static void testActualNv12LayoutSnapshot() {
     assert(uvRow==32);
 }
 int main() {
+    for(uint32_t count:{uint32_t{0},uint32_t{17},uint32_t{1}})for(bool nonzero:{false,true}) {
+        TglNativeContextPropertyBatch<16> batch;
+        TglNativeContextPropertyBatch<16>::CaptureDiagnostic diagnostic;
+        const uintptr_t records=0x2000,context=nonzero?0x3000:0;unsigned arrayReads=0;
+        auto read=[&](uintptr_t address,void* output,size_t bytes) noexcept -> bool {
+            if(address==0x1000 && bytes==4){std::memcpy(output,&count,4);return true;}
+            if(address==0x1008 && bytes==8){++arrayReads;std::memcpy(output,&records,8);return true;}
+            if(address==0x2018 && bytes==8){std::memcpy(output,&context,8);return true;}
+            return false;
+        };
+        const bool captured=batch.capture(0x1000,read,&diagnostic);
+        assert(captured==(count==1 && nonzero) && diagnostic.count==count);
+        if(count!=1)assert(!arrayReads && std::strcmp(diagnostic.reason,"count-bounds")==0);
+        else if(!nonzero)assert(diagnostic.index==0 && std::strcmp(diagnostic.reason,"context-zero")==0);
+        else assert(std::strcmp(diagnostic.reason,"captured")==0 && batch.context(0)==context);
+    }
     {
         TglOwnedFactoryCallbacks callbacks;
         callbacks.initialize=0x135d9;callbacks.destroy=0x13c8c;
