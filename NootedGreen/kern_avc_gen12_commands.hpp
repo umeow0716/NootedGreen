@@ -156,7 +156,7 @@ struct Publication {
 // CPU release fences do not establish device coherency: the kernel integration
 // still needs its native IO synchronization before invoking the native submit.
 template<class Live,class SamePinnedAllocation>
-inline Publication publish(volatile uint32_t* backing,size_t available,
+inline Publication publish(volatile uint32_t* backing,size_t available,size_t reservedWords,
                            volatile uint32_t& nativeWords,uint32_t width,uint32_t height,
                            PublishScratch& scratch,Live live,SamePinnedAllocation canRestore) noexcept {
     Publication r;
@@ -164,7 +164,11 @@ inline Publication publish(volatile uint32_t* backing,size_t available,
     const uintptr_t start=reinterpret_cast<uintptr_t>(backing);
     const uintptr_t work=reinterpret_cast<uintptr_t>(&scratch);
     const uintptr_t counter=reinterpret_cast<uintptr_t>(&nativeWords);
-    if(!backing || (start&3U) || original>1024 || original<2 || available<original ||
+    // reservedWords is the native-accounted EXCLUSIVE used span, not free
+    // allocation capacity. The integration must obtain it from the accepted
+    // data-buffer reservation protocol before any expanding replacement.
+    if(!backing || (start&3U) || original>1024 || original<2 ||
+       reservedWords<original || reservedWords>available ||
        available>SIZE_MAX/4 || start>UINTPTR_MAX-available*4 ||
        work>UINTPTR_MAX-sizeof(scratch) || counter>UINTPTR_MAX-4 ||
        (work<start+available*4 && start<work+sizeof(scratch)) ||
@@ -172,7 +176,7 @@ inline Publication publish(volatile uint32_t* backing,size_t available,
        (counter<work+sizeof(scratch) && work<counter+4) || !live(original))return r;
     for(size_t i=0;i<original;++i)scratch.source[i]=backing[i];
     r.preparation=produce(scratch.source,original,width,height,scratch.produced,
-                          available<1536?available:1536);
+                          reservedWords<1536?reservedWords:1536);
     if(!r.preparation.ok || nativeWords!=original || !live(original))return r;
     const size_t changed=r.preparation.words;
     // Save the WHOLE overwritten extent, including bytes beyond old count.

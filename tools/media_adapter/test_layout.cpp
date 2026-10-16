@@ -18975,26 +18975,33 @@ int main() {
         for(size_t i=used;i<backing.size();++i)backing[i]=0xaabbccdd;
         const auto originalBacking=backing;volatile uint32_t count=static_cast<uint32_t>(used);
         auto live=[&](uint32_t expected){return count==expected;};
-        auto publication=NgreenAvcGen12::publish(backing.data(),backing.size(),count,1920,1080,
+        auto publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,1920,1080,
             *scratch,live,[](){return true;});
         assert(publication.published && !publication.mustStop && count==used+67);
         assert(backing[count-1]==0 && backing[count-2]==0 && backing[count]==0xaabbccdd);
         for(unsigned failure:{1U,2U,3U,4U,5U}) {
             backing=originalBacking;count=static_cast<uint32_t>(used);unsigned observations=0;
             auto unstable=[&](uint32_t expected){return ++observations!=failure && count==expected;};
-            publication=NgreenAvcGen12::publish(backing.data(),backing.size(),count,1920,1080,
+            publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,1920,1080,
                 *scratch,unstable,[](){return true;});
             assert(!publication.published && publication.restored && count==used && backing==originalBacking);
             assert(publication.mustStop==(failure>=4));
         }
         backing=originalBacking;count=static_cast<uint32_t>(used);unsigned observations=0;
-        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),count,1920,1080,*scratch,
+        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,1920,1080,*scratch,
             [&](uint32_t expected){return ++observations!=4 && count==expected;},[](){return false;});
         assert(!publication.published && publication.mustStop && !publication.restored && count==used);
         // Input/counter alias must fail before touching the backing.
         backing=originalBacking;
-        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),backing[0],1920,1080,
+        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,backing[0],1920,1080,
             *scratch,[](uint32_t){return true;},[](){return true;});
+        assert(!publication.published && backing==originalBacking);
+        backing=originalBacking;count=static_cast<uint32_t>(used);
+        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used,count,1920,1080,
+            *scratch,live,[](){return true;});
+        assert(!publication.published && !publication.mustStop && count==used && backing==originalBacking);
+        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used-1,count,1920,1080,
+            *scratch,live,[](){return true;});
         assert(!publication.published && backing==originalBacking);
     }
     for(uint32_t count:{uint32_t{0},uint32_t{17},uint32_t{1}})for(bool nonzero:{false,true}) {
