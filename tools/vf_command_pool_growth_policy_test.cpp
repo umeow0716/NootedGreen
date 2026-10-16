@@ -144,28 +144,28 @@ int main() {
 	constexpr uintptr_t end = start + 0xff8;
 	for (uint32_t request = 0; request <= 0x400; ++request)
 		assert(hasReturnedCapacity(8, 1, 0, 1, 2, start,
-		                           start, end, start, start, request) ==
+		                           start, end, start, start, request, 0x1000, 8) ==
 		       (request <= 0x3fe));
 	constexpr uintptr_t partial = start + 0x9b8;
 	assert(hasReturnedCapacity(8, 1, 0, 1, 2, start,
-	                           start, end, partial, partial, 0x18e));
+	                           start, end, partial, partial, 0x18e, 0x1000, 8));
 	assert(!hasReturnedCapacity(8, 1, 0, 1, 2, start,
-	                            start, end, partial, partial, 0x3fe));
+	                            start, end, partial, partial, 0x3fe, 0x1000, 8));
 	assert(!hasReturnedCapacity(8, 1, 0, 1, 2, start,
-	                            start, end, start, start, UINT32_MAX));
+	                            start, end, start, start, UINT32_MAX, 0x1000, 8));
 	assert(!hasReturnedCapacity(8, 1, 0, 1, 2, start,
-	                            start, end, start, start + 4, 1));
+	                            start, end, start, start + 4, 1, 0x1000, 8));
 	assert(!hasReturnedCapacity(8, 1, -1, 1, 2, start,
-	                            start, end, start, start, 1));
+	                            start, end, start, start, 1, 0x1000, 8));
 	assert(!hasReturnedCapacity(8, 1, 0, 1, 0, start,
-	                            start, end, start, start, 1));
+	                            start, end, start, start, 1, 0x1000, 8));
 	assert(!hasReturnedCapacity(8, 1, 0, 1, 2, start,
-	                            end, start, start, start, 1));
+	                            end, start, start, start, 1, 0x1000, 8));
 	assert(!hasReturnedCapacity(8, 1, 0, 1, 2, start + 4,
-	                            start, end, start, start, 1));
+	                            start, end, start, start, 1, 0x1000, 8));
 	for (uint32_t request = 0; request <= 0x400; ++request) {
 		const char *reason = returnedCapacityRefusal(8, 1, 0, 1, 2, start,
-			start, end, start, start, request);
+			start, end, start, start, request, 0x1000, 8);
 		assert(std::strcmp(reason, request <= 0x3fe ? "none" : "capacity") == 0);
 	}
 	struct RefusalCase { uint16_t maximum,count; int16_t current;
@@ -188,8 +188,40 @@ int main() {
 	};
 	for (const auto &item : refusals) {
 		assert(!hasReturnedCapacity(item.maximum,item.count,item.current,
-			item.memory,item.gpu,item.cpu,item.begin,item.limit,item.cursor,item.returned,1));
+			item.memory,item.gpu,item.cpu,item.begin,item.limit,item.cursor,item.returned,1,0x1000,8));
 		assert(std::strcmp(returnedCapacityRefusal(item.maximum,item.count,item.current,
-			item.memory,item.gpu,item.cpu,item.begin,item.limit,item.cursor,item.returned,1),item.reason)==0);
+			item.memory,item.gpu,item.cpu,item.begin,item.limit,item.cursor,item.returned,1,0x1000,8),item.reason)==0);
 	}
+	// V362 retained frame: native aligned submit advanced start by 0xdc0;
+	// end stayed mapping+0xfff8. Getter returned cursor unchanged, 62008 free.
+	constexpr uintptr_t base = 0x100000;
+	constexpr uintptr_t advanced = base + 0xdc0;
+	constexpr uintptr_t limit = base + 0xfff8;
+	assert(limit - advanced == 62008);
+	assert(hasReturnedCapacity(256,1,0,1,2,base,advanced,limit,
+		advanced,advanced,304,0x10000,8));
+	assert(std::strcmp(returnedCapacityRefusal(256,1,0,1,2,base,
+		advanced,limit,advanced,advanced,304,0x10000,8),"none")==0);
+	for (uintptr_t offset=0; offset<=0xffc0; offset+=0x40) {
+		const uintptr_t begin=base+offset;
+		const uint32_t capacity=static_cast<uint32_t>((limit-begin)/4);
+		assert(hasReturnedCapacity(256,1,0,1,2,base,begin,limit,
+			begin,begin,capacity,0x10000,8));
+		assert(!hasReturnedCapacity(256,1,0,1,2,base,begin,limit,
+			begin,begin,capacity+1,0x10000,8));
+	}
+	assert(!hasReturnedCapacity(256,1,0,1,2,base,base-4,limit,
+		base,base,304,0x10000,8));
+	for (uintptr_t badEnd : {limit-4,limit+4,base-4}) {
+		assert(!hasReturnedCapacity(256,1,0,1,2,base,advanced,badEnd,
+			advanced,advanced,304,0x10000,8));
+		assert(std::strcmp(returnedCapacityRefusal(256,1,0,1,2,base,
+			advanced,badEnd,advanced,advanced,304,0x10000,8),"mapping-extent")==0);
+	}
+	assert(!hasReturnedCapacity(256,1,0,1,2,base,limit+4,limit,
+		limit+4,limit+4,0,0x10000,8));
+	assert(!hasReturnedCapacity(256,1,0,1,2,base,advanced,limit,
+		advanced,advanced,1,8,9));
+	assert(!hasReturnedCapacity(256,1,0,1,2,UINTPTR_MAX-4,
+		UINTPTR_MAX-4,0xfff3,UINTPTR_MAX-4,UINTPTR_MAX-4,1,0x10000,8));
 }

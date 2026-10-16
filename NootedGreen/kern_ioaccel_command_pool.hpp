@@ -230,17 +230,23 @@ inline bool completedGrowth(bool nativeSuccess, uint16_t maximum,
 // comparison whose unsigned wrap can admit an oversized request.  Slot backing
 // members are supplied by the owner-scoped wrapper only after current is proven
 // to index the published fixed array.
+// Native submit with nonzero alignment advances BOTH start and cursor inside
+// the same slot (exact Tahoe 14b6b463..499). Start need not equal mapping base;
+// end must still equal base + ((bufferBytes-reservedBytes)&~3).
 inline bool hasReturnedCapacity(uint16_t maximum, uint16_t count,
                                 int16_t current, uintptr_t memory,
                                 uintptr_t gpuMapping, uintptr_t cpuMapping,
                                 uintptr_t start, uintptr_t end,
                                 uintptr_t cursor, uintptr_t returned,
-                                uint32_t dwords) {
+                                uint32_t dwords, uint32_t bufferBytes,
+                                uint32_t reservedBytes) {
 	if (maximum == 0 || maximum > slotCapacity || count == 0 ||
 	    count > maximum || current < 0 ||
 	    static_cast<uint16_t>(current) >= count || memory == 0 ||
 	    gpuMapping == 0 || cpuMapping == 0 || returned == 0 ||
-	    start != cpuMapping || returned != cursor || returned < start ||
+	    reservedBytes > bufferBytes || end < cpuMapping ||
+	    end - cpuMapping != ((bufferBytes - reservedBytes) & ~uint32_t(3)) ||
+	    start < cpuMapping || returned != cursor || returned < start ||
 	    returned > end)
 		return false;
 	return static_cast<uintptr_t>(dwords) <=
@@ -254,7 +260,8 @@ inline const char *returnedCapacityRefusal(uint16_t maximum, uint16_t count,
                                          uintptr_t gpuMapping, uintptr_t cpuMapping,
                                          uintptr_t start, uintptr_t end,
                                          uintptr_t cursor, uintptr_t returned,
-                                         uint32_t dwords) {
+                                         uint32_t dwords, uint32_t bufferBytes,
+                                         uint32_t reservedBytes) {
 	if (maximum == 0 || maximum > slotCapacity || count == 0 ||
 	    count > maximum || current < 0 || static_cast<uint16_t>(current) >= count)
 		return "slot-state";
@@ -262,7 +269,10 @@ inline const char *returnedCapacityRefusal(uint16_t maximum, uint16_t count,
 	if (!gpuMapping) return "gpu-mapping-missing";
 	if (!cpuMapping) return "cpu-mapping-missing";
 	if (!returned) return "return-null";
-	if (start != cpuMapping) return "start-mapping-mismatch";
+	if (start < cpuMapping) return "start-mapping-mismatch";
+	if (reservedBytes > bufferBytes || end < cpuMapping ||
+	    end - cpuMapping != ((bufferBytes - reservedBytes) & ~uint32_t(3)))
+		return "mapping-extent";
 	if (returned != cursor) return "return-cursor-mismatch";
 	if (returned < start || returned > end) return "return-range";
 	if (static_cast<uintptr_t>(dwords) > (end - returned) / sizeof(uint32_t))

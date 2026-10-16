@@ -4221,12 +4221,16 @@ void *Gen11::vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords)
 		getMember<void *>(pool, NGIOAccelCommandPool::cursorOffset));
 	const bool complete = NGIOAccelCommandPool::hasReturnedCapacity(
 		maximum, count, current, memory, gpuMapping, cpuMapping,
-		start, end, cursor, reinterpret_cast<uintptr_t>(result), dwords);
+		start, end, cursor, reinterpret_cast<uintptr_t>(result), dwords,
+		getMember<uint32_t>(pool, NGIOAccelCommandPool::bufferBytesOffset),
+		getMember<uint32_t>(pool, NGIOAccelCommandPool::reservedBytesOffset));
 	if (!complete) {
 		const NGIOAccelCommandPool::ControlFrame after = vfCommandPoolFrame(pool);
 		const char *const refusal = NGIOAccelCommandPool::returnedCapacityRefusal(
 			maximum, count, current, memory, gpuMapping, cpuMapping,
-			start, end, cursor, reinterpret_cast<uintptr_t>(result), dwords);
+			start, end, cursor, reinterpret_cast<uintptr_t>(result), dwords,
+			getMember<uint32_t>(pool, NGIOAccelCommandPool::bufferBytesOffset),
+			getMember<uint32_t>(pool, NGIOAccelCommandPool::reservedBytesOffset));
 		const uintptr_t returned = reinterpret_cast<uintptr_t>(result);
 		const uint64_t remaining = returned >= start && returned <= end ?
 			static_cast<uint64_t>(end - returned) : 0;
