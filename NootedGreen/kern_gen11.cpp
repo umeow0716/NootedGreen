@@ -175,6 +175,7 @@ bool gVfTaskCompletionAbiVerified = false;
 static mach_vm_address_t gVfRootObservationVtable = 0;
 static mach_vm_address_t gVfRootObservationGetter = 0;
 static mach_vm_address_t gVfLeafObservationReader = 0;
+static bool gVfLeafObservationDummyBound = false;
 // Optional AVC producer integration handles. Resolving these does not enable
 // a route, map memory, invoke a getter, or authorize a command-buffer write.
 bool gVfMediaPublicationAbiVerified = false;
@@ -3047,6 +3048,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		if (vfActive) {
 			gVfRootObservationVtable = gVfRootObservationGetter = 0;
 			gVfLeafObservationReader = 0;
+			gVfLeafObservationDummyBound = false;
 			const auto rootTable = patcher.solveSymbol(index,
 				"__ZTV31IGHardwarePerProcessPageTable64", address, size);
 			const auto rootGetter = patcher.solveSymbol(index,
@@ -3098,6 +3100,19 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				    reader + 0x23U + 0x789U == walker)
 					gVfLeafObservationReader = reader;
 				SYSLOG("ngreen", "V375: bounded native CPU leaf observation bound=%u", gVfLeafObservationReader ? 1U : 0U);
+				// Exact mapRangeDummy +0x3b proves accelerator+1260 manager+f0
+				// physical identity. No native method is called to obtain it.
+				const auto dummy = patcher.solveSymbol(index,
+					"__ZN31IGHardwarePerProcessPageTable6413mapRangeDummyERK14IGAddressRangey", address, size);
+				static constexpr uint8_t dummyIdentity[] = {
+					0x49,0x8b,0x47,0x10,0x48,0x8b,0x80,0x60,0x12,0,0,
+					0x48,0xb9,0,0xf0,0xff,0xff,0x7f,0,0,0,0x48,0x23,0x88,0xf0,0,0,0,
+					0x48,0xb8,0xfe,0x0f,0,0,0x80,0xff,0xff,0xff,0x49,0x21,0xc5,
+					0x4d,0x8d,0x6c,0x0d,0x01};
+				gVfLeafObservationDummyBound = gVfLeafObservationReader && dummy &&
+					dummy <= UINTPTR_MAX-0x3bU && matches(dummy+0x3bU,dummyIdentity,sizeof(dummyIdentity));
+				SYSLOG("ngreen", "V376: bounded native CPU ring operands and dummy identity bound=%u",
+				       gVfLeafObservationDummyBound ? 1U : 0U);
 			}
 			patcher.clearError();
 		}
@@ -9668,6 +9683,33 @@ static void vfObserveBatchLeafMapping(void *task, void *pageTable,
 			       static_cast<uint32_t>(targets.addresses[index]>>32),static_cast<uint32_t>(targets.addresses[index]),
 			       static_cast<uint32_t>(physical>>32),static_cast<uint32_t>(physical),
 			       static_cast<unsigned long long>(flags),bootstrapTask == task ? 1U : 0U);
+		}
+	}
+	if (!gVfLeafObservationDummyBound) return;
+	NGVfTimeoutObservation::MemoryTargets operands;
+	NGVfTimeoutObservation::captureCpuRingMemoryTargets(words,tail/4U,operands);
+	void *manager = getMember<void *>(gVfAccelerator,0x1260);
+	const bool managerOwned = manager && getMember<void *>(manager,0x10) == gVfAccelerator;
+	const uint64_t dummyPhysical = managerOwned ? getMember<uint64_t>(manager,0xf0) : 0;
+	const bool dummyValid = managerOwned && dummyPhysical &&
+		(dummyPhysical & UINT64_C(0x7ffffff000)) == dummyPhysical;
+	SYSLOG("ngreen", "V376: CPU ring operands complete=%u count=%u dummy-valid=%u atomic=0",
+	       operands.complete ? 1U : 0U,operands.count,dummyValid ? 1U : 0U);
+	if (!operands.complete) return;
+	for (uint32_t index=0;index<operands.count;++index) {
+		for (uint32_t role=0;role<2;++role) {
+			void *table = role ? bootstrapTable : pageTable;
+			const bool exact = table && getMember<mach_vm_address_t>(table,0) == gVfRootObservationVtable &&
+				getMember<mach_vm_address_t>(reinterpret_cast<void *>(gVfRootObservationVtable),0x140) ==
+				gVfLeafObservationReader;
+			uint64_t physical=0,flags=0;
+			const bool read = exact && reinterpret_cast<Reader>(gVfLeafObservationReader)(
+				table,operands.addresses[index],physical,flags);
+			SYSLOG("ngreen", "V376: ring operand index=%u kind=%u offset=%x role=%u exact=%u read=%u va=%08x:%08x physical=%08x:%08x flags=%llx dummy-match=%u atomic=0",
+			       index,operands.kinds[index],operands.offsets[index],role,exact ? 1U : 0U,read ? 1U : 0U,
+			       static_cast<uint32_t>(operands.addresses[index]>>32),static_cast<uint32_t>(operands.addresses[index]),
+			       static_cast<uint32_t>(physical>>32),static_cast<uint32_t>(physical),
+			       static_cast<unsigned long long>(flags),dummyValid && read && physical==dummyPhysical ? 1U : 0U);
 		}
 	}
 }

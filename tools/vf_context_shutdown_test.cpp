@@ -549,6 +549,33 @@ int main() {
     };
     targets = cpuRingBatchTargets(shortPrefix, 26);
     assert(targets.complete && targets.count == 1 && targets.offsets[0] == 0x3c);
+    using NGVfTimeoutObservation::cpuRingMemoryTargets;
+    auto operands=cpuRingMemoryTargets(shortPrefix,26);
+    assert(operands.complete && operands.count==4);
+    const uint64_t expectedVA[]={0x40000000,0x400010c0,0x40010000,0x400010c0};
+    const uint32_t expectedKind[]={2,3,1,2},expectedOffset[]={0,0x20,0x3c,0x4c};
+    for(unsigned i=0;i<4;++i)assert(operands.addresses[i]==expectedVA[i] &&
+        operands.kinds[i]==expectedKind[i] && operands.offsets[i]==expectedOffset[i]);
+    operands=cpuRingMemoryTargets(prefix,46);
+    assert(operands.complete && operands.count==6); // deduplicate same VA+kind only
+    assert(operands.addresses[2]==0x400020c0 && operands.kinds[2]==2);
+    assert(operands.addresses[3]==0x40001000 && operands.kinds[3]==3);
+    uint32_t mutated[26];
+    for(unsigned field: {1U,10U,16U,20U}) {
+        for(unsigned i=0;i<26;++i)mutated[i]=shortPrefix[i];
+        mutated[field]|=1U;
+        operands=cpuRingMemoryTargets(mutated,26);
+        assert(!operands.complete && operands.count==0);
+    }
+    for(unsigned i=0;i<26;++i)mutated[i]=shortPrefix[i];
+    mutated[1]|=4U;assert(!cpuRingMemoryTargets(mutated,26).complete); // GGTT flush
+    mutated[1]=shortPrefix[1];mutated[2]=0xffff8000;
+    assert(!cpuRingMemoryTargets(mutated,26).complete); // reserved upper flush bits
+    uint32_t excess[45]{};
+    for(unsigned i=0;i<9;++i){excess[i*5]=0x13004003;excess[i*5+1]=0x1000+i*8;}
+    assert(!cpuRingMemoryTargets(excess,45).complete); // fixed eight-target bound
+    assert(!cpuRingMemoryTargets(nullptr,1).complete);
+    assert(!cpuRingMemoryTargets(shortPrefix,25-2).complete); // partial stamp packet
     assert(!cpuRingBatchTargets(nullptr, 1).complete);
     assert(!cpuRingBatchTargets(prefix, 49).complete);
     assert(!cpuRingBatchTargets(prefix, 38).complete); // truncated BBS

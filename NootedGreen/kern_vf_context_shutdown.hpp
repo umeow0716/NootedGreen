@@ -335,6 +335,63 @@ inline BatchTargets cpuRingBatchTargets(const uint32_t *words, uint32_t count) {
     result.complete = true;
     return result;
 }
+// PPGTT operands of the same admitted CPU prefix, not dereferenced commands.
+// Gen12 MI_FLUSH_DW address is DW1:2 (bit2 selects GGTT); semaphore
+// address is DW2:3 (header bit22 selects GGTT). Preserve the native four-DW
+// semaphore packet already admitted above. Reject all partial results.
+struct MemoryTargets {
+    uint64_t addresses[8] {};
+    uint32_t offsets[8] {}, kinds[8] {};
+    uint32_t count = 0;
+    bool complete = false;
+};
+inline bool captureCpuRingMemoryTargets(const uint32_t *words, uint32_t count,
+                                        MemoryTargets &result) {
+    result.count=0;result.complete=false;
+    for (uint32_t i=0;i<8;++i) {
+        result.addresses[i]=0;result.offsets[i]=0;result.kinds[i]=0;
+    }
+    const auto reject=[&result]() {result.count=0;return false;};
+    if (!cpuRingBatchTargets(words,count).complete) return reject();
+    for (uint32_t at=0; at<count;) {
+        const uint32_t h=words[at];
+        uint32_t length=1, operand=0, kind=0;
+        if ((h & 0xFF800000U)==0x13000000U) {
+            length=5;
+            if ((h & 0xC000U)!=0) {
+                if (words[at+1] & 7U) return reject();
+                operand=1;kind=2;
+            }
+        } else if (h==0x0E009002U) {length=4;operand=2;kind=3;}
+        else if (h==0x18800101U) {length=3;operand=1;kind=1;}
+        else if (h==0x11000001U) length=3;
+        if (kind) {
+            const uint64_t address=words[at+operand] |
+                (static_cast<uint64_t>(words[at+operand+1])<<32);
+            if (!address || (kind==2 && (address>>48)) ||
+                (address & (kind==3 ? 3U : 7U)) ||
+                (address>=UINT64_C(0x0000800000000000) &&
+                 address<UINT64_C(0xFFFF800000000000))) return reject();
+            bool duplicate=false;
+            for (uint32_t i=0;i<result.count;++i)
+                if (result.addresses[i]==address && result.kinds[i]==kind) duplicate=true;
+            if (!duplicate) {
+                if (result.count==8) return reject();
+                result.addresses[result.count]=address;
+                result.offsets[result.count]=at*4U;
+                result.kinds[result.count++]=kind;
+            }
+        }
+        at+=length;
+    }
+    result.complete=true;
+    return true;
+}
+inline MemoryTargets cpuRingMemoryTargets(const uint32_t *words, uint32_t count) {
+    MemoryTargets result;
+    captureCpuRingMemoryTargets(words,count,result);
+    return result;
+}
 // Complete short, zero-head ring prefix; never a command walk or batch follow.
 // Caller pins the exact context/ring backing and serial under the context lock.
 inline bool ringPrefixAdmitted(uint32_t bytes, uint64_t backingBytes, uint32_t tail, uint32_t head) {
