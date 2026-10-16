@@ -1151,43 +1151,42 @@ public:
 		if (!owner) return;
 		// Recursive submission would not own a distinct native locked interval.
 		refusal="reentry";
+		if (!gVfContextLock) return;
+		static_cast<OSObject *>(context)->retain();
+		static_cast<OSObject *>(accelerator)->retain();
+		IOInterruptState state=IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		bool duplicate=false;
 		for (auto &entry : gVfMediaSubmissions)
-			if (entry.thread == owner) return;
-		refusal="slot-capacity";
-		for (auto &entry : gVfMediaSubmissions) {
-			if (!OSCompareAndSwapPtr(nullptr,owner,&entry.thread)) continue;
-			auto *scratch = static_cast<NgreenAvcGen12::PublishScratch *>(
-				IOMallocZero(sizeof(NgreenAvcGen12::PublishScratch)));
-			if (!scratch) {
-				refusal="scratch-allocation";
-				OSCompareAndSwapPtr(owner,nullptr,&entry.thread);
-				return;
+			if (entry.thread == owner || entry.context == context) duplicate=true;
+		if (!duplicate) {
+			refusal="slot-capacity";
+			for (auto &entry : gVfMediaSubmissions) {
+				if (!OSCompareAndSwapPtr(nullptr,owner,&entry.thread)) continue;
+				entry.context=context;entry.accelerator=accelerator;entry.task=nullptr;
+				entry.shared=nullptr;entry.gpuTask=nullptr;
+				entry.scratch=nullptr;entry.translating=false;slot=&entry;
+				break;
 			}
-			static_cast<OSObject *>(context)->retain();
-			static_cast<OSObject *>(accelerator)->retain();
-			entry.context=context;entry.accelerator=accelerator;entry.task=nullptr;
-			entry.shared=nullptr;entry.gpuTask=nullptr;
-			entry.scratch=scratch;entry.translating=false;
-			OSSynchronizeIO();
-			slot=&entry;admitted=true;refusal="admitted";
+		}
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock,state);
+		if (!slot) {
+			static_cast<OSObject *>(context)->release();
+			static_cast<OSObject *>(accelerator)->release();
 			return;
 		}
+		// No allocation or object release while the registry spin lock is held.
+		auto *scratch = static_cast<NgreenAvcGen12::PublishScratch *>(
+			IOMallocZero(sizeof(NgreenAvcGen12::PublishScratch)));
+		if (!scratch) {refusal="scratch-allocation";releaseSlot();return;}
+		slot->scratch=scratch;
+		OSSynchronizeIO();admitted=true;refusal="admitted";
 	}
 	~VfMediaSubmissionScope() {
 		if (!slot) return;
 		void *owner=reinterpret_cast<void *>(current_thread());
 		PANIC_COND(slot->thread != owner || slot->translating,"ngreen",
 		           "Invalid owned AVC submission scope exit");
-		void *context=slot->context,*accelerator=slot->accelerator;
-		bzero(slot->scratch,sizeof(NgreenAvcGen12::PublishScratch));
-		IOFree(slot->scratch,sizeof(NgreenAvcGen12::PublishScratch));
-		slot->scratch=nullptr;slot->context=nullptr;slot->accelerator=nullptr;
-		slot->task=nullptr;slot->shared=nullptr;slot->gpuTask=nullptr;
-		OSSynchronizeIO();
-		PANIC_COND(!OSCompareAndSwapPtr(owner,nullptr,&slot->thread),"ngreen",
-		           "Lost owned AVC submission thread slot");
-		static_cast<OSObject *>(context)->release();
-		static_cast<OSObject *>(accelerator)->release();
+		releaseSlot();
 	}
 	VfMediaSubmissionScope(const VfMediaSubmissionScope &)=delete;
 	VfMediaSubmissionScope &operator=(const VfMediaSubmissionScope &)=delete;
@@ -1216,15 +1215,38 @@ public:
 	static VfMediaSubmission *find(void *context) {
 		void *owner=reinterpret_cast<void *>(current_thread());
 		VfMediaSubmission *found=nullptr;
-		OSSynchronizeIO();
+		if (!gVfContextLock) return nullptr;
+		const IOInterruptState state=IOSimpleLockLockDisableInterrupt(gVfContextLock);
 		for (auto &entry : gVfMediaSubmissions) {
-			if (entry.thread != owner || entry.context != context) continue;
-			if (found) return nullptr;
+			if (entry.thread != owner || entry.context != context || !entry.scratch) continue;
+			if (found) {found=nullptr;break;}
 			found=&entry;
 		}
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock,state);
 		return found;
 	}
 private:
+	void releaseSlot() {
+		void *owner=reinterpret_cast<void *>(current_thread());
+		void *context=slot->context,*accelerator=slot->accelerator;
+		IOInterruptState state=IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		auto *scratch=slot->scratch;slot->scratch=nullptr;
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock,state);
+		if (scratch) {
+			bzero(scratch,sizeof(NgreenAvcGen12::PublishScratch));
+			IOFree(scratch,sizeof(NgreenAvcGen12::PublishScratch));
+		}
+		// Keep the slot claimed until freeing, preserving the 512KiB bound.
+		state=IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		slot->context=nullptr;slot->accelerator=nullptr;slot->task=nullptr;
+		slot->shared=nullptr;slot->gpuTask=nullptr;
+		PANIC_COND(!OSCompareAndSwapPtr(owner,nullptr,&slot->thread),"ngreen",
+		           "Lost owned AVC submission thread slot");
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock,state);
+		slot=nullptr;
+		static_cast<OSObject *>(context)->release();
+		static_cast<OSObject *>(accelerator)->release();
+	}
 	VfMediaSubmission *slot;
 	bool admitted;
 	const char *refusal;

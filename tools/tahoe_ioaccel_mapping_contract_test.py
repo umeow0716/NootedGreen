@@ -3313,6 +3313,17 @@ def check(path, boot_path=None):
         assert raw & 0x3fffffff == address_of(method), "changed context virtual target"
     context_submit = address_of(
         "__ZN15IOAccelContext219submit_data_buffersEP33IOAccelContextSubmitDataBuffersInP34IOAccelContextSubmitDataBuffersOutyPy")
+    # Native per-class used-byte ledger precedes the accelerator IOLock.
+    # Class zero is context+0x6e0+0x14, not mapped allocation capacity.
+    for offset, expected in (
+            (0xf9, "4b 8b 74 e5 08 4b 8d 14 e4 48 c1 e2 04"),
+            (0x106, "41 89 74 17 14 41 f6 44 17 70 01"),
+            (0x116, "48 8b 4a 28 48 85 c9"),
+            (0x13e, "48 3b b1 c8 00 00 00 77 7e"),
+            (0x147, "48 8b 92 80 00 00 00 48 8b 03 48 89 df ff 90 80 0a 00 00")):
+        encoded = bytes.fromhex(expected)
+        assert read(context_submit + offset, len(encoded)) == encoded, \
+            "changed native class used-bytes ledger/resource-length validation"
     assert direct_branch_offsets(context_submit, 0x972, 0x14ba6da2) == [0x342, 0x492], \
         "changed legacy-context busy-lock inventory"
     assert direct_branch_offsets(context_submit, 0x972, 0x14ba6db4) == [0x448, 0x952], \

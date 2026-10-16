@@ -356,11 +356,19 @@ def contract(source, path="<source>"):
                   'entry.gpuTask != gpuTask'):
         assert token in locked_media, f"{path}: missing locked media identity gate: {token}"
     media_exit = function_body(source, '~VfMediaSubmissionScope()')
-    for token in ('slot->thread != owner || slot->translating', 'bzero(slot->scratch',
-                  'IOFree(slot->scratch', 'OSCompareAndSwapPtr(owner,nullptr,&slot->thread)',
+    assert 'slot->thread != owner || slot->translating' in media_exit
+    assert 'releaseSlot();' in media_exit
+    media_release = function_body(source, 'void releaseSlot()')
+    for token in ('bzero(scratch',
+                  'IOFree(scratch', 'OSCompareAndSwapPtr(owner,nullptr,&slot->thread)',
                   'static_cast<OSObject *>(context)->release();',
                   'static_cast<OSObject *>(accelerator)->release();'):
-        assert token in media_exit, f"{path}: incomplete media scope exit: {token}"
+        assert token in media_release, f"{path}: incomplete media scope exit: {token}"
+    assert 'entry.thread == owner || entry.context == context' in media_scope, \
+        f"{path}: overlapping native used-bytes ledger ownership"
+    assert media_scope.index('IOSimpleLockUnlockEnableInterrupt(') < media_scope.index('IOMallocZero(')
+    assert media_release.index('IOSimpleLockUnlockEnableInterrupt(') < media_release.index('IOFree(')
+    assert media_release.index('IOFree(') < media_release.index('OSCompareAndSwapPtr(owner,nullptr,')
     print("PASS counted VF external-producer source/route/teardown contract")
 
 
