@@ -2799,6 +2799,23 @@ def check(path, boot_path=None):
             f"changed post-relocation AVC boundary/lifetime anchor: {address:#x}"
     print("PASS exact sideband-before-endCommandStream and nullable CPU descriptor anchors")
 
+    # Native command-buffer alias and extent ownership. getKernelData is NOT
+    # a side-effect-free pointer getter: it increments a mapping use count.
+    # Future CPU producers must not silently add an unmatched get/release.
+    for address, encoded in (
+            (0x14b6e394, "48 8b 7d d8 4a 89 bc f3 e0 0f 00 00 48 8b 07 ff 50 20"),
+            (0x14b6e446, "48 8b 7d d8 e8 3f ea 01 00 48 89 83 58 06 00 00"),
+            (0x14b6e456, "48 8b 45 d8 31 c9 48 83 b8 88 00 00 00 00 0f 94 c1 8b 84 c8 c8 00 00 00 89 83 60 06 00 00"),
+            (0x14b85152, "49 8b 06 4c 89 f7 ff 50 20 4c 89 73 28"),
+            (0x14b851f4, "48 8b 7f 28 48 8b 07 5d ff a0 c8 01 00 00"),
+            (0x14b8522a, "ff 43 38 48 8b 07 ff 90 18 01 00 00"),
+            (0x14b85302, "31 f6 ff 90 00 02 00 00 49 89 46 30"),
+            (0x14b8532e, "ff 4f 38 5d c3")):
+        expected = bytes.fromhex(encoded)
+        assert read(address, len(expected)) == expected, \
+            f"changed native command alias/extent/retain anchor: {address:#x}"
+    print("PASS native command alias length, resource retain and mapping get/release balance anchors")
+
     for table, slot, method in (
             ("__ZTV21IOAccelDisplayMachine", 0x8b8,
              "__ZN21IOAccelDisplayMachine26framebuffer_will_power_offEj"),
