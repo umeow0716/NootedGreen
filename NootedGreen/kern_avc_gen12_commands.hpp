@@ -90,6 +90,18 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
     for(size_t at=0;at<count;) {
         const uint32_t op=opcode(input[at]);const size_t n=packetWords(input[at]);
         if(!n || n>count-at){r.reason="packet";return r;}
+        // Authenticate prerequisites, not just end-of-frame packet counts.
+        // Gen12 AVC picture state programs mode before its dependent state;
+        // walkers consume both MFX/VDENC image, buffer and surface state.
+        if((op==0x70020000U || op==0x71000000U) && mfx!=1){
+            r.reason="mfx-state-order";return r;}
+        if(op>=0x70810000U && op<=0x70870000U && mode!=1){
+            r.reason="vdenc-state-order";return r;}
+        if(op==0x70870000U &&
+           (mfxPipe!=1 || mfxImage!=1 || image!=1 || pipe!=1 ||
+            srcSurface!=1 || refSurface!=1 || ds!=1)){
+            r.reason="walker-state-order";return r;}
+        if(op==0x12000000U && !walkers){r.reason="status-order";return r;}
         size_t emitted=n;
         if(op==0x70000000U){++mfx;emitted+=2;
             if(input[at+2]&0x20U || input[at+4]){r.reason="mfx-mode-options";return r;}}

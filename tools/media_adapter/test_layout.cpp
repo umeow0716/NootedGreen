@@ -19021,6 +19021,16 @@ int main() {
         const auto good=input;output.fill(0xdeadbeef);
         auto rejected=[&](){auto r=NgreenAvcGen12::produce(input.data(),used,1920,1080,
             output.data(),output.size());assert(!r.ok);for(auto v:output)assert(v==0xdeadbeef);};
+        auto rejectMovedPacket=[&](size_t first,size_t words){
+            const auto before=input;
+            for(size_t i=first;i<used-2-words;++i)input[i]=before[i+words];
+            for(size_t i=0;i<words;++i)input[used-2-words+i]=before[first+i];
+            rejected();input=good;
+        };
+        rejectMovedPacket(0,5); // MFX mode may not follow its buffer/image state.
+        rejectMovedPacket(mode,2); // VDENC mode may not follow dependent state.
+        rejectMovedPacket(pipe,37); // Walker needs its buffer addresses first.
+        rejectMovedPacket(image,35); // Walker needs its image state first.
         input[mode+1]=0xa2;rejected();input=good;
         input[pipe+7]=0x1000;rejected();input=good;
         input[pipe+12]=1U<<9;rejected();input=good;
