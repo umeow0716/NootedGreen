@@ -18946,6 +18946,9 @@ int main() {
             assert(!tglBuildOwnedAvcSliceHeaderPacket(data,extent,bits,packet));
             assert(packet.words==before.words && packet.data==before.data);};
         denied(nullptr,10,78);denied(source.data(),10,0);denied(source.data(),1024,8193);
+        for(uint32_t bits:{UINT32_MAX,UINT32_MAX-1U,UINT32_MAX-6U,
+                           UINT32_MAX-7U,0x80000000U})
+            denied(source.data(),source.size(),bits);
         denied(source.data(),9,78);denied(source.data(),1025,78);
         denied(packet.data.data(),10,78);
     }
