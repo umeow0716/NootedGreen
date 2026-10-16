@@ -104,7 +104,7 @@ def audit(data):
             'registers': registers, 'buffer_controls': controls,
             'surface_controls': surfaces, 'relocation_coupling': coupling}, mapping
 
-def publication(lines):
+def publication(lines, published_only=False):
     counts = None
     streams = [[], []]
     terminal = False
@@ -128,21 +128,27 @@ def publication(lines):
         match = re.search(r'V372 AVC_CPU_BLOCK kind=(\d+) first=(\d+) words=(\d+) data=([A-Za-z0-9+/=]+)', line)
         if match and counts:
             kind, first, valid = map(int, match.group(1, 2, 3))
-            if kind > 1 or first != len(streams[kind]) or valid != min(48, counts[kind]-first) or valid <= 0:
+            if kind > 1 or valid != min(48, counts[kind]-first) or valid <= 0 or first % 48:
                 raise ValueError('invalid chunk order/extent')
             raw = base64.b64decode(match[4], validate=True)
             if len(raw) != 192 or any(raw[valid*4:]):
                 raise ValueError('invalid chunk padding')
+            if published_only and kind == 0:
+                continue
+            if first != len(streams[kind]):
+                raise ValueError('invalid chunk order/extent')
             streams[kind].extend(struct.unpack('<%dI' % valid, raw[:valid*4]))
             continue
         match = re.search(r'V372 AVC_CPU_END source=(\d+) published=(\d+)', line)
-        if match and counts == [int(match[1]), int(match[2])] and list(map(len, streams)) == counts:
+        if match and counts == [int(match[1]), int(match[2])] and len(streams[1]) == counts[1] and (published_only or len(streams[0]) == counts[0]):
             terminal = True
             continue
         raise ValueError('malformed/incomplete publication')
     if not terminal:
         raise ValueError('missing publication terminal')
-    return {'status': 'CPU_PUBLICATION_ONLY_NOT_GPU_EXECUTION', 'source': streams[0], 'published': streams[1]}
+    return {'status': 'CPU_PUBLICATION_ONLY_NOT_GPU_EXECUTION',
+            'source_status': 'NOT_DECODED' if published_only else 'COMPLETE',
+            'source': None if published_only else streams[0], 'published': streams[1]}
 
 def selftest():
     data = struct.pack('<7I', 0x70000003, 0, 0, 0, 0, 0x70800000, 0)
@@ -183,6 +189,8 @@ def selftest():
         chunks.append(f'V372 AVC_CPU_BLOCK kind={kind} first=0 words={count} data={encoded}')
     chunks.append('V372 AVC_CPU_END source=2 published=3')
     assert publication(chunks)['published'] == [0, 1, 2]
+    assert publication([chunks[0], *chunks[2:]], True)['source'] is None
+    assert publication([chunks[0], *chunks[2:]], True)['published'] == [0, 1, 2]
     for bad in (chunks[:-1], chunks+chunks, chunks[:2]+chunks[1:],
                 [x.replace('first=0', 'first=48') for x in chunks],
                 [x.replace('used=12', 'used=8') for x in chunks],
@@ -203,6 +211,7 @@ if __name__ == '__main__':
     parser.add_argument('batch', nargs='?', type=Path)
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--publication-log', type=Path)
+    parser.add_argument('--published-only', action='store_true', help='require complete published stream; never claim source completeness')
     args = parser.parse_args()
     if args.self_test:
         selftest()
@@ -210,7 +219,7 @@ if __name__ == '__main__':
         if args.publication_log.stat().st_size > 2097152:
             parser.error('publication log exceeds 2MiB')
         with args.publication_log.open() as source:
-            print(json.dumps(publication(source), separators=(',', ':')))
+            print(json.dumps(publication(source, args.published_only), separators=(',', ':')))
     elif args.batch:
         if args.batch.stat().st_size > 65536:
             parser.error('batch exceeds 64KiB')
