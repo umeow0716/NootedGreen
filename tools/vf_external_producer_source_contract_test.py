@@ -388,6 +388,9 @@ def contract(source, path="<source>"):
         assert token in locked_media, f"{path}: missing locked media identity gate: {token}"
     media_exit = function_body(source, '~VfMediaSubmissionScope()')
     media_map=function_body(source,'static bool vfCaptureMediaMappedSpan(')
+    assert 'if (getMember<uint32_t>(context,0x6DC)!=1)return false;' in media_map
+    assert 'anchorMatches(submit+0x10b,optionalRecordSkip,sizeof(optionalRecordSkip))' in source
+    assert 'anchorMatches(submit+0x168,nextRecord,sizeof(nextRecord))' in source
     for token in ('getMember<uint32_t>(context,0x6DC)!=1',
                   'getMember<void *>(context,0x708)!=resource',
                   'getMember<uint8_t>(resource,0x14)!=0x0A',
@@ -518,6 +521,10 @@ def mutation_contract(source, path):
         ("getMember<void *>(shared,0x88)", "getMember<void *>(shared,0x80)", 1),
         ("!gVfTaskCompletionAbiVerified", "false", 1),
         ("entry.submissionCoverage.coveredSerial", "entry.submissionCoverage.serial", 1),
+        ('if (getMember<uint32_t>(context,0x6DC)!=1)return false;',
+         'if (getMember<uint32_t>(context,0x6DC)!=1 || !(getMember<uint8_t>(context,0x750)&1))return false;',1),
+        ('anchorMatches(submit+0x10b,optionalRecordSkip,sizeof(optionalRecordSkip))','true',1),
+        ('anchorMatches(submit+0x168,nextRecord,sizeof(nextRecord))','true',1),
     )
     for mutation in mutations:
         old, new = mutation[:2]

@@ -2,6 +2,7 @@
 #include "../NootedGreen/kern_vf_device_observation.hpp"
 #include <cassert>
 #include <cstdio>
+#include <initializer_list>
 
 int main()
 {
@@ -22,10 +23,17 @@ int main()
 			assert(!inlineShape(&envelope,2,i==0?&envelope:nullptr,i==1?&envelope:nullptr,i==2?&envelope:nullptr));
 		uintptr_t Envelope::* forbidden[] = {
 			&Envelope::asyncWakePort,&Envelope::asyncReference,&Envelope::asyncReferenceCount,
-			&Envelope::scalarInput,&Envelope::scalarInputCount,&Envelope::scalarOutput,&Envelope::scalarOutputCount,
-			&Envelope::structureInput,&Envelope::structureInputSize,&Envelope::structureInputDescriptor,
+			&Envelope::scalarInputCount,&Envelope::scalarOutputCount,
+			&Envelope::structureInputSize,&Envelope::structureInputDescriptor,
 			&Envelope::structureOutputDescriptor,&Envelope::structureOutputDescriptorSize,&Envelope::structureVariableOutputData};
 		for(auto field:forbidden) {
+			envelope.*field=1;assert(!inlineShape(&envelope,2,nullptr,nullptr,nullptr));envelope.*field=0;
+		}
+		// MIG's zero-count arrays and zero-length inline input still carry
+		// addresses. They are deliberately never read by the owned selector.
+		envelope.scalarInput=1;envelope.scalarOutput=2;envelope.structureInput=3;
+		assert(inlineShape(&envelope,2,nullptr,nullptr,nullptr));
+		for(auto field:{&Envelope::scalarInputCount,&Envelope::scalarOutputCount,&Envelope::structureInputSize}) {
 			envelope.*field=1;assert(!inlineShape(&envelope,2,nullptr,nullptr,nullptr));envelope.*field=0;
 		}
 		envelope.version=1;assert(!inlineShape(&envelope,2,nullptr,nullptr,nullptr));envelope.version=2;

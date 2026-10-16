@@ -97,8 +97,28 @@ int main() {
         assert(shape());args.structureInputDescriptor=&request;assert(!shape());args.structureInputDescriptor=nullptr;
         args.structureOutputSize--;assert(!shape());args.structureOutputSize++;
         args.scalarInputCount=1;assert(!shape());args.scalarInputCount=0;
+        // Native MIG retains buffer addresses with zero scalar counts.
+        args.scalarInput=&request;args.scalarOutput=&reply;assert(shape());
+        args.scalarOutputCount=1;assert(!shape());args.scalarOutputCount=0;
         assert(!NGVfTaskCompletion::inlineShape(&args,0,&request,nullptr,nullptr));
         args.selector=NGVfDeviceObservation::selector;assert(!shape());
+        args.structureInputSize=0; // MIG inband address may remain non-NULL.
+        args.structureOutputSize=sizeof(NGVfDeviceObservation::Reply);
+        assert(NGVfDeviceObservation::inlineShape(&args,0,nullptr,nullptr,nullptr));
+        args.selector=NGVfAvcPublication::selector;
+        args.structureOutputSize=sizeof(NGVfAvcPublication::Reply);
+        auto avcShape=[&]() {return NGVfAvcPublication::inlineShape(&args,0,nullptr,nullptr,nullptr);};
+        assert(avcShape());
+        args.scalarInputCount=1;assert(!avcShape());args.scalarInputCount=0;
+        args.scalarOutputCount=1;assert(!avcShape());args.scalarOutputCount=0;
+        args.structureInputSize=1;assert(!avcShape());args.structureInputSize=0;
+        args.structureInputDescriptor=&request;assert(!avcShape());args.structureInputDescriptor=nullptr;
+        args.structureOutputDescriptor=&reply;assert(!avcShape());args.structureOutputDescriptor=nullptr;
+        args.structureOutputDescriptorSize=1;assert(!avcShape());args.structureOutputDescriptorSize=0;
+        args.structureVariableOutputData=&reply;assert(!avcShape());args.structureVariableOutputData=nullptr;
+        args.structureOutputSize--;assert(!avcShape());args.structureOutputSize++;
+        assert(!NGVfAvcPublication::inlineShape(&args,0,&request,nullptr,nullptr));
+        assert(avcShape());
         reply.abiVersion=1;reply.bytes=sizeof(reply);reply.registryId=42;reply.recordCount=1;
         for(unsigned i=0;i<16;++i)reply.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
         reply.records[0]={1,3,7,0,4};

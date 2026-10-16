@@ -1284,7 +1284,12 @@ static bool vfCaptureMediaMappedSpan(const VfMediaSubmission &entry,void *stream
 	    getMember<void *>(entry.shared,0x80)!=entry.task || getMember<void *>(entry.shared,0x88)!=entry.gpuTask)return false;
 	out.reason="class-ledger";out.classes=getMember<uint32_t>(context,0x6DC);
 	out.recordFlags=getMember<uint8_t>(context,0x750);
-	if (getMember<uint32_t>(context,0x6DC)!=1 || !(getMember<uint8_t>(context,0x750)&1))return false;
+	// Family submit_data_buffers+0x10b tests this optional record flag and
+	// branches to its next-record edge when clear (68dd -> 693a). It is NOT
+	// a resource-retention/acceptance bit. Keep it diagnostic-only; the exact
+	// class resource/current native resource, retained mapping, lock, owner,
+	// accepted-used extent and all live identities below remain mandatory.
+	if (getMember<uint32_t>(context,0x6DC)!=1)return false;
 	out.reason="resource";
 	void *resource=getMember<void *>(context,0xFE0);
 	if (resource)out.type=getMember<uint8_t>(resource,0x14);
@@ -2806,6 +2811,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			constexpr uint8_t endCall[] = {0xff,0x90,0x38,0x0a,0,0};
 			constexpr uint8_t classBase[] = {0x4c,0x8d,0xbb,0xe0,0x06,0,0};
 			constexpr uint8_t usedStore[] = {0x41,0x89,0x74,0x17,0x14,0x41,0xf6,0x44,0x17,0x70,0x01};
+			constexpr uint8_t optionalRecordSkip[] = {0x41,0xf6,0x44,0x17,0x70,0x01,0x74,0x55};
+			constexpr uint8_t nextRecord[] = {0x49,0xff,0xc4};
 			constexpr uint8_t resourceBound[] = {0x48,0x3b,0xb1,0xc8,0,0,0,0x77,0x7e};
 			constexpr uint8_t nativeLock[] = {0x49,0x8b,0xbc,0x24,0x88,0,0,0,0xe8,0x09,0x45,0x4a,0xeb};
 			constexpr uint8_t lengthLeaf[] = {
@@ -2819,6 +2826,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				submit && mapAddress && mapLength && mapDescriptor && mapOptions &&
 				containsAnchor(submit,0xe2,sizeof(classBase)) && anchorMatches(submit+0xe2,classBase,sizeof(classBase)) &&
 				containsAnchor(submit,0x106,sizeof(usedStore)) && anchorMatches(submit+0x106,usedStore,sizeof(usedStore)) &&
+				containsAnchor(submit,0x10b,sizeof(optionalRecordSkip)) && anchorMatches(submit+0x10b,optionalRecordSkip,sizeof(optionalRecordSkip)) &&
+				containsAnchor(submit,0x168,sizeof(nextRecord)) && anchorMatches(submit+0x168,nextRecord,sizeof(nextRecord)) &&
 				containsAnchor(submit,0x13e,sizeof(resourceBound)) && anchorMatches(submit+0x13e,resourceBound,sizeof(resourceBound)) &&
 				containsAnchor(submit,0x32a,sizeof(nativeLock)) && anchorMatches(submit+0x32a,nativeLock,sizeof(nativeLock)) &&
 				containsAnchor(process,0x57,sizeof(parseCall)) && anchorMatches(process+0x57,parseCall,sizeof(parseCall)) &&

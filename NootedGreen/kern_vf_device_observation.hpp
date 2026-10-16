@@ -19,14 +19,17 @@ struct Reply {
 static_assert(sizeof(Reply)==40, "fixed owned observation wire layout");
 
 // Inspect only the kernel-owned argument envelope, never any input buffer.
+// XNU is_io_connect_method supplies MIG scalar/inband buffer addresses even
+// when their counts are zero. Empty input/output is defined by its count,
+// not by the incidental address; never dereference these zero-count buffers.
 template<class Args> bool inlineShape(const Args *args, uint32_t currentVersion,
                                     const void *dispatch, const void *target,
                                     const void *reference) noexcept {
     return args && !dispatch && !target && !reference &&
         args->version==currentVersion && args->selector==selector &&
         !args->asyncWakePort && !args->asyncReference && !args->asyncReferenceCount &&
-        !args->scalarInput && !args->scalarInputCount && !args->scalarOutput && !args->scalarOutputCount &&
-        !args->structureInput && !args->structureInputSize && !args->structureInputDescriptor &&
+        !args->scalarInputCount && !args->scalarOutputCount &&
+        !args->structureInputSize && !args->structureInputDescriptor &&
         !args->structureOutputDescriptor && !args->structureOutputDescriptorSize &&
         !args->structureVariableOutputData && args->structureOutput && args->structureOutputSize==sizeof(Reply);
 }
@@ -90,8 +93,8 @@ template<class Args> bool inlineShape(const Args* args,uint32_t currentVersion,
     const void* dispatch,const void* target,const void* reference) noexcept {
     return args && !dispatch && !target && !reference && args->version==currentVersion &&
         args->selector==selector && !args->asyncWakePort && !args->asyncReference && !args->asyncReferenceCount &&
-        !args->scalarInput && !args->scalarInputCount && !args->scalarOutput && !args->scalarOutputCount &&
-        !args->structureInput && !args->structureInputSize && !args->structureInputDescriptor &&
+        !args->scalarInputCount && !args->scalarOutputCount &&
+        !args->structureInputSize && !args->structureInputDescriptor &&
         !args->structureOutputDescriptor && !args->structureOutputDescriptorSize &&
         !args->structureVariableOutputData && args->structureOutput && args->structureOutputSize==sizeof(Reply);
 }
@@ -126,7 +129,7 @@ template<class Args> bool inlineShape(const Args* args,uint32_t currentVersion,
     const void* dispatch,const void* target,const void* reference) noexcept {
     return args && !dispatch && !target && !reference && args->version==currentVersion &&
         args->selector==selector && !args->asyncWakePort && !args->asyncReference && !args->asyncReferenceCount &&
-        !args->scalarInput && !args->scalarInputCount && !args->scalarOutput && !args->scalarOutputCount &&
+        !args->scalarInputCount && !args->scalarOutputCount &&
         args->structureInput && args->structureInputSize==sizeof(Request) && !args->structureInputDescriptor &&
         args->structureOutput && args->structureOutputSize==sizeof(Reply) &&
         !args->structureOutputDescriptor && !args->structureOutputDescriptorSize && !args->structureVariableOutputData;
