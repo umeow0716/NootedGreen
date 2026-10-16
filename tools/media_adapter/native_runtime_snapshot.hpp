@@ -146,13 +146,14 @@ class NativeRuntimeSnapshot {
         (void)trigger;
         if(!threads())return false;
         const uint64_t start=seconds();uint64_t copied=0,failures=0,regions=0;
-        uint32_t terminal=0;mach_vm_address_t address=0;
+        uint32_t terminal=0;mach_vm_address_t address=0;natural_t depth=0;
         unsigned char buffer[chunkBytes];
         for(;;) {
             if(copied>=byteLimit) {terminal=1;break;}
             const uint64_t now=seconds();
             if(!start || !now || now-start>=secondLimit) {terminal=2;break;}
-            mach_vm_size_t extent=0;natural_t depth=0;
+            const auto requested=address;
+            mach_vm_size_t extent=0;
             vm_region_submap_info_data_64_t info{};
             kern_return_t status=KERN_SUCCESS;
             for(unsigned nesting=0;nesting<64;++nesting) {
@@ -164,7 +165,7 @@ class NativeRuntimeSnapshot {
                 if(nesting==63)status=KERN_FAILURE;
             }
             if(status==KERN_INVALID_ADDRESS)break;
-            if(status!=KERN_SUCCESS || !extent || address>UINT64_MAX-extent) {terminal=3;break;}
+            if(status!=KERN_SUCCESS || !extent || address<requested || address>UINT64_MAX-extent) {terminal=3;break;}
             if(!packet(3,address,extent,&info,sizeof(info)))return false;
             ++regions;
             if(info.protection&VM_PROT_READ) {

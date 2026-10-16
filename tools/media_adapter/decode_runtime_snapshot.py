@@ -11,7 +11,7 @@ PACKET = struct.Struct("<IIQQ")
 FOOTER = struct.Struct("<5Q")
 
 
-def inspect(path, address=None, size=0):
+def inspect(path, address=None, size=0, include_index=False, async_sample=None):
     if address is not None and (address < 0 or not 0 < size <= 65536 or address + size > 2**64):
         raise ValueError("extraction must be one explicit range of 1..65536 bytes")
     extracted = bytearray(size)
@@ -21,6 +21,10 @@ def inspect(path, address=None, size=0):
     critical_terminal = False
     critical_stack_truncated = True
     timestamps = {}
+    truncated = None
+    spans = []
+    registers = None
+    samples_seen = 0
     with open(path, "rb") as source:
         prefix = source.read(HEADER.size)
         if len(prefix) != HEADER.size:
@@ -30,16 +34,27 @@ def inspect(path, address=None, size=0):
             raise ValueError("unknown snapshot format")
         extent = os.fstat(source.fileno()).st_size
         while source.tell() < extent:
+            packet_offset = source.tell()
             raw = source.read(PACKET.size)
             if len(raw) != PACKET.size:
-                raise ValueError("truncated packet header")
+                truncated = dict(offset=packet_offset, part="header", available=len(raw))
+                break
             kind, length, start, detail = PACKET.unpack(raw)
-            if kind not in range(1, 11) or length > 65536 or source.tell() + length > extent:
-                raise ValueError("invalid/truncated packet")
+            if kind not in range(1, 11) or length > 65536:
+                raise ValueError(f"invalid packet at offset {packet_offset}: kind={kind} bytes={length}")
+            if source.tell() + length > extent:
+                truncated = dict(offset=packet_offset, part="payload", wanted=length, available=extent-source.tell())
+                break
             if kind == 1:
                 if length != state_size:
                     raise ValueError("invalid interrupted state")
                 counts["interrupted"] += 1
+                if include_index:
+                    if length != 168:
+                        raise ValueError("unsupported register layout for index")
+                    names = "rax rbx rcx rdx rdi rsi rbp rsp r8 r9 r10 r11 r12 r13 r14 r15 rip rflags cs fs gs".split()
+                    registers = dict(zip(names, (hex(value) for value in struct.unpack("<21Q", source.read(length)))))
+                    continue
             elif kind == 2:
                 if length not in (0, state_size):
                     raise ValueError("invalid thread state")
@@ -53,7 +68,20 @@ def inspect(path, address=None, size=0):
                 if not length or start + length > 2**64:
                     raise ValueError("invalid memory span")
                 counts["memory_bytes" if kind == 4 else "critical_bytes"] += length
-                if address is not None:
+                if kind == 8 and include_index:
+                    if spans and spans[-1]["role"] == detail and int(spans[-1]["address"], 16)+spans[-1]["bytes"] == start:
+                        spans[-1]["bytes"] += length
+                    else:
+                        if len(spans) >= 16:
+                            raise ValueError("unexpected critical span count")
+                        spans.append(dict(role=detail, address=hex(start), bytes=length))
+                eligible = address is not None
+                if eligible and async_sample is not None:
+                    eligible = kind == 4 and start <= address and start+length >= address+size
+                    if eligible:
+                        eligible = samples_seen == async_sample
+                        samples_seen += 1
+                if eligible:
                     left, right = max(start, address), min(start + length, address + size)
                     if left < right:
                         source.seek(left - start, os.SEEK_CUR)
@@ -88,12 +116,12 @@ def inspect(path, address=None, size=0):
                 counts["thread_failures"] += 1
             elif kind == 9:
                 if length == 24 and start == 0 and detail == 0:
-                    copied, failures, truncated = struct.unpack("<3Q", source.read(length))
+                    copied, failures, stack_cut = struct.unpack("<3Q", source.read(length))
                     if critical_terminal or copied != counts["critical_bytes"] or failures != counts["critical_failures"]:
                         raise ValueError("critical phase counts disagree")
-                    if truncated not in (0, 1):
+                    if stack_cut not in (0, 1):
                         raise ValueError("invalid critical stack flag")
-                    critical_stack_truncated = bool(truncated)
+                    critical_stack_truncated = bool(stack_cut)
                     critical_terminal = True
                     continue
                 if length or not detail:
@@ -108,13 +136,18 @@ def inspect(path, address=None, size=0):
                 timestamps[phase] = mono
                 continue
             source.seek(length, os.SEEK_CUR)
-    complete = set(timestamps) == {0, 1} and critical_terminal and not critical_stack_truncated and not counts["critical_failures"] and terminal is not None and terminal["reason"] == 0 and not counts["read_failures"] and not counts["thread_failures"] and counts["threads"] > 0 and counts["interrupted"] == 1
+    complete = truncated is None and set(timestamps) == {0, 1} and critical_terminal and not critical_stack_truncated and not counts["critical_failures"] and terminal is not None and terminal["reason"] == 0 and not counts["read_failures"] and not counts["thread_failures"] and counts["threads"] > 0 and counts["interrupted"] == 1
     if address is not None and not all(coverage):
         raise ValueError("requested range was not fully captured; no fabricated zero-fill")
     pause = timestamps[1]-timestamps[0] if set(timestamps) == {0, 1} else None
     if pause is not None and pause < 0:
         raise ValueError("phase timestamps reversed")
-    return dict(**counts, terminal=terminal, critical_terminal=critical_terminal, critical_stack_truncated=critical_stack_truncated, critical_pause_ns=pause, complete=complete, other_threads_atomic=False), extracted
+    report = dict(**counts, terminal=terminal, truncated=truncated, critical_terminal=critical_terminal, critical_stack_truncated=critical_stack_truncated, critical_pause_ns=pause, complete=complete, other_threads_atomic=False)
+    if include_index:
+        report.update(critical_spans=spans, interrupted_registers=registers)
+    if async_sample is not None:
+        report.update(async_samples_seen=samples_seen, selected_async_sample=async_sample)
+    return report, extracted
 
 
 def self_test():
@@ -136,7 +169,9 @@ def self_test():
         put(valid)
         report, data = inspect(path, 0x1002, 4)
         assert report["complete"] and data == b"cdef" and not report["other_threads_atomic"]
-        invalid = [b"", valid[:-1], valid + b"x", prefix + packet(4, bytes(65537)),
+        report, data = inspect(path, 0x1002, 4, async_sample=0)
+        assert data == b"CDEF" and report["async_samples_seen"] == 1
+        invalid = [b"", valid + b"x", prefix + packet(4, bytes(65537)),
                    prefix + events + memory + packet(6, FOOTER.pack(0, 9, 0, 1, 1))]
         for value in invalid:
             put(value)
@@ -151,6 +186,9 @@ def self_test():
             assert not inspect(path)[0]["complete"]
         put(prefix + events + memory)
         assert not inspect(path)[0]["complete"]
+        put(valid[:-1])
+        report, data = inspect(path, 0x1002, 4)
+        assert not report["complete"] and report["truncated"] and data == b"cdef"
         put(prefix + events + packet(7, detail=5) + memory + footer)
         assert not inspect(path)[0]["complete"]
         put(valid)
@@ -171,6 +209,8 @@ def main():
     parser.add_argument("--address", type=lambda value: int(value, 0))
     parser.add_argument("--size", type=lambda value: int(value, 0), default=0)
     parser.add_argument("--output")
+    parser.add_argument("--critical-index", action="store_true", help="include bounded private addresses/registers")
+    parser.add_argument("--async-sample", type=int, help="extract one explicit full-range asynchronous sample, starting at 0")
     args = parser.parse_args()
     if args.self_test:
         self_test()
@@ -179,7 +219,9 @@ def main():
         parser.error("snapshot is required")
     if (args.address is None) != (args.output is None) or (args.address is None and args.size):
         parser.error("extraction requires --address, --size and a new --output")
-    report, data = inspect(args.snapshot, args.address, args.size)
+    if args.async_sample is not None and (args.address is None or args.async_sample < 0):
+        parser.error("--async-sample requires an extraction range and nonnegative index")
+    report, data = inspect(args.snapshot, args.address, args.size, args.critical_index, args.async_sample)
     if args.output:
         fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "wb") as target:
