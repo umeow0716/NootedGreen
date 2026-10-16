@@ -42,6 +42,9 @@ inline bool tglProjectTahoeAvcSequenceConsumedFields(const void* source,size_t b
     // Current owned AVC path is eight-bit NV12. Preserve input unchanged
     // and reject noncanonical flags, rather than truncate width into bool.
     if(candidate.level>255 || candidate.chroma!=1 || word(0x34) || word(0x38) ||
+       // Native sequence scaling flag/list/data mapping is not implemented.
+       // Refuse it explicitly; never treat chroma bit-depth as that flag.
+       word(0x40) ||
        candidate.frameOnly>1 || candidate.mbaff>1 || candidate.direct8x8>1 ||
        (candidate.frameOnly && candidate.mbaff) ||
        candidate.log2MaxFrameNumMinus4>12)return false;

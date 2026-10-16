@@ -18955,6 +18955,8 @@ int main() {
         source[0x2c/4]=2;reject();source=original;
         source[0x34/4]=1;reject();source=original;
         source[0x38/4]=1;reject();source=original;
+        source[0x40/4]=1;reject();source=original;
+        source[0x40/4]=0xffffffffU;reject();source=original;
         source[0x404/4]=13;reject();source=original;
         source[0x404/4]=0x10008;reject();source=original;
         assert(!tglProjectTahoeAvcSequenceConsumedFields(nullptr,sizeof(source),1920,1080,fields));
