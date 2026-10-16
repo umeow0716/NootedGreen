@@ -297,6 +297,8 @@ private:
 	static IOReturn vfContextSubmit(void *that, void *input, void *output,
 	                               uint64_t options, uint64_t *stamp);
 	mach_vm_address_t oVfContextSubmit {};
+	static void vfMediaEnd(void *that,void *stream);
+	mach_vm_address_t oVfMediaEnd {};
 	static IOReturn vf2DSetSurface(void *that, uint32_t surface,
 	                              uint32_t mode);
 	mach_vm_address_t oVf2DSetSurface {};

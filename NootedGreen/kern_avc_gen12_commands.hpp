@@ -95,7 +95,7 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
             if(input[at+2]&0x20U || input[at+4]){r.reason="mfx-mode-options";return r;}}
         if(op==0x70020000U){++mfxPipe;
             // Legacy compression-mode bits are not Gen12 compression types.
-            const size_t controls[]={3,6,9,12,15,18,54,57,60,64,67};
+            static constexpr size_t controls[]={3,6,9,12,15,18,54,57,60,64,67};
             for(size_t k:controls)
                 if(input[at+k]&0x600U){r.reason="mfx-compression";return r;}
             if(input[at+61]){r.reason="reference-compression";return r;}}

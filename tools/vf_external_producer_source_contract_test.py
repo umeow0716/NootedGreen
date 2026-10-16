@@ -367,6 +367,39 @@ def contract(source, path="<source>"):
                   'entry.gpuTask != gpuTask'):
         assert token in locked_media, f"{path}: missing locked media identity gate: {token}"
     media_exit = function_body(source, '~VfMediaSubmissionScope()')
+    media_map=function_body(source,'static bool vfCaptureMediaMappedSpan(')
+    for token in ('getMember<uint32_t>(context,0x6DC)!=1',
+                  'getMember<void *>(context,0x708)!=resource',
+                  'getMember<uint8_t>(resource,0x14)!=0x0A',
+                  '!getMember<uint32_t>(mapped,0x38)',
+                  'getMember<mach_vm_address_t>(mapped,0)!=gVfMediaKernelMappedMemoryVtable',
+                  'getMember<mach_vm_address_t>(table,0x118)!=gVfMediaMapAddress',
+                  'getMember<mach_vm_address_t>(table,0x128)!=gVfMediaMapLength',
+                  'getMember<mach_vm_address_t>(table,0x138)!=gVfMediaMapDescriptor',
+                  'getMember<mach_vm_address_t>(table,0x140)!=gVfMediaMapOptions',
+                  'gVfMediaMapDescriptor)(map)!=descriptor',
+                  'gVfMediaMapOptions)(map)&kIOMapReadOnly',
+                  'getMember<uintptr_t>(context,0x658)!=base',
+                  'used=getMember<uint32_t>(context,0x6F4)',
+                  'bytes!=resourceBytes', 'offset>used || used>bytes',
+                  'out.reservedWords=(used-offset)/4U'):
+        assert token in media_map, f"{path}: missing native AVC mapped-span proof: {token}"
+    assert 'getKernelData(' not in media_map and 'map(' not in media_map
+    media_end=function_body(source,'void Gen11::vfMediaEnd(')
+    for token in ('__builtin_return_address(0)',
+                  'VfMediaSubmissionScope::bindLocked(*entry,stream,caller)',
+                  'span.availableWords,span.reservedWords',
+                  'publication.mustStop', 'current.resource==span.resource',
+                  'current.mapped==span.mapped', 'current.map==span.map',
+                  'current.used==span.used', 'current.commands==span.commands'):
+        assert token in media_end, f"{path}: missing native AVC publication ownership: {token}"
+    assert media_end.index('bindLocked(')<media_end.index('NgreenAvcGen12::publish(')<\
+        media_end.index('OSSynchronizeIO();')<media_end.rindex('FunctionCast(vfMediaEnd,'), \
+        f"{path}: AVC publication/native submission ordering changed"
+    rejected=media_end[media_end.index('if (!publication.published)'):media_end.index('OSSynchronizeIO();')]
+    assert 'entry->failed=true;' in rejected and 'return;' in rejected and 'FunctionCast' not in rejected
+    assert media_end.count('FunctionCast(vfMediaEnd,')==2
+    assert 'return mediaScope.failed()?kIOReturnBadArgument:result;' in media_submit
     assert 'slot->thread != owner || slot->translating' in media_exit
     assert 'releaseSlot();' in media_exit
     media_release = function_body(source, 'void releaseSlot()')
@@ -385,6 +418,12 @@ def contract(source, path="<source>"):
 
 def mutation_contract(source, path):
     mutations = (
+        ('getMember<void *>(context,0x708)!=resource','false',1),
+        ('getMember<uint8_t>(resource,0x14)!=0x0A','getMember<uint8_t>(resource,0x14)!=0x0B',1),
+        ('!getMember<uint32_t>(mapped,0x38)','false',1),
+        ('used=getMember<uint32_t>(context,0x6F4)','used=getMember<uint32_t>(context,0x660)',1),
+        ('span.availableWords,span.reservedWords','span.availableWords,span.availableWords',1),
+        ('__builtin_return_address(0)','__builtin_return_address(1)',1),
         ('gVfMediaPublicationRouteReady && gVfMediaPublicationAbiVerified',
          'true && gVfMediaPublicationAbiVerified',1),
         ('static bool gVfMediaPublicationRouteReady = false;',

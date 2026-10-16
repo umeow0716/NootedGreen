@@ -1132,6 +1132,7 @@ struct VfMediaSubmission {
 	void *gpuTask;
 	NgreenAvcGen12::PublishScratch *scratch;
 	bool translating;
+	bool failed;
 };
 static VfMediaSubmission gVfMediaSubmissions[32] {};
 static_assert(sizeof(NgreenAvcGen12::PublishScratch) == 16U*1024U,
@@ -1167,7 +1168,7 @@ public:
 				if (!OSCompareAndSwapPtr(nullptr,owner,&entry.thread)) continue;
 				entry.context=context;entry.accelerator=accelerator;entry.task=nullptr;
 				entry.shared=nullptr;entry.gpuTask=nullptr;
-				entry.scratch=nullptr;entry.translating=false;slot=&entry;
+				entry.scratch=nullptr;entry.translating=false;entry.failed=false;slot=&entry;
 				break;
 			}
 		}
@@ -1195,6 +1196,7 @@ public:
 	VfMediaSubmissionScope &operator=(const VfMediaSubmissionScope &)=delete;
 	explicit operator bool() const { return admitted; }
 	const char *reason() const { return refusal; }
+	bool failed() const { return slot && slot->failed; }
 	// Only the UUID/anchor-pinned processDataBuffers caller carries the native
 	// accelerator IOLock. Never follow shared/task pointers in the outer scope.
 	static bool bindLocked(VfMediaSubmission &entry, void *stream, mach_vm_address_t caller) {
@@ -1254,6 +1256,79 @@ private:
 	bool admitted;
 	const char *refusal;
 };
+
+struct VfMediaMappedSpan {
+	void *resource,*mapped,*map,*descriptor;
+	volatile uint32_t *commands;
+	uint32_t bytes,offset,used;
+	size_t availableWords,reservedWords;
+	const char *reason;
+	uint64_t mapLength;
+	uint32_t classes,recordFlags,type,mapFlags,resourceBytes,count;
+};
+
+// Called only AFTER bindLocked authenticates the sole processDataBuffers
+// native caller. Its IOLock, outer producer lease and retained context enclose
+// all reads; no getKernelData/map creation or use-count increment is performed.
+static bool vfCaptureMediaMappedSpan(const VfMediaSubmission &entry,void *stream,VfMediaMappedSpan &out)
+{
+	void *context=entry.context;
+	out.reason="owner";
+	if (!context || !entry.scratch || entry.thread!=reinterpret_cast<void *>(current_thread()) ||
+	    stream!=static_cast<uint8_t *>(context)+0x650 || entry.accelerator!=gVfAccelerator ||
+	    gVfDeviceStopping || gVfSubmissionStopped || gVfProtocolFault ||
+	    getMember<volatile UInt32>(entry.accelerator,0xDC8)!=0 ||
+	    getMember<void *>(context,0x5A8)!=entry.accelerator ||
+	    getMember<void *>(context,0x578)!=entry.task || getMember<void *>(context,0x5A0)!=entry.shared ||
+	    !entry.shared || getMember<void *>(entry.shared,0x78)!=entry.accelerator ||
+	    getMember<void *>(entry.shared,0x80)!=entry.task || getMember<void *>(entry.shared,0x88)!=entry.gpuTask)return false;
+	out.reason="class-ledger";out.classes=getMember<uint32_t>(context,0x6DC);
+	out.recordFlags=getMember<uint8_t>(context,0x750);
+	if (getMember<uint32_t>(context,0x6DC)!=1 || !(getMember<uint8_t>(context,0x750)&1))return false;
+	out.reason="resource";
+	void *resource=getMember<void *>(context,0xFE0);
+	if (resource)out.type=getMember<uint8_t>(resource,0x14);
+	if (!resource || getMember<void *>(context,0x708)!=resource ||
+	    getMember<uint8_t>(resource,0x14)!=0x0A || getMember<void *>(resource,0xE0))return false;
+	void *mapped=getMember<void *>(resource,0x170);
+	out.reason="retained-mapped-memory";
+	if (!mapped || getMember<mach_vm_address_t>(mapped,0)!=gVfMediaKernelMappedMemoryVtable ||
+	    !getMember<uint32_t>(mapped,0x38))return false;
+	void *map=getMember<void *>(mapped,0x30),*descriptor=getMember<void *>(mapped,0x28);
+	out.reason="map-descriptor";
+	if (!map || !descriptor)return false;
+	void *table=getMember<void *>(map,0);
+	out.reason="map-getters";
+	if (!table || getMember<mach_vm_address_t>(table,0x118)!=gVfMediaMapAddress ||
+	    getMember<mach_vm_address_t>(table,0x128)!=gVfMediaMapLength ||
+	    getMember<mach_vm_address_t>(table,0x138)!=gVfMediaMapDescriptor ||
+	    getMember<mach_vm_address_t>(table,0x140)!=gVfMediaMapOptions)return false;
+	using Scalar=uint64_t (*)(void *);
+	using Pointer=void *(*)(void *);
+	using Options=uint32_t (*)(void *);
+	const uint64_t base=reinterpret_cast<Scalar>(gVfMediaMapAddress)(map);
+	const uint64_t length=reinterpret_cast<Scalar>(gVfMediaMapLength)(map);
+	out.reason="map-alias";out.mapLength=length;
+	out.mapFlags=reinterpret_cast<Options>(gVfMediaMapOptions)(map);
+	if (!base || (base&3) || base>UINTPTR_MAX-length ||
+	    reinterpret_cast<Pointer>(gVfMediaMapDescriptor)(map)!=descriptor ||
+	    (reinterpret_cast<Options>(gVfMediaMapOptions)(map)&kIOMapReadOnly) ||
+	    getMember<uintptr_t>(context,0x658)!=base)return false;
+	const uint32_t bytes=getMember<uint32_t>(context,0x660);
+	const uint32_t resourceBytes=getMember<uint32_t>(resource,getMember<void *>(resource,0x88)?0xC8:0xD0);
+	const uint32_t offset=getMember<uint32_t>(stream,0x30),used=getMember<uint32_t>(context,0x6F4);
+	const uint32_t words=getMember<volatile uint32_t>(stream,0x34);
+	out.reason="accepted-used-span";out.bytes=bytes;out.resourceBytes=resourceBytes;
+	out.offset=offset;out.used=used;out.count=words;
+	if (!bytes || bytes!=resourceBytes || bytes>length || ((bytes|offset|used)&3) ||
+    offset>used || used>bytes || words<2 || words>1536 || uint64_t(words)*4>used-offset)return false;
+	out.resource=resource;out.mapped=mapped;out.map=map;out.descriptor=descriptor;
+	out.commands=reinterpret_cast<volatile uint32_t *>(base+offset);
+	out.bytes=bytes;out.offset=offset;out.used=used;
+	out.availableWords=(bytes-offset)/4U;out.reservedWords=(used-offset)/4U;
+	out.reason="admitted";
+	return true;
+}
 
 bool vfCloseContextOperationGateAndWait(void *guc)
 {
@@ -5913,8 +5988,55 @@ IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
 		SYSLOG("ngreen", "Gen12 AVC submission scope refused reason=%s",mediaScope.reason());
 		return kIOReturnNoResources;
 	}
-	return FunctionCast(vfContextSubmit, callback->oVfContextSubmit)(
+	const IOReturn result=FunctionCast(vfContextSubmit, callback->oVfContextSubmit)(
 		that, input, output, options, stamp);
+	return mediaScope.failed()?kIOReturnBadArgument:result;
+}
+
+void Gen11::vfMediaEnd(void *that,void *stream)
+{
+	PANIC_COND(!callback || !callback->oVfMediaEnd,"ngreen","Missing native Media end trampoline");
+	void *accelerator=that?getMember<void *>(that,0x5A8):nullptr;
+	if (gVfIdentity!=VfIdentity::Virtual || accelerator!=gVfAccelerator ||
+	    !checkKernelArgument("-ngreenmediaadapter") || !checkKernelArgument("-ngreenavcgen12")) {
+		FunctionCast(vfMediaEnd,callback->oVfMediaEnd)(that,stream);return;
+	}
+	auto *entry=VfMediaSubmissionScope::find(that);
+	PANIC_COND(!entry,"ngreen","Unscoped owned AVC Media end refused");
+	const auto caller=reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0));
+	VfMediaMappedSpan span{};
+	if (!VfMediaSubmissionScope::bindLocked(*entry,stream,caller) ||
+	    !vfCaptureMediaMappedSpan(*entry,stream,span) ||
+	    getMember<volatile uint32_t>(stream,0x34)>1024) {
+		entry->failed=true;
+		SYSLOG("ngreen","Gen12 AVC mapping refused reason=%s classes=%u record=%x type=%x mapFlags=%x mapLength=%llu bytes=%u resourceBytes=%u offset=%u used=%u words=%u",
+		    span.reason?span.reason:"native-caller",span.classes,span.recordFlags,span.type,span.mapFlags,
+		    static_cast<unsigned long long>(span.mapLength),span.bytes,span.resourceBytes,span.offset,span.used,span.count);return;
+	}
+	entry->translating=true;
+	struct Reset {VfMediaSubmission &entry;~Reset(){entry.translating=false;}} reset{*entry};
+	auto same=[&]() {
+		VfMediaMappedSpan current{};
+		return vfCaptureMediaMappedSpan(*entry,stream,current) && current.resource==span.resource &&
+			current.mapped==span.mapped && current.map==span.map && current.descriptor==span.descriptor &&
+			current.commands==span.commands && current.bytes==span.bytes && current.offset==span.offset &&
+			current.used==span.used && current.availableWords==span.availableWords && current.reservedWords==span.reservedWords;
+	};
+	auto live=[&](uint32_t words) {return same() && getMember<volatile uint32_t>(stream,0x34)==words;};
+	auto &words=getMember<volatile uint32_t>(stream,0x34);
+	const auto publication=NgreenAvcGen12::publish(span.commands,span.availableWords,span.reservedWords,
+		words,1920,1080,*entry->scratch,live,same);
+	PANIC_COND(publication.mustStop,"ngreen","Lost owned AVC publication allocation/rollback");
+	if (!publication.published) {
+		entry->failed=true;
+		SYSLOG("ngreen","Gen12 AVC command publication refused reason=%s",publication.preparation.reason);return;
+	}
+	OSSynchronizeIO();
+	PANIC_COND(!live(static_cast<uint32_t>(publication.preparation.words)),"ngreen",
+		"Lost owned AVC mapping after count publication");
+	SYSLOG("ngreen","Gen12 AVC native publication words=%u reserved=%u",
+		static_cast<uint32_t>(publication.preparation.words),static_cast<uint32_t>(span.reservedWords));
+	FunctionCast(vfMediaEnd,callback->oVfMediaEnd)(that,stream);
 }
 
 IOReturn Gen11::vf2DSetSurface(void *that, uint32_t surface, uint32_t mode)
