@@ -61,7 +61,7 @@ def inspect(path, address=None, size=0):
                         offset = left - address
                         for index, byte in enumerate(value, offset):
                             priority = 2 if kind == 8 else 1
-                            if coverage[index] == priority:
+                            if coverage[index] == priority and (priority == 1 or extracted[index] != byte):
                                 raise ValueError("overlapping same-phase memory records")
                             if coverage[index] < priority:
                                 extracted[index] = byte
@@ -125,7 +125,7 @@ def self_test():
               packet(8, b"abcdefgh", 0x1000) + packet(9, struct.pack("<3Q", 8, 0, 0)) +
               packet(10, struct.pack("<4Q", 200, 200, 1, 1), detail=1) +
               packet(2, bytes(168)) + packet(3, bytes(80), 0x1000, 8))
-    memory = packet(4, b"abcdefgh", 0x1000)
+    memory = packet(4, b"ABCDEFGH", 0x1000)
     footer = packet(6, FOOTER.pack(0, 8, 0, 1, 1))
     valid = prefix + events + memory + footer
     with tempfile.TemporaryDirectory(prefix="ngreen-snapshot-test-") as directory:
