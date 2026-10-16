@@ -94,6 +94,13 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
     for(size_t at=0;at<count;) {
         const uint32_t op=opcode(input[at]);const size_t n=packetWords(input[at]);
         if(!n || n>count-at){r.reason="packet";return r;}
+        if(op==0x70480000U){
+            const uint32_t control=input[at+1],lastBits=(control>>8)&0x3fU;
+            const uint32_t skipBytes=(control>>16)&3U;
+            if(n<3 || (input[at]&0xf000U) || (control&0xfffc0000U) ||
+               !lastBits || lastBits>32 || (n-3)*32+lastBits<=skipBytes*8U){
+                r.reason="pak-insert-profile";return r;}
+        }
         // Authenticate prerequisites, not just end-of-frame packet counts.
         // Gen12 AVC picture state programs mode before its dependent state;
         // walkers consume both MFX/VDENC image, buffer and surface state.

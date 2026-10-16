@@ -19091,6 +19091,24 @@ int main() {
         input[mfxImage+2]^=1;rejected();input=good;
         input[mfxImage+2]|=1U<<8;rejected();input=good;
         {
+            auto pak=good;const size_t at=used-2,total=used+3;
+            pak[at]=0x70480001;pak[at+1]=0x2004;pak[at+2]=0xa010000;
+            pak[total-2]=pak[total-1]=0;
+            for(uint32_t bits=1;bits<=32;++bits){
+                pak[at+1]=(bits<<8)|4;
+                assert(NgreenAvcGen12::produce(pak.data(),total,1920,1080,
+                    output.data(),output.size()).ok);
+            }
+            auto rejectPak=[&](){output.fill(0xdeadbeef);
+                auto r=NgreenAvcGen12::produce(pak.data(),total,1920,1080,
+                    output.data(),output.size());assert(!r.ok);
+                for(auto v:output)assert(v==0xdeadbeef);};
+            for(uint32_t control:{4U,0x2104U,0x3f04U,0x42004U,0x80002004U,0x30104U}){
+                pak[at+1]=control;rejectPak();}
+            pak[at+1]=0x2004;pak[at]|=0x1000;rejectPak();
+            pak[at]=0x70480000;rejectPak();output.fill(0xdeadbeef);
+        }
+        {
             auto slices=good;
             const size_t begin=used-2,total=used+44;
             for(unsigned i=0;i<4;++i){
