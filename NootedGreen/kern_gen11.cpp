@@ -172,6 +172,8 @@ void *gVfHardwareGuc = nullptr;
 void *gVfAccelerator = nullptr;
 bool gVfDeviceObservationAbiVerified = false;
 bool gVfTaskCompletionAbiVerified = false;
+static mach_vm_address_t gVfRootObservationVtable = 0;
+static mach_vm_address_t gVfRootObservationGetter = 0;
 // Optional AVC producer integration handles. Resolving these does not enable
 // a route, map memory, invoke a getter, or authorize a command-buffer write.
 bool gVfMediaPublicationAbiVerified = false;
@@ -3039,6 +3041,31 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		PANIC_COND(identity == VfIdentity::Invalid, "ngreen",
 			"Cannot classify TGL accelerator as a physical function or VF");
 		const bool vfActive = identity == VfIdentity::Virtual;
+		// Observation binding only: exact payload UUID above, exact leaf below.
+		// Failure disables diagnostics, never changes submission admission.
+		if (vfActive) {
+			gVfRootObservationVtable = gVfRootObservationGetter = 0;
+			const auto rootTable = patcher.solveSymbol(index,
+				"__ZTV31IGHardwarePerProcessPageTable64", address, size);
+			const auto rootGetter = patcher.solveSymbol(index,
+				"__ZN31IGHardwarePerProcessPageTable6431getPageTableRootPhysicalAddressEPy", address, size);
+			constexpr uint8_t rootLeaf[] = {0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x40,
+				0x48,0x8b,0x40,0x18,0x48,0x89,0x06,0x31,0xc0};
+			bool rootLeafMatches = rootTable && rootGetter && rootTable >= address &&
+			    rootTable - address <= size && 0x160U <= size - (rootTable - address) &&
+			    rootGetter >= address &&
+			    rootGetter - address <= size && sizeof(rootLeaf) <= size - (rootGetter - address);
+			if (rootLeafMatches) {
+				const auto *bytes = reinterpret_cast<const volatile uint8_t *>(rootGetter);
+				for (size_t byte = 0; byte < sizeof(rootLeaf); ++byte)
+					if (bytes[byte] != rootLeaf[byte]) rootLeafMatches = false;
+			}
+			if (rootLeafMatches) {
+				gVfRootObservationVtable = rootTable + 16;
+				gVfRootObservationGetter = rootGetter;
+			}
+			patcher.clearError();
+		}
 		const uint32_t gpuDevice = NGreen::callback->getOriginalDeviceId();
 		gVfUsesMemoryIrq = vfActive &&
 			NGGpuCapabilities::hasIovMemoryIrq(gpuDevice);
@@ -9593,6 +9620,29 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		return false;
 	}
 
+	// Sample the native caller-owned task under the existing page-table lock,
+	// BEFORE acquiring the CTB queue. Do not add the reverse queue->PT lock
+	// order. This pre-queue sample is explicitly not atomic with publication.
+	if (static_cast<uint32_t>(hwCsType) == 3 && gVfRootObservationVtable &&
+	    gVfRootObservationGetter && gVfPageTableUpdateLock) {
+		IORecursiveLockLock(gVfPageTableUpdateLock);
+		static uint32_t rootObservationLogs = 0;
+		if (rootObservationLogs < 8) {
+			++rootObservationLogs;
+			auto *pageTable = getMember<void *>(task, 0x260);
+			const bool exactTable = pageTable &&
+				getMember<mach_vm_address_t>(pageTable, 0) == gVfRootObservationVtable &&
+				getMember<mach_vm_address_t>(reinterpret_cast<void *>(gVfRootObservationVtable), 0x148) ==
+				gVfRootObservationGetter;
+			auto *root = exactTable ? getMember<void *>(pageTable, 0x40) : nullptr;
+			const uint64_t physical = root ? getMember<uint64_t>(root, 0x18) : 0;
+			const int32_t children = exactTable ? getMember<int16_t>(pageTable, 0x50) : -1;
+			SYSLOG("ngreen", "V374: task root prequeue desc=%08x:%08x exact=%u present=%u children=%d physical=%08x:%08x atomic=0",
+			       descriptorHi, descriptorLo, exactTable ? 1U : 0U, root ? 1U : 0U,
+			       children, static_cast<uint32_t>(physical >> 32), static_cast<uint32_t>(physical));
+		}
+		IORecursiveLockUnlock(gVfPageTableUpdateLock);
+	}
 	VfContextQueueGuard queue(that);
 	if (!queue.get() || !gVfCtbEnabled || gVfSubmissionStopped ||
 	    gVfCtbStopped || gVfProtocolFault)
