@@ -5573,6 +5573,39 @@ int dispatchOwnedContextFrame(void* context,const void* input,void** output) noe
 }
 struct NativeOtherFrameBackend {
     using Lease=NativeFactoryFrameBatch::Lease;
+    static bool queryPublication(Lease& lease,NativePhysicalFrameScope& scope,uintptr_t image,
+        uintptr_t physical,uint64_t generation,NGVfAvcPublication::Reply& output) noexcept {
+        auto* owner=lease.get();auto api=TglDarwinDeviceObservationApi::resolve();
+        const auto framework=qualifiedIoAcceleratorFramework(library.resourceCreate);
+        if(!owner || owner->family()!=TglNativeContextFamily::NativeOther || !api.valid() ||
+           !framework || !scope.matches(image,physical,generation))return false;
+        const auto qualifyFramework=[framework](uintptr_t address) noexcept {
+            return qualifiedIoAcceleratorFramework(address)==framework;
+        };
+        auto admit=[&](uintptr_t root,uintptr_t device,uint32_t) noexcept {
+            uintptr_t current=0;
+            return scope.matches(image,physical,generation) &&
+                owner->frameTable().publication()==TglContextFramePublication::Published &&
+                readMemory(owner->context(),&current,8) &&
+                current==reinterpret_cast<uintptr_t>(owner->frameTable().addressPoint()) &&
+                leafMemoryPermissions(root,0x50,VM_PROT_READ,VM_PROT_EXECUTE) &&
+                leafMemoryPermissions(device,0x1c,VM_PROT_READ,VM_PROT_EXECUTE);
+        };
+        NGVfAvcPublication::Reply candidate{};
+        const auto connection=tglWithNativePhysicalSharedConnectionSnapshot(physical,library.resourceCreate,
+            &readMemory,qualifyFramework,admit,[&](uint32_t port) noexcept -> int {
+                uint64_t identity=0,after=0;
+                if(api.identity(port,identity))return 5;
+                const bool queried=NGVfAvcPublication::query(identity,
+                    [&](uint32_t selector,void* out,size_t* bytes) noexcept {
+                        return api.readAvcPublication(port,selector,out,bytes);
+                    },candidate);
+                return queried && !api.identity(port,after) && after==identity?0:5;
+            });
+        if(!connection.called || !connection.stable || connection.nativeStatus ||
+           !scope.matches(image,physical,generation))return false;
+        output=candidate;return true;
+    }
     static bool queryCompletion(Lease& lease,NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,uint64_t generation,
         const TglNativeFenceBackingObservation::Snapshot& expected,uint64_t& registryId,NGVfTaskCompletion::Reply& output) noexcept {
         auto* owner=lease.get();auto api=TglDarwinDeviceObservationApi::resolve();
@@ -5682,6 +5715,17 @@ struct NativeOtherFrameBackend {
             [&](uintptr_t entry,uintptr_t context,uintptr_t request,uintptr_t slot,NativePhysicalFrameScope& active) noexcept -> int {
                 if(!active.matches(image,physical,generation) || entry!=owner->frameTable().nativeFrame() || context!=owner->context())return 5;
                 const auto invoke=[&]() noexcept {return TglNativeContextFrameInvoker{}(entry,context,request,slot);};
+                // Query only through the current owner/physical/shared lease.
+                // Unsupported or not-ready kernels preserve native behavior;
+                // this negotiation alone never writes a producer cursor.
+                if(entry==image+0x27724) {
+                    NGVfAvcPublication::Reply publication{};
+                    const bool ready=queryPublication(lease,active,image,physical,generation,publication);
+                    static std::atomic<bool> reported{false};
+                    if(!reported.exchange(true,std::memory_order_acq_rel))
+                        os_log_error(OS_LOG_DEFAULT,"NGRN_AVC_PUBLICATION_NEGOTIATION ready=%{public}d profile=%{public}u",
+                            int(ready),ready?publication.commandProfile:0U);
+                }
                 // Exact AVC400 frame only. Full self-process capture precedes
                 // native SubmitDataBuffers while the native builder lock is
                 // still held. A refusal never changes native frame behavior.
