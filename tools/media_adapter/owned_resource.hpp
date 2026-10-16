@@ -23,6 +23,7 @@
 // pointer dereference, Apple text change or blanket eight-byte shift here.
 struct TglAvcSequenceConsumedFields {
     uint32_t level=0,chroma=0,frameOnly=0,mbaff=0,direct8x8=0;
+    uint32_t log2MaxFrameNumMinus4=0;
 };
 inline bool tglProjectTahoeAvcSequenceConsumedFields(const void* source,size_t bytes,
     uint32_t width,uint32_t height,TglAvcSequenceConsumedFields& output) noexcept {
@@ -37,11 +38,13 @@ inline bool tglProjectTahoeAvcSequenceConsumedFields(const void* source,size_t b
     candidate.level=word(0x24);candidate.chroma=word(0x2c);
     candidate.frameOnly=word(0x830);candidate.mbaff=word(0x834);
     candidate.direct8x8=word(0x838);
+    candidate.log2MaxFrameNumMinus4=word(0x404);
     // Current owned AVC path is eight-bit NV12. Preserve input unchanged
     // and reject noncanonical flags, rather than truncate width into bool.
     if(candidate.level>255 || candidate.chroma!=1 || word(0x34) || word(0x38) ||
        candidate.frameOnly>1 || candidate.mbaff>1 || candidate.direct8x8>1 ||
-       (candidate.frameOnly && candidate.mbaff))return false;
+       (candidate.frameOnly && candidate.mbaff) ||
+       candidate.log2MaxFrameNumMinus4>12)return false;
     output=candidate;return true;
 }
 
