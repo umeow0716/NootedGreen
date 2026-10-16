@@ -16316,6 +16316,11 @@ static void testRetainedVeboxFrames() {
             assert(ticket.serial && !pending.service(image,physical,1,context,observeUnbound));
             assert(unboundObservations==0 && pending.pending());
             assert(ticket.serial && pending.pending() && pending.bind(ticket,lineage,fence,fresh));
+            // Aggregate scan success with no valid completion evidence must
+            // keep the bound frame; reporting success is not retirement.
+            assert(pending.service(image,physical,1,context,observeUnbound));
+            assert(unboundObservations==1 && pending.pending());
+            unboundObservations=0;
             NGVfTaskCompletion::Reply reply{};
             reply.abiVersion=NGVfTaskCompletion::version;reply.bytes=sizeof(reply);reply.registryId=99;reply.recordCount=1;
             std::memcpy(reply.familyUuid,NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid,16);
