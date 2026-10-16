@@ -5,6 +5,11 @@ compiler="${CXX:-clang++}"
 task_output="$(mktemp -d "${TMPDIR:-/tmp}/ngreen-static.XXXXXX")"
 printf 'Diagnostic directory: %s\n' "$task_output"
 failed=0
+if python3 -B tools/media_adapter/audit_vdenc_batch.py --self-test; then
+    printf 'PASS offline VDENC packet and rebase audit\n'
+else
+    failed=1
+fi
 if python3 -B tools/media_adapter/decode_runtime_snapshot.py --self-test; then
     printf 'PASS bounded native runtime snapshot parser\n'
 else
