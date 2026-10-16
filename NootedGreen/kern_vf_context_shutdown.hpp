@@ -306,7 +306,7 @@ inline bool ringPrefixAdmitted(uint32_t bytes, uint64_t backingBytes, uint32_t t
         tail < bytes && !(tail & 7U);
 }
 inline void encodeRingPrefix(const uint32_t (&words)[48], char (&output)[257]) {
-    constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    static constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     for (uint32_t byte = 0, out = 0; byte < 192; byte += 3, out += 4) {
         uint32_t value = 0;
         for (uint32_t i = 0; i < 3; ++i) {
