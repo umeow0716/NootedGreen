@@ -18738,6 +18738,12 @@ static void testNativeCreatorRequestChains() {
         if(!scenario){TglNativeCreatorRequestChains<2,1> limited;assert(!limited.capture(0x1000,read));}
         if(expected) {
             assert(snapshot.stable(read) && snapshot.rootCount()==2 && snapshot.nodeCount()==(scenario==4?2U:3U));
+            bool present=false;uint32_t rootKind=0,rootProperty=0;uint64_t rootType=0;
+            assert(snapshot.rootControls(0,present,rootKind,rootType,rootProperty) && present &&
+                rootKind==avcKind && rootType==type && rootProperty==0);
+            assert(snapshot.rootControls(1,present,rootKind,rootType,rootProperty) && present==(scenario!=4));
+            if(scenario==4)assert(!rootKind && !rootType && !rootProperty);
+            assert(!snapshot.rootControls(2,present,rootKind,rootType,rootProperty) && !present && !rootKind && !rootType && !rootProperty);
             uint32_t actualKind=0,actualProperty=0;uint64_t actualType=0;
             assert(snapshot.controls(1,actualKind,actualType,actualProperty) && actualKind==kind && actualType==type && actualProperty==property);
             assert(!snapshot.controls(3,actualKind,actualType,actualProperty) && !actualKind && !actualType && !actualProperty);

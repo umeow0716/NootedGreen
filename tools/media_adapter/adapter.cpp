@@ -6154,6 +6154,16 @@ struct NativeCreatorScopedInvocation {
             result.handoffCompleted=false;return result;
         }
         result.nativeOtherOnly=families.vpCount==0;
+        static std::atomic<unsigned> publicationDiagnostics{0};
+        if(publicationDiagnostics.fetch_add(1,std::memory_order_relaxed)<8) {
+            os_log_info(OS_LOG_DEFAULT,"NGRN_CONTEXT_CREATE_OUTPUT count=%{public}u roots=%{public}u",batch.count,chains.rootCount());
+            for(size_t i=0;i<batch.count && i<16;++i) {
+                bool present=false;uint32_t kind=0,property=0;uint64_t type=0;
+                const bool captured=chains.rootControls(i,present,kind,type,property);
+                os_log_info(OS_LOG_DEFAULT,"NGRN_CONTEXT_CREATE_OUTPUT_RECORD index=%{public}u request-captured=%{public}d request-present=%{public}d kind=%{public}u type=%{public}llu property=%{public}u output-present=%{public}d",
+                    unsigned(i),int(captured),int(present),kind,static_cast<unsigned long long>(type),property,int(batch.contexts[i]!=0));
+            }
+        }
         return result;
     }
     template<class Admit,class Handoff>

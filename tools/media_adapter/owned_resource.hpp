@@ -26468,6 +26468,17 @@ public:
     }
     size_t nodeCount() const noexcept {return ready_?used_:0;}
     uint32_t rootCount() const noexcept {return ready_?count_:0;}
+    // Snapshot-only diagnostics: preserve root index (controls() indexes the
+    // deduplicated node graph instead). Never expose an address or read again.
+    bool rootControls(size_t index,bool& present,uint32_t& kind,uint64_t& type,uint32_t& property) const noexcept {
+        present=false;kind=0;type=0;property=0;
+        if(!ready_ || index>=count_)return false;
+        if(!roots_[index])return true;
+        for(size_t n=0;n<used_;++n)if(nodes_[n].address==roots_[index]) {
+            present=true;return controls(n,kind,type,property);
+        }
+        return false;
+    }
     bool controls(size_t index,uint32_t& kind,uint64_t& type,uint32_t& property) const noexcept {
         kind=0;type=0;property=0;if(!ready_ || index>=used_)return false;
         std::memcpy(&kind,nodes_[index].bytes.data(),4);
