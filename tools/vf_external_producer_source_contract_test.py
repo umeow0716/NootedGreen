@@ -353,10 +353,13 @@ def contract(source, path="<source>"):
                   'matches(videoEnd+0x22e,nativeSubmit,sizeof(nativeSubmit))',
                   '0xA48)==videoEnd', '))==videoTable',
                   'PANIC_COND(!qualified', '!this->oVfMediaEnd',
+                  'this->oVfMediaEnd=videoEnd;',
                   'gVfMediaPublicationRouteReady=true;'):
         assert token in media_install, f"{path}: unsafe AVC hook readiness: {token}"
     assert media_install.index('PANIC_COND(!qualified')<media_install.index('patcher.routeMultiple(index,mediaRoute')<\
         media_install.index('OSSynchronizeIO();')<media_install.index('gVfMediaPublicationRouteReady=true;')
+    assert media_install.index('PANIC_COND(!qualified') < media_install.index('this->oVfMediaEnd=videoEnd;') < media_install.index('patcher.routeMultiple(index,mediaRoute')
+    assert 'vfMediaEnd,this->oVfMediaEnd}' not in media_install, 'RIP-relative Media thunk must not be copied into a trampoline'
     media_submit = function_body(source, "IOReturn Gen11::vfContextSubmit(")
     assert media_submit.index('VfExternalProducerGuard guard') < \
         media_submit.index('VfMediaSubmissionScope mediaScope(that,accelerator,mediaEnabled);') < \
@@ -525,6 +528,8 @@ def mutation_contract(source, path):
          'if (getMember<uint32_t>(context,0x6DC)!=1 || !(getMember<uint8_t>(context,0x750)&1))return false;',1),
         ('anchorMatches(submit+0x10b,optionalRecordSkip,sizeof(optionalRecordSkip))','true',1),
         ('anchorMatches(submit+0x168,nextRecord,sizeof(nextRecord))','true',1),
+        ('this->oVfMediaEnd=videoEnd;', 'this->oVfMediaEnd=mediaEnd;', 1),
+        ('Info",vfMediaEnd}', 'Info",vfMediaEnd,this->oVfMediaEnd}', 1),
     )
     for mutation in mutations:
         old, new = mutation[:2]

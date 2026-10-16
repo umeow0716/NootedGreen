@@ -3095,8 +3095,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					getMember<mach_vm_address_t>(reinterpret_cast<void *>(videoTable),0xA48)==videoEnd &&
 					mediaEnd+11+static_cast<int32_t>(getMember<uint32_t>(reinterpret_cast<void *>(mediaEnd),7))==videoTable;
 				PANIC_COND(!qualified,"ngreen","Unreviewed native AVC Media end submission ABI");
+				// The exact Media thunk tail-jumps to this verified table entry.
+				// Lilu copies prologues assuming PIC: its trampoline cannot relocate
+				// the thunk's RIP-relative LEA. Preserve its semantics without copying it.
+				this->oVfMediaEnd=videoEnd;
 				KernelPatcher::RouteRequest mediaRoute[]={
-					{"__ZN24IGAccelVideoContextMedia16endCommandStreamER24IOAccelCommandStreamInfo",vfMediaEnd,this->oVfMediaEnd}
+					{"__ZN24IGAccelVideoContextMedia16endCommandStreamER24IOAccelCommandStreamInfo",vfMediaEnd}
 				};
 				patcher.clearError();
 				PANIC_COND(!patcher.routeMultiple(index,mediaRoute,address,size) || !this->oVfMediaEnd,
@@ -6061,7 +6065,7 @@ IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
 
 void Gen11::vfMediaEnd(void *that,void *stream)
 {
-	PANIC_COND(!callback || !callback->oVfMediaEnd,"ngreen","Missing native Media end trampoline");
+	PANIC_COND(!callback || !callback->oVfMediaEnd,"ngreen","Missing verified native Media end target");
 	void *accelerator=that?getMember<void *>(that,0x5A8):nullptr;
 	if (gVfIdentity!=VfIdentity::Virtual || accelerator!=gVfAccelerator ||
 	    !checkKernelArgument("-ngreenmediaadapter") || !checkKernelArgument("-ngreenavcgen12")) {
