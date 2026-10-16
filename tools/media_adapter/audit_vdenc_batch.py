@@ -27,7 +27,7 @@ def audit(data):
     if not data or len(data) > 65536 or len(data) % 4:
         raise ValueError('bounded nonempty dword-aligned batch required')
     words = struct.unpack('<%dI' % (len(data)//4), data)
-    packets, mapping, registers, controls = [], {}, [], []
+    packets, mapping, registers, controls, surfaces = [], {}, [], [], []
     old = new = 0
     while old < len(words):
         header = words[old]
@@ -46,6 +46,13 @@ def audit(data):
             raise ValueError('unreviewed opcode at %#x' % (old*4))
         if old + size > len(words):
             raise ValueError('truncated packet at %#x' % (old*4))
+        if opcode in (0x70810000,0x70820000,0x70830000):
+            field = words[old+3]
+            surfaces.append({'offset':old*4, 'old_format':field>>28,
+                             'old_interleave':(field>>27)&1,
+                             'gen12_if_blind_copied_format':field>>27,
+                             'nv12_reencoded_control':(field&0xfffff)|(4<<27)
+                             if field>>28==4 and field&(1<<27) else None})
         if opcode == 0x12000000:
             reg = words[old+1]
             expected = MFC_REGISTERS.get(reg)
@@ -93,7 +100,7 @@ def audit(data):
     return {'status': 'AUDIT_ONLY_NOT_SUBMITTABLE', 'native_dwords': len(words),
             'proposed_dwords': new, 'packets': packets,
             'registers': registers, 'buffer_controls': controls,
-            'relocation_coupling': coupling}, mapping
+            'surface_controls': surfaces, 'relocation_coupling': coupling}, mapping
 
 def selftest():
     data = struct.pack('<7I', 0x70000003, 0, 0, 0, 0, 0x70800000, 0)
@@ -112,6 +119,10 @@ def selftest():
     assert not report['buffer_controls'][0]['reserved_triplet_already_zero']
     assert report['buffer_controls'][0]['compression_enabled_slots'] == [12]
     assert report['buffer_controls'][0]['cache_indices'][3] == 42
+    report, _ = audit(struct.pack('<6I',0x70810004,0,0,0x48000003,0,0))
+    assert report['surface_controls'][0]['old_format']==4
+    assert report['surface_controls'][0]['gen12_if_blind_copied_format']==9
+    assert report['surface_controls'][0]['nv12_reencoded_control']==0x20000003
     for reg, absolute in MFC_REGISTERS.items():
         report, _ = audit(struct.pack('<4I',0x12000002,reg,0,0))
         assert report['registers'][0]['gen12_vcs_relative'] == absolute & 0x3fff
