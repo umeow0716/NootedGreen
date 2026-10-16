@@ -176,6 +176,9 @@ static mach_vm_address_t gVfRootObservationVtable = 0;
 static mach_vm_address_t gVfRootObservationGetter = 0;
 static mach_vm_address_t gVfLeafObservationReader = 0;
 static bool gVfLeafObservationDummyBound = false;
+static mach_vm_address_t gVfNativeBatchMapVtable = 0;
+static mach_vm_address_t gVfNativeBatchMapGetter = 0;
+static bool gVfNativeBatchLayoutBound = false;
 // Optional AVC producer integration handles. Resolving these does not enable
 // a route, map memory, invoke a getter, or authorize a command-buffer write.
 bool gVfMediaPublicationAbiVerified = false;
@@ -2899,6 +2902,24 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		               reinterpret_cast<const uint8_t *>(getterStart),
 		               getterEnd - getterStart),
 		           "ngreen", "Changed IOAccelerator command-pool contract");
+		// Observation-only map layout binding on the UUID-pinned Family.
+		const auto mapInit = patcher.solveSymbol(index,
+			"__ZN16IOAccelMemoryMap4initEP22IOGraphicsAccelerator2P11IOAccelTaskP13IOAccelMemoryj",address,size);
+		const auto mapGetter = patcher.solveSymbol(index,
+			"__ZN16IOAccelMemoryMap20getGPUVirtualAddressEv",address,size);
+		static constexpr uint8_t mapOwnerBytes[]={0x4c,0x89,0xa3,0x88,0,0,0,0x4c,0x89,0xab,0x90,0,0,0};
+		static constexpr uint8_t mapAddressBytes[]={0xf6,0x47,0x10,0x40,0x75,0x08,0x48,0x8b,0x87,0x98,0,0,0,0xc3};
+		const auto observationMatch=[address,size](mach_vm_address_t at,const uint8_t *expected,size_t length) {
+			if (at<address || at-address>size || length>size-(at-address)) return false;
+			const auto *actual=reinterpret_cast<const volatile uint8_t *>(at);
+			for (size_t i=0;i<length;++i)if(actual[i]!=expected[i])return false;
+			return true;
+		};
+		gVfNativeBatchLayoutBound=mapInit && mapGetter &&
+			observationMatch(mapInit+0x53U,mapOwnerBytes,sizeof(mapOwnerBytes)) &&
+			observationMatch(mapGetter,mapAddressBytes,sizeof(mapAddressBytes));
+		gVfNativeBatchMapGetter=gVfNativeBatchLayoutBound?mapGetter:0;
+		patcher.clearError();
 		KernelPatcher::RouteRequest commandPoolRoutes[] = {
 			{"__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj",
 			 ngVfCommandPoolInitBridge, gIOAccelCommandPoolInit},
@@ -3113,6 +3134,21 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					dummy <= UINTPTR_MAX-0x3bU && matches(dummy+0x3bU,dummyIdentity,sizeof(dummyIdentity));
 				SYSLOG("ngreen", "V376: bounded native CPU ring operands and dummy identity bound=%u",
 				       gVfLeafObservationDummyBound ? 1U : 0U);
+				const auto batchMapTable=patcher.solveSymbol(index,"__ZTV16IGAccelMemoryMap",address,size);
+				const auto batchEnd=patcher.solveSymbol(index,
+					"__ZN19IGAccelVideoContext16endCommandStreamER24IOAccelCommandStreamInfo",address,size);
+				static constexpr uint8_t batchRecordIdentity[]={
+					0x4d,0x8b,0xa5,0xe0,0x0f,0x00,0x00,0x41,0x8b,0x5e,0x30,0x89,0xd8,0x83,0xe0,0xfc,
+					0x49,0x03,0x46,0x08,0x49,0x8b,0x8d,0x18,0x06,0x00,0x00,0x48,0x89,0x41,0x20,0x49,
+					0x8b,0x7c,0x24,0x40,0x48,0x8b,0x07,0xff,0x90,0x28,0x01,0x00,0x00,0x48,0x01,0xd8,
+					0x49,0x8b,0x8d,0x18,0x06,0x00,0x00,0x48,0x89,0x41,0x18,0x41,0x8b,0x46,0x34,0x83,
+					0xc0,0xfe,0x89,0x41,0x30
+				};
+				gVfNativeBatchMapVtable=batchMapTable && batchMapTable>=address &&
+					batchMapTable-address<=size && 0x150U<=size-(batchMapTable-address) && batchEnd &&
+					matches(batchEnd+0x124U,batchRecordIdentity,sizeof(batchRecordIdentity))?batchMapTable+16U:0;
+				SYSLOG("ngreen", "V377: native batch CPU provenance observation bound=%u",
+				       gVfNativeBatchLayoutBound && gVfNativeBatchMapVtable && gVfLeafObservationReader ? 1U:0U);
 			}
 			patcher.clearError();
 		}
@@ -9629,6 +9665,77 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 // Borrow retained ring/image only under the context lock, then query the
 // exact native CPU leaf reader after releasing that spinlock. No GPU VA is
 // dereferenced; these are first-page translations, not batch-content capture.
+// Existing producer lease/native IOLock and this thread's Media-end scope pin
+// the same resource/map/record. Under PTlock, never ctxspin; no GPU walk.
+static void vfObserveNativeBatchProvenance(void *task,const NGVfTimeoutObservation::BatchTargets &targets) {
+	if (!gVfNativeBatchLayoutBound || !gVfNativeBatchMapVtable || !targets.complete || !targets.count) return;
+	VfMediaSubmission *selected=nullptr;
+	uint32_t scopes=0;
+	void *thread=reinterpret_cast<void *>(current_thread());
+	const IOInterruptState saved=IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	for (auto &entry:gVfMediaSubmissions) {
+		if (entry.thread==thread && entry.context && entry.scratch && entry.translating &&
+		    entry.accelerator==gVfAccelerator) {++scopes;selected=&entry;}
+	}
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock,saved);
+	if (scopes!=1 || !selected) {
+		SYSLOG("ngreen","V377: native batch observation refused reason=media-scope scopes=%u",scopes);return;
+	}
+	void *context=selected->context;
+	void *stream=static_cast<uint8_t *>(context)+0x650;
+	VfMediaMappedSpan span{};
+	if (!vfCaptureMediaMappedSpan(*selected,stream,span) || !span.bytes || span.bytes>65536 ||
+	    span.count<2 || span.count>1536) {
+		SYSLOG("ngreen","V377: native batch observation refused reason=retained-span scopes=%u",scopes);return;
+	}
+	// Exact VideoContext end +0x124..169 binds the retained FE0 resource,
+	// resource+40 GPU map and +618 record's CPU/GPU/count-minus-two stores.
+	void *record=getMember<void *>(context,0x618);
+	void *map=getMember<void *>(span.resource,0x40);
+	const bool mapExact=map && getMember<mach_vm_address_t>(map,0)==gVfNativeBatchMapVtable &&
+		getMember<mach_vm_address_t>(reinterpret_cast<void *>(gVfNativeBatchMapVtable),0x128)==gVfNativeBatchMapGetter;
+	if (!record || !mapExact || getMember<void *>(map,0x88)!=gVfAccelerator ||
+	    !getMember<void *>(map,0x90) || (getMember<uint32_t>(map,0x10)&0x40U)) {
+		SYSLOG("ngreen","V377: native batch observation refused reason=map-identity exact=%u",mapExact?1U:0U);return;
+	}
+	const uint64_t gpuBase=getMember<uint64_t>(map,0x98);
+	if (!gpuBase || span.offset>UINT64_MAX-gpuBase) return;
+	const uint64_t gpu=gpuBase+span.offset;
+	bool matched=false;
+	for (uint32_t i=0;i<targets.count;++i)if(targets.addresses[i]==gpu)matched=true;
+	const auto sameRecord=[&]() {
+		return getMember<uint64_t>(record,0x18)==gpu &&
+			getMember<uintptr_t>(record,0x20)==reinterpret_cast<uintptr_t>(span.commands) &&
+			getMember<uint32_t>(record,0x30)==span.count-2;
+	};
+	if (!matched || !sameRecord()) {
+		SYSLOG("ngreen","V377: native batch observation refused reason=bbs-record-match count=%u",targets.count);return;
+	}
+	static volatile UInt32 recorded=0;
+	if (!OSCompareAndSwap(0,1,&recorded)) return;
+	void *mapTask=getMember<void *>(map,0x90);
+	void *mapMemory=getMember<void *>(map,0x18);
+	SYSLOG("ngreen","V377 NATIVE_BATCH_BEGIN words=%u offset=%u mapFlags=%x map-task-match=%u media-task-match=%u va=%08x:%08x atomic=0 native-count=%u memory-self=%u memory-backing=%u",
+	       span.count,span.offset,getMember<uint32_t>(map,0x10),mapTask==task?1U:0U,
+	       selected->gpuTask==task?1U:0U,static_cast<uint32_t>(gpu>>32),static_cast<uint32_t>(gpu),
+	       span.count-2,mapMemory==span.resource?1U:0U,mapMemory==getMember<void *>(span.resource,0x88)?1U:0U);
+	for (uint32_t first=0;first<span.count;first+=48U) {
+		uint32_t block[48]{};char encoded[257]{};
+		const uint32_t valid=span.count-first<48U?span.count-first:48U;
+		for (uint32_t i=0;i<valid;++i)block[i]=span.commands[first+i];
+		NGVfTimeoutObservation::encodeRingPrefix(block,encoded);
+		SYSLOG("ngreen","V377 NATIVE_BATCH_BLOCK first=%u words=%u data=%.256s",first,valid,encoded);
+	}
+	VfMediaMappedSpan after{};
+	const bool stable=vfCaptureMediaMappedSpan(*selected,stream,after) &&
+		after.resource==span.resource && after.mapped==span.mapped && after.map==span.map &&
+		after.descriptor==span.descriptor && after.commands==span.commands && after.count==span.count &&
+		after.offset==span.offset && after.bytes==span.bytes && after.used==span.used &&
+		getMember<void *>(span.resource,0x40)==map &&
+		getMember<uint64_t>(map,0x98)==gpuBase && getMember<void *>(map,0x90)==mapTask && sameRecord();
+	SYSLOG("ngreen","V377 NATIVE_BATCH_END words=%u stable=%u atomic=0",span.count,stable?1U:0U);
+}
+
 static void vfObserveBatchLeafMapping(void *task, void *pageTable,
                                      NGContextDescriptor::Value descriptor,
                                      uint32_t tail, mach_vm_address_t getter) {
@@ -9666,6 +9773,7 @@ static void vfObserveBatchLeafMapping(void *task, void *pageTable,
 	SYSLOG("ngreen", "V375: CPU ring targets desc=%08x:%08x retained=%u complete=%u count=%u tail=%x atomic=0",
 	       descriptor.high,descriptor.low,captured ? 1U : 0U,targets.complete ? 1U : 0U,targets.count,tail);
 	if (!targets.complete) return;
+	vfObserveNativeBatchProvenance(task,targets);
 	void *bootstrapTask = getMember<void *>(gVfAccelerator,0x150);
 	void *bootstrapTable = bootstrapTask ? getMember<void *>(bootstrapTask,0x260) : nullptr;
 	using Reader = bool (*)(const void *,uint64_t,uint64_t &,uint64_t &);

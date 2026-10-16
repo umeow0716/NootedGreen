@@ -150,6 +150,49 @@ def publication(lines, published_only=False):
             'source_status': 'NOT_DECODED' if published_only else 'COMPLETE',
             'source': None if published_only else streams[0], 'published': streams[1]}
 
+def native_batch(lines):
+    """One terminal, stable, native-record-bound CPU span; not GPU proof."""
+    metadata = None
+    words = []
+    terminal = False
+    for line in lines:
+        if len(line) > 4096:
+            raise ValueError('native batch line exceeds bound')
+        if 'V377 NATIVE_BATCH_' not in line:
+            continue
+        if terminal:
+            raise ValueError('duplicate native batch')
+        match = re.search(r'V377 NATIVE_BATCH_BEGIN words=(\d+) offset=(\d+) mapFlags=([0-9a-f]+) map-task-match=([01]) media-task-match=([01]) va=([0-9a-f]{8}):([0-9a-f]{8}) atomic=0 native-count=(\d+) memory-self=([01]) memory-backing=([01])', line)
+        if match:
+            count, offset = int(match[1]), int(match[2])
+            if metadata is not None or not 2 <= count <= 1536 or int(match[8])+2 != count or offset + count*4 > 65536 or offset % 4:
+                raise ValueError('invalid native batch begin')
+            metadata = {'count': count, 'offset': offset, 'map_flags': int(match[3], 16),
+                        'map_task_match': int(match[4]), 'media_task_match': int(match[5]),
+                        'gpu_va': int(match[6] + match[7], 16), 'native_count': int(match[8]),
+                        'memory_self': int(match[9]), 'memory_backing': int(match[10])}
+            continue
+        match = re.search(r'V377 NATIVE_BATCH_BLOCK first=(\d+) words=(\d+) data=([A-Za-z0-9+/=]+)', line)
+        if match and metadata:
+            first, valid = int(match[1]), int(match[2])
+            if first != len(words) or first % 48 or valid != min(48, metadata['count']-first) or valid <= 0:
+                raise ValueError('invalid native batch chunk extent/order')
+            raw = base64.b64decode(match[3], validate=True)
+            if len(raw) != 192 or any(raw[valid*4:]):
+                raise ValueError('invalid native batch chunk padding')
+            words.extend(struct.unpack('<%dI' % valid, raw[:valid*4]))
+            continue
+        match = re.search(r'V377 NATIVE_BATCH_END words=(\d+) stable=1 atomic=0', line)
+        if match and metadata and int(match[1]) == len(words) == metadata['count']:
+            terminal = True
+            continue
+        raise ValueError('malformed/incomplete/unstable native batch')
+    if not terminal:
+        raise ValueError('missing native batch terminal')
+    return {'status': 'CPU_NATIVE_BATCH_ONLY_NOT_GPU_EXECUTION', 'atomic': False,
+            'metadata': metadata, 'words': words}
+
+
 def selftest():
     data = struct.pack('<7I', 0x70000003, 0, 0, 0, 0, 0x70800000, 0)
     report, mapping = audit(data)
@@ -205,16 +248,43 @@ def selftest():
             continue
         raise AssertionError('bad publication accepted')
     print('AVC_CPU_PUBLICATION_DECODER_SELFTEST_OK')
+    chunks = ['V377 NATIVE_BATCH_BEGIN words=55 offset=16 mapFlags=201 map-task-match=1 media-task-match=1 va=00000000:40010010 atomic=0 native-count=53 memory-self=0 memory-backing=1']
+    for first in (0, 48):
+        valid = min(48, 55-first)
+        raw = struct.pack('<48I', *list(range(first, first+valid)), *([0]*(48-valid)))
+        chunks.append(f'V377 NATIVE_BATCH_BLOCK first={first} words={valid} data={base64.b64encode(raw).decode()}')
+    chunks.append('V377 NATIVE_BATCH_END words=55 stable=1 atomic=0')
+    assert native_batch(chunks)['words'] == list(range(55))
+    for bad in [chunks[1:], chunks[:-1], [chunks[0], *chunks[2:]],
+                [chunks[0], chunks[1], chunks[1], *chunks[2:]],
+                [chunks[0], chunks[2], chunks[1], chunks[3]], [*chunks, chunks[-1]],
+                [chunks[0].replace('words=55', 'words=16385'), *chunks[1:]],
+                [chunks[0].replace('offset=16', 'offset=65536'), *chunks[1:]],
+                [chunks[0].replace('native-count=53', 'native-count=55'), *chunks[1:]],
+                [*chunks[:-1], chunks[-1].replace('stable=1', 'stable=0')],
+                [*chunks[:2], chunks[2].replace('data=', 'data=AAAA'), chunks[-1]]]:
+        try:
+            native_batch(bad)
+        except (ValueError, base64.binascii.Error):
+            continue
+        raise AssertionError('bad native batch accepted')
+    print('NATIVE_BATCH_CPU_DECODER_SELFTEST_OK')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('batch', nargs='?', type=Path)
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--publication-log', type=Path)
+    parser.add_argument('--native-batch-log', type=Path)
     parser.add_argument('--published-only', action='store_true', help='require complete published stream; never claim source completeness')
     args = parser.parse_args()
     if args.self_test:
         selftest()
+    elif args.native_batch_log:
+        if args.publication_log or args.published_only or args.native_batch_log.stat().st_size > 2097152:
+            parser.error('native batch log exceeds 2MiB or conflicting mode')
+        with args.native_batch_log.open() as source:
+            print(json.dumps(native_batch(source), separators=(',', ':')))
     elif args.publication_log:
         if args.publication_log.stat().st_size > 2097152:
             parser.error('publication log exceeds 2MiB')
