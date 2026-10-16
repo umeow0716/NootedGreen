@@ -19066,6 +19066,65 @@ int main() {
         publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used-1,count,1920,1080,
             *scratch,live,[](){return true;});
         assert(!publication.published && backing==originalBacking);
+        {
+            // Native pre-submit reservation, distinct from post-relocation
+            // command publication. Faults include partial write callbacks.
+            std::array<unsigned char,0x5c> wrapper{};
+            constexpr uintptr_t argument=0x10000,base=0x20000;
+            const uintptr_t connection=17,end=base+backing.size()*4,oldCursor=base+used*4;
+            const uint32_t classes=1,previous=128;
+            auto reset=[&]() {
+                wrapper.fill(0);backing=originalBacking;
+                std::memcpy(wrapper.data()+8,&connection,8);std::memcpy(wrapper.data()+0x10,&base,8);
+                std::memcpy(wrapper.data()+0x18,&end,8);std::memcpy(wrapper.data()+0x20,&oldCursor,8);
+                std::memcpy(wrapper.data()+0x44,&previous,4);std::memcpy(wrapper.data()+0x58,&classes,4);
+            };
+            auto locate=[&](uintptr_t at,size_t bytes) noexcept -> unsigned char* {
+                if(at>=argument && at-argument<=wrapper.size() && bytes<=wrapper.size()-(at-argument))
+                    return wrapper.data()+(at-argument);
+                if(at>=base && at-base<=backing.size()*4 && bytes<=backing.size()*4-(at-base))
+                    return reinterpret_cast<unsigned char*>(backing.data())+(at-base);
+                return nullptr;
+            };
+            auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                auto* p=locate(at,bytes);if(!p)return false;std::memcpy(out,p,bytes);return true;
+            };
+            NGVfAvcPublication::Reply cap{};
+            cap.abiVersion=1;cap.bytes=sizeof(cap);cap.registryId=19;cap.flags=1;
+            cap.commandProfile=1;cap.inputLimit=1024;cap.outputLimit=1536;
+            for(unsigned i=0;i<16;++i)cap.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
+            for(unsigned fault=0;fault<8;++fault) {
+                reset();const auto originalWrapper=wrapper;unsigned writes=0;bool ownerLive=true;
+                if(fault==6)cap.flags=0;else cap.flags=1;
+                auto write=[&](uintptr_t at,const void* data,size_t bytes) noexcept {
+                    ++writes;auto* p=locate(at,bytes);if(!p)return false;
+                    const unsigned failAt=(fault==1 || fault==2)?1:2;
+                    if(fault && fault<=5 && writes==failAt) {
+                        if(fault==2 || fault==4 || fault==5)std::memcpy(p,data,bytes/2);
+                        return false;
+                    }
+                    if(fault==5 && writes>failAt)return false;
+                    std::memcpy(p,data,bytes);return true;
+                };
+                auto writable=[&](uintptr_t at,size_t bytes) noexcept {return fault!=7 && locate(at,bytes)!=nullptr;};
+                auto reserved=NgreenNativeAvcReservation::commit(argument,cap,19,1920,1080,*scratch,
+                    read,write,writable,[&]() noexcept {return ownerLive;});
+                assert(!std::memcmp(backing.data(),originalBacking.data(),used*4));
+                if(fault==0) {
+                    assert(reserved.applied && !reserved.mustStop && reserved.extraBytes==67*4);
+                    uintptr_t current=0;std::memcpy(&current,wrapper.data()+0x20,8);
+                    assert(current==oldCursor+67*4);
+                    for(size_t i=used;i<used+67;++i)assert(backing[i]==0);
+                    assert(backing[used+67]==originalBacking[used+67]);
+                    for(size_t i=0;i<wrapper.size();++i)
+                        if(i<0x20 || i>=0x28)assert(wrapper[i]==originalWrapper[i]);
+                } else if(fault==5)assert(!reserved.applied && reserved.mustStop);
+                else {
+                    assert(!reserved.applied && !reserved.mustStop && backing==originalBacking && wrapper==originalWrapper);
+                    if(fault>=6)assert(writes==0);
+                }
+            }
+        }
     }
     for(uint32_t count:{uint32_t{0},uint32_t{17},uint32_t{1}})for(bool nonzero:{false,true}) {
         TglNativeContextPropertyBatch<16> batch;
