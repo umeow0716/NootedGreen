@@ -28474,6 +28474,20 @@ struct TglNativeFrameBatchInvoker {
 };
 // Preparation only; caller publishes the completed table after ALL preflight
 // succeeds. Failure leaves output untouched, including aliased input/output.
+// Named ABI composition prevents swapping similarly named pool/backing pairs.
+// Native2ba5a table slots6/7 are1541c/154cf (pool), slots9/10 are
+//155d1/1580c (typed backing); these are NOT interchangeable entry points.
+struct TglOwnedFactoryCallbacks {
+    uintptr_t initialize=0,destroy=0,createContexts=0,removeContexts=0,lookupFormats=0;
+    uintptr_t allocatePool=0,releasePool=0,describeFormats=0,allocateBacking=0,releaseBacking=0;
+    uintptr_t frame=0,reportFrameEvents=0,configureContexts=0,queryContexts=0;
+    uintptr_t setPhysicalProperties=0,queryPhysicalProperties=0;
+    constexpr std::array<uintptr_t,16> ordered() const noexcept {
+        return {initialize,destroy,createContexts,removeContexts,lookupFormats,
+            allocatePool,releasePool,describeFormats,allocateBacking,releaseBacking,
+            frame,reportFrameEvents,configureContexts,queryContexts,setPhysicalProperties,queryPhysicalProperties};
+    }
+};
 template<class OwnedAdmit>
 bool tglBuildOwnedFullFactoryTable(const TglNativePhysicalCallbackBinding& binding,
     const std::array<uintptr_t,17>& original,const std::array<uintptr_t,16>& replacements,

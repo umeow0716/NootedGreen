@@ -18905,6 +18905,28 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        TglOwnedFactoryCallbacks callbacks;
+        callbacks.initialize=0x135d9;callbacks.destroy=0x13c8c;
+        callbacks.createContexts=0x13e43;callbacks.removeContexts=0x15128;
+        callbacks.lookupFormats=0x1523b;callbacks.allocatePool=0x1541c;
+        callbacks.releasePool=0x154cf;callbacks.describeFormats=0x154f8;
+        callbacks.allocateBacking=0x155d1;callbacks.releaseBacking=0x1580c;
+        callbacks.frame=0x159a4;callbacks.reportFrameEvents=0x15b01;
+        callbacks.configureContexts=0x15c0e;callbacks.queryContexts=0x15f1f;
+        callbacks.setPhysicalProperties=0x15f96;callbacks.queryPhysicalProperties=0x161c3;
+        const auto ordered=callbacks.ordered();
+        TglNativePhysicalCallbackBinding binding;binding.image=0x400000;
+        binding.initialize=binding.image+0x135d9;binding.destroy=binding.image+0x13c8c;
+        std::array<uintptr_t,17> table{};table[0]=0x1234;
+        for(size_t i=0;i<ordered.size();++i)table[i+1]=binding.image+ordered[i];
+        assert(binding.matchesFactoryTable(table));
+        for(size_t i=1;i<table.size();++i)for(size_t j=i+1;j<table.size();++j) {
+            auto wrong=table;std::swap(wrong[i],wrong[j]);assert(!binding.matchesFactoryTable(wrong));
+        }
+        auto old=table;std::swap(old[6],old[9]);std::swap(old[7],old[10]);
+        assert(!binding.matchesFactoryTable(old));
+    }
+    {
         TglOwnedSurfaceStorage shell{};bool changed=false;
         const uint32_t one=1,width=24,height=8,format=0x32,tile=4;
         std::memcpy(shell.resource.data()+0x14,&one,4);

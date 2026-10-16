@@ -6320,16 +6320,16 @@ struct NativeFactoryLifecycle {
         return observe(4,[&]() noexcept {return NativeFactorySource::process().get()?NativeCompositeContextRemoval::run(physical,input):5;});
     }
     static int allocateBacking(void* physical,const void* input) noexcept {
-        return observe(6,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::allocateBacking(physical,input):5;});
+        return observe(9,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::allocateBacking(physical,input):5;});
     }
     static int releaseBacking(void* physical,uint32_t type) noexcept {
-        return observe(7,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::releaseBacking(physical,type):5;});
+        return observe(10,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::releaseBacking(physical,type):5;});
     }
     static int allocatePool(void* physical,const void* input) noexcept {
-        return observe(9,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::allocatePool(physical,input):5;});
+        return observe(6,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::allocatePool(physical,input):5;});
     }
     static int releasePool(void* physical,uint32_t type) noexcept {
-        return observe(10,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::releasePool(physical,type):5;});
+        return observe(7,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::releasePool(physical,type):5;});
     }
     static int initialize(void** output,const void* input) noexcept {
         return observe(1,[&]() noexcept {return NativeFactorySource::process().get()?NativePhysicalBackend::initialize(output,input).status:5;});
@@ -6351,16 +6351,18 @@ struct NativeFactoryLifecycle {
     }
 };
 bool prepareFullFactoryTable(Entry& entry) noexcept {
-    const std::array<uintptr_t,16> callbacks{
-        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::initialize),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::destroy),
-        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::createContexts),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::removeContexts),
-        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::lookupFormats),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::allocateBacking),
-        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::releaseBacking),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::describeFormats),
-        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::allocatePool),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::releasePool),
-        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::frame),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::reportFrameEvents),
-        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::configureContexts),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::queryContexts),
-        reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::setPhysicalProperties),reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::queryPhysicalProperties)};
-    return tglBuildOwnedFullFactoryTable(entry.physical,entry.callbacks,callbacks,entry.preparedCallbacks,&ownedExecutableMemory);
+    TglOwnedFactoryCallbacks callbacks;
+#define NGRN_FACTORY_CALLBACK(name) callbacks.name=reinterpret_cast<uintptr_t>(&NativeFactoryLifecycle::name)
+    NGRN_FACTORY_CALLBACK(initialize);NGRN_FACTORY_CALLBACK(destroy);
+    NGRN_FACTORY_CALLBACK(createContexts);NGRN_FACTORY_CALLBACK(removeContexts);
+    NGRN_FACTORY_CALLBACK(lookupFormats);NGRN_FACTORY_CALLBACK(allocatePool);
+    NGRN_FACTORY_CALLBACK(releasePool);NGRN_FACTORY_CALLBACK(describeFormats);
+    NGRN_FACTORY_CALLBACK(allocateBacking);NGRN_FACTORY_CALLBACK(releaseBacking);
+    NGRN_FACTORY_CALLBACK(frame);NGRN_FACTORY_CALLBACK(reportFrameEvents);
+    NGRN_FACTORY_CALLBACK(configureContexts);NGRN_FACTORY_CALLBACK(queryContexts);
+    NGRN_FACTORY_CALLBACK(setPhysicalProperties);NGRN_FACTORY_CALLBACK(queryPhysicalProperties);
+#undef NGRN_FACTORY_CALLBACK
+    return tglBuildOwnedFullFactoryTable(entry.physical,entry.callbacks,callbacks.ordered(),entry.preparedCallbacks,&ownedExecutableMemory);
 }
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::initialize),int(*)(void**,const void*) noexcept>);
 static_assert(std::is_same_v<decltype(&NativeFactoryLifecycle::destroy),int(*)(void*) noexcept>);
