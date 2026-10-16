@@ -18928,6 +18928,19 @@ static void testActualNv12LayoutSnapshot() {
 }
 int main() {
     {
+        // Actual captured AVC shape: reserve 544 bytes without rebasing any
+        // native sideband token. This is CPU arithmetic, not ownership proof.
+        const auto r=NgreenAvcGen12::reserve(0x1000,0x1aa8,0x3000,128,682,818);
+        assert(r.ok && r.cursor==0x1cc8 && r.extraBytes==544 && r.usedBytes==3400);
+        assert(!NgreenAvcGen12::reserve(0x1000,0x1aa8,0x1cc4,0,682,818).ok);
+        assert(!NgreenAvcGen12::reserve(0x1000,0x1aa8,0x3000,UINT32_MAX-3,682,818).ok);
+        assert(!NgreenAvcGen12::reserve(0x1000,0x1aac,0x3000,0,682,818).ok);
+        assert(!NgreenAvcGen12::reserve(0x1000,0x1aa8,0x3000,0,682,682).ok);
+        assert(!NgreenAvcGen12::reserve(0x1000,0x1aa8,0x3001,0,682,818).ok);
+        const uintptr_t high=UINTPTR_MAX-0x2fff;
+        assert(NgreenAvcGen12::reserve(high,high+2728,high+4096,0,682,818).ok);
+    }
+    {
         std::array<uint32_t,512> input{},output{};size_t used=0;
         auto add=[&](uint32_t header,size_t n){size_t start=used;input[used++]=header;
             used+=n-1;return start;};

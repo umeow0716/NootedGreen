@@ -10,6 +10,31 @@
 // it is not a general HEVC/AV1/compressed-reference translator.
 namespace NgreenAvcGen12 {
 struct Result { bool ok=false; size_t words=0; const char* reason="input"; };
+// Arithmetic only: callers must prove the native builder lock, current buffer
+// identity, writable tail and kernel feature handshake before applying this.
+// Advancing the producer cursor reserves bytes through native SetUsedBytes;
+// sideband offsets and the original command count must remain unchanged.
+struct Reservation {
+    bool ok=false;
+    uintptr_t cursor=0;
+    uint32_t usedBytes=0;
+    size_t extraBytes=0;
+};
+inline Reservation reserve(uintptr_t base,uintptr_t cursor,uintptr_t end,
+                           uint32_t previousUsedBytes,size_t inputWords,
+                           size_t outputWords) noexcept {
+    Reservation r;
+    if(!base || ((base|cursor|end|previousUsedBytes)&3U) ||
+       cursor<base || end<cursor || inputWords<2 || inputWords>1024 ||
+       outputWords<=inputWords || outputWords>1536 ||
+       cursor-base!=inputWords*4U)return r;
+    const size_t extra=(outputWords-inputWords)*4U;
+    if(extra>end-cursor || cursor-base>UINT32_MAX-previousUsedBytes)return r;
+    const uint32_t used=previousUsedBytes+static_cast<uint32_t>(cursor-base);
+    if(extra>UINT32_MAX-used)return r;
+    r.ok=true;r.cursor=cursor+extra;r.usedBytes=used+static_cast<uint32_t>(extra);
+    r.extraBytes=extra;return r;
+}
 inline uint32_t opcode(uint32_t header) noexcept {
     return header<0x60000000U ? header&0xff800000U : header&0xffff0000U;
 }
