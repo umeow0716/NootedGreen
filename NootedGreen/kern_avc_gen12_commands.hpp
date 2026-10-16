@@ -72,7 +72,11 @@ inline bool legacyNv12Surface(const uint32_t* packet,uint32_t width,uint32_t hei
     // Gen9 bits28..31=format4, bit27=interleave. Gen12 bits27..31=format4;
     // blind copying 0x48000000 would select Gen12 RGBA_10_10_10_2 (format9).
     return (packet[2]&15U)==0 && ((packet[2]>>4)&0x3fffU)+1==width &&
-        (packet[2]>>18)+1==height && (packet[3]&0xfff00000U)==0x48000000U;
+        (packet[2]>>18)+1==height && (packet[3]&0xfff00000U)==0x48000000U &&
+        // Accepted PLANAR_420_8/NV12 has one byte per luma pixel. Gen12
+        // SurfacePitch bits3..19 encode byte stride minus one for all three
+        // source/reference/downscaled NV12 surfaces; it must cover a row.
+        ((packet[3]>>3)&0x1ffffU)+1>=width;
 }
 inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t height,
                       uint32_t* output,size_t capacity) noexcept {

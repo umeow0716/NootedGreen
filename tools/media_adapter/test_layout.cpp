@@ -18997,9 +18997,12 @@ int main() {
         add(0x70000003,5);auto mfxPipe=add(0x70020042,68);
         auto mode=add(0x70800000,2);input[mode+1]=0x82;
         auto surface=[&](uint32_t header,uint32_t width,uint32_t height){auto at=add(header,6);
-            input[at+2]=((width-1)<<4)|((height-1)<<18);input[at+3]=0x48000003;return at;};
-        auto source=surface(0x70810004,1920,1088);surface(0x70820004,1920,1088);
-        surface(0x70830004,480,272);auto pipe=add(0x70840023,37);input[pipe+9]=14;
+            input[at+2]=((width-1)<<4)|((height-1)<<18);
+            input[at+3]=0x48000003|((width-1)<<3);return at;};
+        auto source=surface(0x70810004,1920,1088);
+        auto reference=surface(0x70820004,1920,1088);
+        auto downscaled=surface(0x70830004,480,272);
+        auto pipe=add(0x70840023,37);input[pipe+9]=14;
         auto mfxImage=add(0x71000013,21);auto image=add(0x70850021,35);
         auto walker=add(0x70870002,4);input[walker+2]=68;
         for(uint32_t reg:{0x128a0U,0x128a4U,0x128b4U,0x128b8U}) {
@@ -19010,7 +19013,9 @@ int main() {
         assert(result.ok && result.words==used+67);
         assert(output[0]==0x68000100 && output[6]==0x68000100 && output[75]==0x70800004);
         assert(output[76]==0x82 && output[77]==0x2b030a && output[78]==0x7000303);
-        assert(output[84]==0x20000003 && output[90]==0x20000003 && output[96]==0x20000003);
+        assert(output[84]==(0x20000003U|(1919U<<3)) &&
+               output[90]==(0x20000003U|(1919U<<3)) &&
+               output[96]==(0x20000003U|(479U<<3)));
         assert(output[196]==0x40 && !(output[196]&0x20));
         // Captured native AVC DW1=0xc0 already enables Extended PAK.
         // Preserve it exactly; the previous 0x20 OR incorrectly enabled UltraMode.
@@ -19036,6 +19041,10 @@ int main() {
         input[pipe+12]=1U<<9;rejected();input=good;
         input[walker+2]=69;rejected();input=good;
         input[source+3]=0x20000003;rejected();input=good;
+        input[source+3]=0x48000003;rejected();input=good; // One-byte pitch.
+        input[source+3]=0x48000003U|(1918U<<3);rejected();input=good;
+        input[reference+3]=0x48000003U|(1918U<<3);rejected();input=good;
+        input[downscaled+3]=0x48000003U|(478U<<3);rejected();input=good;
         input[source+2]^=16;rejected();input=good;
         input[mfxPipe+3]=0x400;rejected();input=good;
         input[mfxImage+17]=1;rejected();input=good;
