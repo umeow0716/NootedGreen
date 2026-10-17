@@ -5,10 +5,51 @@
 #include <cstdio>
 #include <cstring>
 #include "../NootedGreen/kern_vf_device_observation.hpp"
+#include "../NootedGreen/kern_flight_trace.hpp"
+
+struct FlightSample {uint32_t id;uint64_t args[4];};
+static std::array<FlightSample,260> flightSamples{};
+static unsigned flightCount=0;
+static void traceFlight(uint32_t id,uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t unused) {
+    assert(unused==0 && flightCount<flightSamples.size());
+    flightSamples[flightCount++]={id,{a,b,c,d}};
+}
+static void testFlightEnvelope() {
+    std::array<uint32_t,1536> words{};
+    for(uint32_t i=0;i<words.size();++i)words[i]=0x12345678U+i*0x1020304U;
+    for(uint32_t count:{0U,1U,5U,6U,7U,1535U,1536U}) {
+        flightCount=0;unsigned ids=0;
+        assert(NGFlightTrace::emitCpuWords(&traceFlight,[&](){++ids;return 7U;},3,42,99,words.data(),count));
+        assert(ids==1 && flightCount==2+(count+5)/6);
+        const auto& first=flightSamples[0];
+        assert(first.id==NGFlightTrace::begin && first.args[0]==(NGFlightTrace::magic|7));
+        assert(first.args[1]==42 && first.args[2]==((uint64_t(3)<<32)|count) && first.args[3]==99);
+        uint64_t hash=UINT64_C(14695981039346656037);
+        for(unsigned chunk=1;chunk+1<flightCount;++chunk) {
+            const auto& sample=flightSamples[chunk];const uint32_t at=(chunk-1)*6;
+            assert(sample.id==NGFlightTrace::data && sample.args[0]==((uint64_t(7)<<32)|at));
+            for(unsigned i=0;i<6;++i) {
+                const uint32_t got=uint32_t(sample.args[1+i/2]>>((i&1)*32));
+                assert(got==(at+i<count?words[at+i]:0));
+                if(at+i<count)hash=(hash^got)*UINT64_C(1099511628211);
+            }
+        }
+        const auto& last=flightSamples[flightCount-1];
+        assert(last.id==NGFlightTrace::end && last.args[0]==(NGFlightTrace::magic|7));
+        assert(last.args[1]==42 && last.args[2]==count && last.args[3]==hash);
+    }
+    auto denied=[](){assert(false);return 0U;};flightCount=0;
+    assert(!NGFlightTrace::emitCpuWords(nullptr,denied,1,0,0,nullptr,0));
+    assert(!NGFlightTrace::emitCpuWords(&traceFlight,denied,1,0,0,nullptr,1));
+    assert(!NGFlightTrace::emitCpuWords(&traceFlight,denied,1,0,0,words.data(),1537));
+    assert(!NGFlightTrace::emitCpuWords(&traceFlight,[](){return 0U;},1,0,0,words.data(),1));
+    assert(flightCount==0);
+}
 
 using NGVfContextShutdown::Action;
 
 int main() {
+    testFlightEnvelope();
     assert(NGVfTimeoutObservation::prefixEngineForChannel(0)==0);
     assert(NGVfTimeoutObservation::prefixEngineForChannel(3)==3);
     for(int32_t channel:{INT32_MIN,-1,1,2,4,5,6,INT32_MAX})

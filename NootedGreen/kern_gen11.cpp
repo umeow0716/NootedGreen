@@ -4,6 +4,7 @@
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOUserClient.h>
 #include "kern_guc_ring.hpp"
+#include "kern_flight_trace.hpp"
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
 #include "kern_ggtt_rotation.hpp"
@@ -519,6 +520,27 @@ constexpr uint32_t kGucContextRegistrationFlagKmd = 1;
 constexpr uint32_t kGucContextDisable = 0;
 constexpr uint32_t kGucContextEnable = 1;
 constexpr uint32_t kGucClientPriorityKmdNormal = 2;
+// Native XNU 12377 kdebug ABI: five uintptr arguments, arg5 ignored in
+// kernel_debug (the native implementation supplies the actual thread ID).
+// Resolved public KPI/data symbols, not a text patch or a private RPC bypass.
+using VfFlightTrace = NGFlightTrace::Callback;
+static VfFlightTrace gVfFlightTrace = nullptr;
+static volatile uint32_t *gVfFlightEnable = nullptr;
+static volatile SInt32 gVfFlightRecordSerial = 0,gVfFlightGroupSerial = 0;
+static uint32_t vfFlightCurrentGroup();
+static bool vfFlightEnabled() {
+	return gVfIdentity==VfIdentity::Virtual && gVfFlightTrace && gVfFlightEnable && (*gVfFlightEnable&1U);
+}
+// Copies only explicitly qualified CPU words. Each bounded record has a
+// unique ID, group, extent and end hash; missing native trace events cannot
+// masquerade as a complete record. Atomic GPU state/execution is NOT claimed.
+static void vfFlightRecord(uint32_t kind,uint32_t group,uint64_t identity,
+                           const volatile uint32_t *words,uint32_t count) {
+	if (!vfFlightEnabled())return;
+	(void)NGFlightTrace::emitCpuWords(gVfFlightTrace,[]() {
+		return static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+	},kind,group,identity,words,count);
+}
 constexpr uint32_t kGucPolicyExecutionQuantum = 0x2001;
 constexpr uint32_t kGucPolicyPreemptionTimeout = 0x2002;
 constexpr uint32_t kGucPolicySchedulingPriority = 0x2003;
@@ -786,6 +808,13 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 			OSSynchronizeIO();
 			NGreen::callback->writeReg32(kGen11GucHostInterrupt,
 			                              kGucSendTrigger);
+			if(vfFlightEnabled()) {
+				uint32_t wire[39]{};
+				wire[0]=fence;wire[1]=requestLength;wire[2]=wireStart;wire[3]=tail;
+				wire[4]=contextTailField?1U:0U;wire[5]=contextTail;
+				for(uint32_t i=0;i<=requestLength;++i)wire[6+i]=buffer[(wireStart+i)%size];
+				vfFlightRecord(6,vfFlightCurrentGroup(),fence,wire,7U+requestLength);
+			}
 			// The producer queue is still held, so another CPU producer cannot
 			// reuse these slots during this bounded readback. GuC consumption,
 			// PCIe delivery and GPU execution are NOT proved by CPU equality.
@@ -1161,8 +1190,17 @@ struct VfMediaSubmission {
 	NgreenAvcGen12::PublishScratch *scratch;
 	bool translating;
 	bool failed;
+	uint32_t flightGroup;
 };
 static VfMediaSubmission gVfMediaSubmissions[32] {};
+static uint32_t vfFlightCurrentGroup() {
+	if(!gVfContextLock)return 0;
+	void *thread=reinterpret_cast<void *>(current_thread());uint32_t group=0,seen=0;
+	const auto state=IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	for(const auto& entry:gVfMediaSubmissions)if(entry.thread==thread && entry.scratch){group=entry.flightGroup;++seen;}
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock,state);
+	return seen==1?group:0; // Async events remain explicitly unassociated.
+}
 static_assert(sizeof(NgreenAvcGen12::PublishScratch) == 16U*1024U,
               "owned AVC per-submission scratch budget changed");
 
@@ -1197,6 +1235,7 @@ public:
 				entry.context=context;entry.accelerator=accelerator;entry.task=nullptr;
 				entry.shared=nullptr;entry.gpuTask=nullptr;
 				entry.scratch=nullptr;entry.translating=false;entry.failed=false;slot=&entry;
+				entry.flightGroup=static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightGroupSerial));
 				break;
 			}
 		}
@@ -1212,12 +1251,15 @@ public:
 		if (!scratch) {refusal="scratch-allocation";releaseSlot();return;}
 		slot->scratch=scratch;
 		OSSynchronizeIO();admitted=true;refusal="admitted";
+		vfFlightRecord(1,slot->flightGroup,0,nullptr,0);
 	}
 	~VfMediaSubmissionScope() {
 		if (!slot) return;
 		void *owner=reinterpret_cast<void *>(current_thread());
 		PANIC_COND(slot->thread != owner || slot->translating,"ngreen",
 		           "Invalid owned AVC submission scope exit");
+		const uint32_t result[]={slot->failed?1U:0U};
+		vfFlightRecord(11,slot->flightGroup,0,result,1);
 		releaseSlot();
 	}
 	VfMediaSubmissionScope(const VfMediaSubmissionScope &)=delete;
@@ -2799,6 +2841,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		               ioAccelImage, size,
 		               NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid),
 		           "ngreen", "Unsupported Tahoe IOAcceleratorFamily2 private ABI");
+		if(checkKernelArgument("-ngreenmediaadapter") && checkKernelArgument("-ngreenavcgen12")) {
+			gVfFlightTrace=reinterpret_cast<VfFlightTrace>(patcher.solveSymbol(KernelPatcher::KernelID,"_kernel_debug"));
+			gVfFlightEnable=reinterpret_cast<volatile uint32_t *>(patcher.solveSymbol(KernelPatcher::KernelID,"_kdebug_enable"));
+			patcher.clearError();
+			SYSLOG("ngreen","V380: native binary flight recorder bound=%u",gVfFlightTrace && gVfFlightEnable?1U:0U);
+		}
 		// Diagnostics only: preserve all native routes if this optional private
 		// field provenance is unavailable. No native instruction is modified.
 		const auto reportRestart = patcher.solveSymbol(index,
@@ -6297,6 +6345,13 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 		"Lost owned AVC mapping after count publication");
 	SYSLOG("ngreen","Gen12 AVC native publication words=%u reserved=%u",
 		static_cast<uint32_t>(publication.preparation.words),static_cast<uint32_t>(span.reservedWords));
+	const uint64_t flightAddress=span.gpuBase+span.offset;
+	const uint32_t flightMetadata[]={span.count,static_cast<uint32_t>(publication.preparation.words),
+		span.offset,span.used,span.bytes,span.mapFlags,span.type,span.resourceBytes,
+		span.classes,span.recordFlags,static_cast<uint32_t>(flightAddress),static_cast<uint32_t>(flightAddress>>32)};
+	vfFlightRecord(9,entry->flightGroup,flightAddress,flightMetadata,arrsize(flightMetadata));
+	vfFlightRecord(2,entry->flightGroup,flightAddress,entry->scratch->source,span.count);
+	vfFlightRecord(3,entry->flightGroup,flightAddress,span.commands,static_cast<uint32_t>(publication.preparation.words));
 	// One complete CPU-side publication record per boot, while the existing
 	// owner/lock/mapping scope is still pinned. Never traverse GPU addresses.
 	// This is not an atomic GPU snapshot or evidence of device execution.
@@ -9798,10 +9853,16 @@ static void vfObserveNativeBatchProvenance(void *task,const NGVfTimeoutObservati
 	if (!matched || !sameRecord()) {
 		SYSLOG("ngreen","V377: native batch observation refused reason=bbs-record-match count=%u",targets.count);return;
 	}
-	static volatile UInt32 recorded=0;
-	if (!OSCompareAndSwap(0,1,&recorded)) return;
 	void *mapTask=getMember<void *>(map,0x90);
 	void *mapMemory=getMember<void *>(map,0x18);
+	const uint32_t nativeMetadata[]={span.count,span.offset,getMember<uint32_t>(map,0x10),
+		mapTask==task?1U:0U,selected->gpuTask==task?1U:0U,
+		mapMemory==span.resource?1U:0U,mapMemory==getMember<void *>(span.resource,0x88)?1U:0U,
+		1U}; // before-copy identity qualified; NOT an after-copy/atomicity claim.
+	vfFlightRecord(12,selected->flightGroup,gpu,nativeMetadata,arrsize(nativeMetadata));
+	vfFlightRecord(4,selected->flightGroup,gpu,span.commands,span.count);
+	static volatile UInt32 recorded=0;
+	if (!OSCompareAndSwap(0,1,&recorded)) return;
 	SYSLOG("ngreen","V377 NATIVE_BATCH_BEGIN words=%u offset=%u mapFlags=%x map-task-match=%u media-task-match=%u va=%08x:%08x atomic=0 native-count=%u memory-self=%u memory-backing=%u",
 	       span.count,span.offset,getMember<uint32_t>(map,0x10),mapTask==task?1U:0U,
 	       selected->gpuTask==task?1U:0U,static_cast<uint32_t>(gpu>>32),static_cast<uint32_t>(gpu),
@@ -9863,6 +9924,7 @@ static void vfObserveBatchLeafMapping(void *task, void *pageTable,
 	SYSLOG("ngreen", "V375: CPU ring targets desc=%08x:%08x retained=%u complete=%u count=%u tail=%x atomic=0",
 	       descriptor.high,descriptor.low,captured ? 1U : 0U,targets.complete ? 1U : 0U,targets.count,tail);
 	if (!targets.complete) return;
+	vfFlightRecord(5,vfFlightCurrentGroup(),(uint64_t(descriptor.high)<<32)|descriptor.low,words,tail/4U);
 	vfObserveNativeBatchProvenance(task,targets);
 	void *bootstrapTask = getMember<void *>(gVfAccelerator,0x150);
 	void *bootstrapTable = bootstrapTask ? getMember<void *>(bootstrapTask,0x260) : nullptr;
@@ -10199,6 +10261,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	}
 
 	queue.unlock();
+	const uint32_t flightSubmit[]={gucId,descriptorLo,descriptorHi,static_cast<uint32_t>(hwCsType),
+		channelId,ringSequence,ringTail,previousRingTail,enable?1U:0U,submitted?1U:0U,transportFence,
+		static_cast<uint32_t>(submissionToken),static_cast<uint32_t>(submissionToken>>32)};
+	vfFlightRecord(7,vfFlightCurrentGroup(),(uint64_t(descriptorHi)<<32)|descriptorLo,flightSubmit,arrsize(flightSubmit));
 	static uint32_t submitLogs = 0;
 	if (submitLogs++ < 64 || !submitted) {
 		SYSLOG("ngreen", "V233: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x old=0x%x channel=%u seq=%u enable=%d ret=%d fence=%u desc-hi=%08x serial=%llx",
@@ -10470,6 +10536,7 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	const uint32_t transport = message[0];
 	const uint32_t hxg = message[1];
 	const uint32_t length = transport & 0xFFU;
+	if(length && length<=31)vfFlightRecord(8,0,transport>>16,message,length+1U);
 	const uint32_t type = hxg & kGucTypeMask;
 	const bool response = (hxg & kGucOriginGuc) != 0 &&
 	                      (type == kGucTypeRetry ||

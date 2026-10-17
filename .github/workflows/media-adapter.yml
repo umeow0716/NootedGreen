@@ -20,6 +20,10 @@ jobs:
           xcrun clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tools/media_adapter/test_layout.cpp -o "$RUNNER_TEMP/adapter-test"
           "$RUNNER_TEMP/adapter-test"
           mkdir -p output
+          xcrun clang++ -std=c++17 -Wall -Wextra -Werror -arch x86_64 -mmacosx-version-min=26.0 tools/media_adapter/kdebug_recorder.cpp -o output/kdebug-recorder
+          codesign --force --sign - output/kdebug-recorder
+          output/kdebug-recorder --self-test
+          shasum -a 256 output/kdebug-recorder > output/kdebug-recorder.sha256
           xcrun clang++ -std=c++17 -Wall -Wextra -Werror -arch x86_64 -mmacosx-version-min=26.0 tools/media_adapter/factory_probe.cpp -o output/tgl-capability-factory-probe
           codesign --force --sign - output/tgl-capability-factory-probe
           xcrun clang++ -std=c++17 -Wall -Wextra -Werror -arch x86_64 -mmacosx-version-min=26.0 tools/media_adapter/self_debug_probe.cpp -o output/self-debug-probe

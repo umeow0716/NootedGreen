@@ -5,6 +5,13 @@ compiler="${CXX:-clang++}"
 task_output="$(mktemp -d "${TMPDIR:-/tmp}/ngreen-static.XXXXXX")"
 printf 'Diagnostic directory: %s\n' "$task_output"
 failed=0
+if "$compiler" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    tools/media_adapter/kdebug_recorder.cpp -o "$task_output/kdebug-recorder-test" && \
+    "$task_output/kdebug-recorder-test" --self-test; then
+    printf 'PASS native trace ABI/ownership CPU tests (no trace configured)\n'
+else
+    failed=1
+fi
 if python3 -B tools/ngreen_flight_stream.py self-test; then
     printf 'PASS bounded Host flight stream archive integrity\n'
 else
