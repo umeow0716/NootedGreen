@@ -41,6 +41,7 @@ def mode_template_fields(words):
               'pipeline_flushes': [], 'mi_flushes': [], 'mi_operands': [], 'mi_profile_issues': [],
               'vdenc_pipe_resources': [], 'mfx_pipe_resources': [],
               'mfx_indirect_resources': [], 'mfx_bsp_resources': [], 'indirect_start_fields': [],
+              'surface_layouts': [],
               'resource_coverage': 'EXPLICIT_BASE_FIELDS_ONLY_NOT_EXTENTS_OR_ALL_INDIRECT_ACCESSES'}
     if not words or len(words) > 1536 or any(type(x) is not int or not 0 <= x <= 0xffffffff for x in words):
         result['refusal'] = 'word-extent-or-value'
@@ -85,7 +86,21 @@ def mode_template_fields(words):
         if count > len(words) - at:
             result.update(refusal='truncated-packet', stopped_word=at)
             return result
-        if op == 0x70000000:
+        if op in (0x70010000, 0x70810000, 0x70820000, 0x70830000):
+            # Gen12 MFX DW2..5 / VDENC common surface fields DW2..5.
+            # Format moved from MFX bit28 to VDENC bit27; do not unify it.
+            geometry, control, u, v = words[at+2:at+6]
+            result['surface_layouts'].append(dict(word=at, opcode=f'{op:08x}',
+                surface_id=words[at+1]&15 if op==0x70010000 else None,
+                width=((geometry>>4)&0x3fff)+1, height=(geometry>>18)+1,
+                pitch=((control>>3)&0x1ffff)+1, tiled=(control>>1)&1,
+                tile_walk=control&1, half_pitch=(control>>2)&1,
+                format=control>>(28 if op==0x70010000 else 27),
+                interleave=(control>>27)&1 if op==0x70010000 else None,
+                u_y=u&0x7fff, u_x=(u>>16)&0x7fff,
+                v_y=v&0xffff, v_x=(v>>16)&0x1fff,
+                allocation_extent_proven=False, gpu_fetch_proven=False))
+        elif op == 0x70000000:
             control = words[at+1]
             result['mfx_modes'].append(dict(word=at, control=control, standard=control & 15,
                 encode=(control >> 4) & 1, vdenc=(control >> 13) & 1, standalone=(control >> 14) & 1))
@@ -623,6 +638,25 @@ def selftest():
     assert offsets[0]['base_resolution'] == 'NOT_PERFORMED'
     assert not mode_template_fields(mfx[:-1])['complete_packet_walk']
     assert not mode_template_fields(mfx[:-1])['mfx_pipe_resources']
+    mfx_surface=[0x70010004,4,0x10fc77f0,0x48003bfb,0x440,0x440]
+    vdenc_surface=[0x70810004,0,0x10fc77f0,0x20003bfb,0x440,0x440]
+    for packet in (mfx_surface,vdenc_surface):
+        layout=mode_template_fields(packet)['surface_layouts'][0]
+        assert (layout['width'],layout['height'],layout['pitch'])==(1920,1088,1920)
+        assert layout['format']==4 and layout['u_y']==1088 and layout['tiled']==1
+        assert not layout['allocation_extent_proven'] and not layout['gpu_fetch_proven']
+    assert mode_template_fields(mfx_surface)['surface_layouts'][0]['interleave']==1
+    assert mode_template_fields(vdenc_surface)['surface_layouts'][0]['interleave'] is None
+    assert not mode_template_fields(vdenc_surface[:-1])['surface_layouts']
+    # Distinguish the two format layouts and exercise every field boundary.
+    edge=[0x70810004,0,0xffffffff,0xffffffff,0xffffffff,0xffffffff]
+    layout=mode_template_fields(edge)['surface_layouts'][0]
+    assert (layout['width'],layout['height'],layout['pitch'])==(16384,16384,131072)
+    assert (layout['format'],layout['u_x'],layout['u_y'],layout['v_x'],layout['v_y'])==(
+        31,32767,32767,8191,65535)
+    edge[0]=0x70010004
+    layout=mode_template_fields(edge)['surface_layouts'][0]
+    assert layout['format']==15 and layout['surface_id']==0
     assert mode_template_fields([0x05000000, 0])['complete_packet_walk']
     assert not mode_template_fields([0x05000000, 0, 0])['complete_packet_walk']
     assert not mode_template_fields([0x05000000, 1])['complete_packet_walk']
