@@ -61,6 +61,40 @@ void testAvcPublishedByteRevalidation(std::array<uint32_t,512>& backing,volatile
     assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),SIZE_MAX,count,scratch,publication));
 }
 
+void testAvcMiAddressSpaces(const std::array<uint32_t,512>& frame,size_t used,size_t insert) {
+    auto examine=[&](std::array<uint32_t,5> packet,bool accepted) {
+        assert(insert<used && used+packet.size()<=frame.size());
+        auto input=frame;
+        for(size_t i=used;i>insert;--i)input[i+packet.size()-1]=frame[i-1];
+        for(size_t i=0;i<packet.size();++i)input[insert+i]=packet[i];
+        const auto frozen=input;std::array<uint32_t,512> output;output.fill(0xdeadbeef);
+        const auto result=NgreenAvcGen12::produce(input.data(),used+5,1920,1080,output.data(),output.size());
+        const auto size=NgreenAvcGen12::sizeBeforeRelocation(input.data(),used+5,1920,1080);
+        if(result.ok!=accepted || size.bounded!=accepted)
+            std::fprintf(stderr,"CPU MI case header=%08x expected=%d strict=%d size=%d reason=%s\n",
+                packet[0],int(accepted),int(result.ok),int(size.bounded),result.reason);
+        assert(result.ok==accepted && size.bounded==accepted && input==frozen);
+        if(accepted)assert(size.outputWords==result.words);
+        else for(auto word:output)assert(word==0xdeadbeef);
+    };
+    const std::array<uint32_t,5> store{0x10200003,0x2000,0,1,0},flush{0x13004003,0x1000,0,1,0};
+    examine(store,true);examine(flush,true);
+    auto dword=store;dword[0]&=~(1U<<21);examine(dword,true);
+    auto noWrite=flush;noWrite[0]&=~0xc000U;examine(noWrite,true);
+    auto timestamp=flush;timestamp[0]|=1U<<15;examine(timestamp,true);
+    auto packet=store;packet[0]|=1U<<22;examine(packet,false); // GGTT store.
+    packet=flush;packet[1]|=4U;examine(packet,false); // GGTT flush destination.
+    packet=flush;packet[0]|=1U<<21;examine(packet,false); // HWS/index mode, not an ordinary PPGTT address.
+    packet=flush;packet[0]=(packet[0]&~0xc000U)|0x8000U;examine(packet,false); // Undefined PostSync=2, not timestamp=3.
+    for(unsigned bit:{6U,10U,11U,12U,13U,16U,17U,19U,20U,22U}) {
+        packet=flush;packet[0]|=1U<<bit;examine(packet,false);
+    }
+    for(unsigned bit:{10U,11U,12U}) {packet=store;packet[0]|=1U<<bit;examine(packet,false);}
+    for(unsigned bit:{0U,1U}) {packet=flush;packet[1]|=1U<<bit;examine(packet,false);}
+    for(unsigned bit=16;bit<32;++bit) {packet=flush;packet[2]|=1U<<bit;examine(packet,false);}
+    packet=store;packet[1]|=2U;examine(packet,false); // Reserved address bit1.
+}
+
 void testOwnedAvcHookFailStop() {
     using namespace NgreenNativeAvcReservation;
     for(unsigned mode=0;mode<10;++mode) {
@@ -20558,6 +20592,7 @@ int main() {
         assert(result.ok && output[196]==0xc0);
         input[image+1]=0;
         const auto good=input;output.fill(0xdeadbeef);
+        testAvcMiAddressSpaces(good,used,walker);
         // Cross-phase invariant over every single-bit change to the actual
         // fixture: strict accepted commands must have an equal reservation
         // size, and rejection must leave the entire output untouched. This

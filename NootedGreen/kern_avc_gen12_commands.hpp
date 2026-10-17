@@ -48,6 +48,11 @@ inline size_t packetWords(uint32_t header) noexcept {
     // Gen12 SRM reserves bits8..16,18,20..21. Keep functional bits
     // MMIO-remap17, CS-offset19 and global-GTT22 distinct from this mask.
     if(op==0x12000000U && (header&0x0035ff00U))return 0;
+    // Distinct Gen12 MI layouts: store-immediate reserves12..10;
+    // flush-DW reserves6/13..10/17..16/20..19/22. Legal flags are
+    // narrowed separately by the owned address-space profile below.
+    if(op==0x10000000U && (header&0x00001c00U))return 0;
+    if(op==0x13000000U && (header&0x005b3c40U))return 0;
     if(op==0x70480000U)return (header&0xfffU)+2;
     size_t n=0;
     switch(op) {
@@ -134,6 +139,18 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
             r.reason="walker-state-order";return r;}
         if(op==0x12000000U && !walkers){r.reason="status-order";return r;}
         size_t emitted=n;
+        if(op==0x10000000U) {
+            if(input[at]&(1U<<22)){r.reason="store-global-gtt";return r;}
+            if(input[at+1]&2U){r.reason="store-address-reserved";return r;}
+        }
+        if(op==0x13000000U) {
+            // GGTT and HWS-index writes cannot inherit task-PPGTT admission.
+            if((input[at]&(1U<<21)) || (input[at+1]&4U)){
+                r.reason="flush-address-space";return r;}
+            if((input[at+1]&3U) || (input[at+2]&0xffff0000U)){
+                r.reason="flush-address-reserved";return r;}
+            if(((input[at]>>14)&3U)==2U){r.reason="flush-postsync";return r;}
+        }
         if(op==0x70000000U){++mfx;emitted+=2;
             if(input[at+2]&0x20U || input[at+4]){r.reason="mfx-mode-options";return r;}}
         if(op==0x70020000U){++mfxPipe;
