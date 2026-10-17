@@ -223,12 +223,51 @@ static void testPublishedResourceBases() {
         [](const uint32_t *,uint32_t){assert(false);}));
 }
 
+static void testMapHeaderWalk() {
+    const uint64_t base=UINT64_C(0xffffff8042000000);
+    for(unsigned scenario=0;scenario<10;++scenario) {
+        unsigned nodeReads=0,headReads=0,emitted=0,endStatus=99,endWalked=0;
+        const unsigned count=scenario==1?300:3;
+        const bool complete=NGFlightTrace::observeMapListHeaders(
+            [&](unsigned phase,NGFlightTrace::MapListHead &head) {
+                ++headReads;head.head=base;head.tail=base+(count-1)*256;head.count=count;
+                if(scenario==2)head.head=0xffff000000005000ULL;
+                if(scenario==3 && phase)++head.count;
+                return true;
+            },[&](uint64_t address,unsigned index,NGFlightTrace::MapListNode &node) {
+                assert(address==base+index*256);++nodeReads;
+                if(scenario==4)return false;
+                node.previous=index?address-256:0;node.next=index+1<count?address+256:0;
+                if(scenario==5 && index==2)node.next=base;
+                node.owner=!(scenario==6 && index==1);node.known=scenario!=7;node.stable=scenario!=8;
+                node.gpu=0x40000000+index*65536;node.backingBytes=65536;
+                node.assignedBytes=index==1?131072:0;node.flags=index==1?0x4001:1;
+                return true;
+            },[&](){return scenario!=9;},
+            [&](unsigned index,const NGFlightTrace::MapListNode &node,bool unchanged) {
+                assert(index==emitted++ && unchanged);
+                if(index==1)assert(node.backingBytes==65536 && node.assignedBytes==131072 && node.flags==0x4001);
+            },[&](unsigned status,unsigned walked,unsigned declared) {
+                endStatus=status;endWalked=walked;
+                assert(declared==count || scenario==9);
+            });
+        const unsigned expected[]={0,2,3,6,1,3,4,0,5,5};
+        assert(endStatus==expected[scenario] && complete==(endStatus==0));
+        if(scenario==0 || scenario==7)assert(nodeReads==3 && headReads==2 && emitted==3);
+        if(scenario==1)assert(nodeReads==256 && endWalked==256);
+        if(scenario==2 || scenario==9)assert(!nodeReads && !emitted);
+        if(scenario==4)assert(nodeReads==1 && !emitted);
+        if(scenario==6)assert(nodeReads==2 && emitted==2);
+    }
+}
+
 int main() {
     testFlightEnvelope();
     testBackingPages();
     testCpuAliasPages();
     testBorrowedBatchCopy();
     testPublishedResourceBases();
+    testMapHeaderWalk();
     assert(NGVfTimeoutObservation::prefixEngineForChannel(0)==0);
     assert(NGVfTimeoutObservation::prefixEngineForChannel(3)==3);
     for(int32_t channel:{INT32_MIN,-1,1,2,4,5,6,INT32_MAX})

@@ -30,7 +30,8 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          15: 'retained_ring_metadata', 16: 'retained_ring_chunk',
          17: 'mapper_backing_page', 18: 'cpu_alias_ram_page',
          19: 'synchronous_batch_metadata', 20: 'synchronous_batch_chunk',
-         21: 'resource_base_metadata', 22: 'resource_base_leaf'}
+         21: 'resource_base_metadata', 22: 'resource_base_leaf',
+         23: 'cpu_map_header_pair', 24: 'cpu_map_list_boundary'}
 RESOURCE_SLOTS = {
     1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
     2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
@@ -38,6 +39,62 @@ RESOURCE_SLOTS = {
 
 
 def validate_leaf(kind, words):
+    if kind in (23, 24):
+        expected = 226 if kind == 23 else 24
+        if len(words) != expected or words[0] != 1 or words[1] > 2 or words[2] > 1:
+            raise ValueError('invalid CPU map snapshot extent/role')
+        def zero_padding(raw, copied):
+            return not any(struct.pack(f'<{len(raw)}I', *raw)[copied:])
+        def value(raw, offset):
+            return raw[offset//4] | raw[offset//4+1] << 32
+        if kind == 24:
+            if (words[3] not in (0, 1) or words[4] > 6 or words[5] > 256 or
+                    words[7] > 20 or words[8] > 20 or words[9] != 256 or words[10] or words[11] or
+                    not zero_padding(words[12:18], words[7]) or not zero_padding(words[18:24], words[8])):
+                raise ValueError('invalid CPU map list boundary flags/padding')
+            if words[3] == 0 and any(words[i] for i in (4, 5, 6, 7, 8)):
+                raise ValueError('CPU map list begin is not empty')
+            if words[3] == 1:
+                if words[7] == 20 and words[16] != words[6]:
+                    raise ValueError('CPU map list declared count mismatch')
+                if words[4] == 0 and (words[7:9] != [20, 20] or words[5] != words[6] or words[12:17] != words[18:23]):
+                    raise ValueError('CPU map list completion without equal full heads')
+                if words[4] == 0:
+                    head, tail = value(words[12:18], 0), value(words[12:18], 8)
+                    if (words[6] == 0 and (head or tail)) or (words[6] and
+                            (head >> 47 != 0x1ffff or tail >> 47 != 0x1ffff or (head | tail) & 7)):
+                        raise ValueError('CPU map completed topology has invalid endpoints')
+                if words[4] == 2 and (words[5] != 256 or words[6] < 256):
+                    raise ValueError('CPU map list limit inconsistent')
+            return
+        if (words[3] >= 256 or words[6] > 208 or words[7] > 208 or words[8] > 216 or words[9] > 216 or
+                words[10] & ~255 or words[11] or words[12] or words[13] != 212):
+            raise ValueError('invalid CPU map header counts/flags')
+        address = words[4] | words[5] << 32
+        if address >> 47 != 0x1ffff or address & 7:
+            raise ValueError('noncanonical CPU map node')
+        before, after, memory, memory_after = words[14:66], words[66:118], words[118:172], words[172:226]
+        for raw, copied in ((before, words[6]), (after, words[7]), (memory, words[8]), (memory_after, words[9])):
+            if not zero_padding(raw, copied):
+                raise ValueError('CPU map uncopied bytes are nonzero')
+        flags = words[10]
+        for bit, copied, size in ((1, words[6], 208), (2, words[7], 208), (4, words[8], 216), (8, words[9], 216)):
+            if bool(flags & bit) != (copied == size):
+                raise ValueError('CPU map full-copy flag mismatch')
+        if flags & 0xb0 and flags & 3 != 3:
+            raise ValueError('CPU map identity without full headers')
+        if flags & 16 and (not value(before, 0x88) or not value(before, 0x90) or
+                           any(value(before, offset) != value(after, offset) for offset in (0x88, 0x90))):
+            raise ValueError('CPU map owner comparison mismatch')
+        if flags & 32 and (not value(before, 0) or value(before, 0) != value(after, 0)):
+            raise ValueError('CPU map class comparison mismatch')
+        if flags & 64 and (flags & 0x3f != 0x3f or not value(memory, 0) or not value(memory, 0x28) or
+                           any(value(memory, offset) != value(memory_after, offset) for offset in (0, 0x28, 0x40, 0xd0))):
+            raise ValueError('CPU backing header comparison mismatch')
+        if flags & 128 and (before[4] != after[4] or any(value(before, offset) != value(after, offset)
+                           for offset in (0, 0x18, 0x28, 0x30, 0x88, 0x90, 0x98, 0xc8))):
+            raise ValueError('CPU map stable-header comparison mismatch')
+        return
     if kind == 21:
         if (len(words) != 8 or words[0] != 1 or words[1] > 64 or
                 words[2] not in (0, 1) or not 1 <= words[4] <= 1536 or
@@ -366,6 +423,7 @@ class DiskSink:
         self.db.execute('CREATE TABLE cpu_backings (identity TEXT, group_id INTEGER, pages INTEGER, captured INTEGER, valid INTEGER, bytes INTEGER, map_offset TEXT, options INTEGER, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.execute('CREATE TABLE synchronous_batches (identity TEXT PRIMARY KEY, group_id INTEGER, gpu TEXT, words INTEGER, copied INTEGER, flags INTEGER, captured INTEGER) WITHOUT ROWID')
         self.db.execute('CREATE TABLE resource_batches (identity TEXT, group_id INTEGER, fields INTEGER, words INTEGER, admitted INTEGER, captured INTEGER, stable INTEGER, last_field TEXT, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
+        self.db.execute('CREATE TABLE map_lists (identity TEXT, group_id INTEGER, role INTEGER, list INTEGER, attempts INTEGER, good INTEGER, known INTEGER, ended INTEGER, status INTEGER, walked INTEGER, declared INTEGER, PRIMARY KEY(identity,group_id,role,list)) WITHOUT ROWID')
         self.db.commit()
         self.pending = 0
         self.sideband_file = None
@@ -403,7 +461,32 @@ class DiskSink:
         validate_leaf(record['kind'], words)
         if self.db.execute('SELECT 1 FROM records WHERE id=?', (record['record_id'],)).fetchone():
             raise ValueError('duplicate completed flight record ID')
-        if record['kind'] == 21:
+        if record['kind'] in (23, 24):
+            key = (record['identity'], record['group'], words[1], words[2])
+            if not int(record['identity'], 16) or not record['group']:
+                raise ValueError('CPU map snapshot parent missing')
+            if record['kind'] == 24 and words[3] == 0:
+                try:
+                    self.db.execute('INSERT INTO map_lists VALUES (?,?,?,?,0,0,0,0,NULL,NULL,NULL)', key)
+                except sqlite3.IntegrityError as exc:
+                    raise ValueError('duplicate CPU map list begin') from exc
+            else:
+                current = self.db.execute('SELECT attempts,good,ended FROM map_lists WHERE identity=? AND group_id=? AND role=? AND list=?', key).fetchone()
+                if current is None or current[2]:
+                    raise ValueError('CPU map node/end before begin or after end')
+                if record['kind'] == 23:
+                    if current[0] != words[3]:
+                        raise ValueError('CPU map node duplicate/out of order')
+                    self.db.execute('UPDATE map_lists SET attempts=attempts+1,good=good+?,known=known+? WHERE identity=? AND group_id=? AND role=? AND list=?',
+                                    (int(words[10] & 0x93 == 0x93), int(words[10] & 0x60 == 0x60))+key)
+                else:
+                    if current[0] not in (words[5], words[5]+1):
+                        raise ValueError('CPU map attempted/walked count mismatch')
+                    if words[4] == 0 and (current[0] != words[5] or current[1] != current[0]):
+                        raise ValueError('CPU map completion missing qualified headers')
+                    self.db.execute('UPDATE map_lists SET ended=1,status=?,walked=?,declared=? WHERE identity=? AND group_id=? AND role=? AND list=?',
+                                    (words[4], words[5], words[6])+key)
+        elif record['kind'] == 21:
             if not int(record['identity'], 16) or not record['group']:
                 raise ValueError('resource inventory batch identity/group missing')
             try:
@@ -504,6 +587,12 @@ class DiskSink:
                 'stability_scope': 'SOURCE_IDENTITY_ONLY_NOT_TABLE_ATOMICITY',
                 'only_base_first_pages': True, 'allocation_extents_proven': False,
                 'gpu_execution_proof': False}
+
+    def map_list_report(self):
+        total, complete, unknown = self.db.execute('SELECT COUNT(*),COALESCE(SUM(ended=1 AND status=0),0),COALESCE(SUM(attempts-known),0) FROM map_lists').fetchone()
+        return {'lists': total, 'observed_complete_topologies': complete, 'partial_or_missing_end': total-complete,
+                'unknown_or_partial_backing_nodes': unknown, 'native_object_lease_proven': False,
+                'allocation_extents_proven': False, 'gpu_execution_proof': False}
 
     def close(self):
         if self.sideband_file is not None:
@@ -807,6 +896,54 @@ def self_test():
             pass
         else:
             raise AssertionError('refused resource inventory admitted a leaf')
+        boundary = dict(saved[0], record_id=700, group=3, kind=24, identity='0000000040010000',
+                        words=[1, 0, 0, 0, 0, 0, 0, 0, 0, 256, 0, 0]+[0]*12)
+        save(boundary)
+        def put64(raw, offset, value):
+            raw[offset//4:offset//4+2] = [value & 0xffffffff, value >> 32]
+        node, memory = [0]*52, [0]*54
+        put64(node, 0, 0xffffff804010a000)
+        put64(node, 0x18, 0xffffff8041004000)
+        put64(node, 0x88, 0xffffff8040200000)
+        put64(node, 0x90, 0xffffff8041000000)
+        put64(node, 0x98, 0x40010000)
+        put64(node, 0xc8, 131072); node[4] = 0x4001
+        put64(memory, 0, 0xffffff804010b000)
+        put64(memory, 0x28, 0xffffff8040200000)
+        put64(memory, 0x40, 65536)
+        put64(memory, 0xd0, 0xffffff8041006000)
+        map_words = [1, 0, 0, 0, 0x41002000, 0xffffff80, 208, 208, 216, 216, 255, 0, 0, 212]+node+node+memory+memory
+        snapshot = dict(boundary, record_id=701, kind=23, words=map_words)
+        for index, val in ((6, 209), (10, 254), (11, 1), (12, 1), (13, 213), (14+104+16, 0)):
+            bad = list(map_words); bad[index] = val
+            try:
+                validate_leaf(23, bad)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('invalid/false-leased CPU map header accepted')
+        save.db.execute("CREATE TEMP TRIGGER map_failure BEFORE INSERT ON records WHEN NEW.id=701 BEGIN SELECT RAISE(ABORT,'owned map injected write failure'); END")
+        try:
+            save(snapshot)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('injected CPU map header write failure accepted')
+        assert save.db.execute('SELECT attempts FROM map_lists').fetchone()[0] == 0
+        save.db.execute('DROP TRIGGER map_failure')
+        save(snapshot)
+        assert save.map_list_report()['observed_complete_topologies'] == 0
+        heads = [0x41002000, 0xffffff80, 0x41002000, 0xffffff80, 1, 0]
+        ended = dict(boundary, record_id=702, words=[1, 0, 0, 1, 0, 1, 1, 20, 20, 256, 0, 0]+heads+heads)
+        save(ended)
+        assert save.map_list_report()['observed_complete_topologies'] == 1
+        assert not save.map_list_report()['native_object_lease_proven']
+        try:
+            save(dict(snapshot, record_id=703))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('CPU map header after END accepted')
         for index, value in ((5, 1), (6, 4097), (7, 5), (9, 2), (12, 1)):
             bad = list(batch['words']); bad[index] = value
             try:
@@ -855,6 +992,7 @@ if __name__ == '__main__':
         cpu_alias_report = sink.backing_report(cpu_alias=True)
         synchronous_batch_report = sink.synchronous_batch_report()
         resource_report = sink.resource_report()
+        map_list_report = sink.map_list_report()
         try:
             sink.close()
         except (OSError, sqlite3.Error) as exc:
@@ -865,6 +1003,7 @@ if __name__ == '__main__':
         report['cpu_alias_backings'] = cpu_alias_report
         report['synchronous_batches'] = synchronous_batch_report
         report['resource_bases'] = resource_report
+        report['cpu_map_lists'] = map_list_report
         if error:
             report['error'] = error
             report['capture_transport_complete'] = False

@@ -188,6 +188,7 @@ static void *gVfCpuKernelPmapStore = nullptr;
 static void **gVfCpuSystemMapperSlot = nullptr;
 static mach_vm_address_t gVfBatchCpuCopy = 0;
 static mach_vm_address_t gVfBatchCaller = 0;
+static bool gVfMapSnapshotLayoutBound = false;
 // Boot-owned copies, not retained native pointers. Unique tickets avoid any
 // reuse while emitting; no allocation, waits or new locks in native submit.
 static uint32_t gVfBatchCpuCopies[8][16384] {};
@@ -2959,6 +2960,20 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			const auto nofaultCopy=patcher.solveSymbol(KernelPatcher::KernelID,"_ml_nofault_copy");
 			const auto physicalCopy=patcher.solveSymbol(KernelPatcher::KernelID,"_bcopy_phys");
 			gVfBatchCpuCopy=0;
+			gVfMapSnapshotLayoutBound=false;
+			const auto listInit=patcher.solveSymbol(index,"__ZN20IOAccelMemoryMapList4initEv",address,size);
+			const auto listAdd=patcher.solveSymbol(index,"__ZN20IOAccelMemoryMapList10addMappingEP16IOAccelMemoryMap",address,size);
+			const auto mapReserve=patcher.solveSymbol(index,"__ZN16IOAccelMemoryMap24reserveGPUVirtualAddressEyy",address,size);
+			const auto mapSearch=patcher.solveSymbol(index,"__ZN11IOAccelTask29searchMapForGPUVirtualAddressEyPP16IOAccelMemoryMap",address,size);
+			constexpr uint8_t reserveFields[]={0x48,0x89,0xb7,0x98,0,0,0,0x48,0x89,0x97,0xc8,0,0,0,0x80,0x4f,0x11,0x40};
+			constexpr uint8_t listFirst[]={0x48,0x8d,0xb7,0,0x02,0,0};
+			constexpr uint8_t listSecond[]={0x49,0x81,0xc7,0xe8,0x01,0,0};
+			gVfMapSnapshotLayoutBound=listInit && listAdd && mapReserve && mapSearch &&
+				NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(listInit),22)==UINT64_C(0x8af5292e747d0d15) &&
+				NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(listAdd),42)==UINT64_C(0x34662c7e271165d2) &&
+				anchorMatches(mapReserve+0x10,reserveFields,sizeof(reserveFields)) &&
+				anchorMatches(mapSearch+0x38,listFirst,sizeof(listFirst)) &&
+				anchorMatches(mapSearch+0x56,listSecond,sizeof(listSecond));
 			// Complete exact code, plus both actual callees. This native helper
 			// rejects non-RAM/missing pages and returns a SHORT byte count.
 			// It never enters descriptor DMA mapping or faults pages in.
@@ -3420,7 +3435,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				SYSLOG("ngreen","V382: bounded CPU batch and resource observers bound=%u",
 					this->oVfObserveRingBatch && gVfLeafObservationReader && gVfRootObservationVtable && gVfRootObservationGetter &&
 					gVfNativeBatchLayoutBound && gVfNativeBatchMapVtable && gVfNativeBatchMapGetter &&
-					gVfMediaMapOffsetLayoutVerified && gVfMediaSysMemoryVtable && gVfCpuKernelPmapSlot && gVfCpuSystemMapperSlot?1U:0U);
+					gVfMediaMapOffsetLayoutVerified && gVfMediaSysMemoryVtable && gVfCpuKernelPmapSlot && gVfCpuSystemMapperSlot &&
+					gVfMapSnapshotLayoutBound?1U:0U);
 			}
 			// Tahoe's telemetry manager and per-stamp usage objects are created
 			// before startGraphicsEngine(). TelemetryDisable only gates the trace
@@ -9998,6 +10014,87 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 // Caller holds the EXISTING native page-table update lock, before CTB queue.
 // These inputs are the qualified retained CPU span, not a GPUVA dereference.
 template<class Stable>
+static void vfObserveTaskMapHeaders(void *task,uint32_t role,uint32_t group,uint64_t gpu,Stable &&stable) {
+	if(!vfFlightEnabled() || !gVfMapSnapshotLayoutBound || !gVfBatchCpuCopy)return;
+	using Copy=uint64_t (*)(uint64_t,uint64_t,uint64_t);
+	const auto copy=reinterpret_cast<Copy>(gVfBatchCpuCopy);
+	const auto value=[](const uint32_t *raw,uint32_t offset) {
+		return uint64_t(raw[offset/4])|(uint64_t(raw[offset/4+1])<<32);
+	};
+	for(uint32_t list=0;list<2;++list) {
+		uint32_t heads[12]{},headBytes[2]{};
+		const uint32_t offset=list?0x200U:0x1e8U;
+		const auto meta=[&](uint32_t phase,uint32_t status,uint32_t walked,uint32_t declared) {
+			const uint32_t prefix[]={1,role,list,phase,status,walked,declared,headBytes[0],headBytes[1],256,0,0};
+			NGFlightTrace::emitCpuWordsPrefixed(gVfFlightTrace,[]() {
+				return static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+			},24,group,gpu,prefix,arrsize(prefix),heads,arrsize(heads));
+		};
+		meta(0,0,0,0);
+		const uint64_t taskAddress=reinterpret_cast<uintptr_t>(task);
+		if(!NGFlightTrace::canonicalKernelObject(taskAddress) || taskAddress>UINT64_MAX-0x218U) {
+			meta(1,3,0,0);continue;
+		}
+		(void)NGFlightTrace::observeMapListHeaders([&](uint32_t phase,NGFlightTrace::MapListHead &head) {
+			auto *raw=heads+phase*6;
+			const auto bytes=copy(taskAddress+offset,reinterpret_cast<uintptr_t>(raw),20);
+			headBytes[phase]=bytes<=20?uint32_t(bytes):0U;
+			if(bytes!=20)return false;
+			head.head=value(raw,0);head.tail=value(raw,8);head.count=raw[4];return true;
+		},[&](uint64_t address,uint32_t index,NGFlightTrace::MapListNode &node) {
+			// Fixed base-class CPU headers only; no virtual call or retain on
+			// borrowed nodes. Unknown child classes never enter backing reads.
+			uint32_t raw[212]{};
+			auto *before=raw,*after=raw+52,*memory=raw+104,*memoryAfter=raw+158;
+			const auto boundedCopy=[&](uint64_t from,uint32_t *to,uint32_t bytes) {
+				if(!NGFlightTrace::canonicalKernelObject(from) || from>UINT64_MAX-bytes)return 0U;
+				const auto copied=copy(from,reinterpret_cast<uintptr_t>(to),bytes);
+				return copied<=bytes?uint32_t(copied):0U;
+			};
+			const uint32_t first=boundedCopy(address,before,208);
+			uint32_t memoryBytes=0,memoryAfterBytes=0;
+			const auto backingCopy=[&](const uint32_t *map,uint32_t bytes,uint32_t *destination) {
+				if(bytes!=208 || value(map,0)!=gVfNativeBatchMapVtable || value(map,0x88)!=reinterpret_cast<uintptr_t>(gVfAccelerator) ||
+				   value(map,0x90)!=taskAddress)return 0U;
+				const uint64_t backing=value(map,0x18);
+				const uint32_t peek=boundedCopy(backing,destination,8);
+				return peek==8 && value(destination,0)==gVfMediaSysMemoryVtable?boundedCopy(backing,destination,216):peek;
+			};
+			memoryBytes=backingCopy(before,first,memory);
+			const uint32_t second=boundedCopy(address,after,208);
+			memoryAfterBytes=backingCopy(after,second,memoryAfter);
+			const bool full=first==208 && second==208;
+			node.owner=full && value(before,0x88)==reinterpret_cast<uintptr_t>(gVfAccelerator) &&
+				value(before,0x90)==taskAddress && value(after,0x88)==value(before,0x88) && value(after,0x90)==taskAddress;
+			const bool mapKnown=full && value(before,0)==gVfNativeBatchMapVtable && value(after,0)==gVfNativeBatchMapVtable;
+			const bool backingKnown=memoryBytes==216 && memoryAfterBytes==216 &&
+				value(memory,0)==gVfMediaSysMemoryVtable && value(memoryAfter,0)==gVfMediaSysMemoryVtable &&
+				value(memory,0x28)==reinterpret_cast<uintptr_t>(gVfAccelerator) && value(memoryAfter,0x28)==value(memory,0x28) &&
+				value(memory,0x40)==value(memoryAfter,0x40) && value(memory,0xD0)==value(memoryAfter,0xD0);
+			node.known=mapKnown && backingKnown;
+			node.stable=full && value(before,0x88)==value(after,0x88) && value(before,0x90)==value(after,0x90) &&
+				value(before,0)==value(after,0) && before[4]==after[4] &&
+				value(before,0x18)==value(after,0x18) && value(before,0x28)==value(after,0x28) && value(before,0x30)==value(after,0x30) &&
+				value(before,0x98)==value(after,0x98) && value(before,0xC8)==value(after,0xC8);
+			if(full) {
+				node.previous=value(before,0x28);node.next=value(before,0x30);node.gpu=value(before,0x98);
+				node.assignedBytes=value(before,0xC8);node.flags=before[4];
+				if(backingKnown)node.backingBytes=value(memory,0x40);
+			}
+			const uint32_t flags=(first==208?1U:0U)|(second==208?2U:0U)|(memoryBytes==216?4U:0U)|
+				(memoryAfterBytes==216?8U:0U)|(node.owner?16U:0U)|(mapKnown?32U:0U)|(backingKnown?64U:0U)|(node.stable?128U:0U);
+			const uint32_t prefix[]={1,role,list,index,uint32_t(address),uint32_t(address>>32),first,second,memoryBytes,memoryAfterBytes,flags,0,0,212};
+			NGFlightTrace::emitCpuWordsPrefixed(gVfFlightTrace,[]() {
+				return static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+			},23,group,gpu,prefix,arrsize(prefix),raw,arrsize(raw));
+			return full;
+		},[&](){return stable() && vfFlightEnabled();},
+		[](uint32_t,const NGFlightTrace::MapListNode &,bool){},
+		[&](uint32_t status,uint32_t walked,uint32_t declared){meta(1,status,walked,declared);});
+	}
+}
+
+template<class Stable>
 static void vfObserveMediaResourceBases(void *task,void *mediaTask,uint32_t group,uint64_t gpu,
                                        const volatile uint32_t *commands,uint32_t words,Stable &&stable) {
 	if(!vfFlightEnabled())return;
@@ -10022,6 +10119,8 @@ static void vfObserveMediaResourceBases(void *task,void *mediaTask,uint32_t grou
 		return sample;
 	},stable,[&](const uint32_t *record,uint32_t count){vfFlightRecord(22,group,gpu,record,count);});
 	SYSLOG("ngreen","V382: resource base CPU leaves fields=%u sampled=%u atomic=0 extent-proof=0",bases.count,sampled?1U:0U);
+	void *tasks[]={task,bootstrapTask,mediaTask};
+	for(uint32_t role=0;role<3;++role)vfObserveTaskMapHeaders(tasks[role],role,group,gpu,stable);
 }
 
 static void vfObserveNativeBatchProvenance(void *task,const NGVfTimeoutObservation::BatchTargets &targets) {

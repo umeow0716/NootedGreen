@@ -10,6 +10,52 @@ constexpr uint64_t magic=UINT64_C(0x4e47464c00000000);
 constexpr uint32_t maximumWords=1536;
 struct BorrowedBatchCopy {uint32_t bytes=0,copied=0,flags=0;};
 struct ResourceLeafSample {uint64_t physical=0,flags=0;bool exact=false,read=false;};
+struct MapListHead {uint64_t head=0,tail=0;uint32_t count=0;};
+struct MapListNode {
+    uint64_t previous=0,next=0,gpu=0,assignedBytes=0,backingBytes=0;
+    uint32_t flags=0;
+    bool owner=false,known=false,stable=false;
+};
+inline bool canonicalKernelObject(uint64_t address) {
+    return (address>>47)==0x1ffffU && !(address&7U);
+}
+// CPU snapshot walker only: callbacks must use the bound native nofault copy,
+// not virtual getters or retain. Equality does NOT exclude reuse/ABA and never
+// supplies a lifetime lease. No address below is a GPU memory dereference.
+template<class ReadHead,class ReadNode,class Stable,class EmitNode,class EmitEnd>
+inline bool observeMapListHeaders(ReadHead &&readHead,ReadNode &&readNode,Stable &&stable,
+                                  EmitNode &&emitNode,EmitEnd &&emitEnd) {
+    MapListHead before{},after{};
+    uint32_t walked=0,status=0;
+    uint64_t previous=0,current=0;
+    if(!stable())status=5;
+    else if(!readHead(0U,before))status=1;
+    else if((!before.head)!=(!before.tail) || (!before.head)!=(before.count==0) ||
+            (before.head && (!canonicalKernelObject(before.head) || !canonicalKernelObject(before.tail))))status=3;
+    else current=before.head;
+    const uint32_t limit=before.count<256U?before.count:256U;
+    while(!status && current && walked<limit) {
+        if(!stable()){status=5;break;}
+        if(!canonicalKernelObject(current)){status=3;break;}
+        MapListNode node{};
+        if(!readNode(current,walked,node)){status=1;break;}
+        const bool unchanged=stable();
+        emitNode(walked,node,unchanged);
+        ++walked;
+        if(!unchanged || !node.stable){status=5;break;}
+        if(!node.owner){status=4;break;}
+        if(node.previous!=previous || node.next==current || (node.next && node.next==before.head)) {status=3;break;}
+        previous=current;current=node.next;
+    }
+    if(!status && current)status=walked==256U?2U:3U;
+    if(!status && (walked!=before.count || previous!=before.tail))status=3;
+    if(!status && !stable())status=5;
+    if(!status && !readHead(1U,after))status=1;
+    if(!status && (before.head!=after.head || before.tail!=after.tail || before.count!=after.count))status=6;
+    if(!status && !stable())status=5;
+    emitEnd(status,walked,before.count);
+    return !status; // Topology observation only, NEVER object/mapping/plane proof.
+}
 // Read-only observations of an already decoded CPU base inventory. NULL and
 // internal-media addresses must NEVER enter a PPGTT reader. No inferred extent.
 template<class Bases,class Query,class Stable,class Emit>

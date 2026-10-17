@@ -1,5 +1,28 @@
 # Tahoe SR-IOV protocol audit — in progress
 
+## 2026-10-18 bounded CPU map-header snapshot (local, not deployed)
+
+The native-nofault backend now samples the allocated/resident intrusive lists
+for submit/bootstrap/media task roles, at most256 nodes per list. It copies
+base-class208B map headers before/after and only follows an exact known map's
+backing after owner checks. The backing is first peeked for its8B class; only
+the bound SysMemory subtype gets a216B header copy. No virtual getter, native
+search, allocator, retain, new lock, MMIO or GPUVA dereference is invoked.
+Exact pure Family list-init22B/list-add42B and reserved-field/list-head anchors
+bind the raw layout; the existing SysMemory length+40 proof is reused.
+
+Kinds23/24 preserve copied-byte counts and header pairs, begin/end status,
+role/list/index, ownership/class/stability observations, and explicit atomic0 /
+lifetime-lease0. Backing length+40 and fixed assigned length+C8 remain distinct.
+Malformed heads, short reads, topology/cycles, owner mismatches, identity
+changes and the256-node limit are explicit failures/partial snapshots. Unknown
+subtypes are not dereferenced through their vtable or treated as known backing.
+Head/link equality does NOT exclude reuse/ABA or prove an allocation lease.
+Decoder separates observed topology coverage from object, extent and GPU proof;
+SQL rejects duplicate/out-of-order/before-BEGIN/after-END nodes and rolls back
+partially inserted records. Only CPU-owned fixture callbacks have executed the
+new backend; real kernel routing/copying and PF/H264 safety are NOT proven.
+
 ## 2026-10-18 resource first-page observation (local, not deployed)
 
 The qualified retained native CPU batch now feeds a strict bounded Gen12

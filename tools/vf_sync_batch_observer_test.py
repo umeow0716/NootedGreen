@@ -109,8 +109,8 @@ if sys.argv[1:2] == ['--resource-layout']:
             subprocess.run([str(binary)], check=True)
         print('PASS production CPU resource parser matches independent offline inventory for saved publication and native batch; no GPU call')
 elif sys.argv[1:]:
-    if len(sys.argv) != 4 or sys.argv[1] != '--native':
-        raise SystemExit('usage: vf_sync_batch_observer_test.py [--native TGL KERNEL]')
+    if len(sys.argv) not in (4, 5) or sys.argv[1] != '--native':
+        raise SystemExit('usage: vf_sync_batch_observer_test.py [--native TGL KERNEL [FAMILY]]')
     def bounded(path, offset, size):
         assert 0 < size <= 1024
         with Path(path).open('rb') as file:
@@ -144,17 +144,33 @@ elif sys.argv[1:]:
             (0x7b, 0x7f, 0xffffff80003c9880),
             (0x12d, 0x131, 0xffffff80003e0b10)):
         assert 0xffffff80003e4dc0 + next_instruction + struct.unpack_from('<i', copier, displacement)[0] == target
+    if len(sys.argv) == 5:
+        family = sys.argv[4]
+        for offset, size, digest in ((0x1ce9e, 22, 0x8af5292e747d0d15),
+                                     (0x1cebe, 42, 0x34662c7e271165d2)):
+            original = bounded(family, offset, size)
+            assert f'0x{digest:016x}' in source and fnv(original) == digest
+            for index in range(size):
+                bad = bytearray(original); bad[index] ^= 1
+                assert fnv(bad) != digest; mutations += 1
+        assert bounded(family, 0x525be, 18) == bytes.fromhex('4889b798000000488997c8000000804f1140')
+        assert bounded(family, 0x39c20, 7) == bytes.fromhex('488db700020000')
+        assert bounded(family, 0x39c3e, 7) == bytes.fromhex('4981c7e8010000')
     print(f'PASS bounded native batch/copy/pmap spans and {mutations} byte mutations; exact caller and relocation-free entry; static only')
 start = source.index('bool Gen11::vfObserveRingBatch(')
 stop = source.index('\nvoid Gen11::vfMediaEnd(', start)
 body = source[start:stop]
 assert body.count('__builtin_return_address(0)') == 1
 body = body.replace('__builtin_return_address(0)', 'testCaller')
+map_start = source.index('template<class Stable>\nstatic void vfObserveTaskMapHeaders(')
+map_body = source[map_start:source.index('\ntemplate<class Stable>\nstatic void vfObserveMediaResourceBases(', map_start)]
+assert all(token not in map_body for token in ('readReg', 'writeReg', 'getPhysicalSegment', 'searchMapForGPU', 'retain(', 'IOMalloc'))
 prefix = r'''
 #include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
+#include <cstdio>
 #include "NootedGreen/kern_flight_trace.hpp"
 using mach_vm_address_t=uintptr_t;using UInt32=uint32_t;
 #define PANIC_COND(c,...) assert(!(c))
@@ -199,6 +215,9 @@ static uint64_t copy(uint64_t src,uint64_t dst,uint64_t bytes){
     return done;
 }
 static mach_vm_address_t gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&copy);
+static bool gVfMapSnapshotLayoutBound=true;
+static mach_vm_address_t gVfNativeBatchMapVtable=0xffffff804010a000ULL;
+static mach_vm_address_t gVfMediaSysMemoryVtable=0xffffff804010b000ULL;
 class Gen11 {public:
     static bool vfObserveRingBatch(void *,uint64_t,uint32_t,uint32_t *,uint32_t,bool,bool);
     mach_vm_address_t oVfObserveRingBatch=0;
@@ -216,6 +235,77 @@ static void reset(){
     callback->oVfObserveRingBatch=reinterpret_cast<uintptr_t>(&native);
 }
 static void invoke(){assert(Gen11::vfObserveRingBatch(ring,nativeGpu,7,cpu,expectedCount,true,false)==nativeResult);}
+'''
+map_harness = r'''
+static uint32_t taskRaw[134],nodeRaw[52],memoryRaw[54];
+static unsigned mapScenario=0,mapReads=0,rawRecords=0,currentRecord=0;
+static uint32_t rawKinds[32],rawCounts[32],rawRecordsData[32][226];
+static constexpr uint64_t taskAt=0xffffff8041000000ULL,nodeAt=0xffffff8041002000ULL,memoryAt=0xffffff8041004000ULL;
+static void put64(uint32_t *words,unsigned offset,uint64_t value){words[offset/4]=uint32_t(value);words[offset/4+1]=uint32_t(value>>32);}
+static void mapTrace(uint32_t event,uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t){
+    if(event==NGFlightTrace::begin){
+        assert(rawRecords<32);currentRecord=rawRecords++;rawKinds[currentRecord]=uint32_t(c>>32);
+        rawCounts[currentRecord]=uint32_t(c);assert(rawCounts[currentRecord]<=226);
+    }else if(event==NGFlightTrace::data){
+        const uint32_t offset=uint32_t(a);uint64_t packed[]={b,c,d};
+        for(unsigned i=0;i<6 && offset+i<rawCounts[currentRecord];++i)
+            rawRecordsData[currentRecord][offset+i]=uint32_t(packed[i/2]>>((i&1)*32));
+    }
+}
+static uint64_t mapCopy(uint64_t source,uint64_t destination,uint64_t bytes){
+    const void *from=nullptr;uint64_t done=bytes;
+    if(source==taskAt+0x1e8 || source==taskAt+0x200){assert(bytes==20);from=taskRaw+(source-taskAt)/4;}
+    else if(source==nodeAt){
+        assert(bytes==208);++mapReads;
+        if(mapScenario==2)done=204;
+        if(mapScenario==3 && mapReads==2)nodeRaw[0x98/4]+=4096;
+        from=nodeRaw;
+    }else if(source==memoryAt){assert(bytes==8 || bytes==216);from=memoryRaw;}
+    else assert(false && "unexpected getter/DMA/foreign CPU read");
+    std::memcpy(reinterpret_cast<void *>(destination),from,done);return done;
+}
+static void testMapSnapshotBackend(){
+    for(mapScenario=0;mapScenario<10;++mapScenario){
+        reset();mapReads=rawRecords=currentRecord=0;
+        std::memset(taskRaw,0,sizeof(taskRaw));std::memset(nodeRaw,0,sizeof(nodeRaw));std::memset(memoryRaw,0,sizeof(memoryRaw));
+        std::memset(rawRecordsData,0,sizeof(rawRecordsData));
+        put64(taskRaw,0x1e8,nodeAt);put64(taskRaw,0x1f0,nodeAt);taskRaw[0x1f8/4]=1;
+        put64(nodeRaw,0,gVfNativeBatchMapVtable);put64(nodeRaw,0x18,memoryAt);
+        put64(nodeRaw,0x88,reinterpret_cast<uintptr_t>(gVfAccelerator));put64(nodeRaw,0x90,taskAt);
+        put64(nodeRaw,0x98,0x40010000);put64(nodeRaw,0xc8,131072);nodeRaw[4]=0x4001;
+        put64(memoryRaw,0,gVfMediaSysMemoryVtable);put64(memoryRaw,0x28,reinterpret_cast<uintptr_t>(gVfAccelerator));
+        put64(memoryRaw,0x40,65536);put64(memoryRaw,0xd0,0xffffff8041006000ULL);
+        if(mapScenario==1)nodeRaw[4]|=0x40; // Physical mode must not call a physical getter.
+        if(mapScenario==4)put64(nodeRaw,0x90,taskAt+4096);
+        if(mapScenario==5)put64(nodeRaw,0,gVfNativeBatchMapVtable+4096);
+        if(mapScenario==7)put64(nodeRaw,0x30,nodeAt);
+        if(mapScenario==9)put64(memoryRaw,0,gVfMediaSysMemoryVtable+4096);
+        gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&mapCopy);gVfFlightTrace=mapTrace;
+        vfObserveTaskMapHeaders(reinterpret_cast<void *>(mapScenario==8?0x40010000ULL:taskAt),0,3,0x40010000,
+                               [](){return mapScenario!=6;});
+        const unsigned expected[]={0,0,1,5,4,0,5,3,3,0};
+        unsigned end0=99,nodeCount=0;
+        for(unsigned i=0;i<rawRecords;++i){
+            const auto *r=rawRecordsData[i];assert(r[0]==1);
+            if(rawKinds[i]==24){assert(rawCounts[i]==24 && !r[10] && !r[11]);if(r[3]==1 && r[2]==0)end0=r[4];}
+            else {assert(rawKinds[i]==23 && rawCounts[i]==226 && !r[11] && !r[12]);++nodeCount;
+                if(mapScenario==0 || mapScenario==1){assert(r[6]==208 && r[7]==208 && r[8]==216 && r[9]==216 && r[10]==255);
+                    assert(r[14+0xc8/4]==131072 && r[14+104+0x40/4]==65536);}
+                if(mapScenario==2)assert(r[6]==204 && r[7]==204 && !r[8] && !r[9]);
+                if(mapScenario==5)assert(!r[8] && !r[9] && !(r[10]&32));
+                if(mapScenario==9)assert(r[8]==8 && r[9]==8 && !(r[10]&64));
+            }
+        }
+        assert(end0==expected[mapScenario]);
+        assert(nodeCount==(mapScenario==6 || mapScenario==8?0U:1U));
+        for(unsigned i=0;i<rawRecords;++i){
+            std::printf("OWNED_MAP_RECORD %u %u",mapScenario,rawKinds[i]);
+            for(unsigned j=0;j<rawCounts[i];++j)std::printf(" %u",rawRecordsData[i][j]);
+            std::printf("\n");
+        }
+    }
+    gVfFlightTrace=trace;gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&copy);
+}
 '''
 tests = r'''
 int main(){
@@ -240,13 +330,37 @@ int main(){
     reset();changeAtOwnerRead=2;invoke();assert(nativeCalls==1 && !sourceCopies && metadata==1 && !lastFlags);
     reset();changeAtOwnerRead=3;invoke();assert(nativeCalls==1 && sourceCopies==1 && metadata==1 && lastFlags==3 && !traceEvents);
     reset();for(unsigned i=0;i<10;++i)invoke();assert(nativeCalls==10 && sourceCopies==8 && metadata==8 && gVfBatchCpuTickets==8);
+    testMapSnapshotBackend();
 }
 '''
 with tempfile.TemporaryDirectory(prefix='ngreen-sync-batch-') as directory:
     cpp = Path(directory)/'actual.cpp'
-    cpp.write_text(prefix+body+tests)
+    cpp.write_text(prefix+body+map_body+map_harness+tests)
     binary = Path(directory)/'test'
     subprocess.run([os.environ.get('CXX', 'clang++'), '-std=c++14', '-O1', '-g',
                     '-fsanitize=address,undefined', '-I', str(root), str(cpp), '-o', str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
-print('PASS actual synchronous observer ASan/UBSan: native once/false/owner/caller/gates/short-copy/stability/64KiB/budget; owned CPU callbacks only')
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr[:4096]
+    sys.path.insert(0, str(root/'tools/media_adapter'))
+    from decode_kdebug_recorder import DiskSink, KINDS
+    sinks = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        assert parts[0] == 'OWNED_MAP_RECORD'
+        scenario, kind = map(int, parts[1:3]); words = list(map(int, parts[3:]))
+        if scenario not in sinks:
+            sinks[scenario] = DiskSink(Path(directory)/f'case-{scenario}')
+        sink = sinks[scenario]
+        number = sink.db.execute('SELECT COUNT(*) FROM records').fetchone()[0]+1
+        sink(dict(record_id=number, group=3, identity='0000000040010000',
+                  kind=kind, kind_name=KINDS[kind], words=words))
+    assert len(sinks) == 10
+    for scenario, sink in sinks.items():
+        report = sink.map_list_report()
+        assert report['lists'] == 2 and not report['native_object_lease_proven']
+        if scenario in (0, 1, 5, 9):
+            assert report['observed_complete_topologies'] == 2
+        else:
+            assert report['partial_or_missing_end'] > 0
+        sink.close()
+print('PASS actual synchronous observer ASan/UBSan native-once cases; actual nofault CPU map backend 10 cases plus strict decoder/SQL; owned callbacks only')
