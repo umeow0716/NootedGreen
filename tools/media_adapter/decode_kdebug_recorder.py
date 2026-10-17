@@ -25,7 +25,30 @@ MASK64 = (1 << 64) - 1
 KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          4: 'native_batch', 5: 'ring_prefix', 6: 'h2g_cpu_readback',
          7: 'submit_identity', 8: 'g2h_raw', 9: 'publication_mapping',
-         10: 'timeout', 11: 'scope_end', 12: 'native_mapping_before_copy'}
+         10: 'timeout', 11: 'scope_end', 12: 'native_mapping_before_copy',
+         13: 'ring_operand_leaf', 14: 'batch_leaf'}
+
+
+def validate_leaf(kind, words):
+    if kind not in (13, 14):
+        return
+    expected = 16 if kind == 13 else 14
+    if len(words) != expected or words[0] != 1 or words[-1] != 0:
+        raise ValueError('invalid leaf schema/extent/atomicity')
+    if kind == 13:
+        index, operand, offset, role, exact_table, read = words[1:7]
+        booleans = (role, exact_table, read, words[13], words[14])
+        if index >= 8 or operand not in (1, 2, 3) or offset % 4:
+            raise ValueError('invalid operand leaf identity')
+        if words[14] and (not read or not words[13]):
+            raise ValueError('unqualified dummy match')
+    else:
+        index, offset, role, exact_table, read = words[1:6]
+        booleans = (role, exact_table, read, words[12])
+        if index >= 2 or offset % 4:
+            raise ValueError('invalid batch leaf identity')
+    if any(value not in (0, 1) for value in booleans) or (read and not exact_table):
+        raise ValueError('invalid leaf qualification flags')
 
 
 def exact(source, size):
@@ -130,6 +153,7 @@ class Decoder:
                     thread != record['thread'] or c != record['word_count'] or
                     c != len(record['words']) or d != record['hash'] or stamp < record['begin_ticks']):
                 raise ValueError('incomplete/mismatched flight end')
+            validate_leaf(record['kind'], record['words'])
             record.update(end_ticks=stamp, kind_name=KINDS[record['kind']],
                           cpu_snapshot_only=True, atomic_snapshot=False, gpu_execution_proof=False,
                           group_associated=bool(record['group']), producer_declared_origin=self.origin,
@@ -291,6 +315,20 @@ class DiskSink:
 
 
 def self_test():
+    leaf = [1, 0, 1, 0x3c, 0, 1, 1, 0x40010000, 0, 0x12345000, 3, 0x89, 0, 1, 0, 0]
+    validate_leaf(13, leaf)
+    batch = [1, 0, 0x3c, 0, 1, 1, 0x40010000, 0, 0x12345000, 3, 0x89, 0, 0, 0]
+    validate_leaf(14, batch)
+    for kind, good, changes in ((13, leaf, ((0, 2), (1, 8), (2, 4), (3, 3), (4, 2), (5, 0), (15, 1))),
+                                (14, batch, ((0, 0), (1, 2), (2, 1), (3, 2), (4, 0), (13, 1)))):
+        for index, value in changes:
+            bad = list(good)
+            bad[index] = value
+            try:
+                validate_leaf(kind, bad)
+            except ValueError:
+                continue
+            raise AssertionError('invalid leaf schema accepted')
     def packet(kind, seq, data):
         zero = HEADER.pack(MAGIC, kind, len(data), 0, seq)
         return HEADER.pack(MAGIC, kind, len(data), zlib.crc32(data, zlib.crc32(zero)), seq), data

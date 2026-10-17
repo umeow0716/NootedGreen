@@ -9938,6 +9938,12 @@ static void vfObserveBatchLeafMapping(void *task, void *pageTable,
 			uint64_t physical = 0, flags = 0;
 			const bool read = exact && reinterpret_cast<Reader>(gVfLeafObservationReader)(
 				table,targets.addresses[index],physical,flags);
+			const uint32_t flightLeaf[]={1U,index,targets.offsets[index],role,exact?1U:0U,read?1U:0U,
+				static_cast<uint32_t>(targets.addresses[index]),static_cast<uint32_t>(targets.addresses[index]>>32),
+				static_cast<uint32_t>(physical),static_cast<uint32_t>(physical>>32),
+				static_cast<uint32_t>(flags),static_cast<uint32_t>(flags>>32),bootstrapTask==task?1U:0U,0U};
+			vfFlightRecord(14,vfFlightCurrentGroup(),(uint64_t(descriptor.high)<<32)|descriptor.low,
+				flightLeaf,arrsize(flightLeaf));
 			SYSLOG("ngreen", "V375: batch first-page desc=%08x:%08x index=%u offset=%x role=%u exact=%u read=%u va=%08x:%08x physical=%08x:%08x flags=%llx same-task=%u atomic=0",
 			       descriptor.high,descriptor.low,index,targets.offsets[index],role,exact ? 1U : 0U,read ? 1U : 0U,
 			       static_cast<uint32_t>(targets.addresses[index]>>32),static_cast<uint32_t>(targets.addresses[index]),
@@ -9965,6 +9971,13 @@ static void vfObserveBatchLeafMapping(void *task, void *pageTable,
 			uint64_t physical=0,flags=0;
 			const bool read = exact && reinterpret_cast<Reader>(gVfLeafObservationReader)(
 				table,operands.addresses[index],physical,flags);
+			const uint32_t flightOperand[]={1U,index,operands.kinds[index],operands.offsets[index],role,
+				exact?1U:0U,read?1U:0U,static_cast<uint32_t>(operands.addresses[index]),
+				static_cast<uint32_t>(operands.addresses[index]>>32),static_cast<uint32_t>(physical),
+				static_cast<uint32_t>(physical>>32),static_cast<uint32_t>(flags),static_cast<uint32_t>(flags>>32),
+				dummyValid?1U:0U,dummyValid && read && physical==dummyPhysical?1U:0U,0U};
+			vfFlightRecord(13,vfFlightCurrentGroup(),(uint64_t(descriptor.high)<<32)|descriptor.low,
+				flightOperand,arrsize(flightOperand));
 			SYSLOG("ngreen", "V376: ring operand index=%u kind=%u offset=%x role=%u exact=%u read=%u va=%08x:%08x physical=%08x:%08x flags=%llx dummy-match=%u atomic=0",
 			       index,operands.kinds[index],operands.offsets[index],role,exact ? 1U : 0U,read ? 1U : 0U,
 			       static_cast<uint32_t>(operands.addresses[index]>>32),static_cast<uint32_t>(operands.addresses[index]),
