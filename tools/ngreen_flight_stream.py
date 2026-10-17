@@ -51,6 +51,15 @@ def record(source, path, channel, maximum, mirror=False):
         frame(fd, seq, 1, metadata)
         seq += 1
         os.fsync(fd)
+        # A synced new file alone does not make its directory entry durable.
+        # Complete both barriers before consuming any upstream evidence. This
+        # is still only a Host archive barrier, not a Guest/GPU completeness ACK.
+        parent = os.path.dirname(os.fspath(path)) or '.'
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
         last_space_check = 0.0
         last_space_bytes = 0
         while total < maximum:
@@ -144,8 +153,53 @@ def self_test():
     global FREE_FLOOR
     import io
     import tempfile
+    import stat
     from pathlib import Path
     with tempfile.TemporaryDirectory(prefix='ngreen-flight-') as directory:
+        # Verify ordering and failure before the first upstream read. Keep a
+        # failed archive as incomplete evidence; never remove/replace it.
+        native_sync = os.fsync
+        barriers = []
+        class OrderedSource(io.BytesIO):
+            def read(self, length=-1):
+                assert barriers[:2] == ['file', 'directory']
+                return super().read(length)
+        def checked_sync(fd):
+            barriers.append('directory' if stat.S_ISDIR(os.fstat(fd).st_mode) else 'file')
+            native_sync(fd)
+        try:
+            os.fsync = checked_sync
+            assert record(OrderedSource(b'x'), Path(directory)/'ordered.bin', 'ordered', 2) == 1
+        finally:
+            os.fsync = native_sync
+        class UnreadSource:
+            reads = 0
+            def read(self, length):
+                self.reads += 1
+                raise AssertionError('read before durable directory entry')
+        unread = UnreadSource()
+        def denied_directory_sync(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError('owned injected directory sync failure')
+            native_sync(fd)
+        try:
+            os.fsync = denied_directory_sync
+            try:
+                record(unread, Path(directory)/'unsynced.bin', 'unsynced', 2)
+            except OSError:
+                pass
+            else:
+                raise AssertionError('directory sync failure ignored')
+            assert unread.reads == 0
+        finally:
+            os.fsync = native_sync
+        with (Path(directory)/'unsynced.bin').open('rb') as failed:
+            try:
+                inspect(failed)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('failed directory barrier became complete evidence')
         path = Path(directory) / 'stream.bin'
         payload = b'EOF\0LIMIT\xff' * 20000
         assert record(io.BytesIO(payload), path, 'owned-test', len(payload)+1) == len(payload)
