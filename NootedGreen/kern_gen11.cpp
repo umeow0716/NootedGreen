@@ -1326,6 +1326,10 @@ static bool vfCaptureMediaMappedSpan(const VfMediaSubmission &entry,void *stream
 	    getMember<void *>(gpuMap,0x18)!=backing ||
 	    getMember<mach_vm_address_t>(backing,0)!=gVfMediaSysMemoryVtable ||
 	    getMember<void *>(backing,0xD0)!=descriptor)return false;
+	// Command publication uses a linear CPU span. Native rotated mappings use
+	// a different PTE iterator and cannot inherit the linear backing proof.
+	out.reason="rotated-command-map";
+	if (getMember<volatile uint8_t>(gpuMap,0x11C)!=0U)return false;
 	void *table=getMember<void *>(map,0);
 	out.reason="map-getters";
 	if (!table || getMember<mach_vm_address_t>(table,0x118)!=gVfMediaMapAddress ||

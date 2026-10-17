@@ -405,6 +405,11 @@ def contract(source, path="<source>"):
         assert token in media_map, f'{path}: lost CPU/GPU descriptor admission: {token}'
     assert media_map.index('getMember<mach_vm_address_t>(backing,0)!=gVfMediaSysMemoryVtable') < \
         media_map.index('getMember<void *>(backing,0xD0)!=descriptor')
+    rotation='if (getMember<volatile uint8_t>(gpuMap,0x11C)!=0U)return false;'
+    assert rotation in media_map, f'{path}: rotated command map admitted as linear'
+    assert media_map.index('getMember<void *>(backing,0xD0)!=descriptor') < \
+        media_map.index(rotation) < media_map.index('out.reason="map-getters"'), \
+        f'{path}: rotation read must follow exact map identity'
     assert 'matches(sysPhysical,sysPhysicalBody,sizeof(sysPhysicalBody))' in source
     assert '0x170U<=size-(sysTable-address)' in source
     assert 'getMember<mach_vm_address_t>(reinterpret_cast<void *>(sysTable+16U),0x158)==sysPhysical' in source
@@ -481,6 +486,9 @@ def mutation_contract(source, path):
         ('if (getMember<volatile uint8_t>(stream,0x3C)!=1U)return false;',
          'if (!getMember<volatile uint8_t>(stream,0x3C))return false;', 1),
         ('getMember<void *>(backing,0xD0)!=descriptor', 'false', 1),
+        ('if (getMember<volatile uint8_t>(gpuMap,0x11C)!=0U)return false;', '', 1),
+        ('if (getMember<volatile uint8_t>(gpuMap,0x11C)!=0U)return false;',
+         'if (getMember<volatile uint8_t>(gpuMap,0x11C)==0U)return false;', 1),
         ('getMember<void *>(gpuMap,0x18)!=backing', 'false', 1),
         ('getMember<void *>(gpuMap,0x90)!=entry.gpuTask', 'false', 1),
         ('getMember<mach_vm_address_t>(backing,0)!=gVfMediaSysMemoryVtable', 'false', 1),
