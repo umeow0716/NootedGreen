@@ -524,6 +524,32 @@ private:
     std::unique_ptr<TglOwnedAvcPictureInput> picture_;
     std::unique_ptr<SliceNal> sliceNal_;
 };
+struct NativeAvcCodedGeometry {
+    uint32_t width=0,height=0,mbWidth=0,mbHeight=0,mbDataBytes=0;
+    bool operator==(const NativeAvcCodedGeometry& other) const noexcept {
+        return width==other.width && height==other.height && mbWidth==other.mbWidth &&
+            mbHeight==other.mbHeight && mbDataBytes==other.mbDataBytes;
+    }
+};
+// Exact26c12 rounds pixels into context128/12c; tail26c80 stores MB counts
+// at130/134/138 and page-rounded MB data bytes164. These are CODED extents,
+// not visible IOSurface dimensions or crop/lifetime authority.
+template<class Read,class Admit>
+bool captureCodedGeometry(uintptr_t context,NativeAvcCodedGeometry& output,Read read,Admit admit) noexcept {
+    const auto destination=reinterpret_cast<uintptr_t>(&output);
+    if(!context || context>UINTPTR_MAX-0x168 ||
+       (destination<context+0x168 && context+0x128<destination+sizeof(output)) || !admit())return false;
+    std::array<uint32_t,16> first{},second{};
+    if(!read(context+0x128,first.data(),sizeof(first)) || !admit() ||
+       !read(context+0x128,second.data(),sizeof(second)) || first!=second || !admit())return false;
+    NativeAvcCodedGeometry candidate{first[0],first[1],first[2],first[3],first[15]};
+    if(candidate.width<16 || candidate.width>4096 || (candidate.width&15) ||
+       candidate.height<16 || candidate.height>4096 || (candidate.height&15) ||
+       candidate.mbWidth!=candidate.width/16 || candidate.mbHeight!=candidate.height/16 ||
+       first[4]!=candidate.mbHeight ||
+       candidate.mbDataBytes!=((candidate.mbWidth*candidate.mbHeight*64U+4095U)&~4095U))return false;
+    output=candidate;return true;
+}
 // One stable ownership unit for both callbacks. Before invoking native outer,
 // its frame owner must retain this through proven GPU retirement/quarantine
 // AND hold real content exclusion; this class cannot manufacture either proof.
@@ -533,6 +559,8 @@ template<class Api> class OwnedAvcCallbackInput {
     alignas(16) std::array<uint8_t,0x488> payload_{};
     OwnedAvcCallbackRequest request_;
     uintptr_t originalRequest_=0,originalPayload_=0;
+    uintptr_t nativeContext_=0;
+    NativeAvcCodedGeometry geometry_{};
     OwnedAvcCallbackInput()=default;
 public:
     OwnedAvcCallbackInput(const OwnedAvcCallbackInput&)=delete;
@@ -563,6 +591,22 @@ public:
         return result;
     }
     const OwnedAvcCallbackRequest& callbackRequest() const noexcept {return request_;}
+    template<class Read,class Admit> static std::unique_ptr<OwnedAvcCallbackInput>
+    captureForContext(uintptr_t context,uintptr_t request,TglOwnedAvcScalingDefaults defaults,
+        Api api,Read read,Admit admit) noexcept {
+        NativeAvcCodedGeometry before,after;
+        if(!captureCodedGeometry(context,before,read,admit))return {};
+        auto input=capture(request,before.width,before.height,defaults,api,read,admit);
+        if(!input || !captureCodedGeometry(context,after,read,admit) || !(before==after))return {};
+        input->nativeContext_=context;input->geometry_=before;
+        return input;
+    }
+    uintptr_t nativeContext() const noexcept {return nativeContext_;}
+    template<class Read,class Admit> bool matchesContext(uintptr_t context,Read read,Admit admit) const noexcept {
+        NativeAvcCodedGeometry current;
+        return nativeContext_ && context==nativeContext_ &&
+            captureCodedGeometry(context,current,read,admit) && current==geometry_;
+    }
     uintptr_t originalRequest() const noexcept {return originalRequest_;}
     uintptr_t originalPayload() const noexcept {return originalPayload_;}
 };

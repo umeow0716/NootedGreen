@@ -210,6 +210,52 @@ template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputA
         if(fail==0)assert(inputState.retains==5);
     }
     assert(originalRequest==savedRequest);
+    alignas(8) std::array<uint8_t,0x168> contextBytes{};
+    const auto context=reinterpret_cast<uintptr_t>(contextBytes.data());
+    const std::array<uint32_t,16> nativeGeometry{16,16,1,1,1,0,0,0,0,0,0,0,0,0,0,4096};
+    for(unsigned bad=0;bad<14;++bad) {
+        auto fields=nativeGeometry;
+        if(bad<3)fields[0]=bad==0?0:bad==1?4097:17;
+        if(bad>=3 && bad<6)fields[1]=bad==3?0:bad==4?4097:17;
+        if(bad>=6 && bad<9)fields[bad-4]=2;
+        if(bad==9)fields[15]=4095;
+        NgreenNativeAvcReservation::NativeAvcCodedGeometry unchanged{99,98,97,96,95};
+        const auto saved=unchanged;unsigned reads=0;
+        auto readGeometry=[&](uintptr_t,void* out,size_t bytes) noexcept {
+            ++reads;if(bad==10)return false;
+            assert(bytes==sizeof(fields));std::memcpy(out,fields.data(),bytes);return true;
+        };
+        assert(!NgreenNativeAvcReservation::captureCodedGeometry(bad==12?UINTPTR_MAX-0x160:bad==13?0:context,
+            unchanged,readGeometry,[&]() noexcept {return bad!=11;}));
+        assert(unchanged==saved);
+        if(bad>=11)assert(!reads);
+    }
+    for(unsigned mode:{1U,2U,3U,4U,0U}) {
+        fullHeader=savedFullHeader;downscaleSurfaces=savedDownscales;inputState={};
+        unsigned geometryReads=0;
+        auto contextRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+            if(at!=context+0x128 || bytes!=sizeof(nativeGeometry))return inputRead(at,out,bytes);
+            ++geometryReads;
+            if(mode==1 && inputState.retains)return false;
+            auto fields=nativeGeometry;
+            if((mode==2 && geometryReads==2) || (mode==3 && inputState.retains)) {
+                fields[0]=32;fields[2]=2;
+            }
+            if(mode==4)fields[4]=2;
+            std::memcpy(out,fields.data(),bytes);return true;
+        };
+        auto contextual=Input::captureForContext(context,originalRequestAddress,{},inputApi,contextRead,
+            []() noexcept {return true;});
+        if(!mode) {
+            assert(contextual && geometryReads==4 && !inputState.releases);
+            assert(contextual->nativeContext()==context && contextual->matchesContext(context,contextRead,[]() noexcept {return true;}));
+            assert(!contextual->matchesContext(context+8,contextRead,[]() noexcept {return true;}));
+            contextual.reset();assert(inputState.releases==5);
+        } else {
+            assert(!contextual && inputState.retains==inputState.releases);
+            assert(inputState.retains==((mode==1 || mode==3)?5U:0U));
+        }
+    }
 }
 
 
