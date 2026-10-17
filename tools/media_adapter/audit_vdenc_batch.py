@@ -41,7 +41,7 @@ def mode_template_fields(words):
               'pipeline_flushes': [], 'mi_flushes': [], 'mi_operands': [], 'mi_profile_issues': [],
               'vdenc_pipe_resources': [], 'mfx_pipe_resources': [],
               'mfx_indirect_resources': [], 'mfx_bsp_resources': [], 'indirect_start_fields': [],
-              'surface_layouts': [],
+              'surface_layouts': [], 'mfx_image_states': [],
               'resource_coverage': 'EXPLICIT_BASE_FIELDS_ONLY_NOT_EXTENTS_OR_ALL_INDIRECT_ACCESSES'}
     if not words or len(words) > 1536 or any(type(x) is not int or not 0 <= x <= 0xffffffff for x in words):
         result['refusal'] = 'word-extent-or-value'
@@ -100,6 +100,16 @@ def mode_template_fields(words):
                 u_y=u&0x7fff, u_x=(u>>16)&0x7fff,
                 v_y=v&0xffff, v_x=(v>>16)&0x1fff,
                 allocation_extent_proven=False, gpu_fetch_proven=False))
+        elif op == 0x71000000:
+            control=words[at+4]
+            result['mfx_image_states'].append(dict(word=at,
+                frame_macroblocks=words[at+1]&0xffff,
+                width_macroblocks=(words[at+2]&0xff)+1,
+                height_macroblocks=((words[at+2]>>16)&0xff)+1,
+                load_slice_pointer=(control>>14)&1,
+                field_picture=control&1, mbaff=(control>>1)&1,
+                frame_mbs_only=(control>>2)&1, chroma_format=(control>>10)&3,
+                hardware_validity_proven=False))
         elif op == 0x70000000:
             control = words[at+1]
             result['mfx_modes'].append(dict(word=at, control=control, standard=control & 15,
@@ -657,6 +667,14 @@ def selftest():
     edge[0]=0x70010004
     layout=mode_template_fields(edge)['surface_layouts'][0]
     assert layout['format']==15 and layout['surface_id']==0
+    image=[0x71000013,8160,0x00430077,0,0x159c]+[0]*16
+    state=mode_template_fields(image)['mfx_image_states'][0]
+    assert (state['width_macroblocks'],state['height_macroblocks'],state['frame_macroblocks'])==(
+        120,68,8160)
+    assert state['load_slice_pointer']==0 and state['frame_mbs_only']==1
+    image[4]|=1<<14
+    assert mode_template_fields(image)['mfx_image_states'][0]['load_slice_pointer']==1
+    assert not mode_template_fields(image[:-1])['mfx_image_states']
     assert mode_template_fields([0x05000000, 0])['complete_packet_walk']
     assert not mode_template_fields([0x05000000, 0, 0])['complete_packet_walk']
     assert not mode_template_fields([0x05000000, 1])['complete_packet_walk']
