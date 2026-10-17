@@ -27160,7 +27160,8 @@ enum class TglContextFramePublication { Unpublished,Published,RemovalPrepared,Na
 template<class Binding> class TglOwnedContextFrameVtableFor {
     decltype(std::declval<Binding>().original) table_{};
     size_t callbackCount_=0;
-    uintptr_t context_=0,nativeFrame_=0,originalVptr_=0;bool attempted_=false,ready_=false;
+    uintptr_t context_=0,nativeFrame_=0,originalVptr_=0;
+    uintptr_t nativeSize_=0,nativeBuilder_=0;bool attempted_=false,ready_=false;
 public:
     using Publication=TglContextFramePublication;
 private:
@@ -27183,6 +27184,32 @@ public:
         context_=context;nativeFrame_=native.frame;originalVptr_=native.vtable;ready_=true;return true;
     }
     const uintptr_t* addressPoint() const noexcept {return ready_?table_.data()+2:nullptr;}
+    // Build the exact AVC callback set BEFORE publication, never mutate a
+    // published table to add one half of an input substitution. The caller
+    // still has to supply real owned-input/lease/phase-authorized callbacks:
+    // native27724 ignores size/builder return values, so these hooks cannot
+    // implement rejection by merely returning an error after outer entry.
+    template<class Read,class Qualify,class Executable,class OwnedExecutable>
+    bool buildAvcInputCallbacks(uintptr_t image,uintptr_t context,
+        uintptr_t frameHook,uintptr_t sizeHook,uintptr_t builderHook,Read read,
+        Qualify qualify,Executable executable,OwnedExecutable ownedExecutable) noexcept {
+        if(attempted_)return false;
+        attempted_=true;
+        if(!image || image>UINTPTR_MAX-0x27724 || !frameHook || !sizeHook || !builderHook ||
+            frameHook==sizeHook || frameHook==builderHook || sizeHook==builderHook ||
+            !ownedExecutable(frameHook,1) || !ownedExecutable(sizeHook,1) ||
+            !ownedExecutable(builderHook,1))return false;
+        Binding native;
+        if(!native.resolve(image,context,read,qualify,executable) || native.callbackCount!=13 ||
+            native.frame!=image+0x27724 || native.original[2+0x30/8]!=image+0x2732c ||
+            native.original[2+0x60/8]!=image+0x2737e)return false;
+        table_=native.original;callbackCount_=native.callbackCount;
+        table_[2+0x28/8]=frameHook;table_[2+0x30/8]=sizeHook;table_[2+0x60/8]=builderHook;
+        context_=context;originalVptr_=native.vtable;nativeFrame_=native.frame;
+        nativeSize_=image+0x2732c;nativeBuilder_=image+0x2737e;ready_=true;return true;
+    }
+    uintptr_t nativeSize() const noexcept {return ready_?nativeSize_:0;}
+    uintptr_t nativeBuilder() const noexcept {return ready_?nativeBuilder_:0;}
     size_t callbackCount() const noexcept {return ready_?callbackCount_:0;}
     uintptr_t nativeFrame() const noexcept {return ready_?nativeFrame_:0;}
     Publication publication() const noexcept {return publication_;}

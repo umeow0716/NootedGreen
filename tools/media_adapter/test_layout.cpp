@@ -16412,6 +16412,38 @@ static void testRetainedVeboxFrames() {
                 assert(owned.publish(readFamily,writeTable,admitTable) && owned.requiresRetention());
                 assert(owned.canDetach(readFamily,admitTable) && owned.detach(readFamily,writeTable,admitTable));
                 assert(actualTable==image+schema.table && !owned.requiresRetention());
+                // Actual AVC table assembly: all three callbacks are selected
+                // before publication; this grants no input/surface authority.
+                constexpr uintptr_t sizeHook=0xf100,builderHook=0xf200;
+                auto ownedAvcEntry=[](uintptr_t p,size_t n) noexcept {
+                    return n==1 && (p==hook || p==sizeHook || p==builderHook);
+                };
+                Table paired;
+                const bool avc=schema.callbacks[5]==0x27724;
+                assert(paired.buildAvcInputCallbacks(image,0x8000,hook,sizeHook,builderHook,
+                    readFamily,qualified,executableFamily,ownedAvcEntry)==avc);
+                if(avc) {
+                    assert(paired.nativeFrame()==image+0x27724 && paired.nativeSize()==image+0x2732c &&
+                        paired.nativeBuilder()==image+0x2737e);
+                    for(size_t i=0;i<schema.count;++i)
+                        assert(paired.addressPoint()[i]==(i==5?hook:i==6?sizeHook:i==12?builderHook:image+schema.callbacks[i]));
+                    assert(paired.publish(readFamily,writeTable,admitTable));
+                    assert(!paired.buildAvcInputCallbacks(image,0x8000,hook,sizeHook,builderHook,
+                        readFamily,qualified,executableFamily,ownedAvcEntry));
+                    assert(paired.detach(readFamily,writeTable,admitTable));
+                    for(uintptr_t denied:{hook,sizeHook,builderHook}) {
+                        Table refused;
+                        assert(!refused.buildAvcInputCallbacks(image,0x8000,hook,sizeHook,builderHook,
+                            readFamily,qualified,executableFamily,[&](uintptr_t p,size_t n) noexcept {
+                                return p!=denied && ownedAvcEntry(p,n);
+                            }));
+                        assert(!refused.addressPoint() && !refused.nativeSize() && !refused.nativeBuilder());
+                    }
+                    Table duplicate;
+                    assert(!duplicate.buildAvcInputCallbacks(image,0x8000,hook,hook,builderHook,
+                        readFamily,qualified,executableFamily,ownedAvcEntry));
+                    assert(!duplicate.addressPoint());
+                } else assert(!paired.addressPoint() && !paired.nativeSize() && !paired.nativeBuilder());
                 Table ambiguous;
                 assert(ambiguous.build(image,0x8000,hook,readFamily,qualified,executableFamily,
                     [](uintptr_t,size_t) noexcept {return true;}));
