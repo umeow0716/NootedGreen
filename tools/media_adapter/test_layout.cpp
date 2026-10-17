@@ -18982,9 +18982,28 @@ int main() {
         std::memcpy(&first,result.data.data()+0x360,4);assert(first==11);
         assert(picture==before);
         const auto expected=result.data;
+        using Picture=TglOwnedAvcPictureInput;
+        static_assert(!std::is_copy_constructible_v<Picture> && !std::is_move_constructible_v<Picture>);
+        const auto address=reinterpret_cast<uintptr_t>(picture.data());
+        auto read=[&](uintptr_t at,void* target,size_t bytes) noexcept {
+            if(at!=address || bytes!=picture.size())return false;
+            std::memcpy(target,picture.data(),bytes);return true;
+        };
+        auto owned=Picture::capture(address,defaults,read);assert(owned);
+        assert(!std::memcmp(owned->data(),expected.data(),expected.size()) && picture==before);
+        picture.fill(0);defaults.intra4.fill(255);
+        assert(!std::memcmp(owned->data(),expected.data(),expected.size()));
+        picture=before;defaults.intra4.fill(6);
+        auto denied=[](uintptr_t,void*,size_t) noexcept {return false;};
+        assert(!Picture::capture(address,defaults,denied));
+        assert(!Picture::capture(UINTPTR_MAX-Picture::Bytes+1,defaults,read));
+        put(0xbc,2);assert(!Picture::capture(address,defaults,read));picture=before;
+        const auto view=owned->data();auto transferred=std::move(owned);
+        assert(!owned && transferred->data()==view);
         defaults.intra4[0]=0;
         assert(!tglMaterializeOwnedPpsDefaultMatrices(picture.data(),picture.size(),defaults,result));
         assert(result.data==expected && picture==before);
+        assert(!Picture::capture(address,defaults,read));
     }
     {
         std::array<uint8_t,0xc18> sequence{};

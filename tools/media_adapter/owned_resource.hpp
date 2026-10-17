@@ -74,6 +74,35 @@ inline bool tglMaterializeOwnedPpsDefaultMatrices(const void* source,size_t byte
     }
     output=candidate;return true;
 }
+// Owned PPS storage for paired size/builder inputs. Defaults must come from
+// the authenticated constructor-order provider, not guessed raster tables.
+// This only owns/materializes bytes; absent-list/SPS inheritance, full PPS
+// syntax and source reader authority remain separate obligations. UNWIRED.
+class TglOwnedAvcPictureInput {
+public:
+    static constexpr size_t Bytes=0x488;
+    TglOwnedAvcPictureInput(const TglOwnedAvcPictureInput&)=delete;
+    TglOwnedAvcPictureInput& operator=(const TglOwnedAvcPictureInput&)=delete;
+    TglOwnedAvcPictureInput(TglOwnedAvcPictureInput&&)=delete;
+    TglOwnedAvcPictureInput& operator=(TglOwnedAvcPictureInput&&)=delete;
+    template<class Read> static std::unique_ptr<TglOwnedAvcPictureInput>
+    capture(uintptr_t source,TglOwnedAvcScalingDefaults defaults,Read read) noexcept {
+        if(!source || source>UINTPTR_MAX-Bytes)return {};
+        auto owned=std::unique_ptr<TglOwnedAvcPictureInput>(new(std::nothrow) TglOwnedAvcPictureInput{});
+        if(!owned)return {};
+        const auto self=reinterpret_cast<uintptr_t>(owned.get());
+        if(self>UINTPTR_MAX-sizeof(*owned) ||
+           (source<self+sizeof(*owned) && self<source+Bytes))return {};
+        TglOwnedAvcPictureSnapshot original;
+        if(!read(source,original.data.data(),Bytes) ||
+           !tglMaterializeOwnedPpsDefaultMatrices(original.data.data(),Bytes,defaults,owned->picture_))return {};
+        return owned;
+    }
+    const uint8_t* data() const noexcept {return picture_.data.data();}
+private:
+    TglOwnedAvcPictureInput()=default;
+    TglOwnedAvcPictureSnapshot picture_{};
+};
 // Dry-run of exact Tahoe57d748/57d4a0/57d3c6, not a full SPS semantic
 // validator. Stable owned source and caller identity are prerequisites.
 // Scaling-present is not implemented by that SPS writer and stays refused.
