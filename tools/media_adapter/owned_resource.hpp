@@ -27617,6 +27617,34 @@ public:
            !scope.matches(state_->image,state_->physical,state_->generation))return 5;
         return state_->nativeOtherPending.service(state_->image,state_->physical,state_->generation,state_->context,observe,retired)?0:5;
     }
+    // Root allocation ONLY: does not exclude allocations referenced by AVC
+    // fields, surface backing, or any GPU mapping. Combine those separately.
+    template<class OwnerLease>
+    bool excludesPublishedAvcRootSpan(const OwnerLease& lease,uintptr_t address,size_t bytes) noexcept {
+        if(!state_ || lease.get()!=this || !lease.exclusive() || !address || !bytes ||
+           address>UINTPTR_MAX-bytes || !enter())return false;
+        Unlock unlock{state_->busy};
+        if(state_->removed || !state_->retainedIdentity() || !state_->nativeParentMatches() ||
+           !state_->qualify(state_->image) || state_->image>UINTPTR_MAX-0x27724 ||
+           state_->table.publication()!=FrameTable::Publication::Published ||
+           state_->table.nativeFrame()!=state_->image+0x27724)return false;
+        uintptr_t vptr=0;
+        if(!state_->read(state_->context,&vptr,8) || vptr!=reinterpret_cast<uintptr_t>(state_->table.addressPoint()))return false;
+        auto matches=[&](uintptr_t offset,const auto& expected) noexcept {
+            auto actual=expected;
+            return state_->executable(state_->image+offset,actual.size()) &&
+                state_->read(state_->image+offset,actual.data(),actual.size()) && actual==expected;
+        };
+        constexpr std::array<uint8_t,10> allocation{0xbf,0x20,0x6c,0,0,0xe8,0xb6,0x9b,0x22,0};
+        constexpr std::array<uint8_t,5> constructor{0xe8,0x93,0x23,1,0};
+        constexpr std::array<uint8_t,10> vtable{0x48,0x8d,0x05,0x93,0xdf,0x72,0,0x48,0x89,0x03};
+        if(!matches(0x14718,allocation) || !matches(0x14728,constructor) || !matches(0x26ace,vtable))return false;
+        const auto excludes=[&](uintptr_t base,size_t extent) noexcept {
+            return base && base<=UINTPTR_MAX-extent && (address>=base+extent || base>=address+bytes);
+        };
+        return excludes(state_->context,0x6c20) && excludes(reinterpret_cast<uintptr_t>(this),sizeof(*this)) &&
+            excludes(reinterpret_cast<uintptr_t>(state_),sizeof(*state_));
+    }
     template<class OwnerLease>
     bool excludesPublishedContextWritableSpan(const OwnerLease& lease,uintptr_t address,size_t bytes) noexcept {
         // This allocation graph is exact VP1370 only. Native-other property

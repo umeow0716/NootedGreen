@@ -16676,7 +16676,19 @@ static void testRetainedVeboxFrames() {
         {
             for(const auto& schema:TglNativeOtherContextFrameBinding::schemas) {
                 uintptr_t actualTable=image+schema.table,parentPhysical=0x9000;int corrupt=-1;bool rx=true,identity=true;
+                constexpr std::array<uintptr_t,3> rootSites{0x14718,0x14728,0x26ace};
+                constexpr std::array<size_t,3> rootSizes{10,5,10};
+                constexpr std::array<std::array<uint8_t,10>,3> rootAnchors{{
+                    {0xbf,0x20,0x6c,0,0,0xe8,0xb6,0x9b,0x22,0},{0xe8,0x93,0x23,1,0},
+                    {0x48,0x8d,0x05,0x93,0xdf,0x72,0,0x48,0x89,0x03}}};
+                int rootCorruptSite=-1,rootCorruptByte=-1;bool rootReadDenied=false;
                 auto readFamily=[&](uintptr_t p,void* out,size_t n) noexcept {
+                    for(size_t i=0;i<rootSites.size();++i)if(p==image+rootSites[i] && n==rootSizes[i]) {
+                        if(rootReadDenied)return false;
+                        auto bytes=rootAnchors[i];
+                        if(int(i)==rootCorruptSite)bytes[size_t(rootCorruptByte)]^=1;
+                        std::memcpy(out,bytes.data(),n);return true;
+                    }
                     if(n!=8)return false;
                     uintptr_t value=0;
                     if(p==0x8000)value=actualTable;
@@ -16819,6 +16831,27 @@ static void testRetainedVeboxFrames() {
                 } else assert(retained->publishFrame(lease,hook,same,executableFamily));
                 assert(retained->frameTable().callbackCount()==schema.count);
                 assert(!retained->excludesPublishedContextWritableSpan(lease,0xa000,4));
+                assert(retained->excludesPublishedAvcRootSpan(lease,0xec20,4)==avc);
+                if(avc) {
+                    for(uintptr_t address:{uintptr_t{0x7fff},uintptr_t{0x8000},uintptr_t{0xec1f}})
+                        assert(!retained->excludesPublishedAvcRootSpan(lease,address,4));
+                    assert(!retained->excludesPublishedAvcRootSpan(lease,UINTPTR_MAX-2,4));
+                    assert(!retained->excludesPublishedAvcRootSpan(lease,0,4));
+                    assert(!retained->excludesPublishedAvcRootSpan(lease,0xec20,0));
+                    assert(!retained->excludesPublishedAvcRootSpan(lease,reinterpret_cast<uintptr_t>(retained),1));
+                    FamilyLease foreign{nullptr},shared{retained,false};
+                    assert(!retained->excludesPublishedAvcRootSpan(foreign,0xec20,4));
+                    assert(!retained->excludesPublishedAvcRootSpan(shared,0xec20,4));
+                    for(size_t i=0;i<rootSites.size();++i)for(size_t j=0;j<rootSizes[i];++j) {
+                        rootCorruptSite=int(i);rootCorruptByte=int(j);
+                        assert(!retained->excludesPublishedAvcRootSpan(lease,0xec20,4));
+                    }
+                    rootCorruptSite=rootCorruptByte=-1;
+                    rootReadDenied=true;assert(!retained->excludesPublishedAvcRootSpan(lease,0xec20,4));rootReadDenied=false;
+                    rx=false;assert(!retained->excludesPublishedAvcRootSpan(lease,0xec20,4));rx=true;
+                    parentPhysical+=8;assert(!retained->excludesPublishedAvcRootSpan(lease,0xec20,4));parentPhysical-=8;
+                    assert(retained->excludesPublishedAvcRootSpan(lease,0xec20,4));
+                }
                 struct FamilyScope {
                     uintptr_t image;uint64_t generation=1;
                     bool matches(uintptr_t i,uintptr_t p,uint64_t g) const noexcept {
