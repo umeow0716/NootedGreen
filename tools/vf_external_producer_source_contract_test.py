@@ -42,7 +42,7 @@ def adapter_frame_contract(source):
     for required in (
         "registry.promoteExclusive(lease,image,physical,generation,owner->context())",
         "if(!exclusive.get())return 5;",
-        "dispatchPinned(exclusive,scope,image,physical,generation,input,output)",
+        "dispatchAvc(exclusive,scope,image,physical,generation,input,output)",
         "registry.demoteExclusive(exclusive,image,physical,generation,owner->context())",
     ):
         assert required in body, "adapter: AVC frame owner transfer missing"
@@ -54,6 +54,15 @@ def adapter_frame_contract(source):
     phase = "if(!NgreenNativeAvcReservation::framePhaseAdmission(image,owner->frameTable().nativeFrame(),physical,generation,owner->context(),input))return 5;"
     assert body.count(phase) == 1, "adapter: exact input-phase refusal missing"
     reserve = body.index("const auto reservation=owner->reserveNativeOtherFrame")
+    for required in (
+        "AvcInput::captureForContext(context,input,{},TglDarwinTypedCfReferenceApi{},&readMemory,admitted)",
+        "outputs.capture(context,input,retained->originalPayload(),output,&readMemory,&writableDataMemory,",
+        "self.input.matchesContext(id.context,&readMemory,admit) &&",
+        "self.outputs.matches(&readMemory) && admit();",
+        "if((phase.started() || result==0) && !phase.complete())_exit(70);",
+        "if(retainedInput && !owner->retainNativeOtherFrameInput(lease,scope,reservation,*ownedInput))return 5;",
+    ):
+        assert required in body, "adapter: owned input/phase/output lifetime admission missing"
     assert body.index(phase) < reserve < body.index(gate), "adapter: phase refusal after reservation/native path"
     for required in (
         "callbacks[0x30/8]!=reinterpret_cast<uintptr_t>(&dispatchOwnedAvcSize)",

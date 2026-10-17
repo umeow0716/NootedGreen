@@ -120,6 +120,7 @@ public:
     OwnedAvcCallbackPhase(const OwnedAvcCallbackPhase&)=delete;
     OwnedAvcCallbackPhase& operator=(const OwnedAvcCallbackPhase&)=delete;
     bool bound() const noexcept {return stage_==Stage::Ready && live();}
+    bool started() const noexcept {return stage_!=Stage::Ready;}
     bool complete() const noexcept {return stage_==Stage::Done && live();}
     bool admitsOuter(uintptr_t image,uintptr_t physical,uint64_t generation,
         uintptr_t context,uintptr_t request) const noexcept {
@@ -583,6 +584,49 @@ bool captureCodedGeometry(uintptr_t context,NativeAvcCodedGeometry& output,Read 
        candidate.mbDataBytes!=((candidate.mbWidth*candidate.mbHeight*64U+4095U)&~4095U))return false;
     output=candidate;return true;
 }
+// Native27724 keeps the ORIGINAL outer payload for output writes. Prevent
+// those writes aliasing the request/input, each other or qualified owned
+// storage. This is not GPU-backing or concurrent VM-permission authority.
+struct NativeAvcFrameOutputs {
+    uintptr_t context=0,payload=0,eventSlot=0,bitCount=0;
+    uint8_t extended=0;bool valid=false;
+    template<class Read> bool matches(Read read) const noexcept {
+        uintptr_t count=0;uint8_t mode=0;
+        return valid && read(payload+0x488,&count,sizeof(count)) && count==bitCount &&
+            read(context+0x6bb8,&mode,sizeof(mode)) && mode==extended;
+    }
+    template<class Read,class Writable,class Exclude>
+    bool capture(uintptr_t object,uintptr_t request,uintptr_t originalPayload,uintptr_t output,
+        Read read,Writable writable,Exclude exclude) noexcept {
+        if(valid || !object || object>UINTPTR_MAX-0x6bb9 || !request || request>UINTPTR_MAX-0x28 ||
+           !originalPayload || originalPayload>UINTPTR_MAX-0x4a4)return false;
+        NativeAvcFrameOutputs candidate;candidate.context=object;candidate.payload=originalPayload;
+        candidate.eventSlot=output;
+        if(!read(originalPayload+0x488,&candidate.bitCount,sizeof(candidate.bitCount)) ||
+           !read(object+0x6bb8,&candidate.extended,sizeof(candidate.extended)))return false;
+        struct Span {uintptr_t address;size_t bytes;};
+        const std::array<Span,3> spans{{{output,8},{candidate.bitCount,4},
+            {originalPayload+0x498,candidate.extended?size_t(12):size_t(0)}}};
+        const uintptr_t self=reinterpret_cast<uintptr_t>(this);
+        if(self>UINTPTR_MAX-sizeof(*this))return false;
+        auto overlaps=[](uintptr_t a,size_t n,uintptr_t b,size_t m) noexcept {
+            return a<b+m && b<a+n;
+        };
+        for(size_t i=0;i<spans.size();++i) {
+            const auto span=spans[i];if(!span.bytes)continue;
+            if(!span.address || span.address>UINTPTR_MAX-span.bytes ||
+               overlaps(span.address,span.bytes,request,0x28) ||
+               overlaps(span.address,span.bytes,originalPayload,0x490) ||
+               overlaps(span.address,span.bytes,self,sizeof(*this)) ||
+               !writable(span.address,span.bytes) || !exclude(span.address,span.bytes))return false;
+            for(size_t j=0;j<i;++j)if(spans[j].bytes &&
+                overlaps(span.address,span.bytes,spans[j].address,spans[j].bytes))return false;
+        }
+        candidate.valid=true;
+        if(!candidate.matches(read))return false;
+        *this=candidate;return true;
+    }
+};
 // One stable ownership unit for both callbacks. Before invoking native outer,
 // its frame owner must retain this through proven GPU retirement/quarantine
 // AND hold real content exclusion; this class cannot manufacture either proof.
@@ -640,6 +684,7 @@ public:
         return input;
     }
     uintptr_t nativeContext() const noexcept {return nativeContext_;}
+    const NativeAvcCodedGeometry& codedGeometry() const noexcept {return geometry_;}
     bool excludesOwnedStorage(uintptr_t address,size_t bytes) const noexcept {
         return disjointOwnedObject(address,bytes,this) && disjointOwnedObject(address,bytes,pins_.get()) &&
             graph_ && graph_->excludesOwnedStorage(address,bytes);

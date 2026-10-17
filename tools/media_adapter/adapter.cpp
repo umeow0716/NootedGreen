@@ -5607,6 +5607,8 @@ uint64_t dispatchOwnedAvcBuilder(void* context,const void* input,void* token) no
 }
 struct NativeOtherFrameBackend {
     using Lease=NativeFactoryFrameBatch::Lease;
+    using ExclusiveLease=NativeCodecBackend::Registry::ExclusiveOwnerLease;
+    using AvcInput=NgreenNativeAvcReservation::OwnedAvcCallbackInput<TglDarwinTypedCfReferenceApi>;
     template<class FrameLease>
     static bool queryPublication(FrameLease& lease,NativePhysicalFrameScope& scope,uintptr_t image,
         uintptr_t physical,uint64_t generation,NGVfAvcPublication::Reply& output) noexcept {
@@ -5759,16 +5761,63 @@ struct NativeOtherFrameBackend {
         auto& registry=NativeCodecBackend::owners();
         auto exclusive=registry.promoteExclusive(lease,image,physical,generation,owner->context());
         if(!exclusive.get())return 5;
-        const int result=dispatchPinned(exclusive,scope,image,physical,generation,input,output);
+        const int result=dispatchAvc(exclusive,scope,image,physical,generation,input,output);
         lease=registry.demoteExclusive(exclusive,image,physical,generation,owner->context());
         // Losing the transfer is not permission to continue a native batch
         // without its batch-long owner pin, even if the native call returned0.
         if(!lease.get())_exit(70);
         return result;
     }
+    static int dispatchAvc(ExclusiveLease& lease,NativePhysicalFrameScope& scope,uintptr_t image,
+        uintptr_t physical,uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
+        auto* owner=lease.get();
+        if(!owner || !lease.exclusive() || !scope.matches(image,physical,generation))return 5;
+        const uintptr_t context=owner->context();
+        auto admitted=[&]() noexcept {
+            uintptr_t vptr=0;
+            return lease.get()==owner && lease.exclusive() && scope.matches(image,physical,generation) &&
+                owner->frameTable().publication()==TglContextFramePublication::Published &&
+                owner->frameTable().nativeFrame()==image+0x27724 &&
+                readMemory(context,&vptr,sizeof(vptr)) &&
+                vptr==reinterpret_cast<uintptr_t>(owner->frameTable().addressPoint());
+        };
+        // No invented scaling matrices: requested default lists still require
+        // an authenticated provider, otherwise syntax capture refuses them.
+        auto owned=AvcInput::captureForContext(context,input,{},TglDarwinTypedCfReferenceApi{},&readMemory,admitted);
+        if(!owned)return 5;
+        auto* retained=owned.get();
+        NgreenNativeAvcReservation::NativeAvcFrameOutputs outputs;
+        if(!outputs.capture(context,input,retained->originalPayload(),output,&readMemory,&writableDataMemory,
+            [&](uintptr_t address,size_t bytes) noexcept {
+                return admitted() && retained->excludesOwnedStorage(address,bytes) &&
+                    owner->excludesPublishedAvcLinearCpuSpan(lease,address,bytes);
+            }))return 5;
+        struct Authority {
+            ExclusiveLease& lease;NativeCodecOwner* owner;NativePhysicalFrameScope& scope;
+            AvcInput& input;const NgreenNativeAvcReservation::NativeAvcFrameOutputs& outputs;
+            static bool live(void* raw,const NgreenNativeAvcReservation::OwnedAvcCallbackPhase::Identity& id) noexcept {
+                auto& self=*static_cast<Authority*>(raw);
+                auto admit=[&]() noexcept {
+                    return self.lease.get()==self.owner && self.lease.exclusive() &&
+                        self.scope.matches(id.image,id.physical,id.generation) &&
+                        self.owner->context()==id.context && self.input.originalRequest()==id.request;
+                };
+                // Native owner dispatch already holds busy; do not reenter
+                // owner/registry methods from size/builder callbacks.
+                return admit() && self.input.matchesContext(id.context,&readMemory,admit) &&
+                    self.outputs.matches(&readMemory) && admit();
+            }
+        } authority{lease,owner,scope,*retained,outputs};
+        NgreenNativeAvcReservation::OwnedAvcCallbackPhase phase(
+            {image,physical,context,input,generation},retained->callbackRequest(),&authority,&Authority::live);
+        if(!phase.bound())return 5;
+        const int result=dispatchPinned(lease,scope,image,physical,generation,input,output,&owned);
+        if((phase.started() || result==0) && !phase.complete())_exit(70);
+        return result;
+    }
     template<class FrameLease>
     static int dispatchPinned(FrameLease& lease,NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,
-        uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
+        uint64_t generation,uintptr_t input,uintptr_t output,std::unique_ptr<AvcInput>* ownedInput=nullptr) noexcept {
         auto* owner=lease.get();
         if(!owner || owner->family()!=TglNativeContextFamily::NativeOther ||
            !scope.matches(image,physical,generation))return 5;
@@ -5781,8 +5830,11 @@ struct NativeOtherFrameBackend {
                callbacks[0x60/8]!=reinterpret_cast<uintptr_t>(&dispatchOwnedAvcBuilder) ||
                owner->frameTable().nativeSize()!=image+0x2732c || owner->frameTable().nativeBuilder()!=image+0x2737e)return 5;
         }
+        const auto* retainedInput=ownedInput?ownedInput->get():nullptr;
+        if(owner->frameTable().nativeFrame()==image+0x27724 && !retainedInput)return 5;
         const auto reservation=owner->reserveNativeOtherFrame(lease,scope);
         if(!reservation.serial)return 5;
+        if(retainedInput && !owner->retainNativeOtherFrameInput(lease,scope,reservation,*ownedInput))return 5;
         TglNativeFrameOutputReceipt receipt;
         const int result=owner->dispatchScopedFrameWithReceipt(lease,scope,input,output,
             [&](uintptr_t entry,uintptr_t context,uintptr_t request,uintptr_t slot,NativePhysicalFrameScope& active) noexcept -> int {

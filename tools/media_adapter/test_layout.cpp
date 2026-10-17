@@ -95,6 +95,34 @@ void testAvcMiAddressSpaces(const std::array<uint32_t,512>& frame,size_t used,si
     packet=store;packet[1]|=2U;examine(packet,false); // Reserved address bit1.
 }
 
+void testAvcFrameOutputs() {
+    using NgreenNativeAvcReservation::NativeAvcFrameOutputs;
+    uintptr_t count=0x40000;uint8_t mode=1;
+    auto read=[&](uintptr_t at,void* out,size_t n) noexcept {
+        if(at==0x30488 && n==sizeof(count)){std::memcpy(out,&count,n);return true;}
+        if(at==0x16bb8 && n==1){std::memcpy(out,&mode,n);return true;}
+        return false;
+    };
+    auto allow=[](uintptr_t,size_t) noexcept {return true;};
+    auto deny=[](uintptr_t,size_t) noexcept {return false;};
+    NativeAvcFrameOutputs good;
+    assert(good.capture(0x10000,0x20000,0x30000,0x50000,read,allow,allow));
+    assert(good.matches(read));
+    assert(!good.capture(0x10000,0x20000,0x30000,0x50000,read,allow,allow));
+    count+=4;assert(!good.matches(read));count-=4;
+    mode=0;assert(!good.matches(read));mode=1;
+    for(uintptr_t event:{uintptr_t(0),uintptr_t(0x20000),uintptr_t(0x30488),
+        uintptr_t(0x30498),uintptr_t(0x40000),UINTPTR_MAX-3}) {
+        NativeAvcFrameOutputs rejected;
+        assert(!rejected.capture(0x10000,0x20000,0x30000,event,read,allow,allow));
+        assert(!rejected.valid);
+    }
+    NativeAvcFrameOutputs rejected;
+    assert(!rejected.capture(0x10000,0x20000,0x30000,0x50000,read,deny,allow));
+    assert(!rejected.capture(0x10000,0x20000,0x30000,0x50000,read,allow,deny));
+    count=0;assert(!rejected.capture(0x10000,0x20000,0x30000,0x50000,read,allow,allow));
+}
+
 void testAvcFrameLeasePromotion() {
     for(bool sameContext:{false,true}) {
         auto read=[&](uintptr_t at,void* out,size_t n) noexcept {
@@ -19593,6 +19621,7 @@ static void testActualNv12LayoutSnapshot() {
     assert(uvRow==32);
 }
 int main() {
+    testAvcFrameOutputs();
     testAvcFrameLeasePromotion();
     testOwnedAvcHookFailStop();
     {
