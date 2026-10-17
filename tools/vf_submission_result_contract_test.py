@@ -133,7 +133,7 @@ def source_mutations(path: Path) -> None:
     source = path.read_text(encoding="utf-8")
     source_contract(source, path)
     mutations = (
-        ('checkKernelArgument("-ngreencaptureonly")', 'true'),
+        ('checkKernelArgument("-ngreencaptureonly"),', 'true,'),
         ('gVfIdentity == VfIdentity::Virtual, static_cast<uint32_t>(hwCsType)',
          'true, static_cast<uint32_t>(hwCsType)'),
         ('\t\treturn false;\n\t}\n\tVfContextQueueGuard queue(that);',

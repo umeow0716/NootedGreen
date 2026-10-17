@@ -40,8 +40,10 @@ RESOURCE_SLOTS = {
 
 def validate_leaf(kind, words):
     if kind in (23, 24):
-        expected = 226 if kind == 23 else 24
-        if len(words) != expected or words[0] != 1 or words[1] > 2 or words[2] > 1:
+        version=words[0] if words else 0
+        extended=kind==23 and version==2
+        expected = (366 if extended else 226) if kind == 23 else 24
+        if len(words) != expected or version not in ((1,2) if kind==23 else (1,)) or words[1] > 2 or words[2] > 1:
             raise ValueError('invalid CPU map snapshot extent/role')
         def zero_padding(raw, copied):
             return not any(struct.pack(f'<{len(raw)}I', *raw)[copied:])
@@ -67,18 +69,22 @@ def validate_leaf(kind, words):
                 if words[4] == 2 and (words[5] != 256 or words[6] < 256):
                     raise ValueError('CPU map list limit inconsistent')
             return
-        if (words[3] >= 256 or words[6] > 208 or words[7] > 208 or words[8] > 216 or words[9] > 216 or
-                words[10] & ~255 or words[11] or words[12] or words[13] != 212):
+        map_size,memory_size=(296,408) if extended else (208,216)
+        map_words,memory_words=map_size//4,memory_size//4
+        if (words[3] >= 256 or words[6] > map_size or words[7] > map_size or words[8] > memory_size or words[9] > memory_size or
+                words[10] & ~255 or words[11] or words[12] or words[13] != 2*(map_words+memory_words)):
             raise ValueError('invalid CPU map header counts/flags')
         address = words[4] | words[5] << 32
         if address >> 47 != 0x1ffff or address & 7:
             raise ValueError('noncanonical CPU map node')
-        before, after, memory, memory_after = words[14:66], words[66:118], words[118:172], words[172:226]
+        raw=words[14:]
+        before,after=raw[:map_words],raw[map_words:2*map_words]
+        memory,memory_after=raw[2*map_words:2*map_words+memory_words],raw[2*map_words+memory_words:]
         for raw, copied in ((before, words[6]), (after, words[7]), (memory, words[8]), (memory_after, words[9])):
             if not zero_padding(raw, copied):
                 raise ValueError('CPU map uncopied bytes are nonzero')
         flags = words[10]
-        for bit, copied, size in ((1, words[6], 208), (2, words[7], 208), (4, words[8], 216), (8, words[9], 216)):
+        for bit, copied, size in ((1, words[6], map_size), (2, words[7], map_size), (4, words[8], memory_size), (8, words[9], memory_size)):
             if bool(flags & bit) != (copied == size):
                 raise ValueError('CPU map full-copy flag mismatch')
         if flags & 0xb0 and flags & 3 != 3:
@@ -94,6 +100,9 @@ def validate_leaf(kind, words):
         if flags & 128 and (before[4] != after[4] or any(value(before, offset) != value(after, offset)
                            for offset in (0, 0x18, 0x28, 0x30, 0x88, 0x90, 0x98, 0xc8))):
             raise ValueError('CPU map stable-header comparison mismatch')
+        if extended and flags&128 and (before[0x114//4]!=after[0x114//4] or
+                (flags&64 and memory[0xd8//4]!=memory_after[0xd8//4])):
+            raise ValueError('CPU native extension false stability')
         return
     if kind == 21:
         if (len(words) != 8 or words[0] != 1 or words[1] > 64 or
@@ -914,6 +923,18 @@ def self_test():
         put64(memory, 0xd0, 0xffffff8041006000)
         map_words = [1, 0, 0, 0, 0x41002000, 0xffffff80, 208, 208, 216, 216, 255, 0, 0, 212]+node+node+memory+memory
         snapshot = dict(boundary, record_id=701, kind=23, words=map_words)
+        native_node=node+[0]*22
+        native_memory=memory+[0]*48
+        native_node[0x114//4]=1
+        native_memory[0xd8//4]=0x300
+        native_words=[2,0,0,0,0x41002000,0xffffff80,296,296,408,408,255,0,0,352]+native_node*2+native_memory*2
+        validate_leaf(23,native_words)
+        for index,val in ((0,3),(6,297),(8,409),(13,351),
+                          (14+74+0x114//4,2),(14+148+102+0xd8//4,0x400)):
+            bad=list(native_words);bad[index]=val
+            try:validate_leaf(23,bad)
+            except ValueError:pass
+            else:raise AssertionError('invalid native object extent/version/cache stability accepted')
         for index, val in ((6, 209), (10, 254), (11, 1), (12, 1), (13, 213), (14+104+16, 0)):
             bad = list(map_words); bad[index] = val
             try:

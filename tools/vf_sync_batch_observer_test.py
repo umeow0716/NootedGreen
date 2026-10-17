@@ -14,6 +14,28 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 source = (root/'NootedGreen/kern_gen11.cpp').read_text()
+def native_snapshot_binding_contract(text):
+    binding=text[text.index('const auto mapMeta='):text.index('"V385: native object snapshot sizes')]
+    for token in ('__ZN16IGAccelMemoryMap9MetaClassC1Ev',
+                  '__ZN16IGAccelSysMemory9MetaClassC1Ev',
+                  '{0xb9,0x28,0x01,0,0}', '{0xb9,0x98,0x01,0,0}',
+                  'matches(mapMeta+0x17U,mapClassSize,sizeof(mapClassSize))',
+                  'matches(sysMeta+0x17U,sysClassSize,sizeof(sysClassSize))'):
+        assert token in binding
+    assert 'if(checkKernelArgument("-ngreencaptureonly") && !gVfNativeObjectLayoutBound)return;' in text
+native_snapshot_binding_contract(source)
+for token in ('matches(mapMeta+0x17U,mapClassSize,sizeof(mapClassSize))',
+              'matches(sysMeta+0x17U,sysClassSize,sizeof(sysClassSize))'):
+    try:native_snapshot_binding_contract(source.replace(token,'true',1))
+    except AssertionError:pass
+    else:raise AssertionError('native class extent gate mutation escaped')
+with (root/'sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics').open('rb') as stream:
+    for offset,expected in ((0x10bcf,bytes.fromhex('b928010000')),(0x126f5,bytes.fromhex('b998010000'))):
+        stream.seek(offset);actual=stream.read(5)
+        assert actual==expected
+        for i in range(5):
+            bad=bytearray(actual);bad[i]^=1
+            assert bad!=expected
 def resource_scope_contract(text):
     try:
         submit = text[text.index('bool Gen11::vfSubmitWorkItem('):]
@@ -282,6 +304,10 @@ static void **gVfCpuKernelPmapSlot=&pmap;static void *gVfCpuKernelPmapStore=pmap
 static uintptr_t testCaller=9,gVfBatchCaller=9;
 static uint32_t gVfBatchCpuCopies[8][16384]{};
 static volatile UInt32 gVfBatchCpuTickets=0;
+static uint32_t gVfNativeObjectCopies[4][352]{};
+static volatile UInt32 gVfNativeObjectCopyBusy[4]{};
+static bool captureMode=false;
+static bool checkKernelArgument(const char *name){assert(!std::strcmp(name,"-ngreencaptureonly"));return captureMode;}
 static volatile int gVfFlightRecordSerial=0;
 struct VfContextOperationGuard {explicit operator bool()const{return operationEnabled;}};
 static bool vfFlightEnabled(){return enabled;}
@@ -311,6 +337,7 @@ static uint64_t copy(uint64_t src,uint64_t dst,uint64_t bytes){
 }
 static mach_vm_address_t gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&copy);
 static bool gVfMapSnapshotLayoutBound=true;
+static bool gVfNativeObjectLayoutBound=true;
 static mach_vm_address_t gVfNativeBatchMapVtable=0xffffff804010a000ULL;
 static mach_vm_address_t gVfMediaSysMemoryVtable=0xffffff804010b000ULL;
 class Gen11 {public:
@@ -332,15 +359,16 @@ static void reset(){
 static void invoke(){assert(Gen11::vfObserveRingBatch(ring,nativeGpu,7,cpu,expectedCount,true,false)==nativeResult);}
 '''
 map_harness = r'''
-static uint32_t taskRaw[134],nodeRaw[52],memoryRaw[54];
+static uint32_t taskRaw[134],nodeRaw[74],memoryRaw[102];
 static unsigned mapScenario=0,mapReads=0,rawRecords=0,currentRecord=0;
-static uint32_t rawKinds[32],rawCounts[32],rawRecordsData[32][226];
+static unsigned memoryReads=0;
+static uint32_t rawKinds[32],rawCounts[32],rawRecordsData[32][366];
 static constexpr uint64_t taskAt=0xffffff8041000000ULL,nodeAt=0xffffff8041002000ULL,memoryAt=0xffffff8041004000ULL;
 static void put64(uint32_t *words,unsigned offset,uint64_t value){words[offset/4]=uint32_t(value);words[offset/4+1]=uint32_t(value>>32);}
 static void mapTrace(uint32_t event,uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t){
     if(event==NGFlightTrace::begin){
         assert(rawRecords<32);currentRecord=rawRecords++;rawKinds[currentRecord]=uint32_t(c>>32);
-        rawCounts[currentRecord]=uint32_t(c);assert(rawCounts[currentRecord]<=226);
+        rawCounts[currentRecord]=uint32_t(c);assert(rawCounts[currentRecord]<=366);
     }else if(event==NGFlightTrace::data){
         const uint32_t offset=uint32_t(a);uint64_t packed[]={b,c,d};
         for(unsigned i=0;i<6 && offset+i<rawCounts[currentRecord];++i)
@@ -351,17 +379,21 @@ static uint64_t mapCopy(uint64_t source,uint64_t destination,uint64_t bytes){
     const void *from=nullptr;uint64_t done=bytes;
     if(source==taskAt+0x1e8 || source==taskAt+0x200){assert(bytes==20);from=taskRaw+(source-taskAt)/4;}
     else if(source==nodeAt){
-        assert(bytes==208);++mapReads;
+        assert(bytes==208 || (captureMode && bytes==296));++mapReads;
+        if(mapScenario==14 && bytes==296)done=292;
+        if(mapScenario==15 && mapReads==4)++nodeRaw[0x114/4];
         if(mapScenario==2)done=204;
         if(mapScenario==3 && mapReads==2)nodeRaw[0x98/4]+=4096;
         from=nodeRaw;
-    }else if(source==memoryAt){assert(bytes==8 || bytes==216);from=memoryRaw;}
+    }else if(source==memoryAt){assert(bytes==8 || bytes==216 || (captureMode && bytes==408));from=memoryRaw;
+        if(bytes==408 && ++memoryReads==2 && mapScenario==16)++memoryRaw[0xd8/4];}
     else assert(false && "unexpected getter/DMA/foreign CPU read");
     std::memcpy(reinterpret_cast<void *>(destination),from,done);return done;
 }
 static void testMapSnapshotBackend(){
-    for(mapScenario=0;mapScenario<10;++mapScenario){
-        reset();mapReads=rawRecords=currentRecord=0;
+    for(mapScenario=0;mapScenario<17;++mapScenario){
+        reset();mapReads=memoryReads=rawRecords=currentRecord=0;captureMode=mapScenario>=10;
+        for(unsigned i=0;i<4;++i)gVfNativeObjectCopyBusy[i]=mapScenario==13?1:0;
         std::memset(taskRaw,0,sizeof(taskRaw));std::memset(nodeRaw,0,sizeof(nodeRaw));std::memset(memoryRaw,0,sizeof(memoryRaw));
         std::memset(rawRecordsData,0,sizeof(rawRecordsData));
         put64(taskRaw,0x1e8,nodeAt);put64(taskRaw,0x1f0,nodeAt);taskRaw[0x1f8/4]=1;
@@ -375,15 +407,20 @@ static void testMapSnapshotBackend(){
         if(mapScenario==5)put64(nodeRaw,0,gVfNativeBatchMapVtable+4096);
         if(mapScenario==7)put64(nodeRaw,0x30,nodeAt);
         if(mapScenario==9)put64(memoryRaw,0,gVfMediaSysMemoryVtable+4096);
+        if(mapScenario==11)put64(nodeRaw,0,gVfNativeBatchMapVtable+4096);
+        if(mapScenario==12)put64(memoryRaw,0,gVfMediaSysMemoryVtable+4096);
+        nodeRaw[0x114/4]=1;memoryRaw[0xd8/4]=0x300;
         gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&mapCopy);gVfFlightTrace=mapTrace;
         vfObserveTaskMapHeaders(reinterpret_cast<void *>(mapScenario==8?0x40010000ULL:taskAt),0,3,0x40010000,
                                [](){return mapScenario!=6;});
-        const unsigned expected[]={0,0,1,5,4,0,5,3,3,0};
+        const unsigned expected[]={0,0,1,5,4,0,5,3,3,0,0,1,0,1,1,5,5};
         unsigned end0=99,nodeCount=0;
         for(unsigned i=0;i<rawRecords;++i){
-            const auto *r=rawRecordsData[i];assert(r[0]==1);
+            const auto *r=rawRecordsData[i];assert(r[0]==(captureMode && rawKinds[i]==23?2U:1U));
             if(rawKinds[i]==24){assert(rawCounts[i]==24 && !r[10] && !r[11]);if(r[3]==1 && r[2]==0)end0=r[4];}
-            else {assert(rawKinds[i]==23 && rawCounts[i]==226 && !r[11] && !r[12]);++nodeCount;
+            else {assert(rawKinds[i]==23 && rawCounts[i]==(captureMode?366U:226U) && !r[11] && !r[12]);++nodeCount;
+                if(mapScenario==10){assert(r[6]==296 && r[8]==408 && r[10]==255);
+                    assert(r[14+0x114/4]==1 && r[14+148+0xd8/4]==0x300);}
                 if(mapScenario==0 || mapScenario==1){assert(r[6]==208 && r[7]==208 && r[8]==216 && r[9]==216 && r[10]==255);
                     assert(r[14+0xc8/4]==131072 && r[14+104+0x40/4]==65536);}
                 if(mapScenario==2)assert(r[6]==204 && r[7]==204 && !r[8] && !r[9]);
@@ -392,13 +429,19 @@ static void testMapSnapshotBackend(){
             }
         }
         assert(end0==expected[mapScenario]);
-        assert(nodeCount==(mapScenario==6 || mapScenario==8?0U:1U));
+        assert(nodeCount==(mapScenario==6 || mapScenario==8 || mapScenario==13?0U:1U));
+        if(captureMode && mapScenario!=13)for(unsigned i=0;i<4;++i)assert(!gVfNativeObjectCopyBusy[i]);
         for(unsigned i=0;i<rawRecords;++i){
             std::printf("OWNED_MAP_RECORD %u %u",mapScenario,rawKinds[i]);
             for(unsigned j=0;j<rawCounts[i];++j)std::printf(" %u",rawRecordsData[i][j]);
             std::printf("\n");
         }
     }
+    captureMode=false;
+    captureMode=true;gVfNativeObjectLayoutBound=false;rawRecords=mapReads=0;
+    vfObserveTaskMapHeaders(reinterpret_cast<void *>(taskAt),0,3,0x40010000,[](){return true;});
+    assert(!rawRecords && !mapReads);
+    captureMode=false;gVfNativeObjectLayoutBound=true;
     gVfFlightTrace=trace;gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&copy);
 }
 '''
@@ -449,13 +492,13 @@ with tempfile.TemporaryDirectory(prefix='ngreen-sync-batch-') as directory:
         number = sink.db.execute('SELECT COUNT(*) FROM records').fetchone()[0]+1
         sink(dict(record_id=number, group=3, identity='0000000040010000',
                   kind=kind, kind_name=KINDS[kind], words=words))
-    assert len(sinks) == 10
+    assert len(sinks) == 17
     for scenario, sink in sinks.items():
         report = sink.map_list_report()
         assert report['lists'] == 2 and not report['native_object_lease_proven']
-        if scenario in (0, 1, 5, 9):
+        if scenario in (0, 1, 5, 9, 10, 12):
             assert report['observed_complete_topologies'] == 2
         else:
             assert report['partial_or_missing_end'] > 0
         sink.close()
-print('PASS actual synchronous observer ASan/UBSan native-once cases; actual nofault CPU map backend 10 cases plus strict decoder/SQL; owned callbacks only')
+print('PASS actual synchronous observer ASan/UBSan native-once cases; actual nofault CPU map backend 17 cases plus strict decoder/SQL; owned callbacks only')
