@@ -9791,9 +9791,12 @@ static void vfObserveNativeBatchProvenance(void *task,const NGVfTimeoutObservati
 	const bool stable=vfCaptureMediaMappedSpan(*selected,stream,after) &&
 		after.resource==span.resource && after.mapped==span.mapped && after.map==span.map &&
 		after.descriptor==span.descriptor && after.commands==span.commands && after.count==span.count &&
+		after.gpuMap==span.gpuMap && after.gpuBase==span.gpuBase && after.backingBytes==span.backingBytes &&
+		after.availableWords==span.availableWords && after.reservedWords==span.reservedWords &&
 		after.offset==span.offset && after.bytes==span.bytes && after.used==span.used &&
 		getMember<void *>(span.resource,0x40)==map &&
-		getMember<uint64_t>(map,0x98)==gpuBase && getMember<void *>(map,0x90)==mapTask && sameRecord();
+		getMember<uint64_t>(map,0x98)==gpuBase && getMember<void *>(map,0x90)==mapTask &&
+		getMember<void *>(map,0x18)==mapMemory && sameRecord();
 	SYSLOG("ngreen","V377 NATIVE_BATCH_END words=%u stable=%u atomic=0",span.count,stable?1U:0U);
 }
 

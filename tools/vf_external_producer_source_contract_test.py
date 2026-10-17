@@ -26,6 +26,11 @@ def block(source, marker, end_marker):
 
 
 def contract(source, path="<source>"):
+    provenance = function_body(source, 'static void vfObserveNativeBatchProvenance(')
+    stable = provenance[provenance.index('const bool stable='):]
+    for field in ('gpuMap', 'gpuBase', 'backingBytes', 'availableWords', 'reservedWords'):
+        assert f'after.{field}==span.{field}' in stable, f'{path}: provenance lost {field} identity'
+    assert 'getMember<void *>(map,0x18)==mapMemory' in stable, f'{path}: provenance lost backing identity'
     route_symbols = (
         "__ZN19IOAccelCommandQueue22submit_command_buffersEPK29IOAccelCommandQueueSubmitArgs",
         "__ZN15IOAccelContext219submit_data_buffersEP33IOAccelContextSubmitDataBuffersInP34IOAccelContextSubmitDataBuffersOutyPy",
@@ -618,6 +623,12 @@ def mutation_contract(source, path):
         ('OSCompareAndSwap(0,1,&publicationRecorded)', 'true', 1),
         ('first<count;first+=48U', 'first<count;first+=24U', 1),
         ('valid=count-first<48U?count-first:48U', 'valid=48U', 1),
+        ('after.gpuMap==span.gpuMap', 'true', 1),
+        ('after.gpuBase==span.gpuBase', 'true', 1),
+        ('after.backingBytes==span.backingBytes', 'true', 1),
+        ('after.availableWords==span.availableWords', 'true', 1),
+        ('after.reservedWords==span.reservedWords', 'true', 1),
+        ('getMember<void *>(map,0x18)==mapMemory', 'true', 1),
         ('block[i]=kind?span.commands[first+i]:entry->scratch->source[first+i]', 'block[i]=entry->scratch->produced[first+i]', 1),
     )
     for mutation in mutations:
