@@ -27666,6 +27666,21 @@ public:
         return state_->table.build(state_->image,state_->context,hook,state_->read,state_->qualify,state_->executable,ownedExecutable) &&
             state_->table.publish(state_->read,state_->write,state_->admit);
     }
+    // Same owner/generation/publication admission as publishFrame. Merely
+    // having three code entries does not grant an AVC input/surface lease.
+    template<class ExclusiveLease,class ScopeAdmit,class OwnedExecutable>
+    bool publishAvcInputCallbacks(const ExclusiveLease& lease,uintptr_t frameHook,
+        uintptr_t sizeHook,uintptr_t builderHook,ScopeAdmit scope,OwnedExecutable ownedExecutable) noexcept {
+        if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;
+        Unlock unlock{state_->busy};
+        if(state_->removed || state_->table.publication()==TglOwnedContextFrameVtable::Publication::RemovalPrepared ||
+            !state_->retainedIdentity() ||
+            !scope(state_->image,state_->physical,state_->generation,state_->context) ||
+            !state_->nativeParentMatches())return false;
+        return state_->table.buildAvcInputCallbacks(state_->image,state_->context,frameHook,sizeHook,builderHook,
+            state_->read,state_->qualify,state_->executable,ownedExecutable) &&
+            state_->table.publish(state_->read,state_->write,state_->admit);
+    }
     // Called by registry.prepareRemoval under its no-frame-pin gate and SAME
     // empty-frame physical scope; scope is not a completion certificate.
     template<class ScopeAdmit> bool prepareRemoval(ScopeAdmit scope) noexcept {

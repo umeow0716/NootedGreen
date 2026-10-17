@@ -16489,12 +16489,26 @@ static void testRetainedVeboxFrames() {
                 auto* retained=OtherOwner::create(image,0x9000,1,0x8000,dependency,readFamily,writeTable,admitOwner,qualified,executableFamily);
                 assert(retained && !dependency.active && !TglImplicitContextRelease<OtherOwner>::allowed(*retained));
                 assert(retained->family()==TglNativeContextFamily::NativeOther);
-                struct FamilyLease {OtherOwner* owner;OtherOwner* get() const noexcept {return owner;}bool exclusive() const noexcept {return true;}} lease{retained};
+                struct FamilyLease {OtherOwner* owner;bool held=true;OtherOwner* get() const noexcept {return owner;}bool exclusive() const noexcept {return held;}} lease{retained};
                 auto same=[&](uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c) noexcept {
                     return i==image && p==0x9000 && g==1 && c==0x8000;
                 };
                 parentPhysical+=8;assert(!retained->publishFrame(lease,hook,same,executableFamily));parentPhysical-=8;
-                assert(retained->publishFrame(lease,hook,same,executableFamily));
+                if(avc) {
+                    FamilyLease foreign{nullptr};
+                    assert(!retained->publishAvcInputCallbacks(foreign,hook,sizeHook,builderHook,same,ownedAvcEntry));
+                    FamilyLease shared{retained,false};
+                    assert(!retained->publishAvcInputCallbacks(shared,hook,sizeHook,builderHook,same,ownedAvcEntry));
+                    assert(!retained->publishAvcInputCallbacks(lease,hook,sizeHook,builderHook,
+                        [](uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept {return false;},ownedAvcEntry));
+                    parentPhysical+=8;
+                    assert(!retained->publishAvcInputCallbacks(lease,hook,sizeHook,builderHook,same,ownedAvcEntry));
+                    parentPhysical-=8;
+                    assert(retained->publishAvcInputCallbacks(lease,hook,sizeHook,builderHook,same,ownedAvcEntry));
+                    assert(retained->frameTable().nativeSize()==image+0x2732c &&
+                        retained->frameTable().nativeBuilder()==image+0x2737e);
+                    assert(!retained->publishFrame(lease,hook,same,ownedAvcEntry));
+                } else assert(retained->publishFrame(lease,hook,same,executableFamily));
                 assert(retained->frameTable().callbackCount()==schema.count);
                 assert(!retained->excludesPublishedContextWritableSpan(lease,0xa000,4));
                 struct FamilyScope {
