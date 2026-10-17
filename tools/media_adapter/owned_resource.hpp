@@ -27035,8 +27035,13 @@ template<size_t Capacity=16> struct TglNativeCreatedContextBatch {
 // object references and never permission to dereference a deleted context.
 template<size_t Capacity=16> struct TglNativeRemovedContextBatch {
     static_assert(Capacity>0 && Capacity<=128,"owned removal work budget");
+    // Exact15128 reads only count+0 and context-array+8; no input writes or
+    // input-pointer escape. Keep this view within the snapshot's lifetime.
+    struct NativeInput {uint32_t count,reserved;const uintptr_t* contexts;};
+    static_assert(sizeof(NativeInput)==16 && offsetof(NativeInput,contexts)==8);
     std::array<uintptr_t,Capacity> contexts{};
     uint32_t count=0;bool valid=false;
+    NativeInput nativeInput() const noexcept {return {count,0,contexts.data()};}
     template<class Read> bool capture(uintptr_t input,Read read) noexcept {
         *this={};uint32_t n=0;uintptr_t array=0;
         if(!input || input>UINTPTR_MAX-16 || !read(input,&n,4) || n>Capacity) return false;
@@ -30070,7 +30075,8 @@ public:
             const int prepared=prepare(scope,physical,static_cast<const Batch&>(snapshot));
             if(prepared)return prepared;
             if(!scope.matches(binding_.image,physical,ticket.generation))return 5;
-            const int status=native(binding_.image+0x15128,physical,input);
+            const auto capturedInput=snapshot.nativeInput();
+            const int status=native(binding_.image+0x15128,physical,&capturedInput);
             if(status)return status;
             return reconcile(scope,physical,static_cast<const Batch&>(snapshot));
         },admit);

@@ -18586,7 +18586,11 @@ static void testRetainedVeboxFrames() {
             return prepareStatus;
         };
         auto preparedNative=[&](uintptr_t entry,uintptr_t physical,const void* original) noexcept -> int {
-            assert(removalStage==1 && entry==image+0x15128 && physical==0xf200 && original==input);
+            assert(removalStage==1 && entry==image+0x15128 && physical==0xf200 && original!=input);
+            using NativeInput=TglNativeRemovedContextBatch<2>::NativeInput;
+            const auto& captured=*static_cast<const NativeInput*>(original);
+            assert(captured.count==2 && captured.reserved==0 && captured.contexts[0]==batchContexts[0] &&
+                captured.contexts[1]==batchContexts[1]);
             removalStage=2;return 0;
         };
         auto preparedReconcile=[&](uintptr_t physical,const TglNativeRemovedContextBatch<2>& batch) noexcept -> int {
@@ -19255,6 +19259,26 @@ int main() {
     }
     {
         std::array<uint32_t,512> input{},output{};size_t used=0;
+        {
+            TglNativeRemovedContextBatch<2> batch;
+            std::array<uintptr_t,2> callerContexts{0x1000,0x2000};
+            struct Request {uint32_t count,reserved;const uintptr_t* contexts;};
+            Request caller{2,0,callerContexts.data()};
+            const auto root=reinterpret_cast<uintptr_t>(&caller);
+            auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(at==root && bytes==4){std::memcpy(out,&caller.count,4);return true;}
+                if(at==root+8 && bytes==8){std::memcpy(out,&caller.contexts,8);return true;}
+                for(size_t i=0;i<2;++i)if(at==reinterpret_cast<uintptr_t>(&callerContexts[i]) && bytes==8) {
+                    std::memcpy(out,&callerContexts[i],8);return true;
+                }
+                return false;
+            };
+            assert(batch.capture(root,read));
+            const auto captured=batch.nativeInput();
+            caller.count=1;caller.contexts=nullptr;callerContexts={0x3000,0x4000};
+            assert(captured.count==2 && captured.reserved==0 && captured.contexts==batch.contexts.data());
+            assert(captured.contexts[0]==0x1000 && captured.contexts[1]==0x2000);
+        }
         {
             using Slices=TglOwnedAvcSliceInputTable;
             static_assert(!std::is_copy_constructible_v<Slices> && !std::is_move_constructible_v<Slices>);
