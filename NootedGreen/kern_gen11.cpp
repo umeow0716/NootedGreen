@@ -771,6 +771,7 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 			const uint32_t fence = static_cast<uint32_t>(OSIncrementAtomic(
 				reinterpret_cast<volatile SInt32 *>(
 					reinterpret_cast<uint8_t *>(ctb) + 0x3C))) & 0xFFFFU;
+			const uint32_t wireStart = tail;
 			buffer[tail] = (fence << 16) | requestLength;
 			tail = (tail + 1U) % size;
 			buffer[tail] = kGucTypeFastRequest |
@@ -785,6 +786,25 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 			OSSynchronizeIO();
 			NGreen::callback->writeReg32(kGen11GucHostInterrupt,
 			                              kGucSendTrigger);
+			// The producer queue is still held, so another CPU producer cannot
+			// reuse these slots during this bounded readback. GuC consumption,
+			// PCIe delivery and GPU execution are NOT proved by CPU equality.
+			// Only the already validated single-context MODE_SET/SCHEDULE path;
+			// no extra MMIO reads, payload writes, retries or result changes.
+			static uint32_t wireLogs = 0;
+			if (contextTailField && (requestLength == 2U || requestLength == 3U) && wireLogs < 16U) {
+				++wireLogs;
+				const uint32_t raw0 = buffer[wireStart];
+				const uint32_t raw1 = buffer[(wireStart + 1U) % size];
+				const uint32_t raw2 = buffer[(wireStart + 2U) % size];
+				const uint32_t raw3 = requestLength == 3U ? buffer[(wireStart + 3U) % size] : 0U;
+				const bool matches = raw0 == ((fence << 16) | requestLength) &&
+					raw1 == (kGucTypeFastRequest | (request[0] & 0x0FFFFFFFU)) &&
+					raw2 == request[1] && (requestLength != 3U || raw3 == request[2]);
+				SYSLOG("ngreen", "V380: H2G CPU readback fence=%u words=%u start=%u tail=%u lrc-tail=%x raw=%08x:%08x:%08x:%08x matches=%u gpu-proof=0",
+				       fence,requestLength + 1U,wireStart,tail,contextTail,
+				       raw0,raw1,raw2,raw3,matches?1U:0U);
+			}
 			if (!alreadyHeldQueue)
 				IOLockUnlock(lock);
 			transportFence = fence;
@@ -10181,10 +10201,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	queue.unlock();
 	static uint32_t submitLogs = 0;
 	if (submitLogs++ < 64 || !submitted) {
-		SYSLOG("ngreen", "V233: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x old=0x%x channel=%u seq=%u enable=%d ret=%d fence=%u",
+		SYSLOG("ngreen", "V233: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x old=0x%x channel=%u seq=%u enable=%d ret=%d fence=%u desc-hi=%08x serial=%llx",
 		       gucId, descriptorLo, static_cast<unsigned int>(hwCsType),
 		       ringTail, previousRingTail, channelId, ringSequence, enable,
-		       submitted, transportFence);
+		       submitted, transportFence, descriptorHi, submissionToken);
 	}
 	return submitted;
 }

@@ -7831,12 +7831,37 @@ def timeout_capture_mutations(path):
     print(f"PASS: {len(mutants)} timeout snapshot lifetime/bounds/side-effect mutations rejected")
 
 
+def downstream_wire_observation_contract(path):
+    source = pathlib.Path(path).read_text()
+    start = source.index('bool vfSendCtbFastAction(')
+    end = source.index('\nbool vfSetContextPolicy(', start)
+    body = source[start:end]
+    first = body.index('static uint32_t wireLogs = 0;')
+    last = body.index('\n\t\t\tif (!alreadyHeldQueue)', first)
+    observation = body[first:last]
+    assert 'contextTailField && (requestLength == 2U || requestLength == 3U) && wireLogs < 16U' in observation
+    for read in ('buffer[wireStart]', 'buffer[(wireStart + 1U) % size]',
+                 'buffer[(wireStart + 2U) % size]',
+                 'requestLength == 3U ? buffer[(wireStart + 3U) % size] : 0U'):
+        assert read in observation
+    assert 'matches=%u gpu-proof=0' in observation
+    assert body.index('const uint32_t wireStart = tail;') < body.index('buffer[tail] = (fence << 16) | requestLength;')
+    assert body.index('descriptor[5] = tail;') < body.index('writeReg32(kGen11GucHostInterrupt,') < first < last
+    assert not any(token in observation for token in
+                   ('writeReg', 'readReg', 'IOLock', 'return ', 'PANIC', 'vfMarkProtocolFault'))
+    import re
+    assert not re.search(r'buffer\[[^\n]+?\]\s*=(?!=)', observation)
+    assert 'fence=%u desc-hi=%08x serial=%llx' in source
+    print('PASS: bounded downstream CPU wire observation preserves native publication/result')
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(f"usage: {sys.argv[0]} kern_gen11.cpp TGL-production TGL-debug")
     direct_branch_candidate_contract()
     event_collection_admission_model()
     source_contract(sys.argv[1])
+    downstream_wire_observation_contract(sys.argv[1])
     timeout_capture_mutations(sys.argv[1])
     v321_edram_dispatch_source_mutations(sys.argv[1])
     v323_native_publication_source_mutations(sys.argv[1])
