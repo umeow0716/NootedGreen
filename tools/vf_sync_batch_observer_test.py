@@ -157,6 +157,78 @@ elif sys.argv[1:]:
         assert bounded(family, 0x39c20, 7) == bytes.fromhex('488db700020000')
         assert bounded(family, 0x39c3e, 7) == bytes.fromhex('4981c7e8010000')
     print(f'PASS bounded native batch/copy/pmap spans and {mutations} byte mutations; exact caller and relocation-free entry; static only')
+# Execute the actual binding admission statements with owned symbol addresses.
+# Hash results are injected here; --native independently checks the exact code
+# spans. No target helper is called, and every individual refusal is preserved.
+ram_begin = source.index('const auto cpuLookup=patcher.solveSymbol(')
+ram_end = source.index('gVfBatchCpuCopy=0;', ram_begin)
+copy_begin = source.index('if(gVfCpuBackingLookup && nofaultCopy && physicalCopy &&', ram_end)
+copy_end = source.index('constexpr uint8_t parseCall[]', copy_begin)
+binding_fixture = r'''
+#include <cstdint>
+#include <cstring>
+#include <cassert>
+#include <cstdio>
+using mach_vm_address_t=uintptr_t;
+alignas(16) static unsigned char arena[32768];
+static unsigned scenario,logs;
+static uintptr_t gVfCpuBackingLookup,gVfBatchCpuCopy;
+static void **gVfCpuKernelPmapSlot,**gVfCpuSystemMapperSlot;
+static void *gVfCpuKernelPmapStore;
+static bool gVfMapSnapshotLayoutBound=false;
+static void logCall(const char *,const char *,...){++logs;}
+#define SYSLOG(...) logCall(__VA_ARGS__)
+struct KernelPatcher {enum {KernelID=0};};
+struct MockPatcher {
+ uintptr_t solveSymbol(int,const char *name) {
+  const char *names[]={"_pmap_find_phys_nofault","_pmap_find_pa","_kernel_pmap",
+    "__ZN8IOMapper7gSystemE","_ml_nofault_copy","_bcopy_phys"};
+  for(unsigned i=0;i<6;++i)if(!std::strcmp(name,names[i]))
+   return scenario==i+1?0:reinterpret_cast<uintptr_t>(arena+(i+1)*4096);
+  assert(false);return 0;
+ }
+} patcher;
+template<class T>T getMember(void *p,unsigned offset){T v;std::memcpy(&v,static_cast<unsigned char *>(p)+offset,sizeof(v));return v;}
+namespace NGFlightTrace {
+ uint64_t boundedCodeHash(const volatile uint8_t *p,unsigned length){
+  const unsigned offsets[]={4096,8192,20480,24576},sizes[]={57,816,362,208};
+  const uint64_t hashes[]={UINT64_C(0x8d33f3e48fddb6bd),UINT64_C(0xddd9ec77c57b4d13),
+    UINT64_C(0x648d5b7fd7277f0e),UINT64_C(0xf9172f81775ea555)};
+  for(unsigned i=0;i<4;++i)if(p==arena+offsets[i]){assert(length==sizes[i]);return hashes[i]^(scenario==i+7?1:0);}
+  assert(false);return 0;
+ }
+}
+static void displacement(unsigned entry,unsigned field,unsigned next,unsigned target){
+ int32_t delta=static_cast<int32_t>(target-entry-next);std::memcpy(arena+entry+field,&delta,4);
+}
+static void actualBinding(){
+__ACTUAL_RAM__
+ gVfBatchCpuCopy=0;
+__ACTUAL_COPY__
+}
+int main(){
+ for(scenario=0;scenario<=15;++scenario){
+  std::memset(arena,0,sizeof(arena));logs=0;
+  gVfCpuBackingLookup=gVfBatchCpuCopy=0;gVfCpuKernelPmapSlot=gVfCpuSystemMapperSlot=nullptr;gVfCpuKernelPmapStore=nullptr;
+  displacement(4096,3,7,28672);displacement(4096,0x2f,0x33,8192+(scenario==11?1:0));
+  displacement(20480,0x31,0x35,8192+(scenario==12?1:0));
+  displacement(20480,0x7b,0x7f,8192+(scenario==13?1:0));
+  displacement(20480,0x12d,0x131,24576+(scenario==14?1:0));
+  *reinterpret_cast<void **>(arena+12288)=arena+28672+(scenario==15?8:0);
+  actualBinding();assert(logs==3);
+  const bool ramOk=scenario==0 || scenario==5 || scenario==6 || scenario==9 || scenario==10 || scenario==12 || scenario==13 || scenario==14;
+  assert(bool(gVfCpuBackingLookup)==ramOk);assert(bool(gVfBatchCpuCopy)==(scenario==0));
+  assert(bool(gVfCpuKernelPmapSlot)==ramOk && bool(gVfCpuSystemMapperSlot)==ramOk && bool(gVfCpuKernelPmapStore)==ramOk);
+ }
+ std::puts("PASS actual RAM/copy binding admission: positive and 15 independent refusals; no native helper invocation");
+}
+'''.replace('__ACTUAL_RAM__',source[ram_begin:ram_end]).replace('__ACTUAL_COPY__',source[copy_begin:copy_end])
+with tempfile.TemporaryDirectory(prefix='ngreen-bindings-') as directory:
+    cpp=Path(directory)/'binding.cpp';cpp.write_text(binding_fixture)
+    binary=Path(directory)/'binding'
+    subprocess.run([os.environ.get('CXX','clang++'),'-std=c++14','-O1','-g','-fsanitize=address,undefined',
+                    str(cpp),'-o',str(binary)],check=True)
+    subprocess.run([str(binary)],check=True)
 start = source.index('bool Gen11::vfObserveRingBatch(')
 stop = source.index('\nvoid Gen11::vfMediaEnd(', start)
 body = source[start:stop]

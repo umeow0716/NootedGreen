@@ -2944,21 +2944,38 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			const auto cpuFindPa=patcher.solveSymbol(KernelPatcher::KernelID,"_pmap_find_pa");
 			const auto kernelPmap=patcher.solveSymbol(KernelPatcher::KernelID,"_kernel_pmap");
 			const auto systemMapper=patcher.solveSymbol(KernelPatcher::KernelID,"__ZN8IOMapper7gSystemE");
+			const auto cpuLookupHash=cpuLookup?NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(cpuLookup),57):0;
+			const auto cpuFindPaHash=cpuFindPa?NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(cpuFindPa),816):0;
+			const bool cpuLookupCall=cpuLookup && cpuFindPa && cpuLookupHash==UINT64_C(0x8d33f3e48fddb6bd) &&
+				cpuLookup+0x33+getMember<int32_t>(reinterpret_cast<void *>(cpuLookup),0x2f)==cpuFindPa;
+			bool cpuStoreMatch=false;
 			// Exact 25G229 complete code spans, including the local leaf walker.
 			// RIP displacements survive the kernel slide. No code is patched.
 			if(cpuLookup && cpuFindPa && kernelPmap && systemMapper &&
-			   NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(cpuLookup),57)==UINT64_C(0x8d33f3e48fddb6bd) &&
-			   NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(cpuFindPa),816)==UINT64_C(0xddd9ec77c57b4d13) &&
-			   cpuLookup+0x33+getMember<int32_t>(reinterpret_cast<void *>(cpuLookup),0x2f)==cpuFindPa) {
+			   cpuLookupHash==UINT64_C(0x8d33f3e48fddb6bd) &&
+			   cpuFindPaHash==UINT64_C(0xddd9ec77c57b4d13) && cpuLookupCall) {
 				void *store=reinterpret_cast<void *>(cpuLookup+7+getMember<int32_t>(reinterpret_cast<void *>(cpuLookup),3));
-				if(*reinterpret_cast<void **>(kernelPmap)==store) {
+				cpuStoreMatch=*reinterpret_cast<void **>(kernelPmap)==store;
+				if(cpuStoreMatch) {
 					gVfCpuBackingLookup=cpuLookup;gVfCpuKernelPmapSlot=reinterpret_cast<void **>(kernelPmap);
 					gVfCpuKernelPmapStore=store;gVfCpuSystemMapperSlot=reinterpret_cast<void **>(systemMapper);
 				}
 			}
+			SYSLOG("ngreen","V383: RAM binding symbols=%x lookup-hash=%llx walker-hash=%llx call=%u store=%u",
+				(cpuLookup?1U:0U)|(cpuFindPa?2U:0U)|(kernelPmap?4U:0U)|(systemMapper?8U:0U),
+				static_cast<unsigned long long>(cpuLookupHash),static_cast<unsigned long long>(cpuFindPaHash),
+				cpuLookupCall?1U:0U,cpuStoreMatch?1U:0U);
 			SYSLOG("ngreen","V382: CPU RAM backing observer bound=%u",gVfCpuBackingLookup?1U:0U);
 			const auto nofaultCopy=patcher.solveSymbol(KernelPatcher::KernelID,"_ml_nofault_copy");
 			const auto physicalCopy=patcher.solveSymbol(KernelPatcher::KernelID,"_bcopy_phys");
+			const auto nofaultCopyHash=nofaultCopy?NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(nofaultCopy),362):0;
+			const auto physicalCopyHash=physicalCopy?NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(physicalCopy),208):0;
+			unsigned copyCalls=0;
+			if(nofaultCopy && nofaultCopyHash==UINT64_C(0x648d5b7fd7277f0e)) {
+				if(cpuFindPa && nofaultCopy+0x35+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x31)==cpuFindPa)copyCalls|=1U;
+				if(cpuFindPa && nofaultCopy+0x7f+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x7b)==cpuFindPa)copyCalls|=2U;
+				if(physicalCopy && nofaultCopy+0x131+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x12d)==physicalCopy)copyCalls|=4U;
+			}
 			gVfBatchCpuCopy=0;
 			gVfMapSnapshotLayoutBound=false;
 			const auto listInit=patcher.solveSymbol(index,"__ZN20IOAccelMemoryMapList4initEv",address,size);
@@ -2974,16 +2991,23 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				anchorMatches(mapReserve+0x10,reserveFields,sizeof(reserveFields)) &&
 				anchorMatches(mapSearch+0x38,listFirst,sizeof(listFirst)) &&
 				anchorMatches(mapSearch+0x56,listSecond,sizeof(listSecond));
+			SYSLOG("ngreen","V383: map layout symbols=%x init-hash=%llx add-hash=%llx anchors=%x",
+				(listInit?1U:0U)|(listAdd?2U:0U)|(mapReserve?4U:0U)|(mapSearch?8U:0U),
+				static_cast<unsigned long long>(listInit?NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(listInit),22):0),
+				static_cast<unsigned long long>(listAdd?NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(listAdd),42):0),
+				(mapReserve && anchorMatches(mapReserve+0x10,reserveFields,sizeof(reserveFields))?1U:0U)|
+				(mapSearch && anchorMatches(mapSearch+0x38,listFirst,sizeof(listFirst))?2U:0U)|
+				(mapSearch && anchorMatches(mapSearch+0x56,listSecond,sizeof(listSecond))?4U:0U));
 			// Complete exact code, plus both actual callees. This native helper
 			// rejects non-RAM/missing pages and returns a SHORT byte count.
 			// It never enters descriptor DMA mapping or faults pages in.
 			if(gVfCpuBackingLookup && nofaultCopy && physicalCopy &&
-			   NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(nofaultCopy),362)==UINT64_C(0x648d5b7fd7277f0e) &&
-			   NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(physicalCopy),208)==UINT64_C(0xf9172f81775ea555) &&
-			   nofaultCopy+0x35+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x31)==cpuFindPa &&
-			   nofaultCopy+0x7f+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x7b)==cpuFindPa &&
-			   nofaultCopy+0x131+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x12d)==physicalCopy)
+			   nofaultCopyHash==UINT64_C(0x648d5b7fd7277f0e) &&
+			   physicalCopyHash==UINT64_C(0xf9172f81775ea555) && copyCalls==7U)
 				gVfBatchCpuCopy=nofaultCopy;
+			SYSLOG("ngreen","V383: CPU copy binding symbols=%x copy-hash=%llx physical-hash=%llx calls=%x map-layout=%u",
+				(nofaultCopy?1U:0U)|(physicalCopy?2U:0U),static_cast<unsigned long long>(nofaultCopyHash),
+				static_cast<unsigned long long>(physicalCopyHash),copyCalls,gVfMapSnapshotLayoutBound?1U:0U);
 			constexpr uint8_t parseCall[] = {0xff,0x90,0x08,0x0a,0,0};
 			constexpr uint8_t endCall[] = {0xff,0x90,0x38,0x0a,0,0};
 			constexpr uint8_t classBase[] = {0x4c,0x8d,0xbb,0xe0,0x06,0,0};
@@ -3418,6 +3442,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					0x49,0x8b,0x76,0x18,0x49,0x8b,0x4e,0x20,0x45,0x8b,0x46,0x30,
 					0x45,0x0f,0xb6,0x4e,0x6a,0x41,0x0f,0xb6,0x46,0x69,0x48,0x8b,0x1f,
 					0x48,0x83,0xec,0x08,0x44,0x89,0xfa,0x50,0xff,0x93,0x18,0x01,0,0};
+				SYSLOG("ngreen","V383: batch binding copy=%u entry=%u caller=%u entry-hash=%llx caller-anchor=%u",
+					gVfBatchCpuCopy?1U:0U,contains(batchSubmit,0,242)?1U:0U,
+					contains(fifoSubmit,0x162,sizeof(batchCall))?1U:0U,
+					static_cast<unsigned long long>(contains(batchSubmit,0,242)?
+						NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(batchSubmit),242):0),
+					contains(fifoSubmit,0x162,sizeof(batchCall)) && matches(fifoSubmit+0x162,batchCall,sizeof(batchCall))?1U:0U);
 				// Entry's first 14 bytes end on complete non-PC-relative instructions.
 				// Never trampoline the earlier Media LEA thunk or read ring history.
 				if(gVfBatchCpuCopy && contains(batchSubmit,0,242) &&

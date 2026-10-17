@@ -1,5 +1,25 @@
 # Tahoe SR-IOV protocol audit — in progress
 
+## 2026-10-18 V382 runtime admission / V383 binding diagnostics
+
+V382 was installed and loaded with its exact UUID. Its native flight collector
+calibrated, but CPU RAM backing, synchronous batch and aggregate observer
+bindings were all0. The sole helper refused before media execution; the Host
+controller closed with status0/full cooldown. No H264 workload or PF repair was
+demonstrated. The first unresolved boundary is native kernel binding admission,
+not a new submitted-command/completion failure. The earlier retained kernel
+UUID matches the offline1291D44A image, but runtime code hashes were not logged;
+neither a hash mismatch nor missing symbol may yet be asserted as the cause.
+
+V383 records all symbol-presence masks, observed bounded code hashes, exact
+callee checks, kernel-store equality, Family layout anchors and TGL caller
+binding before admission. It does not execute an unqualified helper, substitute
+a failed hash, authorize a mapping lease or weaken any precondition. The actual
+RAM/copy admission statements execute in owned ASan/UBSan fixtures: positive
+plus15 independent symbol/hash/call/store refusals. Native hashes remain
+independently checked against bounded offline code spans. Runtime V383 behavior
+is not yet proven; the same mandatory aggregate gate remains in force.
+
 ## 2026-10-18 bounded CPU map-header snapshot (local, not deployed)
 
 The native-nofault backend now samples the allocated/resident intrusive lists
