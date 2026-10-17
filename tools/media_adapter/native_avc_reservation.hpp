@@ -249,6 +249,45 @@ private:
     std::unique_ptr<SliceInput> slices_;
     std::unique_ptr<OwnedTemplateNalInput> nal_;
 };
+// CF object pins for exact2737e/23fad's raw/recon/downscale and16 reference
+// surfaces. Acquire only while the caller excludes source destruction/writes;
+// a CF retain alone is NOT an input-content lock or a GPU completion lease.
+// A future frame owner must retain this object until proven retirement.
+template<class Api> class OwnedAvcSurfaceReferences {
+    using Pin=TglOwnedTypedCfReference<Api>;
+    std::array<std::unique_ptr<Pin>,19> pins_{};
+    std::array<uintptr_t,19> handles_{};
+    size_t count_=0;
+public:
+    OwnedAvcSurfaceReferences(const OwnedAvcSurfaceReferences&)=delete;
+    OwnedAvcSurfaceReferences& operator=(const OwnedAvcSurfaceReferences&)=delete;
+    template<class Admit> static std::unique_ptr<OwnedAvcSurfaceReferences>
+    capture(const std::array<uintptr_t,19>& handles,Api api,Admit admit) noexcept {
+        if(!handles[0] || !handles[1] || !handles[2] || !admit())return {};
+        const auto type=api.surfaceType();
+        if(!type)return {};
+        auto result=std::unique_ptr<OwnedAvcSurfaceReferences>(new(std::nothrow) OwnedAvcSurfaceReferences{});
+        if(!result)return {};
+        for(auto handle:handles) {
+            if(!handle || result->owns(handle))continue;
+            if(!admit())return {};
+            auto pin=std::unique_ptr<Pin>(new(std::nothrow) Pin(api));
+            if(!pin || !pin->acquire(handle,type))return {};
+            result->handles_[result->count_]=handle;
+            result->pins_[result->count_++]=std::move(pin);
+        }
+        if(!admit())return {};
+        return result;
+    }
+    bool owns(uintptr_t handle) const noexcept {
+        if(!handle)return false;
+        for(size_t i=0;i<count_;++i)if(handles_[i]==handle)return true;
+        return false;
+    }
+    size_t size() const noexcept {return count_;}
+private:
+    OwnedAvcSurfaceReferences()=default;
+};
 // All audited syntax inputs share one captured root header. This is NOT a
 // native frame: payload scalars/reference handles/downscale leases/output
 // aliases and complete SPS/PPS inheritance still require separate proof.
@@ -325,6 +364,22 @@ public:
     size_t sliceCount() const noexcept {return sliceNal_->sliceCount();}
     const uintptr_t* sliceTable() const noexcept {return sliceNal_->sliceTable();}
     const uint8_t* nalMetadata() const noexcept {return sliceNal_->nalMetadata();}
+    // Handle identities come from the SAME private root capture as syntax,
+    // not a second borrowed payload read.440[0] is current downscale only;
+    // this does not clone/authorize the rest of the caller's440 table.
+    template<class Api,class Read,class Admit>
+    std::unique_ptr<OwnedAvcSurfaceReferences<Api>> pinSurfaces(Api api,Read read,Admit admit) const noexcept {
+        if(!admit())return {};
+        std::array<uintptr_t,19> handles{};uintptr_t downscale=0,current=0;
+        std::memcpy(&handles[0],input_.data()+8,8);
+        std::memcpy(&handles[1],input_.data()+0x478,8);
+        std::memcpy(&downscale,input_.data()+0x440,8);
+        if(!downscale || downscale>UINTPTR_MAX-8 || !read(downscale,&handles[2],8))return {};
+        for(size_t i=0;i<16;++i)std::memcpy(&handles[3+i],input_.data()+0x38+i*0x40,8);
+        auto result=OwnedAvcSurfaceReferences<Api>::capture(handles,api,admit);
+        if(!result || !read(downscale,&current,8) || current!=handles[2] || !admit())return {};
+        return result;
+    }
 private:
     OwnedAvcSyntaxInput()=default;
     // Input span through metadata480, excluding outer output pointer488 and

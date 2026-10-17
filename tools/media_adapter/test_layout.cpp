@@ -19398,6 +19398,13 @@ int main() {
             const uintptr_t spsAddress=reinterpret_cast<uintptr_t>(sps.data()),ppsAddress=reinterpret_cast<uintptr_t>(pps.data());
             std::memcpy(fullHeader.data()+0x410,&spsAddress,8);std::memcpy(fullHeader.data()+0x418,&ppsAddress,8);
             std::memcpy(fullHeader.data()+0x420,initialHeader.data(),initialHeader.size());
+            const uintptr_t rawSurface=0x1000,reconSurface=0x2000,referenceSurface=0x4000;
+            uintptr_t downscaleSurface=0x3000;
+            const uintptr_t downscaleTable=reinterpret_cast<uintptr_t>(&downscaleSurface);
+            std::memcpy(fullHeader.data()+8,&rawSurface,8);
+            std::memcpy(fullHeader.data()+0x478,&reconSurface,8);
+            std::memcpy(fullHeader.data()+0x440,&downscaleTable,8);
+            std::memcpy(fullHeader.data()+0x38,&referenceSurface,8);
             const auto savedFullHeader=fullHeader;
             const uintptr_t fullStart=reinterpret_cast<uintptr_t>(fullHeader.data()),fullPayload=fullStart;
             unsigned fullReads=0;
@@ -19407,10 +19414,60 @@ int main() {
                 }
                 if(at==spsAddress && bytes==sizeof(sps)){std::memcpy(out,sps.data(),bytes);return true;}
                 if(at==ppsAddress && bytes==pps.size()){std::memcpy(out,pps.data(),bytes);return true;}
+                if(at==downscaleTable && bytes==8){std::memcpy(out,&downscaleSurface,8);return true;}
                 return read(at,out,bytes);
             };
             auto full=FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead);
             assert(full && fullReads==1 && full->sliceCount()==2 && full->pictureBytes()[0x20]==0x73);
+            struct CfState {unsigned retains=0,releases=0;uintptr_t denied=0,wrongType=0;};
+            struct CfApi {
+                CfState* state;
+                uintptr_t surfaceType() const noexcept {return 7;}
+                uintptr_t type(uintptr_t handle) const noexcept {return handle==state->wrongType?9:7;}
+                bool retain(uintptr_t handle) const noexcept {
+                    if(handle==state->denied)return false;
+                    ++state->retains;return true;
+                }
+                void release(uintptr_t) const noexcept {++state->releases;}
+            } cf{nullptr};
+            CfState cfState{};cf.state=&cfState;
+            auto surfacePins=full->pinSurfaces(cf,fullRead,[]() noexcept {return true;});
+            assert(surfacePins && surfacePins->size()==4 && surfacePins->owns(referenceSurface));
+            assert((fullHeader==std::array<uint8_t,0x488>{})); // Source was already overwritten.
+            surfacePins.reset();assert(cfState.retains==4 && cfState.releases==4);
+            using SurfacePins=NgreenNativeAvcReservation::OwnedAvcSurfaceReferences<CfApi>;
+            std::array<uintptr_t,19> allSurfaces{};
+            for(size_t i=0;i<allSurfaces.size();++i)allSurfaces[i]=0x1000+i*0x1000;
+            for(size_t missing=0;missing<3;++missing) {
+                auto incomplete=allSurfaces;incomplete[missing]=0;cfState={};
+                assert(!SurfacePins::capture(incomplete,cf,[]() noexcept {return true;}));
+                assert(!cfState.retains && !cfState.releases);
+            }
+            for(size_t fail=0;fail<allSurfaces.size();++fail)for(bool wrong:{false,true}) {
+                cfState={};
+                (wrong?cfState.wrongType:cfState.denied)=allSurfaces[fail];
+                assert(!SurfacePins::capture(allSurfaces,cf,[]() noexcept {return true;}));
+                assert(cfState.retains==fail && cfState.releases==fail);
+            }
+            cfState={};allSurfaces.fill(rawSurface);
+            auto duplicate=SurfacePins::capture(allSurfaces,cf,[]() noexcept {return true;});
+            assert(duplicate && duplicate->size()==1 && cfState.retains==1);
+            duplicate.reset();assert(cfState.releases==1);
+            for(unsigned deniedAt=1;deniedAt<=3;++deniedAt) {
+                cfState={};unsigned calls=0;
+                assert(!SurfacePins::capture(allSurfaces,cf,[&]() noexcept {return ++calls!=deniedAt;}));
+                assert(cfState.retains==cfState.releases);
+            }
+            cfState={};unsigned tableReads=0;
+            auto changedDownscale=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(!fullRead(at,out,bytes))return false;
+                if(at==downscaleTable && ++tableReads==2) {
+                    const uintptr_t changed=0x9999;std::memcpy(out,&changed,8);
+                }
+                return true;
+            };
+            assert(!full->pinSurfaces(cf,changedDownscale,[]() noexcept {return true;}));
+            assert(cfState.retains==4 && cfState.releases==4);
             uint32_t level=0;std::memcpy(&level,full->sequenceBytes()+0x1c,4);assert(level==40);
             for(uint32_t fieldPicture:{1U,255U,UINT32_MAX}) {
                 fullHeader=savedFullHeader;std::memcpy(slice.data()+0x14,&fieldPicture,4);
