@@ -19214,6 +19214,22 @@ int main() {
         assert(result.ok && output[196]==0xc0);
         input[image+1]=0;
         const auto good=input;output.fill(0xdeadbeef);
+        // Cross-phase invariant over every single-bit change to the actual
+        // fixture: strict accepted commands must have an equal reservation
+        // size, and rejection must leave the entire output untouched. This
+        // does not prove that native callers keep their input immutable.
+        for(size_t word=0;word<used;++word)for(unsigned bit=0;bit<32;++bit) {
+            auto changed=good;changed[word]^=uint32_t(1)<<bit;
+            const auto frozen=changed;
+            const auto size=NgreenAvcGen12::sizeBeforeRelocation(changed.data(),used,1920,1080);
+            output.fill(0xdeadbeef);
+            const auto actual=NgreenAvcGen12::produce(changed.data(),used,1920,1080,
+                output.data(),output.size());
+            assert(changed==frozen);
+            if(actual.ok)assert(size.bounded && size.outputWords==actual.words);
+            else for(auto value:output)assert(value==0xdeadbeef);
+        }
+        output.fill(0xdeadbeef);
         {
             const auto measured=NgreenAvcGen12::sizeBeforeRelocation(good.data(),used,1920,1080);
             assert(measured.bounded && measured.outputWords==used+67);
