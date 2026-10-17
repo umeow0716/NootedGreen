@@ -5754,7 +5754,8 @@ struct NativeOtherFrameBackend {
                    producer>UINTPTR_MAX-0x130 || !writableDataMemory(producer,0x130))
                     return publicationReady?5:invoke();
                 if(publicationReady) {
-                    if(!NgreenNativeAvcReservation::referenceIndices(request,&readMemory))return 5;
+                    if(!NgreenNativeAvcReservation::referenceIndices(request,&readMemory) ||
+                       !NgreenNativeAvcReservation::quantizerIndex(request,&readMemory))return 5;
                     if(!NgreenNativeAvcReservation::abi(image,&readMemory,&executableMemory))return 5;
                     auto scratch=std::unique_ptr<NgreenAvcGen12::PublishScratch>(new(std::nothrow) NgreenAvcGen12::PublishScratch{});
                     if(!scratch)return 5;

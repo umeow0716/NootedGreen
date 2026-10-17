@@ -19206,7 +19206,7 @@ int main() {
         std::array<uint32_t,512> input{},output{};size_t used=0;
         {
             std::array<uint8_t,0x28> request{};
-            std::array<uint8_t,0x410> payload{};
+            std::array<uint8_t,0x440> payload{};
             const auto rq=reinterpret_cast<uintptr_t>(request.data());
             const auto pl=reinterpret_cast<uintptr_t>(payload.data());
             std::memcpy(request.data()+0x20,&pl,8);
@@ -19245,12 +19245,26 @@ int main() {
                 return read(address,target,bytes);
             };
             assert(!NgreenNativeAvcReservation::referenceIndices(rq,moved));
+            for(uint32_t qp=0;qp<=51;++qp) {
+                std::memcpy(payload.data()+0x438,&qp,4);
+                const auto stable=payload;
+                assert(NgreenNativeAvcReservation::quantizerIndex(rq,read) && payload==stable);
+            }
+            for(uint32_t qp:{52U,53U,255U,0x80000000U,UINT32_MAX}) {
+                std::memcpy(payload.data()+0x438,&qp,4);
+                const auto stable=payload;
+                assert(!NgreenNativeAvcReservation::quantizerIndex(rq,read) && payload==stable);
+            }
+            const uint32_t validQp=26;std::memcpy(payload.data()+0x438,&validQp,4);
+            rootReads=0;assert(!NgreenNativeAvcReservation::quantizerIndex(rq,moved));
             auto denied=[](uintptr_t,void*,size_t) noexcept {return false;};
             assert(!NgreenNativeAvcReservation::referenceIndices(rq,denied));
+            assert(!NgreenNativeAvcReservation::quantizerIndex(rq,denied));
             assert(!NgreenNativeAvcReservation::referenceIndices(UINTPTR_MAX-0x20,read));
             const uintptr_t overflow=UINTPTR_MAX-0x400;
             std::memcpy(request.data()+0x20,&overflow,8);
             assert(!NgreenNativeAvcReservation::referenceIndices(rq,read));
+            assert(!NgreenNativeAvcReservation::quantizerIndex(rq,read));
         }
         auto add=[&](uint32_t header,size_t n){size_t start=used;input[used++]=header;
             used+=n-1;return start;};

@@ -35,6 +35,17 @@ bool referenceIndices(uintptr_t request,Read read) noexcept {
     uintptr_t current=0;
     return read(request+0x20,&current,sizeof(current)) && current==payload;
 }
+// Exact23543 indexes the adjacent 52-DWORD tables31f5c0/31f690/...
+// directly by payload438. This is the supported 8-bit AVC QP domain,
+// not permission to clamp unsupported input or change native rate control.
+template<class Read>
+bool quantizerIndex(uintptr_t request,Read read) noexcept {
+    uintptr_t payload=0,current=0;uint32_t qp=0;
+    if(!request || request>UINTPTR_MAX-0x28 ||
+       !read(request+0x20,&payload,sizeof(payload)) || !payload ||
+       payload>UINTPTR_MAX-0x43c || !read(payload+0x438,&qp,sizeof(qp)) || qp>51)return false;
+    return read(request+0x20,&current,sizeof(current)) && current==payload;
+}
 struct Builder {
     uintptr_t argument=0,connection=0,base=0,cursor=0,end=0;
     uint32_t previousUsed=0,classes=0;
