@@ -156,6 +156,9 @@ template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputA
     using Input=NgreenNativeAvcReservation::OwnedAvcCallbackInput<CfApi>;
     auto& inputState=*inputApi.state;
     auto inputRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+        if(at==originalRequestAddress+0x18 && bytes==8) {
+            std::memcpy(out,&originalRequest[3],8);return true;
+        }
         if(at==originalRequestAddress+0x20 && bytes==8) {
             std::memcpy(out,&originalRequest[4],8);return true;
         }
@@ -230,10 +233,19 @@ template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputA
         assert(unchanged==saved);
         if(bad>=11)assert(!reads);
     }
-    for(unsigned mode:{1U,2U,3U,4U,0U}) {
+    assert(!Input::captureForContext(context,originalRequestAddress,{},inputApi,inputRead,
+        []() noexcept {return true;})); // Original request does not name this context.
+    originalRequest[3]=context;
+    const auto requestForContext=originalRequest;
+    for(unsigned mode:{1U,2U,3U,4U,5U,0U}) {
         fullHeader=savedFullHeader;downscaleSurfaces=savedDownscales;inputState={};
         unsigned geometryReads=0;
         auto contextRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+            if(mode==5 && at==originalRequestAddress && bytes==sizeof(originalRequest)) {
+                if(!inputRead(at,out,bytes))return false;
+                const uintptr_t foreign=context+8;
+                std::memcpy(static_cast<unsigned char*>(out)+0x18,&foreign,8);return true;
+            }
             if(at!=context+0x128 || bytes!=sizeof(nativeGeometry))return inputRead(at,out,bytes);
             ++geometryReads;
             if(mode==1 && inputState.retains)return false;
@@ -254,7 +266,7 @@ template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputA
             for(size_t changed=0;changed<sizeof(originalRequest);++changed) {
                 reinterpret_cast<unsigned char*>(originalRequest.data())[changed]^=1;
                 assert(!contextual->matchesOriginalRequest(inputRead,[]() noexcept {return true;}));
-                originalRequest=savedRequest;
+                originalRequest=requestForContext;
             }
             assert(!contextual->matchesOriginalRequest(inputRead,[]() noexcept {return false;}));
             unsigned requestReads=0;
@@ -264,13 +276,14 @@ template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputA
                 return true;
             };
             assert(!contextual->matchesOriginalRequest(changedSecond,[]() noexcept {return true;}));
-            assert(requestReads==2 && originalRequest==savedRequest);
+            assert(requestReads==2 && originalRequest==requestForContext);
             contextual.reset();assert(inputState.releases==5);
         } else {
             assert(!contextual && inputState.retains==inputState.releases);
-            assert(inputState.retains==((mode==1 || mode==3)?5U:0U));
+            assert(inputState.retains==((mode==1 || mode==3 || mode==5)?5U:0U));
         }
     }
+    originalRequest=savedRequest;
 }
 
 

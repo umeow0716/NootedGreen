@@ -52,6 +52,11 @@ public:
     uintptr_t callbackRequest() const noexcept {
         return ready_?reinterpret_cast<uintptr_t>(bytes_.data()):0;
     }
+    bool matchesContextIdentity(uintptr_t context) const noexcept {
+        uintptr_t captured=0;
+        std::memcpy(&captured,bytes_.data()+0x18,sizeof(captured));
+        return ready_ && context && captured==context;
+    }
     // Outer still consumes the ORIGINAL request. Reconstruct its captured
     // bytes, not the private callback payload pointer. Observation only:
     // the caller must retain content exclusion across native use.
@@ -606,10 +611,15 @@ public:
     template<class Read,class Admit> static std::unique_ptr<OwnedAvcCallbackInput>
     captureForContext(uintptr_t context,uintptr_t request,TglOwnedAvcScalingDefaults defaults,
         Api api,Read read,Admit admit) noexcept {
+        uintptr_t requestContext=0;
+        if(!context || !request || request>UINTPTR_MAX-0x28 || !admit() ||
+           !read(request+0x18,&requestContext,sizeof(requestContext)) || !admit() || requestContext!=context)return {};
         NativeAvcCodedGeometry before,after;
         if(!captureCodedGeometry(context,before,read,admit))return {};
         auto input=capture(request,before.width,before.height,defaults,api,read,admit);
-        if(!input || !captureCodedGeometry(context,after,read,admit) || !(before==after))return {};
+        if(!input || !input->request_.matchesContextIdentity(context) ||
+           !input->matchesOriginalRequest(read,admit) ||
+           !captureCodedGeometry(context,after,read,admit) || !(before==after))return {};
         input->nativeContext_=context;input->geometry_=before;
         return input;
     }
