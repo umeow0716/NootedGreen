@@ -318,13 +318,17 @@ def native_batch(lines):
 
 
 def timeout_ring_packets(words):
+    return cpu_ring_packets(words, maximum_words=48, allow_pipe_control=False)
+
+
+def cpu_ring_packets(words, maximum_words=524288, allow_pipe_control=True):
     """Inventory the exact short native ring grammar; do not execute/simulate it.
 
     Field positions: pinned Intel gen12 mhw_mi_hwcmd_g12_X.h. Unknown or
     truncated packets terminate the walk; never resynchronize inside payload.
     Stores/waits below are encoded intent, NOT sampled memory or GPU progress.
     """
-    if len(words) > 48 or any(type(w) is not int or not 0 <= w <= 0xffffffff for w in words):
+    if len(words) > maximum_words or any(type(w) is not int or not 0 <= w <= 0xffffffff for w in words):
         raise ValueError('invalid bounded ring words')
     packets, at = [], 0
     while at < len(words):
@@ -348,11 +352,24 @@ def timeout_ring_packets(words):
             packet.update(opcode='MI_FLUSH_DW', post_sync=(h >> 14) & 3,
                           tlb_invalidate=bool(h & (1 << 18)),
                           hws_index=bool(h & (1 << 21)), notify=bool(h & 0x100))
+        elif allow_pipe_control and h == 0x7a000004:
+            size = 6
+            packet['opcode'] = 'PIPE_CONTROL'
         else:
             return {'complete': False, 'stopped_offset': at * 4, 'reason': 'unknown_header', 'packets': packets}
         if size > len(words) - at:
             return {'complete': False, 'stopped_offset': at * 4, 'reason': 'truncated_packet', 'packets': packets}
-        if packet['opcode'] == 'MI_LOAD_REGISTER_IMM':
+        if packet['opcode'] == 'PIPE_CONTROL':
+            control = words[at+1]
+            # Pinned mhw_mi_hwcmd_g12_X.h DW1. Reserved-field observations
+            # identify a schema difference, not a stepping/hang verdict.
+            packet.update(control=f'{control:08x}', post_sync=(control >> 14) & 3,
+                          cs_stall=bool(control & (1 << 20)), tlb_invalidate=bool(control & (1 << 18)),
+                          pinned_gen12_reserved_dw1=f'{control & 0xc8400040:08x}',
+                          address=f'{(words[at+2] & ~3) | words[at+3] << 32:016x}',
+                          address_space='GGTT' if control & (1 << 24) else 'PPGTT',
+                          immediate=words[at+4] | words[at+5] << 32)
+        elif packet['opcode'] == 'MI_LOAD_REGISTER_IMM':
             packet.update(register=f'{words[at+1]:08x}', value=f'{words[at+2]:08x}')
         elif packet['opcode'] == 'MI_SEMAPHORE_WAIT':
             packet.update(address=f'{words[at+2] | words[at+3] << 32:016x}', threshold=words[at+1])
@@ -415,6 +432,15 @@ def selftest():
         assert not timeout_ring_packets([0x13004003, 8, 0, 1, 0][:length])['complete']
     ggtt = timeout_ring_packets([0x13004003, 12, 0, 1, 0])['packets'][0]
     assert ggtt['address_space'] == 'GGTT' and ggtt['address'] == '0000000000000008'
+    rcs = [0x7a000004, 0x50105021, 0x40000000, 0, 0, 0]
+    pipe = cpu_ring_packets(rcs)['packets'][0]
+    assert pipe['pinned_gen12_reserved_dw1'] == '40000000'
+    assert pipe['cs_stall'] and pipe['post_sync'] == 1 and pipe['address_space'] == 'PPGTT'
+    assert not timeout_ring_packets(rcs)['complete']  # Old selected-prefix grammar unchanged.
+    for length in range(1, 6):
+        assert not cpu_ring_packets(rcs[:length])['complete']
+    assert cpu_ring_packets(rcs+[0x03800000])['complete']
+    assert cpu_ring_packets([0xffffffff]+rcs)['packets'] == []
     for bad in ([0] * 49, [-1], [1 << 32], [True]):
         try:
             timeout_ring_packets(bad)
