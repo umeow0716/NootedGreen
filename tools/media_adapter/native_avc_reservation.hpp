@@ -649,8 +649,10 @@ public:
     }
     template<class Read,class Admit> bool matchesContext(uintptr_t context,Read read,Admit admit) const noexcept {
         NativeAvcCodedGeometry current;
-        return nativeContext_ && context==nativeContext_ &&
-            captureCodedGeometry(context,current,read,admit) && current==geometry_;
+        return nativeContext_ && context==nativeContext_ && request_.matchesContextIdentity(context) &&
+            matchesOriginalRequest(read,admit) &&
+            captureCodedGeometry(context,current,read,admit) && current==geometry_ &&
+            matchesOriginalRequest(read,admit);
     }
     uintptr_t originalRequest() const noexcept {return originalRequest_;}
     uintptr_t originalPayload() const noexcept {return originalPayload_;}

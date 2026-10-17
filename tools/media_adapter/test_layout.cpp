@@ -287,6 +287,7 @@ template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputA
             for(size_t changed=0;changed<sizeof(originalRequest);++changed) {
                 reinterpret_cast<unsigned char*>(originalRequest.data())[changed]^=1;
                 assert(!contextual->matchesOriginalRequest(inputRead,[]() noexcept {return true;}));
+                assert(!contextual->matchesContext(context,contextRead,[]() noexcept {return true;}));
                 originalRequest=requestForContext;
             }
             assert(!contextual->matchesOriginalRequest(inputRead,[]() noexcept {return false;}));
@@ -298,6 +299,16 @@ template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputA
             };
             assert(!contextual->matchesOriginalRequest(changedSecond,[]() noexcept {return true;}));
             assert(requestReads==2 && originalRequest==requestForContext);
+            bool rootChanged=false;
+            auto changedDuringGeometry=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(!contextRead(at,out,bytes))return false;
+                if(at==context+0x128 && !rootChanged) {
+                    originalRequest[3]^=8;rootChanged=true;
+                }
+                return true;
+            };
+            assert(!contextual->matchesContext(context,changedDuringGeometry,[]() noexcept {return true;}));
+            assert(rootChanged);originalRequest=requestForContext;
             contextual.reset();assert(inputState.releases==5);
         } else {
             assert(!contextual && inputState.retains==inputState.releases);
