@@ -455,6 +455,12 @@ public:
             if(prior<i)owned->table_[i]=owned->table_[prior];
             else {
                 if(!read(original[i],owned->slices_[i].data(),ConsumedBytes))return {};
+                // Exact22917/2663c index ten-byte3212f4 directly by DWORD+8.
+                // Ten entries are followed by the next RTTI string, not
+                // additional slice classes. Not a full slice grammar check.
+                uint32_t type=0;
+                std::memcpy(&type,owned->slices_[i].data()+8,sizeof(type));
+                if(type>=10)return {};
                 owned->table_[i]=reinterpret_cast<uintptr_t>(owned->slices_[i].data());
             }
         }

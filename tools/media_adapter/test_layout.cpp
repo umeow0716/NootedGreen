@@ -19318,6 +19318,15 @@ int main() {
                 assert(!Slices::capture(root,4,read) && nodeReads==0);
             }
             pointers={a,b,a,b};
+            for(uint32_t type=0;type<10;++type) {
+                std::memcpy(source[0].data()+8,&type,4);
+                assert(Slices::capture(root,4,read));
+            }
+            for(uint32_t type:{10U,255U,UINT32_MAX}) {
+                std::memcpy(source[0].data()+8,&type,4);
+                assert(!Slices::capture(root,4,read));
+            }
+            const uint32_t validType=0;std::memcpy(source[0].data()+8,&validType,4);
             auto denied=[](uintptr_t,void*,size_t) noexcept {return false;};
             assert(!Slices::capture(root,4,denied));
             auto missing=[&](uintptr_t address,void* target,size_t bytes) noexcept {
