@@ -264,6 +264,7 @@ def main() -> None:
         "__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj",
         "__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv",
         "__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj",
+        "__ZN25IOAccelCommandBufferPool212submitBufferEv",
         "__ZN19IOAccelCommandQueue22submit_command_buffersEPK29IOAccelCommandQueueSubmitArgs",
         "__ZN15IOAccelContext219submit_data_buffersEP33IOAccelContextSubmitDataBuffersInP34IOAccelContextSubmitDataBuffersOutyPy",
         "__ZN17IOAccel2DContext211set_surfaceEj23eIOAccelContextModeBits",
@@ -295,7 +296,8 @@ def main() -> None:
     # One exact opt-in synchronous CPU batch observer, no command rewriting.
     assert "__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb" in routes
     assert "__ZL17get_surface_stateRK16surface_params_tjj12Blt3DOptMode6Intentj" in routes
-    expected_route_count = 177
+    assert "__ZN25IOAccelCommandBufferPool212submitBufferEv" in routes
+    expected_route_count = 178
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"

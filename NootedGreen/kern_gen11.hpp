@@ -306,6 +306,8 @@ private:
 	static void *vfObserveSurfaceState(void *output,const void *parameters,
 		uint32_t a,uint32_t b,uint32_t mode,uint32_t intent,uint32_t flags);
 	mach_vm_address_t oVfObserveSurfaceState {};
+	static uintptr_t vfObservePoolSubmit(void *pool);
+	mach_vm_address_t oVfObservePoolSubmit {};
 	static IOReturn vf2DSetSurface(void *that, uint32_t surface,
 	                              uint32_t mode);
 	mach_vm_address_t oVf2DSetSurface {};

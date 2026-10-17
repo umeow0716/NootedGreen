@@ -74,13 +74,15 @@ def accepts(source: str) -> bool:
         return False
     getter_start = source.index("void *Gen11::vfGetCommandBufferPtrNoInc(")
     getter_frame = source[getter_start:source.index("#undef NG_POOL_FRAME_ARGS", getter_start)]
+    if "NGIOAccelCommandPool::hasReturnedCapacity(" not in getter_frame:
+        return False
     if not (getter_frame.index("ControlFrame before") < getter_frame.index("FunctionCast(") <
             getter_frame.index("hasReturnedCapacity(") < getter_frame.index("ControlFrame after") <
             getter_frame.index("PANIC_COND(true")):
         return False
-    getter_end = source.index("bool Gen11::IGMemoryManagerInitSegments", getter_start)
-    getter = source[getter_start:getter_end]
-    if any(fragment not in getter for fragment in OWNER) or not (
+    getter = getter_frame
+    if (any(fragment not in getter for fragment in OWNER) or
+            "NGIOAccelCommandPool::hasReturnedCapacity(" not in getter) or not (
             getter.index("const bool target") < getter.index("FunctionCast(") <
             getter.index("if (!target)") < getter.index("hasReturnedCapacity(") <
             getter.index("vfMarkProtocolFault(") < getter.index("PANIC_COND(true")):
@@ -110,6 +112,11 @@ def main() -> None:
     assert accepts(source), "missing or reordered VF command-pool contract"
     for fragment in REQUIRED:
         scope = source[source.index("if (index == kextIOAcceleratorFamily2.loadIndex)"):source.index("const bool physicalFramebuffer")] if fragment == "NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid" else source
+        if fragment == "NGIOAccelCommandPool::hasReturnedCapacity(":
+            # The original production postcondition must remain unique inside
+            # its getter. A separate diagnostic cannot satisfy this contract.
+            getter_start = source.index("void *Gen11::vfGetCommandBufferPtrNoInc(")
+            scope = source[getter_start:source.index("static bool vfEventVectorGrowChecked",getter_start)]
         assert scope.count(fragment) == 1, f"ambiguous source contract: {fragment}"
         assert not accepts(source.replace(fragment, "MUTATED", 1)), \
             f"mutation escaped source contract: {fragment}"

@@ -32,7 +32,8 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          19: 'synchronous_batch_metadata', 20: 'synchronous_batch_chunk',
          21: 'resource_base_metadata', 22: 'resource_base_leaf',
          23: 'cpu_map_header_pair', 24: 'cpu_map_list_boundary',
-         25: 'native_render_surface_output'}
+         25: 'native_render_surface_output', 26: 'native_pool_allocation_metadata',
+         27: 'native_pool_allocation_chunk'}
 RESOURCE_SLOTS = {
     1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
     2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
@@ -40,6 +41,20 @@ RESOURCE_SLOTS = {
 
 
 def validate_leaf(kind, words):
+    if kind == 26:
+        if (len(words)!=12 or words[0]!=1 or not 0<words[1]<=65536 or words[1]&3 or
+                words[2]>words[1] or not (0<=words[3]<=words[4]<=((words[1]-words[2])&~3)) or
+                words[5]>words[1] or words[6]&~7 or not words[6]&1 or
+                bool(words[6]&2)!=(words[5]==words[1]) or
+                not 0<=words[7]<words[9]<=words[8]<=256 or words[10] or words[11]):
+            raise ValueError('invalid native pool allocation metadata')
+        return
+    if kind == 27:
+        if (len(words)<7 or words[0]!=1 or not 0<words[2]<=16384 or words[3]>words[2]*4 or
+                not 0<words[4]<=512 or words[1]+words[4]>words[3]//4 or
+                len(words)!=6+words[4] or words[5]&~7 or not words[5]&1):
+            raise ValueError('invalid native pool allocation chunk')
+        return
     if kind == 25:
         if (len(words) != 52 or words[0] != 1 or words[1] > 2 or
                 words[2] & ~31 or words[3] > 48 or words[4] > 48 or words[5] > 64 or words[11]):
@@ -447,6 +462,7 @@ class DiskSink:
         self.db.execute('CREATE TABLE backings (identity TEXT, group_id INTEGER, pages INTEGER, captured INTEGER, valid INTEGER, bytes INTEGER, map_offset TEXT, options INTEGER, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.execute('CREATE TABLE cpu_backings (identity TEXT, group_id INTEGER, pages INTEGER, captured INTEGER, valid INTEGER, bytes INTEGER, map_offset TEXT, options INTEGER, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.execute('CREATE TABLE synchronous_batches (identity TEXT PRIMARY KEY, group_id INTEGER, gpu TEXT, words INTEGER, copied INTEGER, flags INTEGER, captured INTEGER) WITHOUT ROWID')
+        self.db.execute('CREATE TABLE pool_allocations (identity TEXT PRIMARY KEY, group_id INTEGER, bytes INTEGER, copied INTEGER, flags INTEGER, captured INTEGER) WITHOUT ROWID')
         self.db.execute('CREATE TABLE resource_batches (identity TEXT, group_id INTEGER, fields INTEGER, words INTEGER, admitted INTEGER, captured INTEGER, stable INTEGER, last_field TEXT, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.execute('CREATE TABLE map_lists (identity TEXT, group_id INTEGER, role INTEGER, list INTEGER, attempts INTEGER, good INTEGER, known INTEGER, ended INTEGER, status INTEGER, walked INTEGER, declared INTEGER, PRIMARY KEY(identity,group_id,role,list)) WITHOUT ROWID')
         self.db.commit()
@@ -488,6 +504,18 @@ class DiskSink:
             raise ValueError('duplicate completed flight record ID')
         if record['kind'] == 25 and (not record['group'] or int(record['identity'], 16)):
             raise ValueError('surface output requires owning flight group and no pointer identity')
+        if record['kind'] == 26:
+            if not record['group'] or not 1<=int(record['identity'],16)<=4:
+                raise ValueError('missing native pool allocation parent')
+            self.db.execute('INSERT INTO pool_allocations VALUES (?,?,?,?,?,0)',
+                            (record['identity'],record['group'],words[1],words[5],words[6]))
+        if record['kind'] == 27:
+            row=self.db.execute('SELECT group_id,bytes,copied,flags,captured FROM pool_allocations WHERE identity=?',
+                                (record['identity'],)).fetchone()
+            if row != (record['group'],words[2]*4,words[3],words[5],words[1]*4):
+                raise ValueError('missing/duplicate/out-of-order native pool chunk')
+            self.db.execute('UPDATE pool_allocations SET captured=captured+? WHERE identity=?',
+                            (words[4]*4,record['identity']))
         if record['kind'] in (23, 24):
             key = (record['identity'], record['group'], words[1], words[2])
             if not int(record['identity'], 16) or not record['group']:
@@ -607,6 +635,14 @@ class DiskSink:
                 'maximum_captures': 8, 'all_submissions_captured': False,
                 'optional_terminal_extent_included': False,
                 'atomic_snapshot': False, 'gpu_execution_proof': False}
+
+    def pool_allocation_report(self):
+        total, complete = self.db.execute('SELECT COUNT(*),COALESCE(SUM(flags=7 AND copied=bytes AND captured=bytes),0) FROM pool_allocations').fetchone()
+        return {'captures':total,'complete_control_stable_cpu_copies':complete,'incomplete':total-complete,
+                'maximum_captures':4,'all_submissions_captured':False,'atomic_snapshot':False,
+                'capture_phase':'BEFORE_NATIVE_POOL_SUBMIT',
+                'stability_scope':'POOL_CONTROL_FIELDS_NOT_CONTENT_ATOMICITY',
+                'native_object_lease_proven':False,'gpu_execution_proof':False}
 
     def resource_report(self):
         total, complete, stable = self.db.execute('SELECT COUNT(*),COALESCE(SUM(admitted=1 AND captured=fields*2),0),COALESCE(SUM(admitted=1 AND captured=fields*2 AND stable=captured),0) FROM resource_batches').fetchone()
@@ -1030,6 +1066,7 @@ if __name__ == '__main__':
         backing_report = sink.backing_report()
         cpu_alias_report = sink.backing_report(cpu_alias=True)
         synchronous_batch_report = sink.synchronous_batch_report()
+        pool_allocation_report = sink.pool_allocation_report()
         resource_report = sink.resource_report()
         map_list_report = sink.map_list_report()
         try:
@@ -1041,6 +1078,7 @@ if __name__ == '__main__':
         report['backings'] = backing_report
         report['cpu_alias_backings'] = cpu_alias_report
         report['synchronous_batches'] = synchronous_batch_report
+        report['pool_allocations'] = pool_allocation_report
         report['resource_bases'] = resource_report
         report['cpu_map_lists'] = map_list_report
         if error:

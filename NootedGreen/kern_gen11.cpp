@@ -191,6 +191,9 @@ static mach_vm_address_t gVfBatchCpuCopy = 0;
 static mach_vm_address_t gVfBatchCaller = 0;
 static mach_vm_address_t gVfSurfaceCallers[3] {};
 static volatile UInt32 gVfSurfaceTickets = 0;
+static mach_vm_address_t gVfPoolSubmitCaller = 0;
+static uint32_t gVfPoolCpuCopies[4][16384] {};
+static volatile UInt32 gVfPoolCpuTickets = 0;
 static bool gVfMapSnapshotLayoutBound = false;
 static bool gVfNativeObjectLayoutBound = false;
 // Boot-owned copies, not retained native pointers. Unique tickets avoid any
@@ -3135,6 +3138,27 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		PANIC_COND(!patcher.routeMultiple(index, commandPoolRoutes, address, size),
 		           "ngreen", "Cannot route VF command-pool postconditions");
 		SYSLOG("ngreen", "V272: guarded VF command-pool growth and returned capacity");
+		if(checkKernelArgument("-ngreencaptureonly")) {
+			const auto submit=patcher.solveSymbol(index,"__ZN25IOAccelCommandBufferPool212submitBufferEv",address,size);
+			static constexpr uint8_t entry[]={0x55,0x48,0x89,0xe5,0x41,0x56,0x53,
+				0x48,0x89,0xfb,0x4c,0x8b,0xb7,0x48,0x18,0,0};
+			// A 14-byte jump spans 17 bytes of complete non-PC-relative instructions.
+			// Observe BEFORE native rotates/releases a completed current slot.
+			bool exactPool=submit && submit>=address && submit-address<=size && sizeof(entry)<=size-(submit-address);
+			if(exactPool) {
+				const auto *actual=reinterpret_cast<const volatile uint8_t *>(submit);
+				for(size_t i=0;i<sizeof(entry);++i)exactPool=exactPool && actual[i]==entry[i];
+			}
+			if(exactPool) {
+				KernelPatcher::RouteRequest poolRoute[]={
+					{"__ZN25IOAccelCommandBufferPool212submitBufferEv",vfObservePoolSubmit,this->oVfObservePoolSubmit}
+				};
+				patcher.clearError();
+				PANIC_COND(!patcher.routeMultiple(index,poolRoute,address,size) || !this->oVfObservePoolSubmit,
+					"ngreen","Cannot route exact capture-only pool submit observer");
+			}
+			SYSLOG("ngreen","V385: native pool allocation observer bound=%u",this->oVfObservePoolSubmit?1U:0U);
+		}
 		// These are the unique outer roots of every admitted inherited
 		// resource producer.  Wrappers take one invocation lease before native
 		// mutexes or waits; lower prepare/load/page/submit helpers deliberately
@@ -3510,6 +3534,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 						}
 					}
 					if(exact && gVfBatchCpuCopy) {
+						// External rel32 is rewritten by KC linking. The wrapper
+						// itself proves entry into the UUID-pinned Family callee;
+						// its exact return PC supplies the other end of the edge.
+						static constexpr uint8_t poolCall[]={0x48,0x89,0xdf,0xe8};
+						if(contains(rect,0x211a,sizeof(poolCall)) && matches(rect+0x211a,poolCall,sizeof(poolCall)))
+							gVfPoolSubmitCaller=rect+0x2122;
 						for(uint32_t i=0;i<3;++i)gVfSurfaceCallers[i]=rect+offsets[i]+5;
 						KernelPatcher::RouteRequest surfaceRoute[]={
 							{"__ZL17get_surface_stateRK16surface_params_tjj12Blt3DOptMode6Intentj",
@@ -6479,6 +6509,71 @@ IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
 	const IOReturn result=FunctionCast(vfContextSubmit, callback->oVfContextSubmit)(
 		that, input, output, options, stamp);
 	return mediaScope.failed()?kIOReturnBadArgument:result;
+}
+
+uintptr_t Gen11::vfObservePoolSubmit(void *pool)
+{
+	PANIC_COND(!callback || !callback->oVfObservePoolSubmit,"ngreen","Missing native pool submit continuation");
+	using Native=uintptr_t (*)(void *);
+	const auto native=reinterpret_cast<Native>(callback->oVfObservePoolSubmit);
+	const auto caller=reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0));
+	if(!checkKernelArgument("-ngreencaptureonly") || gVfIdentity!=VfIdentity::Virtual ||
+	   !gVfPoolSubmitCaller || caller!=gVfPoolSubmitCaller || !gVfBatchCpuCopy || !vfFlightEnabled())return native(pool);
+	VfContextOperationGuard operation;
+	const uint32_t group=operation?vfFlightCurrentGroup():0;
+	using Copy=uint64_t (*)(uint64_t,uint64_t,uint64_t);
+	const auto copy=reinterpret_cast<Copy>(gVfBatchCpuCopy);
+	const uintptr_t p=reinterpret_cast<uintptr_t>(pool);
+	if(group && NGVfCpuRange::kernelRange(p,0x1874)) {
+		uint32_t before[17]{},after[17]{};
+		uintptr_t owner=0,ownerAfter=0,slot[3]{},slotAfter[3]{};
+		const auto value=[](const uint32_t *raw,uint32_t index) {
+			return uint64_t(raw[index])|(uint64_t(raw[index+1])<<32);
+		};
+		if(copy(p+0x10,reinterpret_cast<uintptr_t>(&owner),8)==8 && owner==reinterpret_cast<uintptr_t>(gVfAccelerator) && owner &&
+		   copy(p+0x1830,reinterpret_cast<uintptr_t>(before),68)==68) {
+			const uint16_t maximum=uint16_t(before[0]),count=uint16_t(before[0]>>16);
+			const int16_t current=int16_t(before[4]>>16);
+			const uint32_t bytes=before[1],reserved=before[16];
+			const uintptr_t start=value(before,6),end=value(before,8),cursor=value(before,10);
+			if(current>=0 && uint16_t(current)<count && count<=maximum && maximum<=256 &&
+			   bytes && bytes<=65536 && !(bytes&3U) &&
+			   copy(p+0x30+uintptr_t(current)*24,reinterpret_cast<uintptr_t>(slot),24)==24 &&
+			   NGVfCpuRange::kernelRange(slot[2],bytes) &&
+			   NGIOAccelCommandPool::hasReturnedCapacity(maximum,count,current,slot[0],slot[1],slot[2],
+				start,end,cursor,cursor,0,bytes,reserved)) {
+				const uint32_t ticket=gVfPoolCpuTickets;
+				if(ticket<4 && OSCompareAndSwap(ticket,ticket+1,&gVfPoolCpuTickets)) {
+					auto *owned=gVfPoolCpuCopies[ticket];
+					const uint64_t copied=copy(slot[2],reinterpret_cast<uintptr_t>(owned),bytes);
+					bool stable=copy(p+0x10,reinterpret_cast<uintptr_t>(&ownerAfter),8)==8 && ownerAfter==owner &&
+						owner==reinterpret_cast<uintptr_t>(gVfAccelerator) &&
+						copy(p+0x1830,reinterpret_cast<uintptr_t>(after),68)==68 &&
+						copy(p+0x30+uintptr_t(current)*24,reinterpret_cast<uintptr_t>(slotAfter),24)==24;
+					for(uint32_t i=0;i<17;++i)stable=stable && before[i]==after[i];
+					for(uint32_t i=0;i<3;++i)stable=stable && slot[i]==slotAfter[i];
+					const uint32_t flags=1U|(copied==bytes?2U:0U)|(stable?4U:0U);
+					const uint32_t prefix[]={1,bytes,reserved,uint32_t(start-slot[2]),uint32_t(cursor-slot[2]),
+						copied<=bytes?uint32_t(copied):0U,flags,uint32_t(current),maximum,count,0,0};
+					NGFlightTrace::emitCpuWordsPrefixed(gVfFlightTrace,[]() {
+						return static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+					},26,group,ticket+1,prefix,arrsize(prefix),nullptr,0);
+					if(copied<=bytes)for(uint32_t first=0;first<copied/4U;) {
+						const uint32_t valid=copied/4U-first<512U?uint32_t(copied/4U)-first:512U;
+						const uint32_t chunk[]={1,first,bytes/4,uint32_t(copied),valid,flags};
+						NGFlightTrace::emitCpuWordsPrefixed(gVfFlightTrace,[]() {
+							return static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+						},27,group,ticket+1,chunk,arrsize(chunk),owned+first,valid);
+						first+=valid;
+					}
+				}
+			}
+		}
+	}
+	// Native may now publish, rotate and release the old slot. No data pointer
+	// is stored for a later read, and neither equality nor this copy proves ABA,
+	// native locking, GPU fetch, atomicity or an observer-owned resource lease.
+	return native(pool);
 }
 
 void *Gen11::vfObserveSurfaceState(void *output,const void *parameters,
