@@ -10409,6 +10409,19 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		}
 		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 	}
+	// Explicit capture-only mode is a refusal, NOT a successful H.264 run.
+	// Keep native registration/retirement and completed non-video work live,
+	// but never enqueue the video workload while inspecting its CPU state.
+	if (NGVfSubmission::captureOnlyRejectVideo(
+	        checkKernelArgument("-ngreencaptureonly"),
+	        gVfIdentity == VfIdentity::Virtual, static_cast<uint32_t>(hwCsType))) {
+		static volatile UInt32 captureOnlyRefusals = 0;
+		const uint32_t refusal = captureOnlyRefusals;
+		if (refusal < 16U && OSCompareAndSwap(refusal, refusal + 1U, &captureOnlyRefusals))
+			SYSLOG("ngreen", "V385: capture-only video refused prequeue type=%u channel=%u seq=%u queued=0",
+			       static_cast<uint32_t>(hwCsType), channelId, ringSequence);
+		return false;
+	}
 	VfContextQueueGuard queue(that);
 	if (!queue.get() || !gVfCtbEnabled || gVfSubmissionStopped ||
 	    gVfCtbStopped || gVfProtocolFault)

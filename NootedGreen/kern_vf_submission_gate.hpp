@@ -5,6 +5,15 @@
 
 namespace NGVfSubmission {
 
+// Diagnostic opt-in only. Reject video work BEFORE CTB queue acquisition;
+// never manufacture a completion or stop G2H/retirement consumers. Unknown
+// engines still require the independent exact descriptor admission.
+constexpr bool captureOnlyRejectVideo(bool requested, bool virtualDevice,
+                                     uint32_t hwCsType)
+{
+	return requested && virtualDevice && (hwCsType == 3U || hwCsType == 4U);
+}
+
 struct State {
 	bool virtualDevice;
 	bool ggttReady;

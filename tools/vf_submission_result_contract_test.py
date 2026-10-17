@@ -58,6 +58,14 @@ def function_body(source: str, signature: str) -> str:
 
 def source_contract(source: str, path: Path) -> None:
     compact = "".join(source.split())
+    work = function_body(source, "bool Gen11::vfSubmitWorkItem(")
+    guard = work[work.index("if (NGVfSubmission::captureOnlyRejectVideo("):]
+    guard = guard[:guard.index("VfContextQueueGuard queue(that);")]
+    for token in ('checkKernelArgument("-ngreencaptureonly")',
+                  'gVfIdentity == VfIdentity::Virtual', 'return false;', 'queued=0'):
+        assert token in guard, f"{path}: incomplete prequeue capture refusal"
+    assert 'return true;' not in guard
+    assert work.index('captureOnlyRejectVideo(') < work.index('VfContextQueueGuard queue(that);')
     route_tokens = (
         f'{{"{SUBMIT_BLIT}",submitBlit,this->osubmitBlit}}',
         f'{{"{SUBMIT_CCS}",vfSubmitCCSResolve,this->oVfSubmitCCSResolve}}',
@@ -125,6 +133,11 @@ def source_mutations(path: Path) -> None:
     source = path.read_text(encoding="utf-8")
     source_contract(source, path)
     mutations = (
+        ('checkKernelArgument("-ngreencaptureonly")', 'true'),
+        ('gVfIdentity == VfIdentity::Virtual, static_cast<uint32_t>(hwCsType)',
+         'true, static_cast<uint32_t>(hwCsType)'),
+        ('\t\treturn false;\n\t}\n\tVfContextQueueGuard queue(that);',
+         '\t\treturn true;\n\t}\n\tVfContextQueueGuard queue(that);'),
         (f'{{"{SUBMIT_CCS}",\n\t\t\t  vfSubmitCCSResolve, this->oVfSubmitCCSResolve}},\n', ""),
         (f'{{"{SUBMIT_DEPTH}",\n\t\t\t  vfSubmitDepthResolve, this->oVfSubmitDepthResolve}},\n', ""),
         ("vfMarkProtocolFault(failure);", ""),

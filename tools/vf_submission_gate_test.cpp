@@ -7,6 +7,15 @@
 
 int main()
 {
+	unsigned captureOnlyRefusals = 0;
+	for (unsigned requested = 0; requested < 2; ++requested)
+		for (unsigned virtualDevice = 0; virtualDevice < 2; ++virtualDevice)
+			for (unsigned engine = 0; engine < 256; ++engine) {
+				const bool expected = requested && virtualDevice && (engine == 3 || engine == 4);
+				assert(NGVfSubmission::captureOnlyRejectVideo(requested, virtualDevice, engine) == expected);
+				captureOnlyRefusals += expected;
+			}
+	assert(captureOnlyRefusals == 2); // VCS0/VCS2 only; no default or PF behavior change.
 	unsigned admitted = 0;
 	unsigned consumers = 0;
 	unsigned pollingConsumers = 0;
