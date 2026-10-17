@@ -13,7 +13,37 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 source = (root/'NootedGreen/kern_gen11.cpp').read_text()
-if sys.argv[1:]:
+if sys.argv[1:2] == ['--resource-layout']:
+    if len(sys.argv) != 3:
+        raise SystemExit('usage: vf_sync_batch_observer_test.py --resource-layout PINNED_GEN12_VDBOX_DIR')
+    fixture = r'''
+    #include "mhw_vdbox_mfx_hwcmd_g12_X.h"
+    #include "mhw_vdbox_vdenc_hwcmd_g12_X.h"
+    using M=mhw_vdbox_mfx_g12_X;using V=mhw_vdbox_vdenc_g12_X;
+    using P=M::MFX_PIPE_BUF_ADDR_STATE_CMD;using I=M::MFX_IND_OBJ_BASE_ADDR_STATE_CMD;
+    using B=M::MFX_BSP_BUF_BASE_ADDR_STATE_CMD;using D=V::VDENC_PIPE_BUF_ADDR_STATE_CMD;
+    static_assert(sizeof(P)==68*4,"MFX pipe extent");
+    static_assert(offsetof(P,DW7)==7*4,"MFX source");
+    static_assert(offsetof(P,Refpicbaseaddr)==19*4,"MFX references");
+    static_assert(sizeof(P::Refpicbaseaddr)==16*8,"MFX 16 packed references");
+    static_assert(offsetof(P,DW51)==51*4,"MFX shared reference attributes");
+    static_assert(offsetof(P,DW61)==61*4,"MFX compression is not an address");
+    static_assert(offsetof(P,DW65)==65*4,"MFX slice-size streamout");
+    static_assert(sizeof(I)==26*4 && offsetof(I,DW21)==21*4 && offsetof(I,DW24)==24*4,"MFX indirect pair");
+    static_assert(sizeof(B)==10*4 && offsetof(B,DW7)==7*4,"MFX BSP bitplane");
+    static_assert(sizeof(D)==71*4,"VDENC pipe extent");
+    static_assert(offsetof(D,OriginalUncompressedPicture)==10*4,"VDENC source");
+    static_assert(offsetof(D,StreaminDataPicture)==13*4,"VDENC streamin");
+    static_assert(offsetof(D,RowStoreScratchBuffer)==16*4,"VDENC rowstore");
+    static_assert(offsetof(D,DW61)==61*4,"VDENC histogram is not an address");
+    static_assert(offsetof(D,VdencTileRowStoreBuffer)==62*4,"VDENC final triples");
+    '''
+    with tempfile.TemporaryDirectory(prefix='ngreen-resource-layout-') as directory:
+        cpp = Path(directory)/'offsets.cpp'; cpp.write_text(fixture)
+        subprocess.run([os.environ.get('CXX', 'clang++'), '-std=c++14', '-Werror',
+                        '-fsyntax-only', '-I', sys.argv[2], str(cpp)], check=True)
+    print('PASS independent compiled Gen12 MFX/VDENC resource sizes/offsets; no resource or GPU call')
+elif sys.argv[1:]:
     if len(sys.argv) != 4 or sys.argv[1] != '--native':
         raise SystemExit('usage: vf_sync_batch_observer_test.py [--native TGL KERNEL]')
     def bounded(path, offset, size):

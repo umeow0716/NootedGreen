@@ -39,11 +39,31 @@ def mode_template_fields(words):
     result = {'status': 'GEN12_FIELDS_CPU_ONLY_NOT_ADMISSION',
               'complete_packet_walk': False, 'mfx_modes': [], 'pak_headers': [], 'walkers': [],
               'pipeline_flushes': [], 'mi_flushes': [], 'mi_operands': [], 'mi_profile_issues': [],
-              'vdenc_pipe_resources': [], 'resource_coverage': 'VDENC_PIPE_ONLY_OTHER_PACKETS_NOT_INVENTORIED'}
+              'vdenc_pipe_resources': [], 'mfx_pipe_resources': [],
+              'mfx_indirect_resources': [], 'mfx_bsp_resources': [], 'indirect_start_fields': [],
+              'resource_coverage': 'EXPLICIT_BASE_FIELDS_ONLY_NOT_EXTENTS_OR_ALL_INDIRECT_ACCESSES'}
     if not words or len(words) > 1536 or any(type(x) is not int or not 0 <= x <= 0xffffffff for x in words):
         result['refusal'] = 'word-extent-or-value'
         return result
     at = 0
+    def mfx_resource(collection, index, name, shift=6, control_index=None,
+                     cache_select=False, upper_index=None):
+        low, high = words[at+index:at+index+2]
+        control = words[at+control_index] if control_index is not None else None
+        cache = (control >> 12) & 1 if cache_select else None
+        item = dict(packet_word=at, address_word=at+index, role=name,
+                    raw=[f'{low:08x}', f'{high:08x}'],
+                    address_hex=f'{((high & 0xffff) << 32) | (low & ~((1 << shift)-1)):016x}',
+                    address_reserved_bits=bool(low & ((1 << shift)-1) or high & 0xffff0000),
+                    control_raw=None if control is None else f'{control:08x}', cache_select=cache,
+                    address_domain='INTERNAL_MEDIA_STORAGE' if cache else 'BUFFER_BASE_ADDRESS',
+                    extent_bytes=None, mapping_proven=False, gpu_fetch_proven=False)
+        if upper_index is not None:
+            end_low, end_high = words[at+upper_index:at+upper_index+2]
+            item.update(upper_bound_raw=[f'{end_low:08x}', f'{end_high:08x}'],
+                        upper_bound_page_hex=f'{((end_high & 0xffff) << 32) | (end_low & ~4095):016x}',
+                        upper_bound_reserved_bits=bool(end_low & 4095 or end_high & 0xffff0000))
+        result[collection].append(item)
     while at < len(words):
         header = words[at]
         op = header & (0xff800000 if header < 0x60000000 else 0xffff0000)
@@ -80,6 +100,35 @@ def mode_template_fields(words):
                 parser_done=(control >> 4) & 1, vdenc_flush=(control >> 17) & 1))
         elif op == 0x13000000:
             result['mi_flushes'].append(dict(word=at, header=header))
+        elif op == 0x70020000 and count == 68:
+            # Pinned MFX_PIPE_BUF_ADDR_STATE: six address/control triples,
+            # sixteen 2DW references sharing DW51 control, then five triples.
+            slots = ((1, 'pre_deblock'), (4, 'post_deblock'), (7, 'source'),
+                     (10, 'streamout'), (13, 'intra_rowstore'), (16, 'deblock_rowstore'),
+                     (52, 'macroblock_or_error'), (55, 'ildb'), (58, 'ildb_second'),
+                     (62, 'scaled_reference'), (65, 'slice_size_streamout'))
+            for index, name in slots:
+                mfx_resource('mfx_pipe_resources', index, name, control_index=index+2,
+                             cache_select=index in (13, 16))
+            for index in range(16):
+                mfx_resource('mfx_pipe_resources', 19+2*index, f'reference{index}', control_index=51)
+        elif op == 0x70030000 and count == 26:
+            # Each entry is base-low/high, attributes, access-upper-low/high.
+            # The upper bound is an encoded page, NOT an allocation-size proof.
+            for index, name in ((1, 'bitstream_decoder_stitch'), (6, 'mv'),
+                                (11, 'it_coeff_decoder'), (16, 'it_deblock_decoder'),
+                                (21, 'pak_bse_encoder')):
+                mfx_resource('mfx_indirect_resources', index, name, shift=12,
+                             control_index=index+2, upper_index=index+3)
+        elif op == 0x70040000 and count == 10:
+            for index, name in ((1, 'bsd_mpc_rowstore'), (4, 'mpr_rowstore_decoder'), (7, 'bitplane')):
+                mfx_resource('mfx_bsp_resources', index, name, control_index=index+2,
+                             cache_select=index in (1, 4))
+        elif op == 0x71030000 and count == 11:
+            result['indirect_start_fields'].append(dict(packet_word=at, word=at+7,
+                role='indirect_pak_bse_start', raw=f'{words[at+7]:08x}',
+                encoded_value=words[at+7] & 0x1fffffff, reserved_bits=bool(words[at+7] & 0xe0000000),
+                base_resolution='NOT_PERFORMED', gpu_fetch_proven=False))
         elif op == 0x70840000 and count == 71:
             # Pinned Gen12 hwcmd: 3DW address/control records. DW7..9 is
             # reserved and DW61 is a histogram OFFSET, neither is an address.
@@ -538,6 +587,40 @@ def selftest():
                for item in resources['vdenc_pipe_resources'])
     pipe[10] |= 1
     assert mode_template_fields(pipe)['vdenc_pipe_resources'][2]['reserved_bits']
+    mfx = [0]*68
+    mfx[0] = 0x70020042
+    mfx[7:9] = [0x4075e000, 0]
+    mfx[13:16] = [0x4000, 0, 0x1000]
+    mfx[19:21] = [0x40c00000, 0x1234]
+    mfx[51] = 0x80  # Shared reference attributes, not an address.
+    mfx[61] = 0xffffffff  # Per-reference compression control, not an address.
+    mf = mode_template_fields(mfx)
+    assert mf['complete_packet_walk'] and len(mf['mfx_pipe_resources']) == 27
+    names = {item['role']: item for item in mf['mfx_pipe_resources']}
+    assert names['source']['address_hex'] == '000000004075e000'
+    assert names['reference0']['address_hex'] == '0000123440c00000'
+    assert names['reference15']['control_raw'] == '00000080'
+    assert names['intra_rowstore']['address_domain'] == 'INTERNAL_MEDIA_STORAGE'
+    assert all(item['address_word'] not in (51, 61) for item in mf['mfx_pipe_resources'])
+    indirect = [0]*26
+    indirect[0] = 0x70030018
+    indirect[21:26] = [0x40500000, 0, 2, 0x405ff000, 0]
+    item = mode_template_fields(indirect)['mfx_indirect_resources'][-1]
+    assert item['address_hex'] == '0000000040500000' and item['extent_bytes'] is None
+    assert item['upper_bound_page_hex'] == '00000000405ff000' and not item['upper_bound_reserved_bits']
+    indirect[22] |= 0x10000
+    assert mode_template_fields(indirect)['mfx_indirect_resources'][-1]['address_reserved_bits']
+    bsp = [0x70040008]+[0]*9
+    bsp[1:4] = [0x10000, 0, 0x1000]
+    assert len(mode_template_fields(bsp)['mfx_bsp_resources']) == 3
+    assert mode_template_fields(bsp)['mfx_bsp_resources'][0]['cache_select'] == 1
+    slice_state = [0x71030009]+[0]*10
+    slice_state[7] = 0x12345
+    offsets = mode_template_fields(slice_state)['indirect_start_fields']
+    assert len(offsets) == 1 and offsets[0]['encoded_value'] == 0x12345
+    assert offsets[0]['base_resolution'] == 'NOT_PERFORMED'
+    assert not mode_template_fields(mfx[:-1])['complete_packet_walk']
+    assert not mode_template_fields(mfx[:-1])['mfx_pipe_resources']
     for header, packet, mask, reason in (
             (0x10200003, [0x2000, 0, 1, 0], 0x1c00, 'store-header-reserved'),
             (0x13004003, [0x1000, 0, 1, 0], 0x005b3c40, 'flush-header-reserved'),

@@ -1,5 +1,28 @@
 # Tahoe SR-IOV protocol audit — in progress
 
+## 2026-10-18 resource-base coverage gap (offline, no new workload)
+
+The complete saved V381818DW publication has57 explicitly decoded base
+fields:22 VDENC pipe,27 MFX pipe (including16 packed references), five MFX
+indirect base/upper-bound pairs and three BSP bases. Independent compiled
+offsetof/sizeof checks against media-driver2a32c7fa Gen12 generated headers
+verify the array/control boundaries. Shared reference control DW51, per-ref
+compression DW61, VDENC histogram offset DW61 and indirect upper bounds are
+not misclassified as resource base pointers. CacheSelect1 is internal media
+storage, not permission to walk that value as a PPGTT address. Four slice
+indirect-start fields retain their raw/encoded values with base resolution
+NOT_PERFORMED; an upper-bound page is not an allocation extent proof.
+
+Ten unique nonzero external bases occur in that saved frame. Existing V381
+leaf records cover NONE at their exact base addresses; they cover ring/BBS
+and synchronization operands instead. Thus old leaf completeness cannot be
+used as media-resource mapping completeness. Next instrumentation must sample
+these native-table resource bases under the existing PT-before-CTB lock order,
+using qualified CPU command bytes only; unknown packet shapes, internal-cache
+addresses and missing/unstable samples must remain explicit. Plane extents,
+mode-dependent actual accesses and derived offsets remain unproven. No PTE,
+command, native result, mapping policy or runtime product changes in this step.
+
 ## 2026-10-18 synchronous CPU batch capture (local, not deployed)
 
 RCS pool slots may rotate after submit, and failure unwind may revoke their
