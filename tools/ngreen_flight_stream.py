@@ -95,7 +95,7 @@ def exact(source, length):
     return bytes(result)
 
 
-def inspect(source):
+def inspect(source, consume=None):
     if exact(source, len(MAGIC)) != MAGIC:
         raise ValueError('unknown archive format')
     seq = total = 0
@@ -125,6 +125,8 @@ def inspect(source):
             total += length
             if total > metadata['max_bytes']:
                 raise ValueError('declared input budget exceeded')
+            if consume is not None:
+                consume(data)  # Only CRC/sequence-verified bytes, constant RAM.
         elif kind in (3, 4, 5) and not length:
             terminal = {3: 'EOF', 4: 'LIMIT', 5: 'DISK_FLOOR'}[kind]
         else:
@@ -202,12 +204,25 @@ if __name__ == '__main__':
     capture.add_argument('--mirror', action='store_true')
     check = sub.add_parser('inspect')
     check.add_argument('archive')
+    check.add_argument('--extract', help='exclusive output; retained prefix is incomplete on validation error')
     sub.add_parser('self-test')
     args = parser.parse_args()
     if args.command == 'record':
         record(sys.stdin.buffer.raw, args.output, args.channel, args.max_bytes, args.mirror)
     elif args.command == 'inspect':
-        with open(args.archive, 'rb') as source:
-            print(json.dumps(inspect(source), separators=(',', ':')))
+        fd = -1
+        try:
+            if args.extract:
+                fd = os.open(args.extract, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with open(args.archive, 'rb') as source:
+                result = inspect(source, (lambda data: write_all(fd, data)) if fd >= 0 else None)
+            if fd >= 0:
+                os.fsync(fd)
+                result['extracted_prefix_only'] = not result['transport_complete']
+            print(json.dumps(result, separators=(',', ':')))
+        finally:
+            if fd >= 0:
+                os.close(fd)
+        raise SystemExit(0 if result['transport_complete'] else 1)
     else:
         self_test()

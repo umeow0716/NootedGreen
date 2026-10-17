@@ -5,6 +5,11 @@ compiler="${CXX:-clang++}"
 task_output="$(mktemp -d "${TMPDIR:-/tmp}/ngreen-static.XXXXXX")"
 printf 'Diagnostic directory: %s\n' "$task_output"
 failed=0
+if python3 -B tools/media_adapter/decode_kdebug_recorder.py --self-test; then
+    printf 'PASS strict native flight stream decoder CPU fixtures\n'
+else
+    failed=1
+fi
 if "$compiler" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined \
     tools/media_adapter/kdebug_recorder.cpp -o "$task_output/kdebug-recorder-test" && \
     "$task_output/kdebug-recorder-test" --self-test; then

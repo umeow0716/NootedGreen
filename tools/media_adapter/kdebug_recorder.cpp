@@ -13,9 +13,11 @@
 #include <signal.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
+#include "../../NootedGreen/kern_flight_trace.hpp"
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
 #include <mach/mach_time.h>
+#include <dlfcn.h>
 #endif
 
 namespace {
@@ -33,6 +35,9 @@ struct BufferInfo {int events,disabled;uint32_t flags;int threads,owner;};
 struct Register {uint32_t type,first,last,reserved1,reserved2;};
 struct Packet {uint32_t magic,kind,bytes,crc;uint64_t sequence;};
 struct Clock {uint64_t wallNs,absoluteTicks,continuousTicks;uint32_t numer,denom;};
+struct Platform {char build[32],bootUUID[64];};
+constexpr uint32_t calibrationId=0x06fefff0U;
+constexpr uint64_t calibrationMagic=UINT64_C(0x4e474b4443414c31);
 static_assert(sizeof(Event)==64 && sizeof(BufferInfo)==20 && sizeof(Register)==20 && sizeof(Packet)==24,"native trace ABI");
 static_assert(sizeof(Clock)==32,"clock anchor ABI");
 constexpr size_t eventCapacity=1024,bufferEvents=262144; // 64KiB reads, 16MiB native storage
@@ -109,6 +114,58 @@ struct Sink {
         ++sequence;total+=bytes;return true;
     }
 };
+bool calibrate(Sink& sink,std::array<Event,eventCapacity>& events) {
+#if defined(__APPLE__)
+    using Emit=int(*)(uint32_t,uint64_t,uint64_t,uint64_t,uint64_t);
+    auto emit=reinterpret_cast<Emit>(dlsym(RTLD_DEFAULT,"kdebug_trace"));
+    const uint64_t nonce=mach_absolute_time();
+    if(!emit || emit(calibrationId,calibrationMagic,nonce,sizeof(Event),uint64_t(getpid())))return false;
+    for(unsigned attempt=0;attempt<100;++attempt) {
+        size_t count=sizeof(events),payload=0;
+        if(control(readTrace,0,events.data(),&count) || !readableCount(count,events.size(),payload) ||
+           lostEvents(events.data(),count))return false;
+        const Event* match=nullptr;
+        for(size_t i=0;i<count;++i) {
+            const auto& e=events[i];
+            // Reject a byte-count/event-count ABI mismatch before LIVE: the
+            // initially zeroed unread tail must not be accepted as events.
+            if(!e.timestamp || !e.debugid)return false;
+            if(e.debugid==calibrationId) {
+                if(match || e.args[0]!=calibrationMagic || e.args[1]!=nonce ||
+                   e.args[2]!=sizeof(Event) || e.args[3]!=uint64_t(getpid()) || !e.args[4])return false;
+                match=&e;
+            }
+        }
+        if(match && !sink.packet(8,match,sizeof(*match)))return false;
+        if(payload && !sink.packet(2,events.data(),payload))return false;
+        if(match)return true;
+        usleep(10000);
+    }
+    return false;
+#else
+    (void)sink;(void)events;return false;
+#endif
+}
+std::array<Event,260> fixtureEvents{};size_t fixtureCount=0;
+void fixtureTrace(uint32_t id,uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t ignored) {
+    assert(!ignored && fixtureCount<fixtureEvents.size());
+    fixtureEvents[fixtureCount]={uint64_t(100+fixtureCount),{a,b,c,d,77},id,0,0};++fixtureCount;
+}
+int ownedFixture(const char* path) {
+    int fd=open(path,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);if(fd<0)return 5;
+    Sink sink{fd};BufferInfo start{int(bufferEvents),0,lp64,1,123};Clock clock{1000,100,100,1,1};
+    Platform source{};strcpy(source.build,"OWNED-CPU-FIXTURE");strcpy(source.bootUUID,"00000000-0000-0000-0000-000000000000");
+    const char origin[]="OWNED_CPU_FIXTURE";
+    Event beacon{99,{calibrationMagic,55,sizeof(Event),123,88},calibrationId,0,0};
+    const uint32_t words[]={0xffffffff,0x12345678,3,4,5,6,7};fixtureCount=0;
+    bool ok=NGFlightTrace::emitCpuWords(&fixtureTrace,[](){return 1U;},3,42,0x40010000,words,7) &&
+        sink.packet(1,&start,sizeof(start)) && sink.packet(5,&clock,sizeof(clock)) &&
+        sink.packet(6,origin,sizeof(origin)-1) && sink.packet(7,&source,sizeof(source)) &&
+        sink.packet(8,&beacon,sizeof(beacon)) && sink.packet(2,&beacon,sizeof(beacon)) &&
+        sink.packet(2,fixtureEvents.data(),fixtureCount*sizeof(Event));
+    start.disabled=1;ok=ok && sink.packet(3,&start,sizeof(start)) && !fsync(fd);
+    close(fd);fprintf(stderr,"OWNED_CPU_FIXTURE_ONLY no-kernel-trace-configured\n");return ok?0:8;
+}
 struct Owner {
     bool acquired=false;
     int (*call)(int,int,void*,size_t*)=&control;
@@ -145,8 +202,20 @@ bool nativeVersion() {
     return false;
 #endif
 }
+bool platform(Platform& out) {
+#if defined(__APPLE__)
+    size_t build=sizeof(out.build),uuid=sizeof(out.bootUUID);
+    return !sysctlbyname("kern.osversion",out.build,&build,nullptr,0) &&
+        !sysctlbyname("kern.bootsessionuuid",out.bootUUID,&uuid,nullptr,0) &&
+        build>0 && build<=sizeof(out.build) && out.build[build-1]==0 &&
+        uuid==37 && out.bootUUID[36]==0 && !strcmp(out.build,"25G229");
+#else
+    (void)out;return false;
+#endif
+}
 int capture(const char* path,unsigned seconds) {
     if(geteuid()!=0 || !nativeVersion() || !seconds || seconds>600)return 2;
+    Platform source{};if(!platform(source))return 2;
     BufferInfo before{};
     if(!info(before)){perror("kdebug read policy");return 3;}
     if(before.owner!=-1 || !before.disabled || !compatibleFilters(before.flags)){fprintf(stderr,"kdebug owned/enabled or conflicting filter; refusing takeover/reset\n");return 4;}
@@ -169,6 +238,10 @@ int capture(const char* path,unsigned seconds) {
         size_t(armed.events)<=2*bufferEvents &&
         (armed.flags&lp64) && !(armed.flags&wrapped) && sink.packet(1,&armed,sizeof(armed));
     Clock anchor{};ok=ok && clockAnchor(anchor) && sink.packet(5,&anchor,sizeof(anchor));
+    const char origin[]="NATIVE_ROOT_TRACE";
+    ok=ok && sink.packet(6,origin,sizeof(origin)-1);
+    ok=ok && sink.packet(7,&source,sizeof(source));
+    ok=ok && calibrate(sink,events);
     if(ok){fprintf(stderr,"NGREEN_KTRACE_LIVE buffer_bytes=%zu upstream_complete=0\n",size_t(armed.events)*sizeof(Event));fflush(stderr);}
     const auto began=std::chrono::steady_clock::now();auto syncAt=began;
     while(ok && !interrupted && std::chrono::steady_clock::now()-began<std::chrono::seconds(seconds)) {
@@ -232,6 +305,7 @@ void selfTest() {
 }
 int main(int argc,char** argv) {
     if(argc==2 && !strcmp(argv[1],"--self-test")){selfTest();return 0;}
+    if(argc==3 && !strcmp(argv[1],"--owned-fixture"))return ownedFixture(argv[2]);
     if(argc==2 && !strcmp(argv[1],"--probe")) {
         if(geteuid()!=0 || !nativeVersion())return 2;
         BufferInfo b{};if(!info(b)){perror("kdebug read policy");return 3;}

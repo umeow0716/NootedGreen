@@ -23,6 +23,10 @@ jobs:
           xcrun clang++ -std=c++17 -Wall -Wextra -Werror -arch x86_64 -mmacosx-version-min=26.0 tools/media_adapter/kdebug_recorder.cpp -o output/kdebug-recorder
           codesign --force --sign - output/kdebug-recorder
           output/kdebug-recorder --self-test
+          python3 -B tools/media_adapter/decode_kdebug_recorder.py --self-test
+          output/kdebug-recorder --owned-fixture "$RUNNER_TEMP/flight-owned.bin" > "$RUNNER_TEMP/flight-owned.txt"
+          python3 -B tools/media_adapter/decode_kdebug_recorder.py --input "$RUNNER_TEMP/flight-owned.bin" --output-dir "$RUNNER_TEMP/flight-binary-decoded"
+          python3 -B tools/media_adapter/decode_kdebug_recorder.py --input "$RUNNER_TEMP/flight-owned.txt" --format text --output-dir "$RUNNER_TEMP/flight-text-decoded"
           shasum -a 256 output/kdebug-recorder > output/kdebug-recorder.sha256
           xcrun clang++ -std=c++17 -Wall -Wextra -Werror -arch x86_64 -mmacosx-version-min=26.0 tools/media_adapter/factory_probe.cpp -o output/tgl-capability-factory-probe
           codesign --force --sign - output/tgl-capability-factory-probe
