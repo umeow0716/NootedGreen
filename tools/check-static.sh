@@ -5,6 +5,12 @@ compiler="${CXX:-clang++}"
 task_output="$(mktemp -d "${TMPDIR:-/tmp}/ngreen-static.XXXXXX")"
 printf 'Diagnostic directory: %s\n' "$task_output"
 failed=0
+if python3 -B tools/media_adapter/analyze_tgl_scratch_programs.py --self-test \
+    --image sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
+    printf 'PASS bounded native scratch source and coverage parser\n'
+else
+    failed=1
+fi
 if python3 -B tools/vf_surface_output_observer_test.py; then
     printf 'PASS actual capture-only native surface output observer tests\n'
 else
