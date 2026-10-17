@@ -19399,6 +19399,29 @@ int main() {
             cap.abiVersion=1;cap.bytes=sizeof(cap);cap.registryId=19;cap.flags=1;
             cap.commandProfile=1;cap.inputLimit=1024;cap.outputLimit=1536;
             for(unsigned i=0;i<16;++i)cap.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
+            const uintptr_t work=reinterpret_cast<uintptr_t>(scratch.get());
+            for(unsigned alias=0;alias<3;++alias) {
+                reset();const auto originalWrapper=wrapper;
+                const uintptr_t testArgument=alias==2?work:argument;
+                const uintptr_t testBase=alias==0?argument:alias==1?work:base;
+                const uintptr_t testEnd=testBase+backing.size()*4,testCursor=testBase+used*4;
+                std::memcpy(wrapper.data()+0x10,&testBase,8);
+                std::memcpy(wrapper.data()+0x18,&testEnd,8);
+                std::memcpy(wrapper.data()+0x20,&testCursor,8);
+                const auto beforeWrapper=wrapper;const auto beforeScratch=*scratch;
+                unsigned reads=0,writes=0;
+                auto headerRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                    ++reads;assert(at==testArgument && bytes==wrapper.size());
+                    std::memcpy(out,wrapper.data(),bytes);return true;
+                };
+                auto denied=NgreenNativeAvcReservation::commit(testArgument,cap,19,1920,1080,*scratch,
+                    headerRead,[&](uintptr_t,const void*,size_t) noexcept {++writes;return false;},
+                    [](uintptr_t,size_t) noexcept {return true;},[]() noexcept {return true;});
+                assert(!denied.applied && !denied.mustStop && !writes && reads==1);
+                assert(std::strcmp(denied.reason,"storage-alias")==0 && wrapper==beforeWrapper);
+                assert(!std::memcmp(scratch.get(),&beforeScratch,sizeof(beforeScratch)));
+                assert(backing==originalBacking);(void)originalWrapper;
+            }
             for(unsigned fault=0;fault<8;++fault) {
                 reset();const auto originalWrapper=wrapper;unsigned writes=0;bool ownerLive=true;
                 if(fault==6)cap.flags=0;else cap.flags=1;

@@ -77,6 +77,13 @@ CommitResult commit(uintptr_t argument,const NGVfAvcPublication::Reply& capabili
     Read read,Write write,Writable writable,Live live) noexcept {
     CommitResult result;Builder before,again;
     if(!NGVfAvcPublication::ready(capability,registryId) || !live() || !capture(argument,read,before))return result;
+    const uintptr_t work=reinterpret_cast<uintptr_t>(&scratch);
+    if(work>UINTPTR_MAX-sizeof(scratch) ||
+       (before.base<argument+0x5c && argument<before.end) ||
+       (before.base<work+sizeof(scratch) && work<before.end) ||
+       (argument<work+sizeof(scratch) && work<argument+0x5c)) {
+        result.reason="storage-alias";return result;
+    }
     const size_t inputWords=(before.cursor-before.base)/4;
     if(inputWords<2 || inputWords>1024 || !read(before.base,scratch.source,inputWords*4))return result;
     const auto converted=NgreenAvcGen12::produce(scratch.source,inputWords,width,height,
