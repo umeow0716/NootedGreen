@@ -194,6 +194,10 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
                input[at+2]>(height+15)/16 || input[at+3]!=0){r.reason="walker-profile";return r;}
             nextRow=input[at+2];}
         if(op==0x12000000U){++srm;
+            // Owned AVC admission is task-PPGTT scoped. A legal HW GGTT
+            // status store needs a separate global range/owner proof; do not
+            // silently clear this bit and reinterpret its destination.
+            if(input[at]&(1U<<22)){r.reason="srm-global-gtt";return r;}
             if(!relativeMfc(input[at+1]) || input[at]&(1U<<19) || (input[at+2]&3U)){
                 r.reason="srm-profile";return r;}
             const uint32_t bit=input[at+1]==0x128a0?1U:input[at+1]==0x128a4?2U:

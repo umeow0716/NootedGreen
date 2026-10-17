@@ -20617,6 +20617,10 @@ int main() {
                 assert(NgreenAvcGen12::packetWords(input[at])==0);rejected();
             }
             input=good;input[at]|=0x0035ff00U;rejected();
+            input=good;input[at]|=1U<<22;
+            assert(NgreenAvcGen12::packetWords(input[at])==4); // Valid HW mode, not this PPGTT profile.
+            rejected();
+            assert(!NgreenAvcGen12::sizeBeforeRelocation(input.data(),used,1920,1080).bounded);
             for(unsigned low=1;low<=3;++low){
                 input=good;input[at+2]|=low;rejected();
             }
