@@ -19111,6 +19111,13 @@ int main() {
         assert(!tglProjectTahoeAvcSequenceConsumedFields(nullptr,sizeof(source),1920,1080,fields));
     }
     {
+        constexpr uintptr_t image=0x100000000;
+        assert(!NgreenNativeAvcReservation::frameAdmission(image,image+0x27724,false));
+        assert(NgreenNativeAvcReservation::frameAdmission(image,image+0x27724,true));
+        assert(NgreenNativeAvcReservation::frameAdmission(image,image+0x27725,false));
+        assert(!NgreenNativeAvcReservation::frameAdmission(0,0x27724,true));
+        assert(!NgreenNativeAvcReservation::frameAdmission(UINTPTR_MAX-0x27723,1,true));
+        assert(!NgreenNativeAvcReservation::frameAdmission(image,0,true));
         NGVfAvcPublication::Reply ready{};
         ready.abiVersion=NGVfAvcPublication::version;ready.bytes=sizeof(ready);ready.registryId=19;
         ready.commandProfile=NGVfAvcPublication::profile;

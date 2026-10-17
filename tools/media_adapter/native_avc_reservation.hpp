@@ -9,6 +9,13 @@
 // A successful read does not authorize a write: the caller still needs the
 // live native builder interval and a kernel protocol handshake.
 namespace NgreenNativeAvcReservation {
+// The exact AVC frame cannot fall back to untranslated native submission when
+// the kernel publication handshake is absent. Other frame families retain
+// their existing admission; this is not a claim that readiness proves safety.
+inline bool frameAdmission(uintptr_t image,uintptr_t entry,bool publicationReady) noexcept {
+    if(!image || image>UINTPTR_MAX-0x27724 || !entry)return false;
+    return entry!=image+0x27724 || publicationReady;
+}
 struct Builder {
     uintptr_t argument=0,connection=0,base=0,cursor=0,end=0;
     uint32_t previousUsed=0,classes=0;

@@ -5727,8 +5727,8 @@ struct NativeOtherFrameBackend {
                 if(!active.matches(image,physical,generation) || entry!=owner->frameTable().nativeFrame() || context!=owner->context())return 5;
                 const auto invoke=[&]() noexcept {return TglNativeContextFrameInvoker{}(entry,context,request,slot);};
                 // Query only through the current owner/physical/shared lease.
-                // Unsupported or not-ready kernels preserve native behavior;
-                // this negotiation alone never writes a producer cursor.
+                // Exact AVC refuses an unsupported/not-ready kernel before
+                // native entry; this query alone never writes a cursor.
                 NGVfAvcPublication::Reply publication{};
                 const bool publicationReady=entry==image+0x27724 &&
                     queryPublication(lease,active,image,physical,generation,publication);
@@ -5738,10 +5738,9 @@ struct NativeOtherFrameBackend {
                         os_log_error(OS_LOG_DEFAULT,"NGRN_AVC_PUBLICATION_NEGOTIATION ready=%{public}d profile=%{public}u",
                             int(publicationReady),publicationReady?publication.commandProfile:0U);
                 }
-                // Exact AVC400 frame only. Full self-process capture precedes
-                // native SubmitDataBuffers while the native builder lock is
-                // still held. A refusal never changes native frame behavior.
-                static std::atomic<bool> snapshotAttempted{false};
+                if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady))return 5;
+                // Exact AVC400 frame only. Reservation precedes native submit
+                // inside the builder interval. Other families remain native.
                 constexpr unsigned char expected[]{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
                     0x41,0x55,0x41,0x54,0x53,0x50,0x49,0x89,0xfe};
                 unsigned char anchor[sizeof(expected)]{};uintptr_t producer=0;
@@ -5813,19 +5812,7 @@ struct NativeOtherFrameBackend {
                         int(pending.called),int(pending.result.applied),pending.result.usedBytes,native);
                     return native;
                 }
-                if(snapshotAttempted.exchange(true,std::memory_order_acq_rel))return invoke();
-                NativeRuntimeSnapshot snapshot;
-                if(!snapshot.ready()) {
-                    os_log_error(OS_LOG_DEFAULT,"NGRN_RUNTIME_SNAPSHOT_SKIP native-temp-or-worker-denied");
-                    return invoke();
-                }
-                // Do not capture an earlier capacity flush from22708: only
-                // the final227e0 call at22843 arms the submit observer.
-                NativeReturnObserver observer({image+0x22843,image+0xa893,0,0},0,0,0,0,0,0,{},0,{},0,
-                    {&snapshot,producer+0x48,1,0});
-                os_log_error(OS_LOG_DEFAULT,"NGRN_RUNTIME_SNAPSHOT_ARM armed=%{public}d path=%{public}s non-atomic-other-threads=1",
-                    int(observer.isArmed()),snapshot.path());
-                return invoke();
+                return 5;
             },receipt);
         // Any invoked-native failure or missing evidence leaves Reserved/Bound
         // retention in the owner. No synthetic cancellation or implicit free.
