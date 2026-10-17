@@ -1293,7 +1293,7 @@ static bool vfCaptureMediaMappedSpan(const VfMediaSubmission &entry,void *stream
 	// Native token discard does not roll back words, and native end still submits.
 	// Read the failure latch only after validating the exact owned stream identity.
 	out.reason="native-stream-failed";
-	if (!getMember<volatile uint8_t>(stream,0x3C))return false;
+	if (getMember<volatile uint8_t>(stream,0x3C)!=1U)return false;
 	out.reason="class-ledger";out.classes=getMember<uint32_t>(context,0x6DC);
 	out.recordFlags=getMember<uint8_t>(context,0x750);
 	// Family submit_data_buffers+0x10b tests this optional record flag and
