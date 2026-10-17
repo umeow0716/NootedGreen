@@ -14,6 +14,13 @@
 // A successful read does not authorize a write: the caller still needs the
 // live native builder interval and a kernel protocol handshake.
 namespace NgreenNativeAvcReservation {
+// CPU allocation bounds only. Disjointness is NOT a writable/GPU-backing
+// authorization, and does not cover objects referenced by CF surface handles.
+template<class T> bool disjointOwnedObject(uintptr_t address,size_t bytes,const T* object) noexcept {
+    const auto base=reinterpret_cast<uintptr_t>(object);
+    return address && bytes && address<=UINTPTR_MAX-bytes && base && base<=UINTPTR_MAX-sizeof(T) &&
+        (address>=base+sizeof(T) || base>=address+bytes);
+}
 // Exact2732c/2737e consume request+20 only. This view is for those two
 // callbacks, NEVER outer27724: the outer retains original output aliases.
 // Admission must hold source exclusion and the owned payload/surface leases
@@ -358,6 +365,10 @@ public:
     size_t sliceCount() const noexcept {return slices_->count();}
     const uintptr_t* sliceTable() const noexcept {return slices_->table();}
     const uint8_t* nalMetadata() const noexcept {return nal_->metadataBytes();}
+    bool excludesOwnedStorage(uintptr_t address,size_t bytes) const noexcept {
+        return disjointOwnedObject(address,bytes,this) && disjointOwnedObject(address,bytes,slices_.get()) &&
+            disjointOwnedObject(address,bytes,nal_.get());
+    }
 private:
     OwnedSliceNalInput()=default;
     std::unique_ptr<SliceInput> slices_;
@@ -488,6 +499,11 @@ public:
     size_t sliceCount() const noexcept {return sliceNal_->sliceCount();}
     const uintptr_t* sliceTable() const noexcept {return sliceNal_->sliceTable();}
     const uint8_t* nalMetadata() const noexcept {return sliceNal_->nalMetadata();}
+    bool excludesOwnedStorage(uintptr_t address,size_t bytes) const noexcept {
+        return disjointOwnedObject(address,bytes,this) && disjointOwnedObject(address,bytes,sequence_.get()) &&
+            disjointOwnedObject(address,bytes,picture_.get()) && sliceNal_ &&
+            sliceNal_->excludesOwnedStorage(address,bytes);
+    }
     // Handle identities come from the SAME private root capture as syntax,
     // not a second borrowed payload/table read. This does not authorize the
     // native context's derived indices or expose a complete native payload.
@@ -624,6 +640,10 @@ public:
         return input;
     }
     uintptr_t nativeContext() const noexcept {return nativeContext_;}
+    bool excludesOwnedStorage(uintptr_t address,size_t bytes) const noexcept {
+        return disjointOwnedObject(address,bytes,this) && disjointOwnedObject(address,bytes,pins_.get()) &&
+            graph_ && graph_->excludesOwnedStorage(address,bytes);
+    }
     template<class Read,class Admit> bool matchesOriginalRequest(Read read,Admit admit) const noexcept {
         return request_.matchesOriginal(originalRequest_,originalPayload_,read,admit);
     }

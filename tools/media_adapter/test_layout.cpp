@@ -172,6 +172,27 @@ template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputA
     uintptr_t ownedPayload=0;
     std::memcpy(&ownedPayload,reinterpret_cast<const void*>(input->callbackRequest().callbackRequest()+0x20),8);
     assert(ownedPayload && !(ownedPayload&15) && ownedPayload!=fullPayload);
+    assert(input->excludesOwnedStorage(fullPayload,sizeof(fullHeader)));
+    assert(!input->excludesOwnedStorage(0,4) && !input->excludesOwnedStorage(fullPayload,0));
+    assert(!input->excludesOwnedStorage(UINTPTR_MAX-2,4));
+    assert(!input->excludesOwnedStorage(reinterpret_cast<uintptr_t>(input.get()),sizeof(*input)));
+    assert(!input->excludesOwnedStorage(input->callbackRequest().callbackRequest(),0x28));
+    assert(!input->excludesOwnedStorage(ownedPayload,0x488));
+    for(size_t offset:{0x410U,0x418U,0x430U,0x440U,0x480U}) {
+        uintptr_t owned=0;std::memcpy(&owned,reinterpret_cast<const void*>(ownedPayload+offset),8);
+        assert(owned && !input->excludesOwnedStorage(owned,1));
+        assert(!input->excludesOwnedStorage(owned-1,2));
+        if(offset==0x430 || offset==0x480) {
+            uintptr_t nested=0;
+            const size_t nestedOffset=offset==0x480?0x58:0;
+            std::memcpy(&nested,reinterpret_cast<const void*>(owned+nestedOffset),8);
+            assert(nested && !input->excludesOwnedStorage(nested,8));
+            if(offset==0x480) {
+                uintptr_t payload=0;std::memcpy(&payload,reinterpret_cast<const void*>(nested),8);
+                assert(payload && !input->excludesOwnedStorage(payload,1));
+            }
+        }
+    }
     downscaleSurfaces.fill(0);
     uintptr_t ownedDownscale=0;
     std::memcpy(&ownedDownscale,reinterpret_cast<const void*>(ownedPayload+0x440),8);
