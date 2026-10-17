@@ -26,10 +26,27 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          4: 'native_batch', 5: 'ring_prefix', 6: 'h2g_cpu_readback',
          7: 'submit_identity', 8: 'g2h_raw', 9: 'publication_mapping',
          10: 'timeout', 11: 'scope_end', 12: 'native_mapping_before_copy',
-         13: 'ring_operand_leaf', 14: 'batch_leaf'}
+         13: 'ring_operand_leaf', 14: 'batch_leaf',
+         15: 'retained_ring_metadata', 16: 'retained_ring_chunk'}
 
 
 def validate_leaf(kind, words):
+    if kind == 15:
+        if (len(words) != 13 or words[0] != 1 or words[6] < 4096 or words[6] > 2097152 or
+                words[6] & (words[6]-1) or words[7] >= words[6] or words[9] not in (0, 1) or words[10]):
+            raise ValueError('invalid retained ring metadata')
+        return
+    if kind == 16:
+        if (len(words) < 7 or words[0] != 1 or words[1] % 4 or words[2] < 4096 or
+                words[2] > 2097152 or words[2] & (words[2]-1) or words[3] >= words[2] or
+                words[4] != len(words)-6 or words[1]+words[4]*4 > words[2] or words[5]):
+            raise ValueError('invalid retained ring chunk extent')
+        return
+    if kind == 10:
+        if (len(words) != 16 or words[0] != 1 or words[2] & ~7 or
+                words[3] >= 6 or words[4] > 6 or words[15] > 192):
+            raise ValueError('invalid timeout CPU frame schema')
+        return
     if kind not in (13, 14):
         return
     expected = 16 if kind == 13 else 14
@@ -272,6 +289,7 @@ class DiskSink:
         self.db.execute('PRAGMA wal_autocheckpoint=128')
         self.db.execute('CREATE TABLE records (id INTEGER PRIMARY KEY, group_id INTEGER, kind INTEGER, metadata TEXT, payload BLOB) WITHOUT ROWID')
         self.db.execute('CREATE INDEX by_group_kind ON records(group_id,kind)')
+        self.db.execute('CREATE TABLE rings (identity TEXT PRIMARY KEY, group_id INTEGER, bytes INTEGER, tail INTEGER, admitted INTEGER, captured INTEGER) WITHOUT ROWID')
         self.db.commit()
         self.pending = 0
         self.sideband_file = None
@@ -286,6 +304,42 @@ class DiskSink:
         self.sideband_file.write(data)
 
     def __call__(self, record):
+        if not self.db.in_transaction:
+            self.db.execute('BEGIN')
+        self.db.execute('SAVEPOINT flight_record')
+        try:
+            self._save_record(record)
+        except Exception:
+            self.db.execute('ROLLBACK TO flight_record')
+            self.db.execute('RELEASE flight_record')
+            raise
+        self.db.execute('RELEASE flight_record')
+        self.pending += 1
+        if self.pending >= 256:
+            space = os.statvfs(self.path)
+            if space.f_bavail*space.f_frsize < 1024**3:
+                raise ValueError('decoder disk free floor reached')
+            self.db.commit()
+            self.pending = 0
+
+    def _save_record(self, record):
+        words = record['words']
+        validate_leaf(record['kind'], words)
+        if self.db.execute('SELECT 1 FROM records WHERE id=?', (record['record_id'],)).fetchone():
+            raise ValueError('duplicate completed flight record ID')
+        if record['kind'] == 15:
+            try:
+                self.db.execute('INSERT INTO rings VALUES (?,?,?,?,?,0)',
+                                (record['identity'], record['group'], words[6], words[7], words[9]))
+            except sqlite3.IntegrityError as exc:
+                raise ValueError('duplicate ring capture identity') from exc
+        elif record['kind'] == 16:
+            ring = self.db.execute('SELECT group_id,bytes,tail,admitted,captured FROM rings WHERE identity=?',
+                                   (record['identity'],)).fetchone()
+            if ring is None or ring != (record['group'], words[2], words[3], 1, words[1]):
+                raise ValueError('missing/duplicate/out-of-order/unqualified ring chunk')
+            self.db.execute('UPDATE rings SET captured=captured+? WHERE identity=?',
+                            (words[4]*4, record['identity']))
         metadata = {key: value for key, value in record.items() if key != 'words'}
         raw = struct.pack(f"<{len(record['words'])}I", *record['words'])
         try:
@@ -294,13 +348,13 @@ class DiskSink:
                              json.dumps(metadata, separators=(',', ':')), raw))
         except sqlite3.IntegrityError as exc:
             raise ValueError('duplicate completed flight record ID') from exc
-        self.pending += 1
-        if self.pending >= 256:
-            space = os.statvfs(self.path)
-            if space.f_bavail*space.f_frsize < 1024**3:
-                raise ValueError('decoder disk free floor reached')
-            self.db.commit()
-            self.pending = 0
+
+    def ring_report(self):
+        total, complete = self.db.execute('SELECT COUNT(*),COALESCE(SUM(admitted=1 AND captured=bytes),0) FROM rings').fetchone()
+        missing = [dict(zip(('identity', 'bytes', 'captured', 'admitted'), row)) for row in
+                   self.db.execute('SELECT identity,bytes,captured,admitted FROM rings WHERE admitted!=1 OR captured!=bytes LIMIT 64')]
+        return {'captures': total, 'complete_cpu_copies': complete, 'incomplete': total-complete,
+                'incomplete_examples': missing, 'gpu_execution_proof': False}
 
     def close(self):
         if self.sideband_file is not None:
@@ -315,6 +369,16 @@ class DiskSink:
 
 
 def self_test():
+    timeout = [1, 3, 1, 3, 3, 42, 31, 2, 1, 0, 0xb8, 0x64, 0, 0xb8, 1, 184]
+    validate_leaf(10, timeout)
+    for index, value in ((0, 2), (2, 8), (3, 6), (4, 7), (15, 193)):
+        bad = list(timeout)
+        bad[index] = value
+        try:
+            validate_leaf(10, bad)
+        except ValueError:
+            continue
+        raise AssertionError('invalid timeout schema accepted')
     leaf = [1, 0, 1, 0x3c, 0, 1, 1, 0x40010000, 0, 0x12345000, 3, 0x89, 0, 1, 0, 0]
     validate_leaf(13, leaf)
     batch = [1, 0, 0x3c, 0, 1, 1, 0x40010000, 0, 0x12345000, 3, 0x89, 0, 0, 0]
@@ -410,6 +474,34 @@ def self_test():
             pass
         else:
             raise AssertionError('record overwritten')
+        ring_record = dict(saved[0], record_id=100, kind=15, identity='0000000000001234',
+                           words=[1, 0x100319, 0x20000020, 3, 3, 1, 4096, 184, 0, 1, 0, 7, 0])
+        save(ring_record)
+        assert save.ring_report()['incomplete'] == 1
+        save.db.execute("CREATE TEMP TRIGGER owned_failure BEFORE INSERT ON records WHEN NEW.id=101 BEGIN SELECT RAISE(ABORT,'owned injected write failure'); END")
+        failed_part = dict(ring_record, record_id=101, kind=16,
+                           words=[1, 0, 4096, 184, 512, 0]+[0]*512)
+        try:
+            save(failed_part)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('injected record write failure accepted')
+        assert save.ring_report()['incomplete_examples'][0]['captured'] == 0
+        assert save.db.execute('SELECT COUNT(*) FROM records WHERE id=101').fetchone()[0] == 0
+        save.db.execute('DROP TRIGGER owned_failure')
+        for offset in (0, 2048):
+            part = dict(ring_record, record_id=101+offset//2048, kind=16,
+                        words=[1, offset, 4096, 184, 512, 0]+[0]*512)
+            save(part)
+        assert save.ring_report()['complete_cpu_copies'] == 1
+        try:
+            save(dict(part, record_id=103))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('duplicate ring range accepted')
+        assert save.ring_report()['complete_cpu_copies'] == 1
         sideband = Decoder(lambda _: None, save.sideband)
         for item in archive[:6]:
             sideband.packet(*item)
@@ -445,11 +537,13 @@ if __name__ == '__main__':
                     decoder.packet(header, data)
         except (ValueError, OSError, struct.error, sqlite3.Error) as exc:
             error = str(exc)
+        ring_report = sink.ring_report()
         try:
             sink.close()
         except (OSError, sqlite3.Error) as exc:
             error = str(exc)
         report = decoder.report()
+        report['rings'] = ring_report
         if error:
             report['error'] = error
             report['capture_transport_complete'] = False

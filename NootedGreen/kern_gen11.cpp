@@ -10273,7 +10273,39 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		       state[0x30], state[0x31], state[0x32], state[0x33]);
 	}
 
+	// Copy while the existing queue still protects the qualified CPU mapping.
+	// Merely retaining its OSObject would not prove that a separate unmap
+	// cannot revoke the address after unlock. Stream only our owned copy.
+	// This is a sleeping queue (no spin/IRQ lock), maximum geometry is 2MiB;
+	// allocation/getter denial records missing coverage without changing submit.
+	const bool flightRing=vfFlightEnabled();
+	uint32_t *flightRingCopy=nullptr;
+	if (flightRing && ringSize<=0x200000U) {
+		auto *cpuRing=static_cast<volatile uint32_t *>(getVirtualAddress(admittedRingBacking));
+		if (cpuRing) {
+			flightRingCopy=static_cast<uint32_t *>(IOMallocZero(ringSize));
+			if (flightRingCopy)for (uint32_t i=0;i<ringSize/4U;++i)flightRingCopy[i]=cpuRing[i];
+		}
+	}
 	queue.unlock();
+	if (flightRing) {
+		const uint32_t group=vfFlightCurrentGroup();
+		const uint32_t captureId=static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+		const uint32_t metadata[]={1U,descriptorLo,descriptorHi,static_cast<uint32_t>(hwCsType),
+			channelId,ringSequence,ringSize,ringTail,previousRingTail,flightRingCopy?1U:0U,0U,
+			static_cast<uint32_t>(submissionToken),static_cast<uint32_t>(submissionToken>>32)};
+		if (captureId)vfFlightRecord(15,group,captureId,metadata,arrsize(metadata));
+		if (flightRingCopy && captureId)for (uint32_t offset=0;offset<ringSize/4U;) {
+			const uint32_t remaining=ringSize/4U-offset;
+			const uint32_t count=remaining<1530U?remaining:1530U;
+			const uint32_t prefix[]={1U,offset*4U,ringSize,ringTail,count,0U};
+			(void)NGFlightTrace::emitCpuWordsPrefixed(gVfFlightTrace,[](){
+				return static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+			},16,group,captureId,prefix,arrsize(prefix),flightRingCopy+offset,count);
+			offset+=count;
+		}
+		if (flightRingCopy)IOFree(flightRingCopy,ringSize);
+	}
 	const uint32_t flightSubmit[]={gucId,descriptorLo,descriptorHi,static_cast<uint32_t>(hwCsType),
 		channelId,ringSequence,ringTail,previousRingTail,enable?1U:0U,submitted?1U:0U,transportFence,
 		static_cast<uint32_t>(submissionToken),static_cast<uint32_t>(submissionToken>>32)};
@@ -11160,6 +11192,17 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	VfTimeoutContextFrame frames[NGVfTimeoutObservation::engineCount] {};
 	const uint32_t prefixEngine = NGVfTimeoutObservation::prefixEngineForChannel(channel);
 	const uint32_t capture = vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames, prefixEngine);
+	// Already-captured CPU fields only; no new map/MMIO access or recovery.
+	// Timeout runs asynchronously, so group zero deliberately claims no frame
+	// ownership. Context ID and native timestamps support later explicit joins.
+	for (uint32_t engine=0;engine<NGVfTimeoutObservation::engineCount;++engine) {
+		const auto &frame=frames[engine];
+		const uint32_t flightTimeout[]={1U,static_cast<uint32_t>(channel),capture,engine,prefixEngine,
+			frame.id,frame.flags,frame.state,frame.expectedStamp,frame.observedStamp,
+			frame.expectedHead,frame.reportedHead,frame.ringHead,frame.ringTail,
+			frame.windowFlags,frame.windowBytes};
+		vfFlightRecord(10,0,frame.id,flightTimeout,arrsize(flightTimeout));
+	}
 	vfMarkProtocolFault("VF native event timeout without verified GPU quiescence");
 	PANIC_COND(true, "ngreen", "V267: refusing VF event timeout recovery channel=%d V364: capture=%x"
 		" T0=" NG_TIMEOUT_FRAME_FORMAT " T1=" NG_TIMEOUT_FRAME_FORMAT

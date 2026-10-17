@@ -44,6 +44,16 @@ static void testFlightEnvelope() {
     assert(!NGFlightTrace::emitCpuWords(&traceFlight,denied,1,0,0,words.data(),1537));
     assert(!NGFlightTrace::emitCpuWords(&traceFlight,[](){return 0U;},1,0,0,words.data(),1));
     assert(flightCount==0);
+    const uint32_t prefix[]={1,48,16384,184,7,0};
+    flightCount=0;
+    assert(NGFlightTrace::emitCpuWordsPrefixed(&traceFlight,[](){return 9U;},16,42,99,prefix,6,words.data(),7));
+    assert(flightSamples[0].args[2]==((uint64_t(16)<<32)|13));
+    assert(uint32_t(flightSamples[1].args[1])==1 && uint32_t(flightSamples[2].args[1])==words[0]);
+    flightCount=0;
+    assert(NGFlightTrace::emitCpuWordsPrefixed(&traceFlight,[](){return 9U;},16,42,99,prefix,6,words.data(),1530));
+    flightCount=0;
+    assert(!NGFlightTrace::emitCpuWordsPrefixed(&traceFlight,denied,16,42,99,prefix,6,words.data(),1531));
+    assert(!NGFlightTrace::emitCpuWordsPrefixed(&traceFlight,denied,16,42,99,nullptr,6,words.data(),7));
 }
 
 using NGVfContextShutdown::Action;
