@@ -58,6 +58,40 @@ def adapter_frame_mutations(source):
     print(f"PASS {len(mutations)} adapter frame-publication refusal mutations rejected")
 
 
+def avc_phase_contract(header, reservation):
+    strict = function_body(header, "inline Result produce(")
+    size = function_body(header, "inline PreRelocationSize sizeBeforeRelocation(")
+    inspection = function_body(header, "inline Result inspectOrProduce(")
+    commit = function_body(reservation, "CommitResult commit(")
+    assert "inspectOrProduce<false>" in strict and "<true>" not in strict
+    assert "inspectOrProduce<true>(input,count,width,height,nullptr,1536)" in size
+    assert "legacyNv12Surface(input+at,surfaceWidth,surfaceHeight,!MeasureOnly)" in inspection
+    branch = inspection.index("if(MeasureOnly) {")
+    assert inspection.index('r.reason="reservation-size-only";return r;', branch) < inspection.index("size_t out=0;")
+    assert "NgreenAvcGen12::sizeBeforeRelocation" in commit
+    assert "NgreenAvcGen12::produce(" not in commit
+    assert "if(!measured.bounded)" in commit and "plan(before,measured.outputWords)" in commit
+
+
+def avc_phase_mutations(header, reservation):
+    avc_phase_contract(header, reservation)
+    variants = (
+        (header.replace("return detail::inspectOrProduce<false>", "return detail::inspectOrProduce<true>", 1), reservation),
+        (header.replace("inspectOrProduce<true>(input,count,width,height,nullptr,1536)", "inspectOrProduce<false>(input,count,width,height,nullptr,1536)", 1), reservation),
+        (header.replace("surfaceHeight,!MeasureOnly)", "surfaceHeight,false)", 1), reservation),
+        (header.replace("if(MeasureOnly) {", "if(false) {", 1), reservation),
+        (header, reservation.replace("NgreenAvcGen12::sizeBeforeRelocation", "NgreenAvcGen12::produce", 1)),
+    )
+    for changed_header, changed_reservation in variants:
+        assert (changed_header, changed_reservation) != (header, reservation)
+        try:
+            avc_phase_contract(changed_header, changed_reservation)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError("AVC relocation phase mutation escaped")
+    print(f"PASS {len(variants)} AVC reservation/publication phase mutations rejected")
+
+
 def contract(source, path="<source>"):
     provenance = function_body(source, 'static void vfObserveNativeBatchProvenance(')
     stable = provenance[provenance.index('const bool stable='):]
@@ -685,6 +719,9 @@ def main():
     mutation_contract(source, str(path))
     adapter = pathlib.Path(__file__).resolve().parent / "media_adapter/adapter.cpp"
     adapter_frame_mutations(adapter.read_text())
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    avc_phase_mutations((repo / "NootedGreen/kern_avc_gen12_commands.hpp").read_text(),
+                        (repo / "tools/media_adapter/native_avc_reservation.hpp").read_text())
 
 
 if __name__ == "__main__":

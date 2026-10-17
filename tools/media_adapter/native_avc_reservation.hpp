@@ -93,17 +93,16 @@ CommitResult commit(uintptr_t argument,const NGVfAvcPublication::Reply& capabili
     }
     const size_t inputWords=(before.cursor-before.base)/4;
     if(inputWords<2 || inputWords>1024 || !read(before.base,scratch.source,inputWords*4))return result;
-    const auto converted=NgreenAvcGen12::produce(scratch.source,inputWords,width,height,
-        scratch.produced,1536);
-    if(!converted.ok){result.reason=converted.reason;return result;}
-    const auto reservation=plan(before,converted.words);
+    const auto measured=NgreenAvcGen12::sizeBeforeRelocation(scratch.source,inputWords,width,height);
+    if(!measured.bounded){result.reason=measured.reason;return result;}
+    const auto reservation=plan(before,measured.outputWords);
     if(!reservation.ok || !writable(before.cursor,reservation.extraBytes) ||
        !writable(argument+0x20,8) || !live())return result;
     if(!capture(argument,read,again) || !unchanged(before,again) ||
        !read(before.base,scratch.undo,inputWords*4) ||
        std::memcmp(scratch.source,scratch.undo,inputWords*4))return result;
-    // Output commands are needed only to calculate the reservation size.
-    // Keep the original input frozen; use the other arrays for tail undo/zeros.
+    // No pre-relocation command buffer was produced. Keep the original input
+    // frozen; use the other arrays only for tail undo/zeros.
     if(!read(before.cursor,scratch.undo,reservation.extraBytes))return result;
     std::memset(scratch.produced,0,reservation.extraBytes);
     if(!live() || !capture(argument,read,again) || !unchanged(before,again))return result;

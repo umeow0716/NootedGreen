@@ -19214,6 +19214,22 @@ int main() {
         assert(result.ok && output[196]==0xc0);
         input[image+1]=0;
         const auto good=input;output.fill(0xdeadbeef);
+        {
+            const auto measured=NgreenAvcGen12::sizeBeforeRelocation(good.data(),used,1920,1080);
+            assert(measured.bounded && measured.outputWords==used+67);
+            auto unrelocated=good;
+            for(size_t at:{source,reference,downscaled})unrelocated[at+3]&=~0x000ffff8U;
+            const auto frozen=unrelocated;
+            const auto planned=NgreenAvcGen12::sizeBeforeRelocation(unrelocated.data(),used,1920,1080);
+            assert(planned.bounded && planned.outputWords==measured.outputWords && unrelocated==frozen);
+            const auto refused=NgreenAvcGen12::produce(unrelocated.data(),used,1920,1080,output.data(),output.size());
+            assert(!refused.ok && std::strcmp(refused.reason,"surface-profile")==0);
+            for(auto value:output)assert(value==0xdeadbeef);
+            unrelocated[source+2]^=16;
+            assert(!NgreenAvcGen12::sizeBeforeRelocation(unrelocated.data(),used,1920,1080).bounded);
+            unrelocated=frozen;unrelocated[source]|=0x1000;
+            assert(!NgreenAvcGen12::sizeBeforeRelocation(unrelocated.data(),used,1920,1080).bounded);
+        }
         auto rejected=[&](){auto r=NgreenAvcGen12::produce(input.data(),used,1920,1080,
             output.data(),output.size());assert(!r.ok);for(auto v:output)assert(v==0xdeadbeef);};
         const uint32_t mediaHeaders[]={0x70000003,0x70010004,0x70020042,0x70030018,
@@ -19277,7 +19293,8 @@ int main() {
         input[mfxImage+2]^=1;rejected();input=good;
         input[mfxImage+2]|=1U<<8;rejected();input=good;
         {
-            auto pak=good;const size_t at=used-2,total=used+3;
+            auto pak=good;const size_t at=walker,total=used+3;
+            std::memmove(pak.data()+at+3,pak.data()+at,(used-at)*4);
             pak[at]=0x70480001;pak[at+1]=0x2004;pak[at+2]=0xa010000;
             pak[total-2]=pak[total-1]=0;
             for(uint32_t bits=1;bits<=32;++bits){
@@ -19296,13 +19313,16 @@ int main() {
         }
         {
             auto slices=good;
-            const size_t begin=used-2,total=used+44;
+            const size_t begin=walker,total=used+56;
+            std::memmove(slices.data()+begin+60,slices.data()+begin+4,(used-begin-4)*4);
             for(unsigned i=0;i<4;++i){
-                const size_t at=begin+11*i;
-                for(size_t k=0;k<11;++k)slices[at+k]=0;
+                const size_t at=begin+15*i;
+                for(size_t k=0;k<15;++k)slices[at+k]=0;
                 slices[at]=0x71030009;slices[at+1]=2;
                 slices[at+4]=(i*17U<<24)|(i*2040U);
                 slices[at+5]=(i+1)*17U<<16;
+                slices[at+11]=0x70870002;slices[at+12]=i*17U;
+                slices[at+13]=(i+1)*17U;
             }
             slices[total-2]=slices[total-1]=0;
             assert(NgreenAvcGen12::produce(slices.data(),total,1920,1080,
@@ -19312,14 +19332,28 @@ int main() {
                     output.data(),output.size());
                 assert(!r.ok);for(auto v:output)assert(v==0xdeadbeef);};
             const auto valid=slices;
-            slices[begin+26]=(68U<<24)|8160U;rejectSlice();slices=valid;
-            slices[begin+37]=(102U<<24)|12240U;rejectSlice();slices=valid;
+            slices[begin+34]=(68U<<24)|8160U;rejectSlice();slices=valid;
+            slices[begin+49]=(102U<<24)|12240U;rejectSlice();slices=valid;
             slices[begin+5]=69U<<16;rejectSlice();slices=valid;
-            slices[begin+16]=17U<<16;rejectSlice();slices=valid;
+            slices[begin+20]=17U<<16;rejectSlice();slices=valid;
             slices[begin+4]|=0x8000;rejectSlice();slices=valid;
             slices[begin+5]|=1U<<9;rejectSlice();slices=valid;
             slices[begin+4]^=1;rejectSlice();
             output.fill(0xdeadbeef);
+        }
+        for(unsigned kind:{0U,1U,2U}) {
+            const bool slice=kind==1,store=kind==2;
+            auto late=good;const size_t at=used-2,n=slice?11:store?5:3,total=used+n;
+            for(size_t k=0;k<n;++k)late[at+k]=0;
+            late[at]=slice?0x71030009:store?0x10000003:0x70480001;
+            late[at+1]=slice?2:store?0:0x2004;
+            if(slice)late[at+5]=68U<<16;
+            else if(!store)late[at+2]=0xa010000;
+            late[total-2]=late[total-1]=0;output.fill(0xdeadbeef);
+            const auto result=NgreenAvcGen12::produce(late.data(),total,1920,1080,output.data(),output.size());
+            assert(!result.ok && std::strcmp(result.reason,store?"status-tail-opcode":"media-after-status")==0);
+            assert(!NgreenAvcGen12::sizeBeforeRelocation(late.data(),total,1920,1080).bounded);
+            for(auto value:output)assert(value==0xdeadbeef);
         }
         for(unsigned bit=0;bit<32;++bit)if((1U<<bit)&0xe0e0c0ffU){
             input[mfxImage+3]=1U<<bit;rejected();input=good;}
@@ -19460,6 +19494,20 @@ int main() {
                     if(fault>=6)assert(writes==0);
                 }
             }
+            reset();cap.flags=1;
+            for(size_t at:{source,reference,downscaled})backing[at+3]&=~0x000ffff8U;
+            const auto preRelocationBacking=backing;
+            auto write=[&](uintptr_t at,const void* data,size_t bytes) noexcept {
+                auto* pointer=locate(at,bytes);if(!pointer)return false;
+                std::memcpy(pointer,data,bytes);return true;
+            };
+            const auto reserved=NgreenNativeAvcReservation::commit(argument,cap,19,1920,1080,*scratch,
+                read,write,[&](uintptr_t at,size_t bytes) noexcept {return locate(at,bytes)!=nullptr;},
+                []() noexcept {return true;});
+            assert(reserved.applied && !reserved.mustStop && reserved.extraBytes==67*4);
+            assert(!std::memcmp(backing.data(),preRelocationBacking.data(),used*4));
+            for(size_t i=used;i<used+67;++i)assert(backing[i]==0);
+            assert(!NgreenAvcGen12::produce(backing.data(),used,1920,1080,output.data(),output.size()).ok);
         }
     }
     for(uint32_t count:{uint32_t{0},uint32_t{17},uint32_t{1}})for(bool nonzero:{false,true}) {

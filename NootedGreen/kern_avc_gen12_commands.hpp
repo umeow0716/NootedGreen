@@ -75,7 +75,8 @@ inline uint32_t relativeMfc(uint32_t legacy) noexcept {
     switch(legacy){case 0x128a0:return 0x8a0;case 0x128a4:return 0x8a4;
     case 0x128b4:return 0x8b4;case 0x128b8:return 0x8b8;default:return 0;}
 }
-inline bool legacyNv12Surface(const uint32_t* packet,uint32_t width,uint32_t height) noexcept {
+inline bool legacyNv12Surface(const uint32_t* packet,uint32_t width,uint32_t height,
+                              bool requireRelocatedPitch=true) noexcept {
     // Gen9 bits28..31=format4, bit27=interleave. Gen12 bits27..31=format4;
     // blind copying 0x48000000 would select Gen12 RGBA_10_10_10_2 (format9).
     return (packet[2]&15U)==0 && ((packet[2]>>4)&0x3fffU)+1==width &&
@@ -83,16 +84,21 @@ inline bool legacyNv12Surface(const uint32_t* packet,uint32_t width,uint32_t hei
         // Accepted PLANAR_420_8/NV12 has one byte per luma pixel. Gen12
         // SurfacePitch bits3..19 encode byte stride minus one for all three
         // source/reference/downscaled NV12 surfaces; it must cover a row.
-        ((packet[3]>>3)&0x1ffffU)+1>=width;
+        (!requireRelocatedPitch || ((packet[3]>>3)&0x1ffffU)+1>=width);
 }
-inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t height,
+namespace detail {
+// Size-only inspection runs before native resource relocation fills pitch.
+// It shares every other profile check, but never emits a command buffer.
+template<bool MeasureOnly>
+inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width,uint32_t height,
                       uint32_t* output,size_t capacity) noexcept {
     Result r;
-    if(!input || !output || count<2 || count>1024 || !width || width>4096 ||
+    if(!input || (!MeasureOnly && !output) || count<2 || count>1024 || !width || width>4096 ||
        !height || height>4096 || (width&1U) || (height&1U))return r;
     const uintptr_t src=reinterpret_cast<uintptr_t>(input),dst=reinterpret_cast<uintptr_t>(output);
-    if((src&3U) || (dst&3U) || capacity>1536 || src>UINTPTR_MAX-count*4 || dst>UINTPTR_MAX-capacity*4 ||
-       (src<dst+capacity*4 && dst<src+count*4)){r.reason="alias";return r;}
+    if((src&3U) || capacity>1536 || src>UINTPTR_MAX-count*4 ||
+       (!MeasureOnly && ((dst&3U) || dst>UINTPTR_MAX-capacity*4 ||
+       (src<dst+capacity*4 && dst<src+count*4)))){r.reason="alias";return r;}
     if(input[count-1] || input[count-2]){r.reason="native-end-reserve";return r;}
     size_t needed=0;unsigned mfx=0,mfxPipe=0,mfxImage=0,image=0,mode=0;
     unsigned srcSurface=0,refSurface=0,ds=0,pipe=0,walkers=0,srm=0;
@@ -101,6 +107,13 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
     for(size_t at=0;at<count;) {
         const uint32_t op=opcode(input[at]);const size_t n=packetWords(input[at]);
         if(!n || n>count-at){r.reason="packet";return r;}
+        // In this reviewed AVC profile, the four status stores form the
+        // terminal phase. Only remaining status stores, MI flush and padding
+        // may follow the first status store;
+        // accepting later PAK/slice/walker work would sample status too early.
+        if(srm && input[at]>=0x60000000U){r.reason="media-after-status";return r;}
+        if(srm && input[at] && op!=0x12000000U && op!=0x13000000U){
+            r.reason="status-tail-opcode";return r;}
         if(op==0x70480000U){
             const uint32_t control=input[at+1],lastBits=(control>>8)&0x3fU;
             const uint32_t skipBytes=(control>>16)&3U;
@@ -159,7 +172,7 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
             const bool downscaled=op==0x70830000U;
             const uint32_t surfaceWidth=downscaled?(width+3)/4:width;
             const uint32_t surfaceHeight=downscaled?((height+15)&~15U)/4:((height+15)&~15U);
-            if(!legacyNv12Surface(input+at,surfaceWidth,surfaceHeight)){
+            if(!legacyNv12Surface(input+at,surfaceWidth,surfaceHeight,!MeasureOnly)){
                 r.reason="surface-profile";return r;}
             if(op==0x70810000U)++srcSurface;
             if(op==0x70820000U)++refSurface;
@@ -193,6 +206,9 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
        !walkers || walkers>32 || srm!=4 || registerMask!=15 ||
        nextRow!=(height+15)/16){r.reason="frame-profile";return r;}
     if(needed>capacity){r.reason="capacity";return r;}
+    if(MeasureOnly) {
+        r.ok=true;r.words=needed;r.reason="reservation-size-only";return r;
+    }
     size_t out=0;
     for(size_t at=0;at<count;) {
         const uint32_t op=opcode(input[at]);const size_t n=packetWords(input[at]);
@@ -220,6 +236,21 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
         at+=n;
     }
     r.ok=true;r.words=out;r.reason="cpu-produced-not-admitted";return r;
+}
+} // namespace detail
+inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t height,
+                      uint32_t* output,size_t capacity) noexcept {
+    return detail::inspectOrProduce<false>(input,count,width,height,output,capacity);
+}
+struct PreRelocationSize {
+    bool bounded=false;size_t outputWords=0;const char* reason="input";
+};
+// A bounded size grants only a tail reservation, never command publication.
+// The kernel must still call strict produce() AFTER native relocation.
+inline PreRelocationSize sizeBeforeRelocation(const uint32_t* input,size_t count,
+                                             uint32_t width,uint32_t height) noexcept {
+    const auto measured=detail::inspectOrProduce<true>(input,count,width,height,nullptr,1536);
+    return {measured.ok,measured.words,measured.reason};
 }
 
 // Must be preallocated OFF the kernel stack, before the native locked scope.
