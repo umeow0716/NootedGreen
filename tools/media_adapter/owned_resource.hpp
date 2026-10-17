@@ -340,6 +340,52 @@ inline bool tglProjectTahoeAvcSequenceConsumedFields(const void* source,size_t b
     output=candidate;return true;
 }
 
+// Owned ABI view for the audited native AVC FRAME consumers, not a complete
+// SPS layout converter or a general provider for additional native readers.
+// The scaling-list branch remains explicitly unsupported by the projection.
+// Capture requires an authenticated source-allocation/lifetime-aware reader;
+// it is not atomic with external writers and does not authorize submission.
+// Dimensions are checked against SPS macroblock extents, not VUI/crop syntax.
+class TglOwnedAvcConsumedSequenceInput {
+public:
+    static constexpr size_t Bytes=0xc18;
+    TglOwnedAvcConsumedSequenceInput(const TglOwnedAvcConsumedSequenceInput&)=delete;
+    TglOwnedAvcConsumedSequenceInput& operator=(const TglOwnedAvcConsumedSequenceInput&)=delete;
+    TglOwnedAvcConsumedSequenceInput(TglOwnedAvcConsumedSequenceInput&&)=delete;
+    TglOwnedAvcConsumedSequenceInput& operator=(TglOwnedAvcConsumedSequenceInput&&)=delete;
+    template<class Read> static std::unique_ptr<TglOwnedAvcConsumedSequenceInput>
+    capture(uintptr_t source,uint32_t width,uint32_t height,Read read) noexcept {
+        if(!source || source>UINTPTR_MAX-Bytes)return {};
+        auto owned=std::unique_ptr<TglOwnedAvcConsumedSequenceInput>(
+            new(std::nothrow) TglOwnedAvcConsumedSequenceInput{});
+        if(!owned)return {};
+        const auto self=reinterpret_cast<uintptr_t>(owned.get());
+        if(self>UINTPTR_MAX-sizeof(*owned) ||
+           (source<self+sizeof(*owned) && self<source+Bytes) ||
+           !read(source,owned->bytes_.data(),Bytes))return {};
+        TglAvcSequenceConsumedFields fields;
+        if(!tglProjectTahoeAvcSequenceConsumedFields(owned->bytes_.data(),Bytes,width,height,fields))return {};
+        // Snapshot every source scalar BEFORE overlapping legacy destinations
+        // are written (e.g. source level24 becomes legacy chroma24).
+        owned->put(0x1c,fields.level);
+        owned->put(0x24,fields.chroma);
+        owned->put(0x3fc,fields.log2MaxFrameNumMinus4);
+        owned->put(0x828,fields.frameOnly);
+        owned->put(0x82c,fields.mbaff);
+        owned->put(0x830,fields.direct8x8);
+        owned->width_=width;owned->height_=height;
+        return owned;
+    }
+    const uint8_t* data() const noexcept {return bytes_.data();}
+    uint32_t width() const noexcept {return width_;}
+    uint32_t height() const noexcept {return height_;}
+private:
+    TglOwnedAvcConsumedSequenceInput()=default;
+    void put(size_t offset,uint32_t value) noexcept {std::memcpy(bytes_.data()+offset,&value,sizeof(value));}
+    alignas(8) std::array<uint8_t,Bytes> bytes_{};
+    uint32_t width_=0,height_=0;
+};
+
 // Tahoe TGL Ief 125e90/126210. Tables must come from the authenticated
 // native image (741e50..742350), not from a different GPU generation.
 // This is a CPU data producer only; it does not issue an SFC command.

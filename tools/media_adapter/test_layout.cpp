@@ -19098,7 +19098,38 @@ int main() {
         source[0x828/4]=119;source[0x82c/4]=67;
         source[0x830/4]=1;source[0x838/4]=1;
         source[0x404/4]=8;
+        source[0x500/4]=0x12345678; // opaque bytes must not be silently rebased
         const auto original=source;
+        using Sequence=TglOwnedAvcConsumedSequenceInput;
+        static_assert(!std::is_copy_constructible_v<Sequence> && !std::is_move_constructible_v<Sequence>);
+        const auto address=reinterpret_cast<uintptr_t>(source.data());
+        auto read=[&](uintptr_t at,void* target,size_t bytes) noexcept {
+            if(at!=address || bytes!=sizeof(source))return false;
+            std::memcpy(target,source.data(),bytes);return true;
+        };
+        auto capture=[&](){return Sequence::capture(address,1920,1080,read);};
+        auto owned=capture();assert(owned && owned->width()==1920 && owned->height()==1080);
+        auto field=[&](size_t offset){uint32_t value=0;std::memcpy(&value,owned->data()+offset,4);return value;};
+        assert(field(0x1c)==40 && field(0x24)==1 && field(0x3fc)==8 && field(0x828)==1 &&
+            field(0x82c)==0 && field(0x830)==1 && field(0x38)==0);
+        for(size_t i=0;i<source.size();++i) {
+            if(i==0x1c/4 || i==0x24/4 || i==0x3fc/4 || i==0x828/4 || i==0x82c/4 || i==0x830/4)continue;
+            assert(field(i*4)==source[i]);
+        }
+        assert(source==original);source.fill(0);
+        assert(field(0x1c)==40 && field(0x82c)==0 && field(0x500)==0x12345678);
+        source=original;source[0x830/4]=0;source[0x834/4]=1;source[0x838/4]=0;
+        auto fieldPicture=capture();assert(fieldPicture);
+        uint32_t flag=0;std::memcpy(&flag,fieldPicture->data()+0x82c,4);assert(flag==1);
+        std::memcpy(&flag,fieldPicture->data()+0x828,4);assert(flag==0);
+        std::memcpy(&flag,fieldPicture->data()+0x830,4);assert(flag==0);
+        source=original;
+        auto denied=[](uintptr_t,void*,size_t) noexcept {return false;};
+        assert(!Sequence::capture(address,1920,1080,denied));
+        assert(!Sequence::capture(UINTPTR_MAX-Sequence::Bytes+1,1920,1080,read));
+        assert(!Sequence::capture(address,1904,1080,read)); // different macroblock width
+        const auto view=owned->data();auto transferred=std::move(owned);
+        assert(transferred->data()==view);owned=std::move(transferred);
         TglAvcSequenceConsumedFields fields;
         // Live output object inside the input extent: rejection must precede
         // all reads/writes, not merely restore the scalar result afterwards.
@@ -19116,6 +19147,7 @@ int main() {
             assert(!tglProjectTahoeAvcSequenceConsumedFields(source.data(),bytes,1920,1080,out));
             assert(out.level==7 && out.chroma==7 && out.frameOnly==7 && out.mbaff==7 &&
                 out.direct8x8==7 && out.log2MaxFrameNumMinus4==7);
+            if(bytes==sizeof(source))assert(!capture());
         };
         reject(sizeof(source)-1);reject(sizeof(source)+1);
         for(size_t at:{size_t(0),size_t(0x828/4),size_t(0x82c/4)}){
