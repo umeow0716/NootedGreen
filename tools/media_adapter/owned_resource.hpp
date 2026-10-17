@@ -27645,6 +27645,56 @@ public:
         return excludes(state_->context,0x6c20) && excludes(reinterpret_cast<uintptr_t>(this),sizeof(*this)) &&
             excludes(reinterpret_cast<uintptr_t>(state_),sizeof(*state_));
     }
+    // Extends root exclusion with the six native linear pools' CPU mappings.
+    // No backing dereference: this does NOT prove surface/GPU mapping aliasing.
+    template<class OwnerLease>
+    bool excludesPublishedAvcLinearCpuSpan(const OwnerLease& lease,uintptr_t address,size_t bytes) noexcept {
+        if(!excludesPublishedAvcRootSpan(lease,address,bytes) || !enter())return false;
+        Unlock unlock{state_->busy};
+        if(state_->removed || !state_->retainedIdentity() || !state_->nativeParentMatches() ||
+           state_->table.publication()!=FrameTable::Publication::Published ||
+           state_->table.nativeFrame()!=state_->image+0x27724)return false;
+        constexpr std::array<uintptr_t,6> fields{0xb50,0x4b90,0x1b60,0x2b70,0x3b80,0x5ba0};
+        constexpr std::array<std::array<uint8_t,12>,6> calls{{
+            {0x48,0x8d,0xbb,0x50,0x0b,0,0,0xe8,0x34,0x2d,0xfe,0xff},
+            {0x48,0x8d,0xbb,0x90,0x4b,0,0,0xe8,0x28,0x2d,0xfe,0xff},
+            {0x48,0x8d,0xbb,0x60,0x1b,0,0,0xe8,0x1c,0x2d,0xfe,0xff},
+            {0x48,0x8d,0xbb,0x70,0x2b,0,0,0xe8,0x10,0x2d,0xfe,0xff},
+            {0x48,0x8d,0xbb,0x80,0x3b,0,0,0xe8,0x04,0x2d,0xfe,0xff},
+            {0x48,0x8d,0xbb,0xa0,0x5b,0,0,0xe8,0xf8,0x2c,0xfe,0xff}}};
+        auto matches=[&](uintptr_t offset,const auto& expected) noexcept {
+            auto actual=expected;
+            return state_->executable(state_->image+offset,actual.size()) &&
+                state_->read(state_->image+offset,actual.data(),actual.size()) && actual==expected;
+        };
+        constexpr std::array<uint8_t,4> cpuAddress{0x48,0x8b,0x73,0xf8},length{0x41,0x8b,0x57,0x08};
+        constexpr std::array<uint8_t,11> countStride{0x41,0x8b,0x47,0x04,0x48,0x83,0xc3,0x20,0x49,0x39,0xc6};
+        if(!matches(0x9918,cpuAddress) || !matches(0x9925,length) || !matches(0x9939,countStride))return false;
+        std::array<uint8_t,0x1010> first{},second{};
+        const auto readPool=[&](uintptr_t base,auto& output) noexcept {
+            return state_->read(base,output.data(),0x10) && state_->read(base+0x10,output.data()+0x10,0x1000);
+        };
+        for(size_t pool=0;pool<fields.size();++pool) {
+            if(!matches(0x26b73+pool*12,calls[pool]) ||
+               !readPool(state_->context+fields[pool],first) ||
+               !readPool(state_->context+fields[pool],second) || first!=second)return false;
+            uint32_t count=0,extent=0,initialized=0;
+            std::memcpy(&count,first.data()+4,4);std::memcpy(&extent,first.data()+8,4);
+            std::memcpy(&initialized,first.data()+0xc,4);
+            // Each 0x1010 embedded pool holds header10 + 128 records20.
+            // Examine all CPU slots: stale slots beyond count must not hide an alias.
+            if(count>128)return false;
+            for(size_t slot=0;slot<128;++slot) {
+                uintptr_t base=0;std::memcpy(&base,first.data()+0x10+slot*0x20,8);
+                if(!base)continue;
+                if(!initialized || !extent || base>UINTPTR_MAX-extent ||
+                   (address<base+extent && base<address+bytes))return false;
+            }
+        }
+        uintptr_t vptr=0;
+        return state_->nativeParentMatches() && state_->read(state_->context,&vptr,8) &&
+            vptr==reinterpret_cast<uintptr_t>(state_->table.addressPoint());
+    }
     template<class OwnerLease>
     bool excludesPublishedContextWritableSpan(const OwnerLease& lease,uintptr_t address,size_t bytes) noexcept {
         // This allocation graph is exact VP1370 only. Native-other property

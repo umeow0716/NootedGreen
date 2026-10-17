@@ -16682,7 +16682,39 @@ static void testRetainedVeboxFrames() {
                     {0xbf,0x20,0x6c,0,0,0xe8,0xb6,0x9b,0x22,0},{0xe8,0x93,0x23,1,0},
                     {0x48,0x8d,0x05,0x93,0xdf,0x72,0,0x48,0x89,0x03}}};
                 int rootCorruptSite=-1,rootCorruptByte=-1;bool rootReadDenied=false;
+                constexpr std::array<uintptr_t,6> linearFields{0xb50,0x4b90,0x1b60,0x2b70,0x3b80,0x5ba0};
+                std::array<std::array<uint8_t,0x1010>,6> linearPools{};
+                int linearCorrupt=-1;bool linearUnstable=false,linearReadDenied=false;unsigned linearReads=0;
                 auto readFamily=[&](uintptr_t p,void* out,size_t n) noexcept {
+                    if(p>=image+0x26b73 && p<image+0x26bbb && (p-image-0x26b73)%12==0 && n==12) {
+                        const size_t i=(p-image-0x26b73)/12;
+                        std::array<uint8_t,12> bytes{0x48,0x8d,0xbb,0,0,0,0,0xe8,0,0,0,0};
+                        const uint32_t field=uint32_t(linearFields[i]);
+                        const int32_t displacement=int32_t(0x98b3)-int32_t(0x26b73+i*12+12);
+                        std::memcpy(bytes.data()+3,&field,4);std::memcpy(bytes.data()+8,&displacement,4);
+                        if(linearCorrupt>=0 && size_t(linearCorrupt)/12==i)bytes[size_t(linearCorrupt)%12]^=1;
+                        std::memcpy(out,bytes.data(),n);return true;
+                    }
+                    constexpr std::array<uintptr_t,3> accessorSites{0x9918,0x9925,0x9939};
+                    constexpr std::array<size_t,3> accessorSizes{4,4,11};
+                    constexpr std::array<std::array<uint8_t,11>,3> accessorBytes{{
+                        {0x48,0x8b,0x73,0xf8},{0x41,0x8b,0x57,0x08},
+                        {0x41,0x8b,0x47,0x04,0x48,0x83,0xc3,0x20,0x49,0x39,0xc6}}};
+                    for(size_t i=0;i<3;++i)if(p==image+accessorSites[i] && n==accessorSizes[i]) {
+                        auto bytes=accessorBytes[i];if(linearCorrupt==int(72+i))bytes[0]^=1;
+                        std::memcpy(out,bytes.data(),n);return true;
+                    }
+                    for(size_t i=0;i<6;++i) {
+                        if(p==0x8000+linearFields[i] && n==0x10) {
+                            if(linearReadDenied)return false;
+                            std::memcpy(out,linearPools[i].data(),n);
+                            if(linearUnstable && ++linearReads==2)static_cast<uint8_t*>(out)[8]^=1;
+                            return true;
+                        }
+                        if(p==0x8010+linearFields[i] && n==0x1000) {
+                            std::memcpy(out,linearPools[i].data()+0x10,n);return true;
+                        }
+                    }
                     for(size_t i=0;i<rootSites.size();++i)if(p==image+rootSites[i] && n==rootSizes[i]) {
                         if(rootReadDenied)return false;
                         auto bytes=rootAnchors[i];
@@ -16851,6 +16883,36 @@ static void testRetainedVeboxFrames() {
                     rx=false;assert(!retained->excludesPublishedAvcRootSpan(lease,0xec20,4));rx=true;
                     parentPhysical+=8;assert(!retained->excludesPublishedAvcRootSpan(lease,0xec20,4));parentPhysical-=8;
                     assert(retained->excludesPublishedAvcRootSpan(lease,0xec20,4));
+                    assert(retained->excludesPublishedAvcLinearCpuSpan(lease,0x300000,4));
+                    for(int corruptByte=0;corruptByte<75;++corruptByte) {
+                        linearCorrupt=corruptByte;
+                        assert(!retained->excludesPublishedAvcLinearCpuSpan(lease,0x300000,4));
+                    }
+                    linearCorrupt=-1;
+                    auto poolPut=[&](size_t pool,size_t offset,auto value) noexcept {
+                        std::memcpy(linearPools[pool].data()+offset,&value,sizeof(value));
+                    };
+                    for(size_t pool=0;pool<6;++pool) {
+                        poolPut(pool,4,uint32_t{1});poolPut(pool,8,uint32_t{64});poolPut(pool,12,uint32_t{1});
+                        for(size_t slot:{size_t{0},size_t{127}}) {
+                            poolPut(pool,0x10+slot*0x20,uintptr_t{0x300000});
+                            assert(!retained->excludesPublishedAvcLinearCpuSpan(lease,0x300000,4));
+                            assert(!retained->excludesPublishedAvcLinearCpuSpan(lease,0x2fffff,2));
+                            assert(retained->excludesPublishedAvcLinearCpuSpan(lease,0x300040,4));
+                            poolPut(pool,0x10+slot*0x20,uintptr_t{0});
+                        }
+                        linearPools[pool].fill(0);
+                    }
+                    poolPut(0,4,uint32_t{129});assert(!retained->excludesPublishedAvcLinearCpuSpan(lease,0x300000,4));
+                    linearPools[0].fill(0);poolPut(0,0x10,uintptr_t{0x400000});
+                    assert(!retained->excludesPublishedAvcLinearCpuSpan(lease,0x300000,4)); // Uninitialized nonempty.
+                    poolPut(0,12,uint32_t{1});assert(!retained->excludesPublishedAvcLinearCpuSpan(lease,0x300000,4)); // Zero extent.
+                    poolPut(0,8,uint32_t{64});poolPut(0,0x10,uintptr_t{UINTPTR_MAX-32});
+                    assert(!retained->excludesPublishedAvcLinearCpuSpan(lease,0x300000,4));
+                    linearPools[0].fill(0);linearUnstable=true;linearReads=0;
+                    assert(!retained->excludesPublishedAvcLinearCpuSpan(lease,0x300000,4));linearUnstable=false;
+                    linearReadDenied=true;
+                    assert(!retained->excludesPublishedAvcLinearCpuSpan(lease,0x300000,4));linearReadDenied=false;
                 }
                 struct FamilyScope {
                     uintptr_t image;uint64_t generation=1;
