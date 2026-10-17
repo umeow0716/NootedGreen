@@ -62,6 +62,29 @@ template<class T,class Released> void testNativeOtherInputRetirement(std::unique
     }
     assert(!destroyed); // Direct pending destruction is NOT retirement.
     delete quarantined;assert(destroyed==1); // Never-submitted CPU fixture only.
+    auto observe=[&](const auto&,const auto&,auto& expected,auto& current,uint64_t& registry,auto& result) noexcept {
+        expected=fence;current=fresh;registry=99;result=reply;return true;
+    };
+    unsigned collectedDrops=0;
+    {
+        TglNativeOtherPendingFrames::RetiredInputs batch;
+        for(size_t i=0;i<33;++i) {
+            auto attachment=std::unique_ptr<Tracked>(new Tracked{&collectedDrops});
+            const auto next=pending.reserve(image,physical,1,context);
+            assert(pending.retainInput(next,image,physical,1,context,attachment));
+            assert(pending.bind(next,lineage,fence,fresh));
+            const bool serviced=pending.service(image,physical,1,context,observe,&batch);
+            assert(serviced==(i<32) && batch.size()==(i<32?i+1:32) && !collectedDrops);
+            assert(pending.pending()==(i==32));
+        }
+    }
+    assert(collectedDrops==32 && pending.pending());
+    {
+        TglNativeOtherPendingFrames::RetiredInputs batch;
+        assert(pending.service(image,physical,1,context,observe,&batch) && batch.size()==1);
+        assert(!pending.pending() && collectedDrops==32);
+    }
+    assert(collectedDrops==33);
 }
 
 template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputApi,std::array<uint8_t,0x488>& fullHeader,const std::array<uint8_t,0x488>& savedFullHeader,std::array<uintptr_t,17>& downscaleSurfaces,const std::array<uintptr_t,17>& savedDownscales,std::array<uintptr_t,5>& originalRequest,Read fullRead) {
@@ -16691,9 +16714,9 @@ static void testRetainedVeboxFrames() {
                 assert(retained->serviceNativeOtherFrames(lease,scope,observe)==0 && observations==2);
                 if(avc) {
                     assert(!retained->nativeOtherWorkQuiescent() && !inputDrops);
-                    TglNativeOtherPendingFrames::RetainedInput retired;
-                    assert(retained->completeNativeOtherFrame(lease,scope,pendingFrame,99,completed,expected,current,&retired));
-                    assert(retired && !inputDrops);retired.reset();
+                    TglNativeOtherPendingFrames::RetiredInputs retired;
+                    assert(retained->serviceNativeOtherFrames(lease,scope,observe,&retired)==0 && observations==3);
+                    assert(retired.size()==1 && !inputDrops);
                 }
                 assert(inputDrops==1);
                 assert(retained->nativeOtherWorkQuiescent());

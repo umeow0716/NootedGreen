@@ -5692,7 +5692,8 @@ struct NativeOtherFrameBackend {
             after.frameworkContext==fence.frameworkContext && after.count==fence.count &&
             scope.matches(image,physical,generation);
     }
-    static int poll(NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,uint64_t generation) noexcept {
+    static int poll(NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,uint64_t generation,
+        TglNativeOtherPendingFrames::RetiredInputs& retired) noexcept {
         return NativeCodecBackend::withNativeOtherOwners(scope,image,physical,generation,[&](auto& lease) noexcept -> int {
             return lease.get()->serviceNativeOtherFrames(lease,scope,
                 [&](const auto& old,const auto& oldFresh,auto& expected,auto& fresh,uint64_t& registryId,auto& reply) noexcept -> bool {
@@ -5704,14 +5705,15 @@ struct NativeOtherFrameBackend {
                     // Re-read AFTER kernel query; completion cannot be based
                     // on cached device44 values or a stale expected buffer.
                     return capture(scope,image,physical,generation,receipt,lineage,expected,fresh);
-                });
+                },&retired);
         });
     }
     static int poll(void* physical) noexcept {
         const auto* source=NativeFactorySource::process().get();if(!source)return 5;
         const auto address=reinterpret_cast<uintptr_t>(physical);
+        TglNativeOtherPendingFrames::RetiredInputs retired; // Outlives withScope/owner/ledger gates.
         return NativePhysicalBackend::withScope(address,[&](NativePhysicalFrameScope& scope,uint64_t generation) noexcept -> int {
-            return poll(scope,source->physical.image,address,generation);
+            return poll(scope,source->physical.image,address,generation,retired);
         });
     }
     static int dispatch(Lease& lease,NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,
@@ -5830,6 +5832,7 @@ struct NativeOtherFrameBackend {
 struct NativeLateFactoryBatch {
     NativeTargetDecompressionFor<NativeTemporarySurfaceOwner>& decompression;
     void* renderArgument;bool busy=false;
+    TglNativeOtherPendingFrames::RetiredInputs retired{}; // Request outlives withBatchFrameScope.
     bool serviceShapeValid() const noexcept {
         // Absence is explicit and legal until the real conditional fast-fill
         // path requests decompression; that call-site still refuses absence.
@@ -5839,13 +5842,13 @@ struct NativeLateFactoryBatch {
     static int dispatch(void* raw,NativeFactoryFrameBatch::Lease& owner,NativePhysicalFrameScope& physical,
         uintptr_t image,uintptr_t address,uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
         if(!raw || !owner.get() || !physical.matches(image,address,generation))return 5;
+        auto& self=*static_cast<NativeLateFactoryBatch*>(raw);
         const int vpCompletion=NativePhysicalBackend::serviceNativeCompletedFramesScoped(physical,image,address,generation);
         if(vpCompletion)return vpCompletion;
-        const int completion=NativeOtherFrameBackend::poll(physical,image,address,generation);
+        const int completion=NativeOtherFrameBackend::poll(physical,image,address,generation,self.retired);
         if(completion)return completion;
         if(owner.get()->family()==TglNativeContextFamily::NativeOther)
             return NativeOtherFrameBackend::dispatch(owner,physical,image,address,generation,input,output);
-        auto& self=*static_cast<NativeLateFactoryBatch*>(raw);
         if(self.busy || !self.serviceShapeValid())return 5;
         self.busy=true;struct Reset {bool& busy;~Reset(){busy=false;}} reset{self.busy};
         const auto result=NativeCreatorPreparation::dispatchLateOwnedFrame(owner,physical,image,address,generation,

@@ -25769,6 +25769,23 @@ public:
         }
         explicit operator bool() const noexcept {return value_!=nullptr;}
     };
+    class RetiredInputs {
+        friend class TglNativeOtherPendingFrames;
+        std::array<RetainedInput,32> inputs_{};
+        RetainedInput* available() noexcept {
+            for(auto& input:inputs_)if(!input)return &input;
+            return nullptr;
+        }
+    public:
+        RetiredInputs()=default;
+        RetiredInputs(const RetiredInputs&)=delete;
+        RetiredInputs& operator=(const RetiredInputs&)=delete;
+        size_t size() const noexcept {
+            size_t count=0;for(const auto& input:inputs_)if(input)++count;return count;
+        }
+        // Destructor releases only already-validated transferred inputs.
+        // The caller must place this outside every owner/physical gate.
+    };
 private:
     enum class State {Empty,Reserved,Bound,Ambiguous};
     struct Record {
@@ -25838,18 +25855,21 @@ public:
         record->fence=fence;record->fresh=fresh;record->state=State::Bound;return true;
     }
     template<class Observe>
-    bool service(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context,Observe observe) noexcept {
+    bool service(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context,Observe observe,
+        RetiredInputs* retired=nullptr) noexcept {
         for(size_t i=0;i<records_.size();++i) {
             auto& record=records_[i];if(record.state==State::Empty)continue;
             if(record.state!=State::Bound || record.image!=image || record.physical!=physical ||
                record.generation!=generation || record.context!=context)return false;
+            auto* sink=record.input && retired?retired->available():nullptr;
+            if(record.input && retired && !sink)return false; // Keep uncollected work on bounded backpressure.
             TglNativeFenceBackingObservation::Snapshot expected;
             TglNativeFreshStampObservation::Snapshot fresh;
             NGVfTaskCompletion::Reply reply{};uint64_t registryId=0;
             if(!observe(std::as_const(record.fence),std::as_const(record.fresh),expected,fresh,registryId,reply))continue;
             // A scan is not completion. Invalid/not-ready evidence retains the
             // record; complete() alone can clear its exact one-shot ticket.
-            (void)complete({this,record.serial,i},image,physical,generation,context,registryId,reply,expected,fresh);
+            (void)complete({this,record.serial,i},image,physical,generation,context,registryId,reply,expected,fresh,sink);
         }
         return true;
     }
@@ -27588,13 +27608,14 @@ public:
             registryId,reply,fence,fresh,retired);
     }
     template<class OwnerLease,class Scope,class Observe>
-    int serviceNativeOtherFrames(const OwnerLease& lease,Scope& scope,Observe observe) noexcept {
+    int serviceNativeOtherFrames(const OwnerLease& lease,Scope& scope,Observe observe,
+        TglNativeOtherPendingFrames::RetiredInputs* retired=nullptr) noexcept {
         if(!state_ || lease.get()!=this || family()!=TglNativeContextFamily::NativeOther || !enter())return 5;
         Unlock unlock{state_->busy};
         if(state_->removed || !state_->retainedIdentity() || !state_->nativeParentMatches() ||
            state_->table.publication()!=TglContextFramePublication::Published ||
            !scope.matches(state_->image,state_->physical,state_->generation))return 5;
-        return state_->nativeOtherPending.service(state_->image,state_->physical,state_->generation,state_->context,observe)?0:5;
+        return state_->nativeOtherPending.service(state_->image,state_->physical,state_->generation,state_->context,observe,retired)?0:5;
     }
     template<class OwnerLease>
     bool excludesPublishedContextWritableSpan(const OwnerLease& lease,uintptr_t address,size_t bytes) noexcept {
