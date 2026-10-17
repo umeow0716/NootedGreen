@@ -11,6 +11,74 @@
 #include "native_avc_reservation.hpp"
 #include <memory>
 
+template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputApi,std::array<uint8_t,0x488>& fullHeader,const std::array<uint8_t,0x488>& savedFullHeader,std::array<uintptr_t,17>& downscaleSurfaces,const std::array<uintptr_t,17>& savedDownscales,std::array<uintptr_t,5>& originalRequest,Read fullRead) {
+    const auto fullPayload=reinterpret_cast<uintptr_t>(fullHeader.data());
+    const auto originalRequestAddress=reinterpret_cast<uintptr_t>(originalRequest.data());
+    const auto savedRequest=originalRequest;
+    uintptr_t reconSurface=0;std::memcpy(&reconSurface,savedFullHeader.data()+0x478,8);
+    auto requestRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+        if(at!=originalRequestAddress || bytes!=sizeof(originalRequest))return false;
+        std::memcpy(out,originalRequest.data(),bytes);return true;
+    };
+    using Input=NgreenNativeAvcReservation::OwnedAvcCallbackInput<CfApi>;
+    auto& inputState=*inputApi.state;
+    auto inputRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+        if(at==originalRequestAddress+0x20 && bytes==8) {
+            std::memcpy(out,&originalRequest[4],8);return true;
+        }
+        if(at==originalRequestAddress)return requestRead(at,out,bytes);
+        return fullRead(at,out,bytes);
+    };
+    fullHeader=savedFullHeader;downscaleSurfaces=savedDownscales;
+    auto input=Input::capture(originalRequestAddress,16,16,{},inputApi,inputRead,[]() noexcept {return true;});
+    assert(input && inputState.retains==5 && !inputState.releases);
+    assert(input->originalRequest()==originalRequestAddress && input->originalPayload()==fullPayload);
+    uintptr_t ownedPayload=0;
+    std::memcpy(&ownedPayload,reinterpret_cast<const void*>(input->callbackRequest().callbackRequest()+0x20),8);
+    assert(ownedPayload && !(ownedPayload&15) && ownedPayload!=fullPayload);
+    downscaleSurfaces.fill(0);
+    uintptr_t ownedDownscale=0;
+    std::memcpy(&ownedDownscale,reinterpret_cast<const void*>(ownedPayload+0x440),8);
+    assert(std::memcmp(reinterpret_cast<const void*>(ownedDownscale),savedDownscales.data(),sizeof(savedDownscales))==0);
+    using Pair=NgreenNativeAvcReservation::OwnedAvcCallbackPhase;
+    Pair::Identity id{0x10000000,0x9000,0x8000,originalRequestAddress,1};
+    auto live=[](void* raw,const Pair::Identity& actual) noexcept {
+        const auto& expected=*static_cast<Pair::Identity*>(raw);
+        return actual.image==expected.image && actual.physical==expected.physical &&
+            actual.context==expected.context && actual.request==expected.request && actual.generation==expected.generation;
+    };
+    {
+        Pair pair(id,input->callbackRequest(),&id,live);assert(pair.bound());
+        uint32_t used=0,capacity=0;uintptr_t sizeRequest=0;
+        const auto sized=pair.size(id.context,id.request,&used,&capacity,
+            [&](uintptr_t,uintptr_t,uintptr_t r,uint32_t* u,uint32_t* c) noexcept -> uint64_t {
+                sizeRequest=r;*u=123;*c=456;return 0;
+            });
+        assert(sized.invoked && !sized.mustStop && inputState.releases==0);
+        const auto built=pair.builder(id.context,id.request,0x7770,
+            [&](uintptr_t,uintptr_t,uintptr_t r,uintptr_t) noexcept -> uint64_t {
+                assert(r==sizeRequest && inputState.releases==0);return 0;
+            });
+        assert(built.invoked && !built.mustStop && pair.complete());
+    }
+    assert(inputState.releases==0); // CPU scope exit is NOT GPU retirement.
+    input.reset();assert(inputState.releases==5); // Test owner explicitly retires CPU-only fixture.
+    downscaleSurfaces=savedDownscales;
+    for(unsigned fail=0;fail<3;++fail) {
+        fullHeader=savedFullHeader;inputState={};
+        auto failingRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+            return !(fail==0 && at==originalRequestAddress) && inputRead(at,out,bytes);
+        };
+        auto admitted=[&]() noexcept {return fail!=1 || inputState.retains<3;};
+        if(fail==2)inputState.denied=reconSurface;
+        assert(!Input::capture(originalRequestAddress,16,16,{},inputApi,failingRead,admitted));
+        assert(inputState.retains==inputState.releases);
+        if(fail==0)assert(inputState.retains==5);
+    }
+    assert(originalRequest==savedRequest);
+}
+
+
 // Gate fixture only: deliberately does NOT clear any retention state.
 struct TestCompletedGroupScope {
     unsigned calls=0;
@@ -19542,6 +19610,11 @@ int main() {
                     return r==originalRequestAddress && p==fullPayload && o==reinterpret_cast<uintptr_t>(callbackPayload.data());
                 }));
             assert(originalRequest==savedRequest && callbackPayload==validPayload);
+            {
+                CfState inputState{};
+                testOwnedAvcCallbackInputUnit(CfApi{&inputState},fullHeader,savedFullHeader,
+                    downscaleSurfaces,savedDownscales,originalRequest,fullRead);
+            }
             {
                 CfState foreignState{};CfApi foreignApi{&foreignState};
                 std::array<uintptr_t,35> foreignHandles{};

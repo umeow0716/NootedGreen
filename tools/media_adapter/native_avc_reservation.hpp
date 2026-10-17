@@ -490,6 +490,48 @@ private:
     std::unique_ptr<TglOwnedAvcPictureInput> picture_;
     std::unique_ptr<SliceNal> sliceNal_;
 };
+// One stable ownership unit for both callbacks. Before invoking native outer,
+// its frame owner must retain this through proven GPU retirement/quarantine
+// AND hold real content exclusion; this class cannot manufacture either proof.
+template<class Api> class OwnedAvcCallbackInput {
+    std::unique_ptr<OwnedAvcSyntaxInput> graph_;
+    std::unique_ptr<OwnedAvcSurfaceReferences<Api>> pins_;
+    alignas(16) std::array<uint8_t,0x488> payload_{};
+    OwnedAvcCallbackRequest request_;
+    uintptr_t originalRequest_=0,originalPayload_=0;
+    OwnedAvcCallbackInput()=default;
+public:
+    OwnedAvcCallbackInput(const OwnedAvcCallbackInput&)=delete;
+    OwnedAvcCallbackInput& operator=(const OwnedAvcCallbackInput&)=delete;
+    OwnedAvcCallbackInput(OwnedAvcCallbackInput&&)=delete;
+    OwnedAvcCallbackInput& operator=(OwnedAvcCallbackInput&&)=delete;
+    template<class Read,class Admit> static std::unique_ptr<OwnedAvcCallbackInput>
+    capture(uintptr_t request,uint32_t width,uint32_t height,TglOwnedAvcScalingDefaults defaults,
+        Api api,Read read,Admit admit) noexcept {
+        if(!request || request>UINTPTR_MAX-0x28 || !admit())return {};
+        uintptr_t payload=0;
+        auto guardedRead=[&](uintptr_t address,void* output,size_t bytes) noexcept {
+            return admit() && read(address,output,bytes) && admit();
+        };
+        if(!guardedRead(request+0x20,&payload,8) || !payload)return {};
+        auto result=std::unique_ptr<OwnedAvcCallbackInput>(new(std::nothrow) OwnedAvcCallbackInput{});
+        if(!result)return {};
+        result->graph_=OwnedAvcSyntaxInput::capture(payload,width,height,defaults,guardedRead);
+        if(!result->graph_)return {};
+        result->pins_=result->graph_->pinSurfaces(api,admit);
+        if(!result->pins_ || !result->graph_->materializeCallbackPayload(result->payload_,*result->pins_,admit))return {};
+        const auto ownedPayload=reinterpret_cast<uintptr_t>(result->payload_.data());
+        if(!result->request_.capture(request,payload,ownedPayload,guardedRead,
+            [&](uintptr_t r,uintptr_t p,uintptr_t o) noexcept {
+                return r==request && p==payload && o==ownedPayload && admit();
+            }) || !admit())return {};
+        result->originalRequest_=request;result->originalPayload_=payload;
+        return result;
+    }
+    const OwnedAvcCallbackRequest& callbackRequest() const noexcept {return request_;}
+    uintptr_t originalRequest() const noexcept {return originalRequest_;}
+    uintptr_t originalPayload() const noexcept {return originalPayload_;}
+};
 struct Builder {
     uintptr_t argument=0,connection=0,base=0,cursor=0,end=0;
     uint32_t previousUsed=0,classes=0;
