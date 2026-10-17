@@ -41,6 +41,9 @@ inline uint32_t opcode(uint32_t header) noexcept {
 inline size_t packetWords(uint32_t header) noexcept {
     const uint32_t op=opcode(header);
     if(!header)return 1;
+    // Both pinned MFX/VDENC PIPE_MODE_SELECT headers reserve bits12..15.
+    // opcode() and the length mask otherwise silently discard these bits.
+    if((op==0x70000000U || op==0x70800000U) && (header&0xf000U))return 0;
     if(op==0x70480000U)return (header&0xfffU)+2;
     size_t n=0;
     switch(op) {

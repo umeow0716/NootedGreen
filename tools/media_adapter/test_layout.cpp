@@ -19209,6 +19209,12 @@ int main() {
         const auto good=input;output.fill(0xdeadbeef);
         auto rejected=[&](){auto r=NgreenAvcGen12::produce(input.data(),used,1920,1080,
             output.data(),output.size());assert(!r.ok);for(auto v:output)assert(v==0xdeadbeef);};
+        for(size_t at:{size_t(0),mode})for(unsigned bits=1;bits<16;++bits){
+            input=good;input[at]|=bits<<12;
+            assert(NgreenAvcGen12::packetWords(input[at])==0);
+            rejected();
+        }
+        input=good;
         auto rejectMovedPacket=[&](size_t first,size_t words){
             const auto before=input;
             for(size_t i=first;i<used-2-words;++i)input[i]=before[i+words];
