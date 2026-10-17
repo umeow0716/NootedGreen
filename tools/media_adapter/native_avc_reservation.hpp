@@ -274,7 +274,11 @@ public:
         }
         std::memcpy(&overridden,first+0x38,4);
         std::memcpy(minusOne,overridden?first+0x3c:owned->picture_->data()+0x90,sizeof(minusOne));
-        if(minusOne[0]+uint32_t(1)>32 || minusOne[1]+uint32_t(1)>32)return {};
+        // Frame-list source records occupy8c0..9bf and9c0..abf,
+        // sixteen16-byte entries each;ac0/ac4 are COUNTS, not entries.
+        //25cf6 reads one record per active count despite its32-byte output.
+        // Field-list expansion is not implemented/admitted above.
+        if(minusOne[0]+uint32_t(1)>16 || minusOne[1]+uint32_t(1)>16)return {};
         return owned;
     }
     const uint8_t* sequenceBytes() const noexcept {return sequence_->data();}

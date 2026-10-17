@@ -19366,24 +19366,24 @@ int main() {
             fullHeader=savedFullHeader;denied=true;
             assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));denied=false;
             auto set32=[](uint8_t* data,size_t offset,uint32_t value) noexcept {std::memcpy(data+offset,&value,4);};
-            set32(pps.data(),0x90,31);set32(pps.data(),0x94,UINT32_MAX);fullHeader=savedFullHeader;
+            set32(pps.data(),0x90,15);set32(pps.data(),0x94,UINT32_MAX);fullHeader=savedFullHeader;
             assert(FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));
             set32(pps.data(),0x90,0);set32(pps.data(),0x94,0);
             for(size_t offset:{size_t(0x90),size_t(0x94)}) {
-                for(uint32_t bad:{32U,255U,UINT32_MAX-1}) {
+                for(uint32_t bad:{16U,31U,32U,255U,UINT32_MAX-1}) {
                     set32(pps.data(),offset,bad);fullHeader=savedFullHeader;
                     assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));
                 }
                 set32(pps.data(),offset,0);
             }
             // Overrides ignore branch-unused PPS counts, but must themselves
-            // fit the native32-byte list; UINT32_MAX+1 keeps native zero.
+            // fit the sixteen source records; UINT32_MAX+1 keeps native zero.
             set32(pps.data(),0x90,255);set32(pps.data(),0x94,255);set32(slice.data(),0x38,1);
-            set32(slice.data(),0x3c,31);set32(slice.data(),0x40,UINT32_MAX);
+            set32(slice.data(),0x3c,15);set32(slice.data(),0x40,UINT32_MAX);
             fullHeader=savedFullHeader;
             assert(FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));
             for(size_t offset:{size_t(0x3c),size_t(0x40)}) {
-                set32(slice.data(),offset,32);fullHeader=savedFullHeader;
+                set32(slice.data(),offset,16);fullHeader=savedFullHeader;
                 assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));
                 set32(slice.data(),offset,0);
             }
