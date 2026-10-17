@@ -407,6 +407,11 @@ def contract(source, path="<source>"):
         media_map.index('getMember<void *>(backing,0xD0)!=descriptor')
     rotation='if (getMember<volatile uint8_t>(gpuMap,0x11C)!=0U)return false;'
     assert rotation in media_map, f'{path}: rotated command map admitted as linear'
+    for token in ('!gVfNativeBatchMapGetter',
+                  '(getMember<volatile uint32_t>(gpuMap,0x10)&0x40U)',
+                  'getMember<volatile uint64_t>(gpuMap,0x98)',
+                  'gpuBase>UINT64_MAX-bytes', 'out.gpuMap=gpuMap;out.gpuBase=gpuBase;'):
+        assert token in media_map, f'{path}: missing GPU address-mode/span proof: {token}'
     assert media_map.index('getMember<void *>(backing,0xD0)!=descriptor') < \
         media_map.index(rotation) < media_map.index('out.reason="map-getters"'), \
         f'{path}: rotation read must follow exact map identity'
@@ -439,6 +444,7 @@ def contract(source, path="<source>"):
                   'span.availableWords,span.reservedWords',
                   'publication.mustStop', 'current.resource==span.resource',
                   'current.mapped==span.mapped', 'current.map==span.map',
+                  'current.gpuMap==span.gpuMap', 'current.gpuBase==span.gpuBase',
                   'current.used==span.used', 'current.commands==span.commands'):
         assert token in media_end, f"{path}: missing native AVC publication ownership: {token}"
     assert media_end.index('bindLocked(')<media_end.index('NgreenAvcGen12::publish(')<\
@@ -486,6 +492,10 @@ def mutation_contract(source, path):
         ('if (getMember<volatile uint8_t>(stream,0x3C)!=1U)return false;',
          'if (!getMember<volatile uint8_t>(stream,0x3C))return false;', 1),
         ('getMember<void *>(backing,0xD0)!=descriptor', 'false', 1),
+        ('(getMember<volatile uint32_t>(gpuMap,0x10)&0x40U)', 'false', 1),
+        ('gpuBase>UINT64_MAX-bytes', 'false', 1),
+        ('current.gpuBase==span.gpuBase', 'true', 1),
+        ('current.gpuMap==span.gpuMap', 'true', 1),
         ('if (getMember<volatile uint8_t>(gpuMap,0x11C)!=0U)return false;', '', 1),
         ('if (getMember<volatile uint8_t>(gpuMap,0x11C)!=0U)return false;',
          'if (getMember<volatile uint8_t>(gpuMap,0x11C)==0U)return false;', 1),

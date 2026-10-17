@@ -1267,6 +1267,8 @@ private:
 
 struct VfMediaMappedSpan {
 	void *resource,*mapped,*map,*descriptor;
+	void *gpuMap;
+	uint64_t gpuBase;
 	volatile uint32_t *commands;
 	uint32_t bytes,offset,used;
 	size_t availableWords,reservedWords;
@@ -1330,6 +1332,11 @@ static bool vfCaptureMediaMappedSpan(const VfMediaSubmission &entry,void *stream
 	// a different PTE iterator and cannot inherit the linear backing proof.
 	out.reason="rotated-command-map";
 	if (getMember<volatile uint8_t>(gpuMap,0x11C)!=0U)return false;
+	out.reason="gpu-address-mode";
+	if (!gVfNativeBatchMapGetter ||
+	    getMember<mach_vm_address_t>(reinterpret_cast<void *>(gVfNativeBatchMapVtable),0x128)!=gVfNativeBatchMapGetter ||
+	    (getMember<volatile uint32_t>(gpuMap,0x10)&0x40U))return false;
+	const uint64_t gpuBase=getMember<volatile uint64_t>(gpuMap,0x98);
 	void *table=getMember<void *>(map,0);
 	out.reason="map-getters";
 	if (!table || getMember<mach_vm_address_t>(table,0x118)!=gVfMediaMapAddress ||
@@ -1355,7 +1362,10 @@ static bool vfCaptureMediaMappedSpan(const VfMediaSubmission &entry,void *stream
 	out.offset=offset;out.used=used;out.count=words;
 	if (!bytes || bytes!=resourceBytes || bytes>length || ((bytes|offset|used)&3) ||
     offset>used || used>bytes || words<2 || words>1536 || uint64_t(words)*4>used-offset)return false;
+	out.reason="gpu-address-span";
+	if (!gpuBase || (gpuBase&3U) || gpuBase>UINT64_MAX-bytes)return false;
 	out.resource=resource;out.mapped=mapped;out.map=map;out.descriptor=descriptor;
+	out.gpuMap=gpuMap;out.gpuBase=gpuBase;
 	out.commands=reinterpret_cast<volatile uint32_t *>(base+offset);
 	out.bytes=bytes;out.offset=offset;out.used=used;
 	out.availableWords=(bytes-offset)/4U;out.reservedWords=(used-offset)/4U;
@@ -6239,6 +6249,7 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 		VfMediaMappedSpan current{};
 		return vfCaptureMediaMappedSpan(*entry,stream,current) && current.resource==span.resource &&
 			current.mapped==span.mapped && current.map==span.map && current.descriptor==span.descriptor &&
+			current.gpuMap==span.gpuMap && current.gpuBase==span.gpuBase &&
 			current.commands==span.commands && current.bytes==span.bytes && current.offset==span.offset &&
 			current.used==span.used && current.availableWords==span.availableWords && current.reservedWords==span.reservedWords;
 	};
