@@ -9,13 +9,46 @@ from pathlib import Path
 import subprocess
 import struct
 import sys
+import sqlite3
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
 source = (root/'NootedGreen/kern_gen11.cpp').read_text()
+def resource_scope_contract(text):
+    try:
+        submit = text[text.index('bool Gen11::vfSubmitWorkItem('):]
+        assert submit.index('IORecursiveLockLock(gVfPageTableUpdateLock)') < submit.index('vfObserveBatchLeafMapping(') < \
+               submit.index('IORecursiveLockUnlock(gVfPageTableUpdateLock)') < submit.index('VfContextQueueGuard queue(that)')
+        assert text.count('vfObserveMediaResourceBases(') == 2
+        assert text.count('vfObserveNativeBatchProvenance(') == 2
+        assert text.count('vfObserveBatchLeafMapping(') == 2
+        native = text[text.index('static void vfObserveNativeBatchProvenance('):text.index('static void vfObserveBatchLeafMapping(')]
+        assert native.index('const bool stable=') < native.index('vfObserveMediaResourceBases(')
+        resource = text[text.index('static void vfObserveMediaResourceBases('):text.index('static void vfObserveNativeBatchProvenance(')]
+        for required in ('collectPublishedResourceBases(commands,words,bases)',
+                         'if(!parsed || !after || !gVfLeafObservationReader',
+                         'NGFlightTrace::observeResourceLeaves(bases',
+                         '0x140)==gVfLeafObservationReader', '},stable,'):
+            assert required in resource
+        assert all(forbidden not in resource for forbidden in ('IOMalloc', 'IOFree', 'writeReg', 'readReg', 'getPhysicalSegment'))
+        return True
+    except (ValueError, AssertionError):
+        return False
+assert resource_scope_contract(source), 'resource capture left qualified PT-before-CTB CPU scope'
+for token in ('IORecursiveLockLock(gVfPageTableUpdateLock)',
+              'IORecursiveLockUnlock(gVfPageTableUpdateLock)',
+              'collectPublishedResourceBases(commands,words,bases)',
+              'if(!parsed || !after || !gVfLeafObservationReader'):
+    # Scope the lock mutation to the submit path, not an older unrelated query.
+    if token.startswith('IORecursiveLock'):
+        at = source.index('bool Gen11::vfSubmitWorkItem(')
+        changed = source[:at]+source[at:].replace(token, 'MUTATED', 1)
+    else:
+        changed = source.replace(token, 'MUTATED', 1)
+    assert not resource_scope_contract(changed)
 if sys.argv[1:2] == ['--resource-layout']:
-    if len(sys.argv) != 3:
-        raise SystemExit('usage: vf_sync_batch_observer_test.py --resource-layout PINNED_GEN12_VDBOX_DIR')
+    if len(sys.argv) not in (3, 4):
+        raise SystemExit('usage: vf_sync_batch_observer_test.py --resource-layout PINNED_GEN12_VDBOX_DIR [READONLY_CAPTURE_DB]')
     fixture = r'''
     #include "mhw_vdbox_mfx_hwcmd_g12_X.h"
     #include "mhw_vdbox_vdenc_hwcmd_g12_X.h"
@@ -43,6 +76,38 @@ if sys.argv[1:2] == ['--resource-layout']:
         subprocess.run([os.environ.get('CXX', 'clang++'), '-std=c++14', '-Werror',
                         '-fsyntax-only', '-I', sys.argv[2], str(cpp)], check=True)
     print('PASS independent compiled Gen12 MFX/VDENC resource sizes/offsets; no resource or GPU call')
+    if len(sys.argv) == 4:
+        sys.path.insert(0, str(root/'tools/media_adapter'))
+        from audit_vdenc_batch import mode_template_fields
+        connection = sqlite3.connect(Path(sys.argv[3]).resolve().as_uri()+'?mode=ro', uri=True)
+        rows = connection.execute('SELECT kind,payload FROM records WHERE group_id=3 AND kind IN (3,4) LIMIT 3').fetchall()
+        assert len(rows) == 2 and {kind for kind, _ in rows} == {3, 4}
+        checks = ['#include <cassert>\n#include "NootedGreen/kern_avc_gen12_commands.hpp"\nint main(){']
+        for kind, raw in rows:
+            assert 0 < len(raw) <= 6144 and len(raw) % 4 == 0
+            words = struct.unpack(f'<{len(raw)//4}I', raw)
+            fields = mode_template_fields(words)
+            assert fields['complete_packet_walk']
+            expected = []
+            for family, collection in enumerate(('vdenc_pipe_resources', 'mfx_pipe_resources',
+                                                  'mfx_indirect_resources', 'mfx_bsp_resources'), 1):
+                for item in fields[collection]:
+                    expected.append((int(item['address_hex'], 16), item['address_word'], family,
+                                     item['address_word']-item['packet_word'], int(item['cache_select'] == 1)))
+            checks.append('{const uint32_t words[]={'+','.join(hex(word)+'U' for word in words)+'};')
+            checks.append('const NgreenAvcGen12::ResourceBase expected[]={'+','.join(
+                '{'+f'{gpu}ULL,{word},{family},{slot},{internal}'+'}' for gpu, word, family, slot, internal in expected)+'};')
+            checks.append('NgreenAvcGen12::ResourceBases out{};assert(NgreenAvcGen12::collectPublishedResourceBases(words,sizeof(words)/4,out));')
+            checks.append('assert(out.complete && out.count==sizeof(expected)/sizeof(expected[0]));')
+            checks.append('for(unsigned i=0;i<out.count;++i){unsigned hits=0;for(const auto &e:expected){const auto &a=out.entries[i];hits+=a.gpu==e.gpu&&a.word==e.word&&a.family==e.family&&a.slot==e.slot&&a.internal==e.internal;}assert(hits==1);}}')
+        checks.append('}')
+        with tempfile.TemporaryDirectory(prefix='ngreen-recorded-resource-') as directory:
+            cpp = Path(directory)/'actual.cpp'; cpp.write_text('\n'.join(checks))
+            binary = Path(directory)/'test'
+            subprocess.run([os.environ.get('CXX', 'clang++'), '-std=c++14', '-O1', '-g',
+                            '-fsanitize=address,undefined', '-I', str(root), str(cpp), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+        print('PASS production CPU resource parser matches independent offline inventory for saved publication and native batch; no GPU call')
 elif sys.argv[1:]:
     if len(sys.argv) != 4 or sys.argv[1] != '--native':
         raise SystemExit('usage: vf_sync_batch_observer_test.py [--native TGL KERNEL]')

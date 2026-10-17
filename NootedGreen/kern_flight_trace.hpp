@@ -9,6 +9,30 @@ constexpr uint32_t begin=0x06fe0000U,data=0x06fe0004U,end=0x06fe0008U;
 constexpr uint64_t magic=UINT64_C(0x4e47464c00000000);
 constexpr uint32_t maximumWords=1536;
 struct BorrowedBatchCopy {uint32_t bytes=0,copied=0,flags=0;};
+struct ResourceLeafSample {uint64_t physical=0,flags=0;bool exact=false,read=false;};
+// Read-only observations of an already decoded CPU base inventory. NULL and
+// internal-media addresses must NEVER enter a PPGTT reader. No inferred extent.
+template<class Bases,class Query,class Stable,class Emit>
+inline bool observeResourceLeaves(const Bases &bases,Query &&query,Stable &&stable,Emit &&emit) {
+    if(!bases.complete || bases.count>64 || !stable())return false;
+    for(uint32_t index=0;index<bases.count;++index) {
+        const auto &base=bases.entries[index];
+        for(uint32_t role=0;role<2;++role) {
+            if(!stable())return false;
+            const uint32_t domain=base.internal?1U:base.gpu?0U:2U;
+            ResourceLeafSample sample{};
+            if(!domain)sample=query(base.gpu,role);
+            const bool after=stable();
+            const uint32_t record[]={1U,index,bases.count,base.family,base.word,base.slot,domain,role,
+                sample.exact?1U:0U,sample.read?1U:0U,uint32_t(base.gpu),uint32_t(base.gpu>>32),
+                uint32_t(sample.physical),uint32_t(sample.physical>>32),uint32_t(sample.flags),uint32_t(sample.flags>>32),
+                0U,after?1U:0U};
+            emit(record,18U);
+            if(!after)return false;
+        }
+    }
+    return true; // CPU-table sampling only, not present-PTE or GPU completion proof.
+}
 // Synchronous borrowed CPU buffer only. The native nofault copier is supplied
 // by the exact kernel binder; this helper never dereferences the source.
 template<class Copy,class Stable>

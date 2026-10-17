@@ -3417,6 +3417,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 						"ngreen","Cannot route exact synchronous CPU batch observer");
 				}
 				SYSLOG("ngreen","V382: synchronous CPU batch observer bound=%u",this->oVfObserveRingBatch?1U:0U);
+				SYSLOG("ngreen","V382: bounded CPU batch and resource observers bound=%u",
+					this->oVfObserveRingBatch && gVfLeafObservationReader && gVfRootObservationVtable && gVfRootObservationGetter &&
+					gVfNativeBatchLayoutBound && gVfNativeBatchMapVtable && gVfNativeBatchMapGetter &&
+					gVfMediaMapOffsetLayoutVerified && gVfMediaSysMemoryVtable && gVfCpuKernelPmapSlot && gVfCpuSystemMapperSlot?1U:0U);
 			}
 			// Tahoe's telemetry manager and per-stamp usage objects are created
 			// before startGraphicsEngine(). TelemetryDisable only gates the trace
@@ -9991,6 +9995,35 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 // scope, then release ctxspin before reading borrowed resource/map/record data.
 // The scope retains context/accelerator, not those nested objects. Matching
 // before/after metadata is non-atomic and is not a backing-lifetime guarantee.
+// Caller holds the EXISTING native page-table update lock, before CTB queue.
+// These inputs are the qualified retained CPU span, not a GPUVA dereference.
+template<class Stable>
+static void vfObserveMediaResourceBases(void *task,void *mediaTask,uint32_t group,uint64_t gpu,
+                                       const volatile uint32_t *commands,uint32_t words,Stable &&stable) {
+	if(!vfFlightEnabled())return;
+	NgreenAvcGen12::ResourceBases bases{};
+	const bool before=stable();
+	const bool parsed=before && NgreenAvcGen12::collectPublishedResourceBases(commands,words,bases);
+	const bool after=before && stable();
+	const uint32_t metadata[]={1,bases.count,parsed?1U:0U,bases.stoppedWord,words,after?1U:0U,
+		task==mediaTask?1U:0U,0U};
+	vfFlightRecord(21,group,gpu,metadata,arrsize(metadata));
+	if(!parsed || !after || !gVfLeafObservationReader || !gVfRootObservationVtable)return;
+	void *pageTable=getMember<void *>(task,0x260);
+	void *bootstrapTask=getMember<void *>(gVfAccelerator,0x150);
+	void *bootstrapTable=bootstrapTask?getMember<void *>(bootstrapTask,0x260):nullptr;
+	using Reader=bool (*)(const void *,uint64_t,uint64_t &,uint64_t &);
+	const bool sampled=NGFlightTrace::observeResourceLeaves(bases,[&](uint64_t address,uint32_t role) {
+		NGFlightTrace::ResourceLeafSample sample{};
+		void *table=role?bootstrapTable:pageTable;
+		sample.exact=table && getMember<mach_vm_address_t>(table,0)==gVfRootObservationVtable &&
+			getMember<mach_vm_address_t>(reinterpret_cast<void *>(gVfRootObservationVtable),0x140)==gVfLeafObservationReader;
+		sample.read=sample.exact && reinterpret_cast<Reader>(gVfLeafObservationReader)(table,address,sample.physical,sample.flags);
+		return sample;
+	},stable,[&](const uint32_t *record,uint32_t count){vfFlightRecord(22,group,gpu,record,count);});
+	SYSLOG("ngreen","V382: resource base CPU leaves fields=%u sampled=%u atomic=0 extent-proof=0",bases.count,sampled?1U:0U);
+}
+
 static void vfObserveNativeBatchProvenance(void *task,const NGVfTimeoutObservation::BatchTargets &targets) {
 	if (!gVfNativeBatchLayoutBound || !gVfNativeBatchMapVtable || !targets.complete || !targets.count) return;
 	VfMediaSubmission *selected=nullptr;
@@ -10067,6 +10100,11 @@ static void vfObserveNativeBatchProvenance(void *task,const NGVfTimeoutObservati
 		getMember<uint64_t>(map,0x98)==gpuBase && getMember<void *>(map,0x90)==mapTask &&
 		getMember<void *>(map,0x18)==mapMemory && sameRecord();
 	SYSLOG("ngreen","V377 NATIVE_BATCH_END words=%u stable=%u atomic=0",span.count,stable?1U:0U);
+	vfObserveMediaResourceBases(task,selected->gpuTask,selected->flightGroup,gpu,span.commands,span.count,[&]() {
+		return stable && !gVfDeviceStopping && !gVfContextShutdownStarted && sameRecord() &&
+			getMember<void *>(span.resource,0x40)==map && getMember<uint64_t>(map,0x98)==gpuBase &&
+			getMember<void *>(map,0x90)==mapTask && getMember<void *>(map,0x18)==mapMemory;
+	});
 }
 
 static void vfObserveBatchLeafMapping(void *task, void *pageTable,

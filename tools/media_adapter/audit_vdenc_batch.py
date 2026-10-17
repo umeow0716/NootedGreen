@@ -69,6 +69,8 @@ def mode_template_fields(words):
         op = header & (0xff800000 if header < 0x60000000 else 0xffff0000)
         if header in (0, 0x68000100):
             count = 1
+        elif header == 0x05000000 and at+2 == len(words) and words[at+1] == 0:
+            count = 1  # Exact native final END/NOOP pair, never scan beyond END.
         elif op == 0x70480000:
             count = (header & 0xfff) + 2
         elif op in SIZES:
@@ -621,6 +623,9 @@ def selftest():
     assert offsets[0]['base_resolution'] == 'NOT_PERFORMED'
     assert not mode_template_fields(mfx[:-1])['complete_packet_walk']
     assert not mode_template_fields(mfx[:-1])['mfx_pipe_resources']
+    assert mode_template_fields([0x05000000, 0])['complete_packet_walk']
+    assert not mode_template_fields([0x05000000, 0, 0])['complete_packet_walk']
+    assert not mode_template_fields([0x05000000, 1])['complete_packet_walk']
     for header, packet, mask, reason in (
             (0x10200003, [0x2000, 0, 1, 0], 0x1c00, 'store-header-reserved'),
             (0x13004003, [0x1000, 0, 1, 0], 0x005b3c40, 'flush-header-reserved'),

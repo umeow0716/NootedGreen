@@ -1,5 +1,33 @@
 # Tahoe SR-IOV protocol audit — in progress
 
+## 2026-10-18 resource first-page observation (local, not deployed)
+
+The qualified retained native CPU batch now feeds a strict bounded Gen12
+resource-base parser (64 fields/1536DW maximum), not a scan for apparent
+opcodes. Unknown/truncated/legacy-expanded/reserved-address shapes refuse
+the inventory without changing native execution. The production parser was
+executed against both saved V381818DW publication/native buffers and matched
+the independent57-field offline inventory. Final native END/NOOP is accepted
+only as the final pair, never as permission to search trailing payload.
+
+The existing native PT-update lock, before CTB queue acquisition, encloses
+both parsing and exact native CPU table reads. There is no new route, lock,
+allocation, DMA query, GPUVA dereference, PTE write or native-result change.
+Each field records private/bootstrap samples; NULL and internal-media fields
+are explicit skips and NEVER enter the PPGTT reader. Source identity is checked
+before/after parsing and every sample; a change stops all subsequent reads.
+These are base first-pages, NOT allocation/plane extents, atomic page-table
+snapshots or device coherency/execution/completion evidence.
+
+Kinds21/22 carry inventory and typed field/role/domain/read/raw-PTE records.
+SQL requires matching metadata, consecutive index/role, same private/bootstrap
+field identity and bounded word extent, with record-transaction rollback.
+First-page field coverage and source-identity stability are reported separately
+from native read success and never upgraded to present-PTE or GPU proof.
+Require `V382: bounded CPU batch and resource observers bound=1` before any
+future workload; this combines the synchronous batch, CPU-RAM and resource
+layout/reader bindings. Guest/Host safety and H264 success remain unproven.
+
 ## 2026-10-18 resource-base coverage gap (offline, no new workload)
 
 The complete saved V381818DW publication has57 explicitly decoded base

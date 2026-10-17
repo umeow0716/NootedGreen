@@ -173,7 +173,8 @@ def avc_phase_mutations(header, reservation):
 
 def contract(source, path="<source>"):
     provenance = function_body(source, 'static void vfObserveNativeBatchProvenance(')
-    stable = provenance[provenance.index('const bool stable='):]
+    stable_start = provenance.index('const bool stable=')
+    stable = provenance[stable_start:provenance.index(';', stable_start)+1]
     for field in ('gpuMap', 'gpuBase', 'backingBytes', 'availableWords', 'reservedWords'):
         assert f'after.{field}==span.{field}' in stable, f'{path}: provenance lost {field} identity'
     assert 'getMember<void *>(map,0x18)==mapMemory' in stable, f'{path}: provenance lost backing identity'

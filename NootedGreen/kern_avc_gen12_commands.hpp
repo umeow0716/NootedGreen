@@ -76,6 +76,74 @@ inline size_t packetWords(uint32_t header) noexcept {
     const uint32_t mask=op==0x13000000U?0x3fU:0xfffU;
     return (header&mask)+2==n?n:0;
 }
+// Observation-only, explicitly bounded base inventory of a Gen12 CPU batch.
+// Does not interpret derived offsets, infer allocation extents or authorize
+// any memory access. Callers must authenticate the borrowed CPU source.
+struct ResourceBase {
+    uint64_t gpu=0;
+    uint16_t word=0;
+    uint8_t family=0,slot=0,internal=0;
+};
+struct ResourceBases {
+    ResourceBase entries[64]{};
+    uint32_t count=0,stoppedWord=0;
+    bool complete=false;
+};
+inline bool collectPublishedResourceBases(const volatile uint32_t *words,uint32_t count,
+                                         ResourceBases &out) noexcept {
+    // Reset the used extent, not a 1KiB aggregate temporary/copy. Every entry
+    // below count is fully assigned before publication; stale tail is unused.
+    out.count=0;out.stoppedWord=0;out.complete=false;
+    if(!words || !count || count>1536)return false;
+    for(uint32_t at=0;at<count;) {
+        out.stoppedWord=at;
+        const uint32_t h=words[at],op=opcode(h);
+        uint32_t n=0,legacy=0,expanded=0;
+        if(!h || h==0x68000100U)n=1;
+        else if(h==0x05000000U) {
+            if(at+2!=count || words[at+1])return false;
+            n=1;
+        } else {
+            switch(op) {
+            case 0x70800000U:legacy=2;expanded=6;break;
+            case 0x70830000U:legacy=6;expanded=10;break;
+            case 0x70840000U:legacy=37;expanded=71;break;
+            case 0x70870000U:legacy=4;expanded=27;break;
+            default:break;
+            }
+            if(expanded) {
+                if((h&0xfffU)+2!=expanded || packetWords((h&~0xfffU)|(legacy-2))!=legacy)return false;
+                n=expanded;
+            } else n=static_cast<uint32_t>(packetWords(h));
+        }
+        if(!n || n>count-at)return false;
+        const auto add=[&](uint32_t index,uint8_t family,uint8_t slot,uint32_t shift,bool internal) {
+            if(out.count>=64)return false;
+            const uint32_t low=words[at+index],high=words[at+index+1];
+            if((low&((1U<<shift)-1)) || (high&0xffff0000U))return false;
+            auto &entry=out.entries[out.count++];
+            entry.gpu=(uint64_t(high)<<32)|low;entry.word=static_cast<uint16_t>(at+index);
+            entry.family=family;entry.slot=slot;entry.internal=internal?1U:0U;
+            return true;
+        };
+        if(op==0x70840000U) {
+            const uint8_t slots[]={1,4,10,13,16,19,22,25,28,31,34,37,40,43,46,49,52,55,58,62,65,68};
+            for(uint8_t index:slots)if(!add(index,1,index,6,(words[at+index+2]&0x1000U)!=0))return false;
+        } else if(op==0x70020000U) {
+            const uint8_t slots[]={1,4,7,10,13,16,52,55,58,62,65};
+            for(uint8_t index:slots)if(!add(index,2,index,6,
+                (index==13 || index==16) && (words[at+index+2]&0x1000U)))return false;
+            for(uint8_t index=0;index<16;++index)if(!add(19+2U*index,2,19+2U*index,6,false))return false;
+        } else if(op==0x70030000U) {
+            for(uint8_t index=1;index<=21;index+=5)if(!add(index,3,index,12,false))return false;
+        } else if(op==0x70040000U) {
+            for(uint8_t index=1;index<=7;index+=3)if(!add(index,4,index,6,
+                index!=7 && (words[at+index+2]&0x1000U)))return false;
+        }
+        at+=n;
+    }
+    out.stoppedWord=count;out.complete=true;return true;
+}
 inline uint32_t relativeMfc(uint32_t legacy) noexcept {
     switch(legacy){case 0x128a0:return 0x8a0;case 0x128a4:return 0x8a4;
     case 0x128b4:return 0x8b4;case 0x128b8:return 0x8b8;default:return 0;}

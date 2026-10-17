@@ -29,10 +29,40 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          13: 'ring_operand_leaf', 14: 'batch_leaf',
          15: 'retained_ring_metadata', 16: 'retained_ring_chunk',
          17: 'mapper_backing_page', 18: 'cpu_alias_ram_page',
-         19: 'synchronous_batch_metadata', 20: 'synchronous_batch_chunk'}
+         19: 'synchronous_batch_metadata', 20: 'synchronous_batch_chunk',
+         21: 'resource_base_metadata', 22: 'resource_base_leaf'}
+RESOURCE_SLOTS = {
+    1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
+    2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
+    3: (1, 6, 11, 16, 21), 4: (1, 4, 7)}
 
 
 def validate_leaf(kind, words):
+    if kind == 21:
+        if (len(words) != 8 or words[0] != 1 or words[1] > 64 or
+                words[2] not in (0, 1) or not 1 <= words[4] <= 1536 or
+                words[3] > words[4] or (words[2] and words[3] != words[4]) or
+                words[5] not in (0, 1) or words[6] not in (0, 1) or words[7]):
+            raise ValueError('invalid resource base inventory metadata')
+        return
+    if kind == 22:
+        if (len(words) != 18 or words[0] != 1 or not 1 <= words[2] <= 64 or words[1] >= words[2] or
+                words[3] not in RESOURCE_SLOTS or words[5] not in RESOURCE_SLOTS[words[3]] or
+                words[4] >= 1536 or words[6] not in (0, 1, 2) or words[7] not in (0, 1) or
+                any(words[i] not in (0, 1) for i in (8, 9, 17)) or words[16] or
+                (words[9] and not words[8])):
+            raise ValueError('invalid resource base leaf schema')
+        gpu = words[10] | words[11] << 32
+        shift = 12 if words[3] == 3 else 6
+        internal_allowed = (words[3] == 1 or (words[3] == 2 and words[5] in (13, 16)) or
+                            (words[3] == 4 and words[5] in (1, 4)))
+        if (gpu >> 48 or gpu & ((1 << shift)-1) or
+                (words[6] == 0 and not gpu) or (words[6] == 2 and gpu) or
+                (words[6] == 1 and not internal_allowed) or
+                (not words[8] and any(words[i] for i in (12, 13, 14, 15))) or
+                (words[6] and any(words[i] for i in (8, 9, 12, 13, 14, 15)))):
+            raise ValueError('invalid resource address domain or skipped-leaf payload')
+        return
     if kind == 19:
         if (len(words) != 13 or words[0] != 1 or not 1 <= words[1] <= 8 or
                 not 1 <= words[4] <= 16384 or words[5] != words[4]*4 or
@@ -335,6 +365,7 @@ class DiskSink:
         self.db.execute('CREATE TABLE backings (identity TEXT, group_id INTEGER, pages INTEGER, captured INTEGER, valid INTEGER, bytes INTEGER, map_offset TEXT, options INTEGER, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.execute('CREATE TABLE cpu_backings (identity TEXT, group_id INTEGER, pages INTEGER, captured INTEGER, valid INTEGER, bytes INTEGER, map_offset TEXT, options INTEGER, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.execute('CREATE TABLE synchronous_batches (identity TEXT PRIMARY KEY, group_id INTEGER, gpu TEXT, words INTEGER, copied INTEGER, flags INTEGER, captured INTEGER) WITHOUT ROWID')
+        self.db.execute('CREATE TABLE resource_batches (identity TEXT, group_id INTEGER, fields INTEGER, words INTEGER, admitted INTEGER, captured INTEGER, stable INTEGER, last_field TEXT, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.commit()
         self.pending = 0
         self.sideband_file = None
@@ -372,7 +403,26 @@ class DiskSink:
         validate_leaf(record['kind'], words)
         if self.db.execute('SELECT 1 FROM records WHERE id=?', (record['record_id'],)).fetchone():
             raise ValueError('duplicate completed flight record ID')
-        if record['kind'] == 19:
+        if record['kind'] == 21:
+            if not int(record['identity'], 16) or not record['group']:
+                raise ValueError('resource inventory batch identity/group missing')
+            try:
+                self.db.execute('INSERT INTO resource_batches VALUES (?,?,?,?,?,0,0,NULL)',
+                                (record['identity'], record['group'], words[1], words[4], int(words[2] and words[5])))
+            except sqlite3.IntegrityError as exc:
+                raise ValueError('duplicate resource inventory metadata') from exc
+        elif record['kind'] == 22:
+            key = (record['identity'], record['group'])
+            current = self.db.execute('SELECT fields,words,admitted,captured,last_field FROM resource_batches WHERE identity=? AND group_id=?', key).fetchone()
+            if (current is None or current[0] != words[2] or words[4]+1 >= current[1] or
+                    current[2] != 1 or current[3] != words[1]*2+words[7]):
+                raise ValueError('missing/denied/duplicate/out-of-order resource leaf')
+            signature = json.dumps(words[3:7]+words[10:12], separators=(',', ':'))
+            if words[7] and current[4] != signature:
+                raise ValueError('private/bootstrap resource field mismatch')
+            self.db.execute('UPDATE resource_batches SET captured=captured+1,stable=stable+?,last_field=? WHERE identity=? AND group_id=?',
+                            (words[17], signature)+key)
+        elif record['kind'] == 19:
             if int(record['identity'], 16) != words[1] or not record['group']:
                 raise ValueError('synchronous CPU batch identity/group mismatch')
             try:
@@ -447,6 +497,13 @@ class DiskSink:
                 'maximum_captures': 8, 'all_submissions_captured': False,
                 'optional_terminal_extent_included': False,
                 'atomic_snapshot': False, 'gpu_execution_proof': False}
+
+    def resource_report(self):
+        total, complete, stable = self.db.execute('SELECT COUNT(*),COALESCE(SUM(admitted=1 AND captured=fields*2),0),COALESCE(SUM(admitted=1 AND captured=fields*2 AND stable=captured),0) FROM resource_batches').fetchone()
+        return {'captures': total, 'complete_field_coverage': complete, 'stable_field_coverage': stable,
+                'stability_scope': 'SOURCE_IDENTITY_ONLY_NOT_TABLE_ATOMICITY',
+                'only_base_first_pages': True, 'allocation_extents_proven': False,
+                'gpu_execution_proof': False}
 
     def close(self):
         if self.sideband_file is not None:
@@ -703,6 +760,53 @@ def self_test():
         save(dict(batch, record_id=304, identity='0000000000000003', words=refused))
         assert save.synchronous_batch_report()['incomplete'] == 2
         assert not save.synchronous_batch_report()['all_submissions_captured']
+        resource = dict(saved[0], record_id=400, group=3, kind=21, identity='0000000040010000',
+                        words=[1, 2, 1, 71, 71, 1, 1, 0])
+        save(resource)
+        leaf = dict(resource, record_id=401, kind=22,
+                    words=[1, 0, 2, 1, 10, 10, 0, 0, 1, 1, 0x4075e000, 0, 0x12340000, 0, 0x8b, 0, 0, 1])
+        save(leaf)
+        assert save.resource_report()['complete_field_coverage'] == 0
+        for index, value in ((2, 3), (7, 2), (8, 0), (10, 0x4075e001), (16, 1), (17, 2)):
+            bad = list(leaf['words']); bad[index] = value
+            try:
+                save(dict(leaf, record_id=402, words=bad))
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('invalid/out-of-order resource leaf accepted')
+        pair = list(leaf['words']); pair[7] = 1
+        wrong = list(pair); wrong[10] += 4096
+        try:
+            save(dict(leaf, record_id=402, words=wrong))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('cross-table resource identity mismatch accepted')
+        save.db.execute("CREATE TEMP TRIGGER resource_failure BEFORE INSERT ON records WHEN NEW.id=402 BEGIN SELECT RAISE(ABORT,'owned resource injected write failure'); END")
+        try:
+            save(dict(leaf, record_id=402, words=pair))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('injected resource leaf write failure accepted')
+        assert save.db.execute('SELECT captured FROM resource_batches').fetchone()[0] == 1
+        save.db.execute('DROP TRIGGER resource_failure')
+        save(dict(leaf, record_id=402, words=pair))
+        internal = [1, 1, 2, 1, 16, 16, 1, 0, 0, 0, 0x4000, 0, 0, 0, 0, 0, 0, 1]
+        save(dict(leaf, record_id=403, words=internal))
+        internal[7] = 1
+        save(dict(leaf, record_id=404, words=internal))
+        assert save.resource_report()['complete_field_coverage'] == 1
+        assert save.resource_report()['stable_field_coverage'] == 1
+        denied = list(resource['words']); denied[2], denied[3] = 0, 20
+        save(dict(resource, record_id=405, identity='0000000040020000', words=denied))
+        try:
+            save(dict(leaf, record_id=406, identity='0000000040020000'))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('refused resource inventory admitted a leaf')
         for index, value in ((5, 1), (6, 4097), (7, 5), (9, 2), (12, 1)):
             bad = list(batch['words']); bad[index] = value
             try:
@@ -750,6 +854,7 @@ if __name__ == '__main__':
         backing_report = sink.backing_report()
         cpu_alias_report = sink.backing_report(cpu_alias=True)
         synchronous_batch_report = sink.synchronous_batch_report()
+        resource_report = sink.resource_report()
         try:
             sink.close()
         except (OSError, sqlite3.Error) as exc:
@@ -759,6 +864,7 @@ if __name__ == '__main__':
         report['backings'] = backing_report
         report['cpu_alias_backings'] = cpu_alias_report
         report['synchronous_batches'] = synchronous_batch_report
+        report['resource_bases'] = resource_report
         if error:
             report['error'] = error
             report['capture_transport_complete'] = False

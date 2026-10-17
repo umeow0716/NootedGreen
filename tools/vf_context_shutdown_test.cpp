@@ -6,6 +6,7 @@
 #include <cstring>
 #include "../NootedGreen/kern_vf_device_observation.hpp"
 #include "../NootedGreen/kern_flight_trace.hpp"
+#include "../NootedGreen/kern_avc_gen12_commands.hpp"
 
 struct FlightSample {uint32_t id;uint64_t args[4];};
 static std::array<FlightSample,260> flightSamples{};
@@ -168,11 +169,66 @@ static void testBorrowedBatchCopy() {
     assert(result.flags==3 && result.copied==64); // Full read, unstable owner: NOT complete evidence.
 }
 
+static void testPublishedResourceBases() {
+    std::array<uint32_t,177> words{};
+    words[0]=0x70840045;words[71]=0x70020042;words[139]=0x70030018;words[165]=0x70040008;
+    words[175]=0x05000000; // Only the reviewed final END/NOOP pair.
+    words[10]=0x4075e000;words[16]=0x4000;words[18]=0x1000;
+    words[71+19]=0x40c00000;words[71+51]=0xffffffff;words[71+61]=0xffffffff;
+    words[139+21]=0x4045d000;
+    NgreenAvcGen12::ResourceBases result{};
+    assert(NgreenAvcGen12::collectPublishedResourceBases(words.data(),words.size(),result));
+    assert(result.complete && result.count==57 && result.stoppedWord==words.size());
+    unsigned families[5]{};bool internal=false,reference=false,pak=false;
+    for(unsigned i=0;i<result.count;++i) {
+        const auto &r=result.entries[i];++families[r.family];
+        if(r.family==1 && r.slot==16){assert(r.internal && r.gpu==0x4000);internal=true;}
+        if(r.family==2 && r.slot==19){assert(!r.internal && r.gpu==0x40c00000);reference=true;}
+        if(r.family==3 && r.slot==21){assert(r.gpu==0x4045d000);pak=true;}
+        assert(r.word!=71+51 && r.word!=71+61);
+    }
+    assert(families[1]==22 && families[2]==27 && families[3]==5 && families[4]==3 && internal && reference && pak);
+    unsigned queries=0,records=0;
+    auto query=[&](uint64_t gpu,uint32_t role) {
+        assert(gpu && gpu!=0x4000 && role<2);++queries;
+        NGFlightTrace::ResourceLeafSample s{};s.exact=s.read=true;s.physical=gpu+0x1000000;s.flags=0x8b;return s;
+    };
+    assert(NGFlightTrace::observeResourceLeaves(result,query,[](){return true;},[&](const uint32_t *r,uint32_t count) {
+        assert(count==18 && r[0]==1 && r[1]==records/2 && r[2]==57 && r[7]==records%2 && !r[16] && r[17]);
+        const auto &base=result.entries[r[1]];
+        assert(r[3]==base.family && r[4]==base.word && r[5]==base.slot && r[10]==base.gpu);
+        if(r[6])assert(!r[8] && !r[9] && !r[12] && !r[13] && !r[14] && !r[15]);
+        else assert(r[8] && r[9] && r[14]==0x8b);
+        ++records;
+    }));
+    assert(queries==6 && records==114); // Never query NULL or internal SRAM addresses.
+    unsigned checks=0;records=0;
+    assert(!NGFlightTrace::observeResourceLeaves(result,query,[&](){return ++checks<3;},
+        [&](const uint32_t *r,uint32_t){assert(!r[17]);++records;}));
+    assert(records==1 && queries==6); // Identity changes stop all later table reads.
+    for(unsigned index:{0U,71U,139U,165U}) {
+        const auto saved=words[index];words[index]^=1;
+        assert(!NgreenAvcGen12::collectPublishedResourceBases(words.data(),words.size(),result) && !result.complete);
+        words[index]=saved;
+    }
+    words[10]|=1;assert(!NgreenAvcGen12::collectPublishedResourceBases(words.data(),words.size(),result));words[10]&=~1U;
+    words[139+22]=0x10000;assert(!NgreenAvcGen12::collectPublishedResourceBases(words.data(),words.size(),result));words[139+22]=0;
+    assert(!NgreenAvcGen12::collectPublishedResourceBases(words.data(),words.size()-1,result));
+    assert(!NgreenAvcGen12::collectPublishedResourceBases(nullptr,1,result));
+    assert(!NgreenAvcGen12::collectPublishedResourceBases(words.data(),1537,result));
+    std::array<uint32_t,213> overflow{};
+    overflow[0]=overflow[71]=overflow[142]=0x70840045;
+    assert(!NgreenAvcGen12::collectPublishedResourceBases(overflow.data(),overflow.size(),result) && !result.complete);
+    assert(!NGFlightTrace::observeResourceLeaves(result,query,[](){return true;},
+        [](const uint32_t *,uint32_t){assert(false);}));
+}
+
 int main() {
     testFlightEnvelope();
     testBackingPages();
     testCpuAliasPages();
     testBorrowedBatchCopy();
+    testPublishedResourceBases();
     assert(NGVfTimeoutObservation::prefixEngineForChannel(0)==0);
     assert(NGVfTimeoutObservation::prefixEngineForChannel(3)==3);
     for(int32_t channel:{INT32_MIN,-1,1,2,4,5,6,INT32_MAX})
