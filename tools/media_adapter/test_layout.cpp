@@ -19316,10 +19316,20 @@ int main() {
             assert(!publication.published && publication.restored && count==used && backing==originalBacking);
             assert(publication.mustStop==(failure>=4));
         }
-        backing=originalBacking;count=static_cast<uint32_t>(used);unsigned observations=0;
-        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,1920,1080,*scratch,
-            [&](uint32_t expected){return ++observations!=4 && count==expected;},[](){return false;});
-        assert(!publication.published && publication.mustStop && !publication.restored && count==used);
+        for(unsigned failure:{4U,5U}) {
+            backing=originalBacking;count=static_cast<uint32_t>(used);
+            unsigned observations=0,restoreChecks=0;
+            publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,1920,1080,*scratch,
+                [&](uint32_t expected){return ++observations!=failure && count==expected;},
+                [&](){++restoreChecks;return false;});
+            assert(!publication.published && publication.mustStop && !publication.restored);
+            assert(observations==failure && restoreChecks==1);
+            // Losing the pin must not write undo bytes or reset a published
+            // count through a potentially stale alias. The caller must stop.
+            assert(count==(failure==5?used+67:used));
+            for(size_t i=0;i<used+67;++i)assert(backing[i]==scratch->produced[i]);
+            for(size_t i=used+67;i<backing.size();++i)assert(backing[i]==originalBacking[i]);
+        }
         // Input/counter alias must fail before touching the backing.
         backing=originalBacking;
         publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,backing[0],1920,1080,
