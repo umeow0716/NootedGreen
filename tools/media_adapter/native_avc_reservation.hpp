@@ -52,6 +52,69 @@ public:
         return ready_?reinterpret_cast<uintptr_t>(bytes_.data()):0;
     }
 };
+// Synchronous size->builder pairing only. The surrounding frame owner retains
+// input/object pins and supplies the SAME live authority throughout. This is
+// not a completion lease and must never outlive those owners.
+class OwnedAvcCallbackPhase {
+public:
+    struct Identity {uintptr_t image=0,physical=0,context=0,request=0;uint64_t generation=0;};
+    using Live=bool(*)(void*,const Identity&) noexcept;
+    struct [[nodiscard]] Result {bool invoked=false,mustStop=true;uint64_t nativeStatus=0;};
+private:
+    enum class Stage {Ready,SizeRunning,Sized,BuilderRunning,Done,Failed};
+    struct Domain {};
+    using Scope=TglOwnedScopedContext<OwnedAvcCallbackPhase,Domain>;
+    Identity identity_;
+    const OwnedAvcCallbackRequest& request_;
+    void* authority_=nullptr;Live live_=nullptr;
+    Stage stage_=Stage::Ready;
+    Scope scope_;
+    bool live() const noexcept {
+        return scope_.bound() && authority_ && live_ && request_.callbackRequest() &&
+            identity_.image && identity_.image<=UINTPTR_MAX-0x2737e &&
+            identity_.physical && identity_.context && identity_.request && identity_.generation &&
+            live_(authority_,identity_);
+    }
+    bool enter(Stage expected,Stage running,uintptr_t context,uintptr_t request) noexcept {
+        if(stage_!=expected || context!=identity_.context || request!=identity_.request || !live()) {
+            stage_=Stage::Failed;return false;
+        }
+        stage_=running;return true;
+    }
+    Result finish(Stage running,Stage next,uint64_t status) noexcept {
+        // Native outer ignores BOTH callback EAX values. A failure/reentry
+        // requires owned fail-stop, never merely returning5 to outer27724.
+        if(stage_!=running || status || !live()) {stage_=Stage::Failed;return {true,true,status};}
+        stage_=next;return {true,false,status};
+    }
+public:
+    OwnedAvcCallbackPhase(Identity identity,const OwnedAvcCallbackRequest& request,
+        void* authority,Live live) noexcept
+        :identity_(identity),request_(request),authority_(authority),live_(live),
+         scope_(reinterpret_cast<void*>(identity.context),*this) {}
+    OwnedAvcCallbackPhase(const OwnedAvcCallbackPhase&)=delete;
+    OwnedAvcCallbackPhase& operator=(const OwnedAvcCallbackPhase&)=delete;
+    bool bound() const noexcept {return stage_==Stage::Ready && live();}
+    bool complete() const noexcept {return stage_==Stage::Done && live();}
+    static OwnedAvcCallbackPhase* current(uintptr_t context) noexcept {
+        return Scope::get(reinterpret_cast<void*>(context));
+    }
+    template<class Invoke> Result size(uintptr_t context,uintptr_t request,
+        uint32_t* used,uint32_t* capacity,Invoke invoke) noexcept {
+        if(!used || !capacity || !enter(Stage::Ready,Stage::SizeRunning,context,request)) {
+            stage_=Stage::Failed;return {};
+        }
+        const auto status=invoke(identity_.image+0x2732c,context,request_.callbackRequest(),used,capacity);
+        return finish(Stage::SizeRunning,Stage::Sized,status);
+    }
+    template<class Invoke> Result builder(uintptr_t context,uintptr_t request,uintptr_t token,Invoke invoke) noexcept {
+        if(!token || !enter(Stage::Sized,Stage::BuilderRunning,context,request)) {
+            stage_=Stage::Failed;return {};
+        }
+        const auto status=invoke(identity_.image+0x2737e,context,request_.callbackRequest(),token);
+        return finish(Stage::BuilderRunning,Stage::Done,status);
+    }
+};
 // The exact AVC frame cannot fall back to untranslated native submission when
 // the kernel publication handshake is absent. Other frame families retain
 // their existing admission; this is not a claim that readiness proves safety.

@@ -19142,6 +19142,72 @@ int main() {
         uintptr_t actual=0;std::memcpy(&actual,copied+0x20,sizeof(actual));
         assert(actual==owned && std::memcmp(copied,before.data(),0x20)==0 && request==before);
         assert(!view.capture(original,payload,owned,read,admit));
+        using Pair=NgreenNativeAvcReservation::OwnedAvcCallbackPhase;
+        Pair::Identity identity{0x10000000,0x9000,0x8000,original,17};
+        struct Authority {bool live=true;Pair::Identity identity;};
+        Authority authority{true,identity};
+        auto live=[](void* opaque,const Pair::Identity& id) noexcept {
+            const auto& a=*static_cast<Authority*>(opaque);
+            return a.live && id.image==a.identity.image && id.physical==a.identity.physical &&
+                id.context==a.identity.context && id.request==a.identity.request && id.generation==a.identity.generation;
+        };
+        {
+            auto wrong=identity;++wrong.generation;
+            Pair stale(wrong,view,&authority,live);assert(!stale.bound());
+        }
+        {
+            Pair denied(identity,view,nullptr,live);assert(!denied.bound());
+        }
+        for(unsigned mode=0;mode<9;++mode) {
+            authority.live=true;unsigned sizes=0,builders=0;uint32_t used=0,capacity=0;
+            {
+                Pair pair(identity,view,&authority,live);assert(pair.bound());
+                assert(Pair::current(identity.context)==&pair && !Pair::current(identity.context+8));
+                {
+                    Pair nested(identity,view,&authority,live);assert(!nested.bound());
+                    assert(Pair::current(identity.context)==&pair);
+                }
+                auto build=[&](uintptr_t entry,uintptr_t context,uintptr_t request,uintptr_t token) noexcept -> uint64_t {
+                    ++builders;assert(entry==identity.image+0x2737e && context==identity.context &&
+                        request==view.callbackRequest() && token==0x7770);
+                    if(mode==8)authority.live=false;
+                    return mode==7?31:0;
+                };
+                if(mode==1) {
+                    const auto wrong=pair.builder(identity.context,original,0x7770,build);
+                    assert(!wrong.invoked && wrong.mustStop && !pair.complete());continue;
+                }
+                if(mode==2)authority.live=false;
+                auto size=[&](uintptr_t entry,uintptr_t context,uintptr_t request,uint32_t* u,uint32_t* c) noexcept -> uint64_t {
+                    ++sizes;assert(entry==identity.image+0x2732c && context==identity.context && request==view.callbackRequest());
+                    *u=123;*c=456;
+                    if(mode==4)authority.live=false;
+                    if(mode==5) {
+                        const auto reentry=pair.builder(context,original,0x7770,build);
+                        assert(!reentry.invoked && reentry.mustStop);
+                    }
+                    return mode==3?31:0;
+                };
+                const auto sized=pair.size(identity.context,mode==6?original+8:original,&used,&capacity,size);
+                if(mode>=2 && mode<=6) {
+                    assert(sized.mustStop && !pair.complete() && builders==0);
+                    assert(sized.invoked==(mode>=3 && mode<=5));
+                    if(mode==3)assert(sized.nativeStatus==31);
+                    continue;
+                }
+                assert(sized.invoked && !sized.mustStop && sizes==1 && used==123 && capacity==456);
+                const auto built=pair.builder(identity.context,original,0x7770,build);
+                assert(built.invoked && builders==1 && built.mustStop==(mode!=0));
+                assert(pair.complete()==(mode==0));
+                if(mode==7)assert(built.nativeStatus==31);
+                if(mode==0) {
+                    const auto repeat=pair.builder(identity.context,original,0x7770,build);
+                    assert(!repeat.invoked && repeat.mustStop && builders==1);
+                }
+            }
+            assert(!Pair::current(identity.context) && request==before);
+        }
+        assert(!Pair::current(identity.context));
         for(unsigned mode=0;mode<11;++mode) {
             CallbackRequest rejected;unsigned reads=0,admissions=0;
             auto gatedRead=[&](uintptr_t at,void* out,size_t size) noexcept {
