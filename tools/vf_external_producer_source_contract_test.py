@@ -391,6 +391,11 @@ def contract(source, path="<source>"):
         assert token in locked_media, f"{path}: missing locked media identity gate: {token}"
     media_exit = function_body(source, '~VfMediaSubmissionScope()')
     media_map=function_body(source,'static bool vfCaptureMediaMappedSpan(')
+    latch='if (!getMember<volatile uint8_t>(stream,0x3C))return false;'
+    assert latch in media_map, f'{path}: failed native stream can reach publication'
+    assert media_map.index('getMember<void *>(entry.shared,0x88)!=entry.gpuTask)return false;') < \
+        media_map.index(latch) < media_map.index('out.reason="class-ledger"'), \
+        f'{path}: native stream latch must follow exact owner identity admission'
     for token in ('!gVfNativeBatchMapVtable || !gVfMediaSysMemoryVtable',
                   'getMember<mach_vm_address_t>(gpuMap,0)!=gVfNativeBatchMapVtable',
                   'getMember<void *>(gpuMap,0x90)!=entry.gpuTask',
@@ -470,6 +475,9 @@ def contract(source, path="<source>"):
 
 def mutation_contract(source, path):
     mutations = (
+        ('if (!getMember<volatile uint8_t>(stream,0x3C))return false;', '', 1),
+        ('if (!getMember<volatile uint8_t>(stream,0x3C))return false;',
+         'if (getMember<volatile uint8_t>(stream,0x3C))return false;', 1),
         ('getMember<void *>(backing,0xD0)!=descriptor', 'false', 1),
         ('getMember<void *>(gpuMap,0x18)!=backing', 'false', 1),
         ('getMember<void *>(gpuMap,0x90)!=entry.gpuTask', 'false', 1),

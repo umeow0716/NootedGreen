@@ -1290,6 +1290,10 @@ static bool vfCaptureMediaMappedSpan(const VfMediaSubmission &entry,void *stream
 	    getMember<void *>(context,0x578)!=entry.task || getMember<void *>(context,0x5A0)!=entry.shared ||
 	    !entry.shared || getMember<void *>(entry.shared,0x78)!=entry.accelerator ||
 	    getMember<void *>(entry.shared,0x80)!=entry.task || getMember<void *>(entry.shared,0x88)!=entry.gpuTask)return false;
+	// Native token discard does not roll back words, and native end still submits.
+	// Read the failure latch only after validating the exact owned stream identity.
+	out.reason="native-stream-failed";
+	if (!getMember<volatile uint8_t>(stream,0x3C))return false;
 	out.reason="class-ledger";out.classes=getMember<uint32_t>(context,0x6DC);
 	out.recordFlags=getMember<uint8_t>(context,0x750);
 	// Family submit_data_buffers+0x10b tests this optional record flag and
