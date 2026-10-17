@@ -16,6 +16,25 @@ inline bool frameAdmission(uintptr_t image,uintptr_t entry,bool publicationReady
     if(!image || image>UINTPTR_MAX-0x27724 || !entry)return false;
     return entry!=image+0x27724 || publicationReady;
 }
+// Exact23fad clears sixteen DWORDs at token+c78, then uses each non-null
+// payload reference handle's DWORD index directly as the destination slot.
+// Check BEFORE native frame entry, not after its resource/token writes.
+// This bounded observation does not freeze caller memory or prove lifetime;
+// the caller still needs the same exclusive input graph throughout native use.
+template<class Read>
+bool referenceIndices(uintptr_t request,Read read) noexcept {
+    uintptr_t payload=0;
+    if(!request || request>UINTPTR_MAX-0x28 ||
+       !read(request+0x20,&payload,sizeof(payload)) || !payload ||
+       payload>UINTPTR_MAX-0x40c)return false;
+    for(size_t i=0;i<16;++i) {
+        uint64_t handle=0;uint32_t index=0;
+        if(!read(payload+0x38+i*0x40,&handle,sizeof(handle)))return false;
+        if(handle && (!read(payload+0x48+i*0x40,&index,sizeof(index)) || index>=16))return false;
+    }
+    uintptr_t current=0;
+    return read(request+0x20,&current,sizeof(current)) && current==payload;
+}
 struct Builder {
     uintptr_t argument=0,connection=0,base=0,cursor=0,end=0;
     uint32_t previousUsed=0,classes=0;

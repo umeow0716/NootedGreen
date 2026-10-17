@@ -19204,6 +19204,54 @@ int main() {
     }
     {
         std::array<uint32_t,512> input{},output{};size_t used=0;
+        {
+            std::array<uint8_t,0x28> request{};
+            std::array<uint8_t,0x410> payload{};
+            const auto rq=reinterpret_cast<uintptr_t>(request.data());
+            const auto pl=reinterpret_cast<uintptr_t>(payload.data());
+            std::memcpy(request.data()+0x20,&pl,8);
+            auto read=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                if(address>UINTPTR_MAX-bytes)return false;
+                if(!((address>=rq && address+bytes<=rq+request.size()) ||
+                     (address>=pl && address+bytes<=pl+payload.size())))return false;
+                std::memcpy(target,reinterpret_cast<void*>(address),bytes);return true;
+            };
+            for(uint32_t i=0;i<16;++i) {
+                const uint64_t handle=i+1;
+                std::memcpy(payload.data()+0x38+i*0x40,&handle,8);
+                std::memcpy(payload.data()+0x48+i*0x40,&i,4);
+            }
+            const auto frozen=payload;
+            assert(NgreenNativeAvcReservation::referenceIndices(rq,read) && payload==frozen);
+            for(size_t i=0;i<16;++i)for(uint32_t bad:{16U,17U,UINT32_MAX}) {
+                payload=frozen;
+                std::memcpy(payload.data()+0x48+i*0x40,&bad,4);
+                assert(!NgreenNativeAvcReservation::referenceIndices(rq,read));
+            }
+            const uint64_t absent=0;std::memcpy(payload.data()+0x3f8,&absent,8);
+            assert(NgreenNativeAvcReservation::referenceIndices(rq,read)); // unused index is not consumed
+            payload=frozen;const uint32_t duplicate=0;
+            std::memcpy(payload.data()+0x408,&duplicate,4);
+            assert(NgreenNativeAvcReservation::referenceIndices(rq,read)); // duplicate slots remain native
+            auto shortRead=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                return address!=pl+0x408 && read(address,target,bytes);
+            };
+            assert(!NgreenNativeAvcReservation::referenceIndices(rq,shortRead));
+            unsigned rootReads=0;
+            auto moved=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                if(address==rq+0x20 && ++rootReads==2) {
+                    const uintptr_t changed=pl+8;std::memcpy(target,&changed,8);return true;
+                }
+                return read(address,target,bytes);
+            };
+            assert(!NgreenNativeAvcReservation::referenceIndices(rq,moved));
+            auto denied=[](uintptr_t,void*,size_t) noexcept {return false;};
+            assert(!NgreenNativeAvcReservation::referenceIndices(rq,denied));
+            assert(!NgreenNativeAvcReservation::referenceIndices(UINTPTR_MAX-0x20,read));
+            const uintptr_t overflow=UINTPTR_MAX-0x400;
+            std::memcpy(request.data()+0x20,&overflow,8);
+            assert(!NgreenNativeAvcReservation::referenceIndices(rq,read));
+        }
         auto add=[&](uint32_t header,size_t n){size_t start=used;input[used++]=header;
             used+=n-1;return start;};
         add(0x70000003,5);auto mfxPipe=add(0x70020042,68);

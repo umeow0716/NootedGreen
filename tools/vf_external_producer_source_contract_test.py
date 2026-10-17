@@ -34,6 +34,9 @@ def adapter_frame_contract(source):
         "adapter: frame admission precedes readiness query"
     assert "invoke()" not in before, "adapter: native invocation precedes publication refusal"
     assert "if(publicationReady) {" in after, "adapter: lost ready-only reservation path"
+    ready = after.split("if(publicationReady) {", 1)[1]
+    reference_gate = "if(!NgreenNativeAvcReservation::referenceIndices(request,&readMemory))return 5;"
+    assert ready.lstrip().startswith(reference_gate), "adapter: native reference slot admission missing or late"
     assert "NGRN_RUNTIME_SNAPSHOT_ARM" not in body and "snapshotAttempted" not in body, \
         "adapter: untranslated snapshot fallback restored"
 
@@ -47,6 +50,9 @@ def adapter_frame_mutations(source):
         source.replace(gate, gate.replace("entry,publicationReady", "entry,true"), 1),
         source.replace(gate, "return invoke();\n" + gate, 1),
         source.replace(gate, gate + '\n// NGRN_RUNTIME_SNAPSHOT_ARM', 1),
+        source.replace("if(!NgreenNativeAvcReservation::referenceIndices(request,&readMemory))return 5;", "", 1),
+        source.replace("referenceIndices(request,&readMemory))return 5;", "referenceIndices(context,&readMemory))return 5;", 1),
+        source.replace("if(!NgreenNativeAvcReservation::referenceIndices", "if(NgreenNativeAvcReservation::referenceIndices", 1),
     )
     for candidate in mutations:
         assert candidate != source, "adapter mutation did not change source"
