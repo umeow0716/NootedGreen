@@ -13,6 +13,45 @@
 // A successful read does not authorize a write: the caller still needs the
 // live native builder interval and a kernel protocol handshake.
 namespace NgreenNativeAvcReservation {
+// Exact2732c/2737e consume request+20 only. This view is for those two
+// callbacks, NEVER outer27724: the outer retains original output aliases.
+// Admission must hold source exclusion and the owned payload/surface leases
+// throughout BOTH callbacks. Readability and the stable copy are not leases.
+class OwnedAvcCallbackRequest {
+    static_assert(sizeof(uintptr_t)==8,"exact x86_64 native request ABI");
+    alignas(uintptr_t) std::array<unsigned char,0x28> bytes_{};
+    bool attempted_=false,ready_=false;
+public:
+    OwnedAvcCallbackRequest()=default;
+    OwnedAvcCallbackRequest(const OwnedAvcCallbackRequest&)=delete;
+    OwnedAvcCallbackRequest& operator=(const OwnedAvcCallbackRequest&)=delete;
+    OwnedAvcCallbackRequest(OwnedAvcCallbackRequest&&)=delete;
+    OwnedAvcCallbackRequest& operator=(OwnedAvcCallbackRequest&&)=delete;
+    template<class Read,class Admit>
+    bool capture(uintptr_t original,uintptr_t originalPayload,uintptr_t ownedPayload,
+                 Read read,Admit admit) noexcept {
+        if(attempted_)return false;
+        attempted_=true;
+        const auto self=reinterpret_cast<uintptr_t>(this);
+        if(!original || original>UINTPTR_MAX-bytes_.size() || !originalPayload ||
+           !ownedPayload || originalPayload==ownedPayload ||
+           (original<self+sizeof(*this) && self<original+bytes_.size()) ||
+           !admit(original,originalPayload,ownedPayload))return false;
+        std::array<unsigned char,0x28> first{},second{};
+        uintptr_t payload=0;
+        if(!read(original,first.data(),first.size()) ||
+           !read(original,second.data(),second.size()) || first!=second)return false;
+        std::memcpy(&payload,first.data()+0x20,sizeof(payload));
+        if(payload!=originalPayload || !admit(original,originalPayload,ownedPayload))return false;
+        bytes_=first;
+        std::memcpy(bytes_.data()+0x20,&ownedPayload,sizeof(ownedPayload));
+        ready_=true;
+        return true;
+    }
+    uintptr_t callbackRequest() const noexcept {
+        return ready_?reinterpret_cast<uintptr_t>(bytes_.data()):0;
+    }
+};
 // The exact AVC frame cannot fall back to untranslated native submission when
 // the kernel publication handshake is absent. Other frame families retain
 // their existing admission; this is not a claim that readiness proves safety.

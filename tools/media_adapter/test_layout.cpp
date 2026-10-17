@@ -19121,6 +19121,49 @@ int main() {
         assert(!tglValidateOwnedAvcSliceVariableLoops(slice.data(),sizeof(slice)-1,false,0,0,false,false));
     }
     {
+        using CallbackRequest=NgreenNativeAvcReservation::OwnedAvcCallbackRequest;
+        std::array<unsigned char,0x28> request{};
+        for(size_t i=0;i<0x20;++i)request[i]=static_cast<unsigned char>(i+1);
+        const uintptr_t original=reinterpret_cast<uintptr_t>(request.data());
+        const uintptr_t payload=0x12340000,owned=0x56780000;
+        std::memcpy(request.data()+0x20,&payload,sizeof(payload));
+        const auto before=request;
+        auto read=[&](uintptr_t at,void* out,size_t size) noexcept {
+            if(at!=original || size!=request.size())return false;
+            std::memcpy(out,request.data(),size);return true;
+        };
+        auto admit=[&](uintptr_t r,uintptr_t p,uintptr_t o) noexcept {
+            return r==original && p==payload && o==owned;
+        };
+        CallbackRequest view;
+        assert(!view.callbackRequest());
+        assert(view.capture(original,payload,owned,read,admit));
+        const auto* copied=reinterpret_cast<const unsigned char*>(view.callbackRequest());
+        uintptr_t actual=0;std::memcpy(&actual,copied+0x20,sizeof(actual));
+        assert(actual==owned && std::memcmp(copied,before.data(),0x20)==0 && request==before);
+        assert(!view.capture(original,payload,owned,read,admit));
+        for(unsigned mode=0;mode<11;++mode) {
+            CallbackRequest rejected;unsigned reads=0,admissions=0;
+            auto gatedRead=[&](uintptr_t at,void* out,size_t size) noexcept {
+                ++reads;if(mode==0)return false;
+                if(!read(at,out,size))return false;
+                if(mode==1 && reads==2)static_cast<unsigned char*>(out)[0]^=1;
+                return true;
+            };
+            auto gatedAdmit=[&](uintptr_t r,uintptr_t p,uintptr_t o) noexcept {
+                ++admissions;
+                if(mode==9)return true; // Stable source still carries the wrong payload.
+                return mode!=2 && !(mode==3 && admissions==2) && admit(r,p,o);
+            };
+            const uintptr_t source=mode==4?0:mode==5?UINTPTR_MAX-8:
+                mode==6?reinterpret_cast<uintptr_t>(&rejected):original;
+            assert(!rejected.capture(source,(mode==7 || mode==9)?payload+8:payload,
+                                     mode==8?payload:mode==10?0:owned,gatedRead,gatedAdmit));
+            assert(!rejected.callbackRequest() && request==before);
+            assert(!rejected.capture(original,payload,owned,read,admit));
+        }
+    }
+    {
         std::array<unsigned char,1024> source{};
         const unsigned char first[]={0,0,1,0x25,0xb8,0,0x40,0,3,0x9c};
         std::memcpy(source.data(),first,sizeof(first));
