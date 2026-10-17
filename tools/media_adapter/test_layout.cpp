@@ -19215,6 +19215,18 @@ int main() {
             rejected();
         }
         input=good;
+        for(size_t at=0;at<used;at+=NgreenAvcGen12::packetWords(good[at])) {
+            if(NgreenAvcGen12::opcode(good[at])!=0x12000000U)continue;
+            for(unsigned bit:{8U,9U,10U,11U,12U,13U,14U,15U,16U,18U,20U,21U}) {
+                input=good;input[at]|=1U<<bit;
+                assert(NgreenAvcGen12::packetWords(input[at])==0);rejected();
+            }
+            input=good;input[at]|=0x0035ff00U;rejected();
+            for(unsigned low=1;low<=3;++low){
+                input=good;input[at+2]|=low;rejected();
+            }
+        }
+        input=good;
         auto rejectMovedPacket=[&](size_t first,size_t words){
             const auto before=input;
             for(size_t i=first;i<used-2-words;++i)input[i]=before[i+words];

@@ -44,6 +44,9 @@ inline size_t packetWords(uint32_t header) noexcept {
     // Both pinned MFX/VDENC PIPE_MODE_SELECT headers reserve bits12..15.
     // opcode() and the length mask otherwise silently discard these bits.
     if((op==0x70000000U || op==0x70800000U) && (header&0xf000U))return 0;
+    // Gen12 SRM reserves bits8..16,18,20..21. Keep functional bits
+    // MMIO-remap17, CS-offset19 and global-GTT22 distinct from this mask.
+    if(op==0x12000000U && (header&0x0035ff00U))return 0;
     if(op==0x70480000U)return (header&0xfffU)+2;
     size_t n=0;
     switch(op) {
@@ -177,7 +180,7 @@ inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t
                input[at+2]>(height+15)/16 || input[at+3]!=0){r.reason="walker-profile";return r;}
             nextRow=input[at+2];}
         if(op==0x12000000U){++srm;
-            if(!relativeMfc(input[at+1]) || input[at]&(1U<<19)){
+            if(!relativeMfc(input[at+1]) || input[at]&(1U<<19) || (input[at+2]&3U)){
                 r.reason="srm-profile";return r;}
             const uint32_t bit=input[at+1]==0x128a0?1U:input[at+1]==0x128a4?2U:
                                input[at+1]==0x128b4?4U:8U;
