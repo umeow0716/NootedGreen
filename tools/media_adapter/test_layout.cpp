@@ -19209,10 +19209,22 @@ int main() {
         const auto good=input;output.fill(0xdeadbeef);
         auto rejected=[&](){auto r=NgreenAvcGen12::produce(input.data(),used,1920,1080,
             output.data(),output.size());assert(!r.ok);for(auto v:output)assert(v==0xdeadbeef);};
-        for(size_t at:{size_t(0),mode})for(unsigned bits=1;bits<16;++bits){
-            input=good;input[at]|=bits<<12;
-            assert(NgreenAvcGen12::packetWords(input[at])==0);
-            rejected();
+        const uint32_t mediaHeaders[]={0x70000003,0x70010004,0x70020042,0x70030018,
+            0x70040008,0x70070010,0x70080020,0x71000013,0x71030009,0x70800000,
+            0x70810004,0x70820004,0x70830004,0x70840023,0x70850021,0x7086003b,
+            0x70870002,0x77800000,0x70480001};
+        for(auto header:mediaHeaders){
+            assert(NgreenAvcGen12::packetWords(header)>0);
+            for(unsigned bits=1;bits<16;++bits)
+                assert(NgreenAvcGen12::packetWords(header|(bits<<12))==0);
+        }
+        for(size_t at=0;at<used;at+=NgreenAvcGen12::packetWords(good[at])) {
+            if(good[at]<0x60000000U)continue;
+            for(unsigned bits=1;bits<16;++bits){
+                input=good;input[at]|=bits<<12;
+                assert(NgreenAvcGen12::packetWords(input[at])==0);
+                rejected();
+            }
         }
         input=good;
         for(size_t at=0;at<used;at+=NgreenAvcGen12::packetWords(good[at])) {

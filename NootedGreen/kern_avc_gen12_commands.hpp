@@ -41,9 +41,10 @@ inline uint32_t opcode(uint32_t header) noexcept {
 inline size_t packetWords(uint32_t header) noexcept {
     const uint32_t op=opcode(header);
     if(!header)return 1;
-    // Both pinned MFX/VDENC PIPE_MODE_SELECT headers reserve bits12..15.
+    // All supported pinned MFX/VDENC media headers reserve bits12..15.
     // opcode() and the length mask otherwise silently discard these bits.
-    if((op==0x70000000U || op==0x70800000U) && (header&0xf000U))return 0;
+    // MI packets below the media range have their own field layouts.
+    if(header>=0x60000000U && (header&0xf000U))return 0;
     // Gen12 SRM reserves bits8..16,18,20..21. Keep functional bits
     // MMIO-remap17, CS-offset19 and global-GTT22 distinct from this mask.
     if(op==0x12000000U && (header&0x0035ff00U))return 0;
