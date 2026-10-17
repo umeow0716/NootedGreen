@@ -415,6 +415,60 @@ private:
     uint32_t width_=0,height_=0;
 };
 
+// Owned slice bytes for the audited native frame readers only. Highest
+// qualified read is258ab DWORD+e08; the e10-byte local view has four zero
+// padding bytes, which are NOT fetched from a borrowed allocation. This is
+// not slice syntax validation, a surface retain, or permission to submit.
+// Reader must authenticate source extents/lifetime. Capture is not atomic.
+class TglOwnedAvcSliceInputTable {
+public:
+    static constexpr size_t ConsumedBytes=0xe0c,StoredBytes=0xe10,MaxSlices=32;
+    TglOwnedAvcSliceInputTable(const TglOwnedAvcSliceInputTable&)=delete;
+    TglOwnedAvcSliceInputTable& operator=(const TglOwnedAvcSliceInputTable&)=delete;
+    TglOwnedAvcSliceInputTable(TglOwnedAvcSliceInputTable&&)=delete;
+    TglOwnedAvcSliceInputTable& operator=(TglOwnedAvcSliceInputTable&&)=delete;
+    template<class Read> static std::unique_ptr<TglOwnedAvcSliceInputTable>
+    capture(uintptr_t sourceTable,size_t count,Read read) noexcept {
+        if(!count || count>MaxSlices || !sourceTable || sourceTable>UINTPTR_MAX-count*8U)return {};
+        auto owned=std::unique_ptr<TglOwnedAvcSliceInputTable>(new(std::nothrow) TglOwnedAvcSliceInputTable{});
+        if(!owned)return {};
+        const auto self=reinterpret_cast<uintptr_t>(owned.get());
+        if(self>UINTPTR_MAX-sizeof(*owned))return {};
+        auto overlaps=[](uintptr_t a,size_t aBytes,uintptr_t b,size_t bBytes) noexcept {
+            return a<b+bBytes && b<a+aBytes;
+        };
+        if(overlaps(sourceTable,count*8U,self,sizeof(*owned)))return {};
+        std::array<uintptr_t,MaxSlices> original{};
+        if(!read(sourceTable,original.data(),count*8U))return {};
+        // Preserve exact duplicate aliases; partial overlap and table/record
+        // overlap are not qualified by this owned typed-graph representation.
+        for(size_t i=0;i<count;++i) {
+            if(!original[i] || original[i]>UINTPTR_MAX-ConsumedBytes ||
+               overlaps(original[i],ConsumedBytes,self,sizeof(*owned)) ||
+               overlaps(original[i],ConsumedBytes,sourceTable,count*8U))return {};
+            for(size_t j=0;j<i;++j)
+                if(original[i]!=original[j] && overlaps(original[i],ConsumedBytes,original[j],ConsumedBytes))return {};
+        }
+        for(size_t i=0;i<count;++i) {
+            size_t prior=0;
+            for(;prior<i;++prior)if(original[prior]==original[i])break;
+            if(prior<i)owned->table_[i]=owned->table_[prior];
+            else {
+                if(!read(original[i],owned->slices_[i].data(),ConsumedBytes))return {};
+                owned->table_[i]=reinterpret_cast<uintptr_t>(owned->slices_[i].data());
+            }
+        }
+        owned->count_=count;return owned;
+    }
+    const uintptr_t* table() const noexcept {return table_.data();}
+    size_t count() const noexcept {return count_;}
+private:
+    TglOwnedAvcSliceInputTable()=default;
+    alignas(8) std::array<std::array<uint8_t,StoredBytes>,MaxSlices> slices_{};
+    std::array<uintptr_t,MaxSlices> table_{};
+    size_t count_=0;
+};
+
 // Tahoe TGL Ief 125e90/126210. Tables must come from the authenticated
 // native image (741e50..742350), not from a different GPU generation.
 // This is a CPU data producer only; it does not issue an SFC command.

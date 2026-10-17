@@ -19256,6 +19256,60 @@ int main() {
     {
         std::array<uint32_t,512> input{},output{};size_t used=0;
         {
+            using Slices=TglOwnedAvcSliceInputTable;
+            static_assert(!std::is_copy_constructible_v<Slices> && !std::is_move_constructible_v<Slices>);
+            std::array<std::array<uint8_t,Slices::ConsumedBytes>,2> source{};
+            source[0][0x100]=0x11;source[1][0x100]=0x22;
+            const uint32_t tail=0x12345678;std::memcpy(source[0].data()+0xe08,&tail,4);
+            const uintptr_t a=reinterpret_cast<uintptr_t>(source[0].data()),b=reinterpret_cast<uintptr_t>(source[1].data());
+            std::array<uintptr_t,4> pointers{a,b,a,b};
+            const auto root=reinterpret_cast<uintptr_t>(pointers.data());
+            unsigned nodeReads=0;
+            auto read=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                if(address==root && bytes==sizeof(pointers)) {
+                    std::memcpy(target,pointers.data(),bytes);return true;
+                }
+                if((address==a || address==b) && bytes==Slices::ConsumedBytes) {
+                    ++nodeReads;std::memcpy(target,reinterpret_cast<void*>(address),bytes);return true;
+                }
+                return false;
+            };
+            auto owned=Slices::capture(root,4,read);assert(owned && owned->count()==4 && nodeReads==2);
+            assert(owned->table()[0]==owned->table()[2] && owned->table()[1]==owned->table()[3]);
+            assert(owned->table()[0]!=a && owned->table()[1]!=b && owned->table()[4]==0);
+            const auto first=reinterpret_cast<const uint8_t*>(owned->table()[0]);
+            uint32_t capturedTail=0;std::memcpy(&capturedTail,first+0xe08,4);assert(capturedTail==tail);
+            for(size_t i=Slices::ConsumedBytes;i<Slices::StoredBytes;++i)assert(first[i]==0);
+            pointers.fill(0);for(auto& part:source)part.fill(0);
+            assert(first[0x100]==0x11 && reinterpret_cast<const uint8_t*>(owned->table()[1])[0x100]==0x22);
+            pointers={a,b,a,b};
+            for(uintptr_t bad:{uintptr_t(0),UINTPTR_MAX-Slices::ConsumedBytes+1,a+4,root}) {
+                pointers[1]=bad;nodeReads=0;
+                assert(!Slices::capture(root,4,read) && nodeReads==0);
+            }
+            pointers={a,b,a,b};
+            auto denied=[](uintptr_t,void*,size_t) noexcept {return false;};
+            assert(!Slices::capture(root,4,denied));
+            auto missing=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                return address!=b && read(address,target,bytes);
+            };
+            assert(!Slices::capture(root,4,missing));
+            assert(!Slices::capture(root,0,read) && !Slices::capture(root,33,read));
+            assert(!Slices::capture(UINTPTR_MAX-7,1,read));
+            std::array<uintptr_t,32> maximum{};maximum.fill(a);
+            const auto maximumRoot=reinterpret_cast<uintptr_t>(maximum.data());
+            auto maxRead=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                if(address==maximumRoot && bytes==sizeof(maximum)) {
+                    std::memcpy(target,maximum.data(),bytes);return true;
+                }
+                return read(address,target,bytes);
+            };
+            nodeReads=0;auto maxOwned=Slices::capture(maximumRoot,32,maxRead);
+            assert(maxOwned && nodeReads==1 && maxOwned->table()[31]==maxOwned->table()[0]);
+            const auto view=owned->table();auto transferred=std::move(owned);
+            assert(!owned && transferred->table()==view && first[0x100]==0x11);
+        }
+        {
             using Nal=NgreenNativeAvcReservation::OwnedTemplateNalInput;
             static_assert(!std::is_copy_constructible_v<Nal> && !std::is_move_constructible_v<Nal>);
             std::array<uint8_t,0x68> metadata{};
