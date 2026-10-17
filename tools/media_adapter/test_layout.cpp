@@ -19323,6 +19323,11 @@ int main() {
             auto full=FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead);
             assert(full && fullReads==1 && full->sliceCount()==2 && full->pictureBytes()[0x20]==0x73);
             uint32_t level=0;std::memcpy(&level,full->sequenceBytes()+0x1c,4);assert(level==40);
+            for(uint32_t fieldPicture:{1U,255U,UINT32_MAX}) {
+                fullHeader=savedFullHeader;std::memcpy(slice.data()+0x14,&fieldPicture,4);
+                assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));
+            }
+            const uint32_t framePicture=0;std::memcpy(slice.data()+0x14,&framePicture,4);
             for(uint32_t qp:{51U,52U,255U,UINT32_MAX}) {
                 fullHeader=savedFullHeader;std::memcpy(fullHeader.data()+0x438,&qp,4);
                 assert(bool(FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead))==(qp==51));

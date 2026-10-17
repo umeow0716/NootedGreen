@@ -251,7 +251,12 @@ public:
         // Validate the bytes native will actually see, not an earlier
         // borrowed preflight.2737e's uint32 increment/wrap is intentional.
         const auto* first=reinterpret_cast<const uint8_t*>(owned->sliceNal_->sliceTable()[0]);
-        uint32_t overridden=0,minusOne[2]{};
+        uint32_t fieldPicture=0,overridden=0,minusOne[2]{};
+        std::memcpy(&fieldPicture,first+0x14,4);
+        // Exact2737e's field-picture branch calls906b, an eight-byte
+        // return-zero stub with no list/count outputs. Do not treat it as
+        // an implemented counterpart of8b4f or fabricate initialized lists.
+        if(fieldPicture)return {};
         std::memcpy(&overridden,first+0x38,4);
         std::memcpy(minusOne,overridden?first+0x3c:owned->picture_->data()+0x90,sizeof(minusOne));
         if(minusOne[0]+uint32_t(1)>32 || minusOne[1]+uint32_t(1)>32)return {};
