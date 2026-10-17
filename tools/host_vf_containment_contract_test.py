@@ -206,6 +206,26 @@ grep -qx 'after fault' "$1/kernel-follow.log"
 """
         subprocess.run(["bash", "-c", stub + watcher + check, "watcher-test", evidence],
                        check=True, timeout=5, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    failure_check = """
+trap 'kill "$watcher_pid" "$journal_pid" 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+if start_kernel_watch "$1"; then exit 97; fi
+"""
+    failure_stubs = (
+        # A failed containment action must terminate the watcher nonzero;
+        # it must not become a successful/live observer after the fault.
+        (stub.replace('>> "$1/destroy.calls"; }', '>> "$1/destroy.calls"; return 1; }'),
+         'if wait "$watcher_pid"; then exit 98; fi\n'
+         '[[ $(< "$1/kernel.trigger") == "GPU HANG first" ]]\n'),
+        # An exhausted journal must be rejected even without any fault line.
+        (stub.replace("printf '%s\\n' 'GPU HANG first' 'GPU HANG second' 'after fault'; exec sleep 3;",
+                      "printf '%s\\n' 'journal ended';"),
+         '[[ ! -e "$1/kernel.trigger" && ! -e "$1/destroy.calls" ]]\n'),
+    )
+    for failure_stub, assertions in failure_stubs:
+        with tempfile.TemporaryDirectory(prefix="ngreen-watcher-failure-") as evidence:
+            subprocess.run(["bash", "-c", failure_stub + watcher + failure_check + assertions,
+                            "watcher-failure-test", evidence], check=True, timeout=5,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     require(internal, "FAIL kernel observer exited during cooldown", "cooldown observer health")
     require(runner, 'readonly tracefs_root="/sys/kernel/tracing"',
             "private tracefs root")
