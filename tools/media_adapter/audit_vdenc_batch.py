@@ -317,6 +317,57 @@ def native_batch(lines):
             'metadata': metadata, 'words': words}
 
 
+def timeout_ring_packets(words):
+    """Inventory the exact short native ring grammar; do not execute/simulate it.
+
+    Field positions: pinned Intel gen12 mhw_mi_hwcmd_g12_X.h. Unknown or
+    truncated packets terminate the walk; never resynchronize inside payload.
+    Stores/waits below are encoded intent, NOT sampled memory or GPU progress.
+    """
+    if len(words) > 48 or any(type(w) is not int or not 0 <= w <= 0xffffffff for w in words):
+        raise ValueError('invalid bounded ring words')
+    packets, at = [], 0
+    while at < len(words):
+        h = words[at]
+        packet = {'offset': at * 4, 'header': f'{h:08x}'}
+        if h in (0, 0x03800000):
+            size = 1
+            packet['opcode'] = 'MI_NOOP' if h == 0 else 'MI_USER_INTERRUPT'
+        elif h == 0x11000001:
+            size = 3
+            packet['opcode'] = 'MI_LOAD_REGISTER_IMM'
+        elif h == 0x0e009002:
+            size = 4
+            packet.update(opcode='MI_SEMAPHORE_WAIT', comparison='memory_unsigned_greater_equal',
+                          polling=True, address_space='PPGTT')
+        elif h == 0x18800101:
+            size = 3
+            packet.update(opcode='MI_BATCH_BUFFER_START', address_space='PPGTT')
+        elif h & 0xff800000 == 0x13000000 and h & 0x3f == 3:
+            size = 5
+            packet.update(opcode='MI_FLUSH_DW', post_sync=(h >> 14) & 3,
+                          tlb_invalidate=bool(h & (1 << 18)),
+                          hws_index=bool(h & (1 << 21)), notify=bool(h & 0x100))
+        else:
+            return {'complete': False, 'stopped_offset': at * 4, 'reason': 'unknown_header', 'packets': packets}
+        if size > len(words) - at:
+            return {'complete': False, 'stopped_offset': at * 4, 'reason': 'truncated_packet', 'packets': packets}
+        if packet['opcode'] == 'MI_LOAD_REGISTER_IMM':
+            packet.update(register=f'{words[at+1]:08x}', value=f'{words[at+2]:08x}')
+        elif packet['opcode'] == 'MI_SEMAPHORE_WAIT':
+            packet.update(address=f'{words[at+2] | words[at+3] << 32:016x}', threshold=words[at+1])
+        elif packet['opcode'] == 'MI_BATCH_BUFFER_START':
+            packet['address'] = f'{words[at+1] | words[at+2] << 32:016x}'
+        elif packet['opcode'] == 'MI_FLUSH_DW':
+            packet.update(address=f'{(words[at+1] & ~7) | words[at+2] << 32:016x}',
+                          address_space='GGTT' if words[at+1] & 4 else 'PPGTT',
+                          immediate=words[at+3] | words[at+4] << 32)
+        packet['bytes'] = size * 4
+        packets.append(packet)
+        at += size
+    return {'complete': True, 'packets': packets, 'execution_observed': False}
+
+
 def timeout_ring(text):
     """V379 selected retained CPU ring; never a GPU PC or completion proof."""
     text = text.replace('\\/', '/').replace('\\n', '\n')
@@ -341,12 +392,36 @@ def timeout_ring(text):
     raw = base64.b64decode(encoded, validate=True)
     if len(encoded) != 256 or len(raw) != 192 or base64.b64encode(raw).decode() != encoded or any(raw[tail:]):
         raise ValueError('truncated, noncanonical, or nonzero padded prefix')
+    words = list(struct.unpack(f'<{tail // 4}I', raw[:tail]))
     return {'engine_index': engine, 'native_channel': channel, 'ring_allocation_bytes': size,
-            'head': head, 'tail': tail, 'words': list(struct.unpack(f'<{tail // 4}I', raw[:tail])),
+            'head': head, 'tail': tail, 'words': words, 'packet_inventory': timeout_ring_packets(words),
             'cpu_snapshot_only': True, 'live_instruction_pointer': False, 'completion_proof': False}
 
 
 def selftest():
+    packets = timeout_ring_packets([0x0e009002, 2, 0x40001000, 0,
+                                   0x18800101, 0x40010000, 0,
+                                   0x13004103, 0x400010c0, 0, 1, 0, 0x03800000])
+    assert packets['complete'] and not packets['execution_observed']
+    wait, batch, store, interrupt = packets['packets']
+    assert wait['threshold'] == 2 and wait['comparison'] == 'memory_unsigned_greater_equal'
+    assert wait['address'] == '0000000040001000' and wait['polling']
+    assert batch['address'] == '0000000040010000' and batch['offset'] == 16
+    assert store['immediate'] == 1 and store['post_sync'] == 1 and store['notify']
+    assert interrupt['opcode'] == 'MI_USER_INTERRUPT'
+    assert not timeout_ring_packets([0xffffffff, 0x18800101, 8, 0])['complete']
+    assert timeout_ring_packets([0xffffffff, 0x18800101, 8, 0])['packets'] == []
+    for length in range(1, 5):
+        assert not timeout_ring_packets([0x13004003, 8, 0, 1, 0][:length])['complete']
+    ggtt = timeout_ring_packets([0x13004003, 12, 0, 1, 0])['packets'][0]
+    assert ggtt['address_space'] == 'GGTT' and ggtt['address'] == '0000000000000008'
+    for bad in ([0] * 49, [-1], [1 << 32], [True]):
+        try:
+            timeout_ring_packets(bad)
+        except ValueError:
+            continue
+        raise AssertionError('invalid bounded ring accepted')
+    print('TIMEOUT_RING_PACKET_INVENTORY_SELFTEST_OK')
     ring = [0x13000003] + [0xffffffff] * 33 + [0] * 14
     encoded = base64.b64encode(struct.pack('<48I', *ring)).decode()
     saved = ('V267: refusing VF event timeout recovery channel=0 V364: capture=1 '
