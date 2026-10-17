@@ -97,6 +97,11 @@ public:
     OwnedAvcCallbackPhase& operator=(const OwnedAvcCallbackPhase&)=delete;
     bool bound() const noexcept {return stage_==Stage::Ready && live();}
     bool complete() const noexcept {return stage_==Stage::Done && live();}
+    bool admitsOuter(uintptr_t image,uintptr_t physical,uint64_t generation,
+        uintptr_t context,uintptr_t request) const noexcept {
+        return identity_.image==image && identity_.physical==physical && identity_.generation==generation &&
+            identity_.context==context && identity_.request==request && bound();
+    }
     static OwnedAvcCallbackPhase* current(uintptr_t context) noexcept {
         return Scope::get(reinterpret_cast<void*>(context));
     }
@@ -139,9 +144,17 @@ uint64_t builderOrStop(uintptr_t context,uintptr_t request,uintptr_t token,Invok
 // The exact AVC frame cannot fall back to untranslated native submission when
 // the kernel publication handshake is absent. Other frame families retain
 // their existing admission; this is not a claim that readiness proves safety.
-inline bool frameAdmission(uintptr_t image,uintptr_t entry,bool publicationReady) noexcept {
+inline bool framePhaseAdmission(uintptr_t image,uintptr_t entry,uintptr_t physical,uint64_t generation,
+    uintptr_t context,uintptr_t request) noexcept {
     if(!image || image>UINTPTR_MAX-0x27724 || !entry)return false;
-    return entry!=image+0x27724 || publicationReady;
+    if(entry!=image+0x27724)return true;
+    const auto* phase=OwnedAvcCallbackPhase::current(context);
+    return phase && phase->admitsOuter(image,physical,generation,context,request);
+}
+inline bool frameAdmission(uintptr_t image,uintptr_t entry,bool publicationReady,
+    uintptr_t physical=0,uint64_t generation=0,uintptr_t context=0,uintptr_t request=0) noexcept {
+    return framePhaseAdmission(image,entry,physical,generation,context,request) &&
+        (entry!=image+0x27724 || publicationReady);
 }
 // Exact23fad clears sixteen DWORDs at token+c78, then uses each non-null
 // payload reference handle's DWORD index directly as the destination slot.

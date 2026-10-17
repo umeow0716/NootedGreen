@@ -19385,6 +19385,13 @@ int main() {
             authority.live=true;unsigned sizes=0,builders=0;uint32_t used=0,capacity=0;
             {
                 Pair pair(identity,view,&authority,live);assert(pair.bound());
+                assert(NgreenNativeAvcReservation::frameAdmission(identity.image,identity.image+0x27724,true,
+                    identity.physical,identity.generation,identity.context,identity.request));
+                assert(!NgreenNativeAvcReservation::frameAdmission(identity.image,identity.image+0x27724,false,
+                    identity.physical,identity.generation,identity.context,identity.request));
+                assert(!pair.admitsOuter(identity.image,identity.physical,identity.generation+1,identity.context,identity.request));
+                assert(!pair.admitsOuter(identity.image,identity.physical+8,identity.generation,identity.context,identity.request));
+                assert(!pair.admitsOuter(identity.image,identity.physical,identity.generation,identity.context,identity.request+8));
                 assert(Pair::current(identity.context)==&pair && !Pair::current(identity.context+8));
                 {
                     Pair nested(identity,view,&authority,live);assert(!nested.bound());
@@ -19575,7 +19582,7 @@ int main() {
     {
         constexpr uintptr_t image=0x100000000;
         assert(!NgreenNativeAvcReservation::frameAdmission(image,image+0x27724,false));
-        assert(NgreenNativeAvcReservation::frameAdmission(image,image+0x27724,true));
+        assert(!NgreenNativeAvcReservation::frameAdmission(image,image+0x27724,true)); // Readiness is not an input phase.
         assert(NgreenNativeAvcReservation::frameAdmission(image,image+0x27725,false));
         assert(!NgreenNativeAvcReservation::frameAdmission(0,0x27724,true));
         assert(!NgreenNativeAvcReservation::frameAdmission(UINTPTR_MAX-0x27723,1,true));

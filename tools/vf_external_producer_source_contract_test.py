@@ -27,9 +27,20 @@ def block(source, marker, end_marker):
 
 def adapter_frame_contract(source):
     body = block(source, "struct NativeOtherFrameBackend {", "struct NativeLateFactoryBatch {")
-    gate = "if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady))return 5;"
+    gate = "if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady,physical,generation,context,request))return 5;"
     assert body.count(gate) == 1, "adapter: exact AVC publication refusal missing or changed"
     before, after = body.split(gate)
+    phase = "if(!NgreenNativeAvcReservation::framePhaseAdmission(image,owner->frameTable().nativeFrame(),physical,generation,owner->context(),input))return 5;"
+    assert body.count(phase) == 1, "adapter: exact input-phase refusal missing"
+    reserve = body.index("const auto reservation=owner->reserveNativeOtherFrame")
+    assert body.index(phase) < reserve < body.index(gate), "adapter: phase refusal after reservation/native path"
+    for required in (
+        "callbacks[0x30/8]!=reinterpret_cast<uintptr_t>(&dispatchOwnedAvcSize)",
+        "callbacks[0x60/8]!=reinterpret_cast<uintptr_t>(&dispatchOwnedAvcBuilder)",
+        "owner->frameTable().nativeSize()!=image+0x2732c",
+        "owner->frameTable().nativeBuilder()!=image+0x2737e",
+    ):
+        assert required in body[:reserve], "adapter: exact paired callback admission missing"
     assert "queryPublication(lease,active,image,physical,generation,publication)" in before, \
         "adapter: frame admission precedes readiness query"
     assert "invoke()" not in before, "adapter: native invocation precedes publication refusal"
@@ -43,7 +54,8 @@ def adapter_frame_contract(source):
 
 def adapter_frame_mutations(source):
     adapter_frame_contract(source)
-    gate = "if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady))return 5;"
+    gate = "if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady,physical,generation,context,request))return 5;"
+    phase = "if(!NgreenNativeAvcReservation::framePhaseAdmission(image,owner->frameTable().nativeFrame(),physical,generation,owner->context(),input))return 5;"
     mutations = (
         source.replace(gate, "", 1),
         source.replace(gate, gate.replace("if(!", "if("), 1),
@@ -53,6 +65,15 @@ def adapter_frame_mutations(source):
         source.replace("!NgreenNativeAvcReservation::framePreflight(request,&readMemory)", "false", 1),
         source.replace("framePreflight(request,&readMemory)", "framePreflight(context,&readMemory)", 1),
         source.replace("if(!NgreenNativeAvcReservation::framePreflight", "if(NgreenNativeAvcReservation::framePreflight", 1),
+        source.replace(phase, "", 1),
+        source.replace(phase, phase.replace("if(!", "if("), 1),
+        source.replace(phase, phase.replace("physical,generation", "physical,0"), 1),
+        source.replace(phase, phase.replace("owner->context(),input", "owner->context(),0"), 1),
+        source.replace(phase, "", 1).replace(gate, phase+gate, 1),
+        source.replace("callbacks[0x30/8]!=reinterpret_cast<uintptr_t>(&dispatchOwnedAvcSize)", "false", 1),
+        source.replace("callbacks[0x60/8]!=reinterpret_cast<uintptr_t>(&dispatchOwnedAvcBuilder)", "false", 1),
+        source.replace("owner->frameTable().nativeSize()!=image+0x2732c", "false", 1),
+        source.replace("owner->frameTable().nativeBuilder()!=image+0x2737e", "false", 1),
     )
     for candidate in mutations:
         assert candidate != source, "adapter mutation did not change source"

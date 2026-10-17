@@ -5739,6 +5739,15 @@ struct NativeOtherFrameBackend {
         auto* owner=lease.get();
         if(!owner || owner->family()!=TglNativeContextFamily::NativeOther ||
            !scope.matches(image,physical,generation))return 5;
+        // Publication readiness alone cannot authorize borrowed-input AVC.
+        // Refuse before reserving work while phase/callbacks are missing.
+        if(!NgreenNativeAvcReservation::framePhaseAdmission(image,owner->frameTable().nativeFrame(),physical,generation,owner->context(),input))return 5;
+        if(owner->frameTable().nativeFrame()==image+0x27724) {
+            const auto* callbacks=owner->frameTable().addressPoint();
+            if(!callbacks || callbacks[0x30/8]!=reinterpret_cast<uintptr_t>(&dispatchOwnedAvcSize) ||
+               callbacks[0x60/8]!=reinterpret_cast<uintptr_t>(&dispatchOwnedAvcBuilder) ||
+               owner->frameTable().nativeSize()!=image+0x2732c || owner->frameTable().nativeBuilder()!=image+0x2737e)return 5;
+        }
         const auto reservation=owner->reserveNativeOtherFrame(lease,scope);
         if(!reservation.serial)return 5;
         TglNativeFrameOutputReceipt receipt;
@@ -5758,7 +5767,7 @@ struct NativeOtherFrameBackend {
                         os_log_error(OS_LOG_DEFAULT,"NGRN_AVC_PUBLICATION_NEGOTIATION ready=%{public}d profile=%{public}u",
                             int(publicationReady),publicationReady?publication.commandProfile:0U);
                 }
-                if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady))return 5;
+                if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady,physical,generation,context,request))return 5;
                 // Exact AVC400 frame only. Reservation precedes native submit
                 // inside the builder interval. Other families remain native.
                 constexpr unsigned char expected[]{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
