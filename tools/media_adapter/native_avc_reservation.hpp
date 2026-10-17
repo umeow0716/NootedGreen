@@ -14,6 +14,24 @@
 // A successful read does not authorize a write: the caller still needs the
 // live native builder interval and a kernel protocol handshake.
 namespace NgreenNativeAvcReservation {
+// Pinned TGL constructor-order constants, not raster-order H.264 tables.
+// Caller authenticates the exact image and read-only native storage.
+template<class Read,class Qualify,class Admit>
+bool captureScalingDefaults(uintptr_t image,TglOwnedAvcScalingDefaults& output,
+    Read read,Qualify qualify,Admit admit) noexcept {
+    static_assert(sizeof(TglOwnedAvcScalingDefaults)==640,"native matrix extent");
+    if(!image || image>UINTPTR_MAX-0x321240 || !admit())return false;
+    const uintptr_t source=image+0x320fc0,destination=reinterpret_cast<uintptr_t>(&output);
+    if(destination>UINTPTR_MAX-sizeof(output) ||
+       (destination<source+sizeof(output) && source<destination+sizeof(output)) ||
+       !qualify(source,sizeof(output)))return false;
+    std::array<uint32_t,160> first{},second{};
+    if(!read(source,first.data(),sizeof(first)) || !admit() ||
+       !read(source,second.data(),sizeof(second)) || first!=second ||
+       !qualify(source,sizeof(output)) || !admit())return false;
+    for(auto coefficient:first)if(!coefficient || coefficient>255)return false;
+    std::memcpy(&output,first.data(),sizeof(output));return true;
+}
 // CPU allocation bounds only. Disjointness is NOT a writable/GPU-backing
 // authorization, and does not cover objects referenced by CF surface handles.
 template<class T> bool disjointOwnedObject(uintptr_t address,size_t bytes,const T* object) noexcept {

@@ -5783,7 +5783,12 @@ struct NativeOtherFrameBackend {
         };
         // No invented scaling matrices: requested default lists still require
         // an authenticated provider, otherwise syntax capture refuses them.
-        auto owned=AvcInput::captureForContext(context,input,{},TglDarwinTypedCfReferenceApi{},&readMemory,admitted);
+        TglOwnedAvcScalingDefaults defaults;
+        if(!NgreenNativeAvcReservation::captureScalingDefaults(image,defaults,&readMemory,
+            [](uintptr_t at,size_t bytes) noexcept {
+                return leafMemoryPermissions(at,bytes,VM_PROT_READ,VM_PROT_WRITE|VM_PROT_EXECUTE);
+            },admitted))return 5;
+        auto owned=AvcInput::captureForContext(context,input,defaults,TglDarwinTypedCfReferenceApi{},&readMemory,admitted);
         if(!owned)return 5;
         auto* retained=owned.get();
         NgreenNativeAvcReservation::NativeAvcFrameOutputs outputs;

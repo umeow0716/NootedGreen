@@ -96,6 +96,28 @@ void testAvcMiAddressSpaces(const std::array<uint32_t,512>& frame,size_t used,si
 }
 
 void testAvcFrameOutputs() {
+    TglOwnedAvcScalingDefaults matrices;matrices.intra4.fill(6);matrices.inter4.fill(13);
+    matrices.intra8.fill(20);matrices.inter8.fill(28);
+    unsigned reads=0;bool mutate=false;
+    auto matrixRead=[&](uintptr_t at,void* out,size_t n) noexcept {
+        if(at!=0x420fc0 || n!=640)return false;
+        std::memcpy(out,&matrices,n);
+        if(mutate && ++reads==2)static_cast<uint32_t*>(out)[159]=29;
+        return true;
+    };
+    auto admit=[]() noexcept {return true;};
+    auto qualify=[](uintptr_t at,size_t n) noexcept {return at==0x420fc0 && n==640;};
+    TglOwnedAvcScalingDefaults captured;
+    assert(NgreenNativeAvcReservation::captureScalingDefaults(0x100000,captured,matrixRead,qualify,admit));
+    assert(captured.intra4==matrices.intra4 && captured.inter4==matrices.inter4 &&
+        captured.intra8==matrices.intra8 && captured.inter8==matrices.inter8);
+    mutate=true;reads=0;
+    assert(!NgreenNativeAvcReservation::captureScalingDefaults(0x100000,captured,matrixRead,qualify,admit));
+    mutate=false;matrices.inter8[63]=0;
+    assert(!NgreenNativeAvcReservation::captureScalingDefaults(0x100000,captured,matrixRead,qualify,admit));
+    assert(captured.inter8[63]==28); // Refusal leaves published defaults unchanged.
+    matrices.inter8[63]=28;
+    assert(!NgreenNativeAvcReservation::captureScalingDefaults(0x100000,captured,matrixRead,qualify,[]() noexcept {return false;}));
     using NgreenNativeAvcReservation::NativeAvcFrameOutputs;
     uintptr_t count=0x40000;uint8_t mode=1;
     auto read=[&](uintptr_t at,void* out,size_t n) noexcept {

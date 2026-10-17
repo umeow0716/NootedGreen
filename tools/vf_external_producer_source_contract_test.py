@@ -55,7 +55,9 @@ def adapter_frame_contract(source):
     assert body.count(phase) == 1, "adapter: exact input-phase refusal missing"
     reserve = body.index("const auto reservation=owner->reserveNativeOtherFrame")
     for required in (
-        "AvcInput::captureForContext(context,input,{},TglDarwinTypedCfReferenceApi{},&readMemory,admitted)",
+        "NgreenNativeAvcReservation::captureScalingDefaults(image,defaults,&readMemory,",
+        "leafMemoryPermissions(at,bytes,VM_PROT_READ,VM_PROT_WRITE|VM_PROT_EXECUTE)",
+        "AvcInput::captureForContext(context,input,defaults,TglDarwinTypedCfReferenceApi{},&readMemory,admitted)",
         "outputs.capture(context,input,retained->originalPayload(),output,&readMemory,&writableDataMemory,",
         "self.input.matchesContext(id.context,&readMemory,admit) &&",
         "self.outputs.matches(&readMemory) && admit();",
