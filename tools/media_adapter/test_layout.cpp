@@ -19266,6 +19266,58 @@ int main() {
     {
         std::array<uint32_t,512> input{},output{};size_t used=0;
         {
+            using Graph=NgreenNativeAvcReservation::OwnedSliceNalInput<TglOwnedAvcSliceInputTable>;
+            std::array<uint8_t,0x68> header{},metadata{};
+            std::array<uint8_t,TglOwnedAvcSliceInputTable::ConsumedBytes> slice{};
+            slice[0x100]=0x65;
+            uint8_t nalByte=0xa5;
+            std::array<uintptr_t,2> table{reinterpret_cast<uintptr_t>(slice.data()),reinterpret_cast<uintptr_t>(slice.data())};
+            std::array<uint32_t,2> lengths{8,8};
+            uintptr_t nalSource=reinterpret_cast<uintptr_t>(&nalByte);
+            const uintptr_t tableAddress=reinterpret_cast<uintptr_t>(table.data());
+            const uintptr_t metadataAddress=reinterpret_cast<uintptr_t>(metadata.data());
+            const uintptr_t lengthsAddress=reinterpret_cast<uintptr_t>(lengths.data());
+            const uintptr_t headersAddress=reinterpret_cast<uintptr_t>(&nalSource);
+            uint32_t count=2;
+            std::memcpy(header.data(),&count,4);
+            std::memcpy(header.data()+0x10,&tableAddress,8);
+            std::memcpy(header.data()+0x60,&metadataAddress,8);
+            std::memcpy(metadata.data()+0x58,&headersAddress,8);
+            std::memcpy(metadata.data()+0x60,&lengthsAddress,8);
+            const auto initialHeader=header;
+            const uintptr_t start=reinterpret_cast<uintptr_t>(header.data()),payload=start-0x420;
+            const std::array<std::pair<uintptr_t,size_t>,7> regions{{
+                {start,header.size()},{metadataAddress,metadata.size()},{tableAddress,sizeof(table)},
+                {table[0],slice.size()},{lengthsAddress,sizeof(lengths)},{headersAddress,8},{nalSource,1}}};
+            unsigned headerReads=0;bool denied=false;
+            auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(denied && at==metadataAddress)return false;
+                for(const auto& region:regions)if(at>=region.first && at-region.first<=region.second &&
+                    bytes<=region.second-(at-region.first)) {
+                    std::memcpy(out,reinterpret_cast<const void*>(at),bytes);
+                    if(at==start){++headerReads;header.fill(0);} // caller changes after capture
+                    return true;
+                }
+                return false;
+            };
+            denied=true;assert(!Graph::capture(payload,read)); // NAL failure exposes no partial graph
+            header=initialHeader;denied=false;headerReads=0;
+            auto graph=Graph::capture(payload,read);
+            assert(graph && headerReads==1 && graph->sliceCount()==2 && graph->sliceTable()[0]==graph->sliceTable()[1]);
+            uintptr_t ownedLengths=0,ownedHeaders=0,ownedSource=0;
+            std::memcpy(&ownedLengths,graph->nalMetadata()+0x60,8);
+            std::memcpy(&ownedHeaders,graph->nalMetadata()+0x58,8);
+            std::memcpy(&ownedSource,reinterpret_cast<const void*>(ownedHeaders),8);
+            lengths.fill(0);slice.fill(0);nalByte=0;metadata.fill(0);table.fill(0);nalSource=0;
+            assert(reinterpret_cast<const uint8_t*>(graph->sliceTable()[0])[0x100]==0x65);
+            assert(reinterpret_cast<const uint32_t*>(ownedLengths)[1]==8 && *reinterpret_cast<const uint8_t*>(ownedSource)==0xa5);
+            for(uint32_t bad:{0U,33U}) {
+                header=initialHeader;std::memcpy(header.data(),&bad,4);assert(!Graph::capture(payload,read));
+            }
+            header=initialHeader;assert(!Graph::capture(payload,read)); // invalidated child table
+            assert(!Graph::capture(0,read) && !Graph::capture(UINTPTR_MAX-0x487,read));
+        }
+        {
             TglNativeRemovedContextBatch<2> batch;
             std::array<uintptr_t,2> callerContexts{0x1000,0x2000};
             struct Request {uint32_t count,reserved;const uintptr_t* contexts;};

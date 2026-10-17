@@ -164,6 +164,45 @@ private:
     std::array<std::array<uint8_t,MaxPayloadBytes>,5> payloads_{};
     size_t slices_=0;
 };
+// Joint immutable syntax subgraph, NOT a native frame/payload or surface lease.
+// SliceInput is the audited owned slice table; parameterization avoids a
+// dependency on renderer/handle ownership. Reader authenticates allocations
+// and capture authority. One CPU read is not an atomic snapshot with writers.
+template<class SliceInput> class OwnedSliceNalInput {
+public:
+    OwnedSliceNalInput(const OwnedSliceNalInput&)=delete;
+    OwnedSliceNalInput& operator=(const OwnedSliceNalInput&)=delete;
+    OwnedSliceNalInput(OwnedSliceNalInput&&)=delete;
+    OwnedSliceNalInput& operator=(OwnedSliceNalInput&&)=delete;
+    template<class Read> static std::unique_ptr<OwnedSliceNalInput>
+    capture(uintptr_t payload,Read read) noexcept {
+        static_assert(sizeof(uintptr_t)==8 && SliceInput::MaxSlices==OwnedTemplateNalInput::MaxSlices);
+        if(!payload || payload>UINTPTR_MAX-0x488)return {};
+        // Count420, table430, metadata480 from ONE captured header, never
+        // independent borrowed rereads between slice and NAL factories.
+        std::array<uint8_t,0x68> header{};
+        if(!read(payload+0x420,header.data(),header.size()))return {};
+        uint32_t count=0;uintptr_t table=0,metadata=0;
+        std::memcpy(&count,header.data(),4);
+        std::memcpy(&table,header.data()+0x10,8);
+        std::memcpy(&metadata,header.data()+0x60,8);
+        if(!count || count>SliceInput::MaxSlices)return {};
+        auto owned=std::unique_ptr<OwnedSliceNalInput>(new(std::nothrow) OwnedSliceNalInput{});
+        if(!owned)return {};
+        owned->slices_=SliceInput::capture(table,count,read);
+        if(!owned->slices_)return {};
+        owned->nal_=OwnedTemplateNalInput::capture(metadata,count,read);
+        if(!owned->nal_)return {};
+        return owned;
+    }
+    size_t sliceCount() const noexcept {return slices_->count();}
+    const uintptr_t* sliceTable() const noexcept {return slices_->table();}
+    const uint8_t* nalMetadata() const noexcept {return nal_->metadataBytes();}
+private:
+    OwnedSliceNalInput()=default;
+    std::unique_ptr<SliceInput> slices_;
+    std::unique_ptr<OwnedTemplateNalInput> nal_;
+};
 struct Builder {
     uintptr_t argument=0,connection=0,base=0,cursor=0,end=0;
     uint32_t previousUsed=0,classes=0;
