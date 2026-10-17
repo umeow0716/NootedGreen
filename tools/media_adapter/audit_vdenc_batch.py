@@ -64,6 +64,16 @@ def mode_template_fields(words):
             item.update(upper_bound_raw=[f'{end_low:08x}', f'{end_high:08x}'],
                         upper_bound_page_hex=f'{((end_high & 0xffff) << 32) | (end_low & ~4095):016x}',
                         upper_bound_reserved_bits=bool(end_low & 4095 or end_high & 0xffff0000))
+        if collection == 'mfx_pipe_resources':
+            item.update(mocs_raw=control&0x7f, tiled_resource_mode=(control>>13)&3)
+            # References share DW51 attributes, but their compression bits are
+            # individual pairs in DW61, NOT bit9 of shared attributes.
+            if name.startswith('reference'):
+                reference=int(name[len('reference'):])
+                item.update(compression_enable=(words[at+61]>>(reference*2))&1,
+                            compression_type=(words[at+61]>>(reference*2+1))&1)
+            else:
+                item.update(compression_enable=(control>>9)&1, compression_type=(control>>10)&1)
         result[collection].append(item)
     while at < len(words):
         header = words[at]
@@ -175,6 +185,8 @@ def mode_template_fields(words):
                     raw=[f'{value:08x}' for value in (low, high, control)],
                     address_hex=f'{((high & 0xffff) << 32) | (low & ~63):016x}',
                     cache_select=(control >> 12) & 1,
+                    mocs_raw=control&0x7f, compression_enable=(control>>9)&1,
+                    compression_type=(control>>10)&1, tiled_resource_mode=(control>>13)&3,
                     address_domain='INTERNAL_MEDIA_STORAGE' if control & 0x1000 else 'LLC_BUFFER_ADDRESS',
                     reserved_bits=bool(low & 63 or high & 0xffff0000 or control & 0xffff8800),
                     extent_bytes=None, mapping_proven=False, gpu_fetch_proven=False))
@@ -612,6 +624,10 @@ def selftest():
     assert not by_name['source']['reserved_bits'] and by_name['source']['extent_bytes'] is None
     assert all(item['address_word'] not in (7, 8, 9, 61) and not item['mapping_proven']
                for item in resources['vdenc_pipe_resources'])
+    pipe[12]=0x460e  # MOCS14, compression+type, TileYS; cache select remains0.
+    source=mode_template_fields(pipe)['vdenc_pipe_resources'][2]
+    assert (source['mocs_raw'],source['compression_enable'],source['compression_type'],
+            source['tiled_resource_mode'],source['cache_select'])==(14,1,1,2,0)
     pipe[10] |= 1
     assert mode_template_fields(pipe)['vdenc_pipe_resources'][2]['reserved_bits']
     mfx = [0]*68
@@ -629,6 +645,14 @@ def selftest():
     assert names['reference15']['control_raw'] == '00000080'
     assert names['intra_rowstore']['address_domain'] == 'INTERNAL_MEDIA_STORAGE'
     assert all(item['address_word'] not in (51, 61) for item in mf['mfx_pipe_resources'])
+    assert names['reference15']['compression_enable']==1
+    assert names['reference15']['compression_type']==1
+    assert names['source']['compression_enable']==0
+    mfx[61]=1<<9  # Reference4 TYPE only, not all references and not reference0.
+    ref_fields=mode_template_fields(mfx)['mfx_pipe_resources']
+    refs={x['role']:x for x in ref_fields if x['role'].startswith('reference')}
+    assert refs['reference4']['compression_type']==1 and refs['reference4']['compression_enable']==0
+    assert refs['reference0']['compression_type']==0 and refs['reference15']['compression_enable']==0
     indirect = [0]*26
     indirect[0] = 0x70030018
     indirect[21:26] = [0x40500000, 0, 2, 0x405ff000, 0]
