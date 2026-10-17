@@ -13,7 +13,7 @@ constexpr uint32_t maximumWords=1536;
 // a PTE write, a command, or completion. No query after identity instability.
 template<class Query,class Stable,class Emit>
 inline bool observeBackingPages(uint64_t mapOffset,uint32_t bytes,uint64_t gpuBase,uint32_t mapperOptions,
-                               Query query,Stable stable,Emit emit) {
+                               Query &&query,Stable &&stable,Emit &&emit) {
     if(!bytes || bytes>65536U || (mapOffset&4095U) || (gpuBase&4095U) ||
        mapOffset>UINT64_MAX-bytes || gpuBase>UINT64_MAX-bytes)return false;
     const uint32_t pages=(bytes+4095U)/4096U;
@@ -22,7 +22,9 @@ inline bool observeBackingPages(uint64_t mapOffset,uint32_t bytes,uint64_t gpuBa
         const uint64_t gpu=gpuBase+uint64_t(i)*4096U;
         const uint32_t needed=bytes-i*4096U<4096U?bytes-i*4096U:4096U;
         uint64_t length=0,physical=0;uint32_t flags=0;
-        if(stable()) {
+        // Native mapped-segment lookup may lazily create a DMA map. Never
+        // perform that operation for diagnostics, and never override options.
+        if((mapperOptions&0x800U) && stable()) { // kIOMemoryMapperNone
             flags=3U;physical=query(offset,&length);
             if(stable())flags|=4U;
             if(physical && !(physical&4095U) && physical<=UINT64_MAX-needed && length>=needed)flags|=8U;

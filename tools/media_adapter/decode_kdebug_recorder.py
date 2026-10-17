@@ -42,7 +42,7 @@ def validate_leaf(kind, words):
             words[i] | words[i+1] << 32 for i in (4, 6, 8, 10, 12))
         if (gpu & 4095 or map_offset & 4095 or offset != map_offset + words[1]*4096 or
                 offset > MASK64-words[15] or gpu > MASK64-words[15] or
-                (words[3] & 1 and not words[3] & 2) or
+                (words[3] & 1 and (not words[3] & 2 or not words[18] & 0x800)) or
                 (words[3] & 4 and words[3] & 3 != 3) or
                 (words[3] & 8 and (not words[3] & 1 or not physical or physical & 4095 or
                                     physical > MASK64-words[15] or length < words[15])) or
@@ -411,11 +411,11 @@ class DiskSink:
 
 def self_test():
     backing = [1, 0, 16, 15, 0x40010000, 0, 0, 0, 0x12300000, 3,
-               65536, 0, 0, 0, 65536, 4096, 0, 0, 0x88, 0]
+               65536, 0, 0, 0, 65536, 4096, 0, 0, 0x888, 0]
     validate_leaf(17, backing)
     for index, value in ((0, 2), (1, 16), (2, 17), (3, 16), (4, 1), (6, 4096),
                          (8, 1), (10, 4095), (12, 1), (14, 65537), (15, 1),
-                         (16, 1), (17, 1), (19, 1)):
+                         (16, 1), (17, 1), (18, 0), (19, 1)):
         bad = list(backing)
         bad[index] = value
         try:

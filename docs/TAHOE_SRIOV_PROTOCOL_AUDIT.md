@@ -10,8 +10,15 @@ native submission acquires PT/CTB locks. It does **not** call
 global memory lock. The exact native `IGAccelSysMemory` getter instead supplies
 the same manager IOMapper options used by native linear `commitRange`.
 
+Mapped-mode `getPhysicalSegment` can lazily allocate a DMA map (Apple XNU
+`xnu-12377.1.9`, IOMemoryDescriptor.cpp:3198..3217). Diagnostics therefore only
+query when the unchanged native manager options already include
+`kIOMemoryMapperNone` (0x800). Other options emit an explicit denied sample,
+without invoking the getter. Never OR this option into native policy or treat
+an unmapped address as mapper-domain evidence when native options differ.
+
 Record kind17 (`mapper_backing_page`) covers at most sixteen pages/64KiB.
-Its20 DWORDs are version/index/page-count/flags, GPUVA, descriptor-relative
+Its 20 DWORDs are version/index/page-count/flags, GPUVA, descriptor-relative
 offset, physical segment, segment length, CPU map offset (each address/length
 as low/high), total bytes, page bytes, atomic0, reserved0, mapper options,
 reserved0. Flags1=query,2=identity before,4=identity after,8=valid segment extent.
