@@ -96,6 +96,10 @@ void testAvcMiAddressSpaces(const std::array<uint32_t,512>& frame,size_t used,si
 }
 
 void testAvcFrameOutputs() {
+    static_assert(NGVfAvcPublication::visibleHeight==1080 && NGVfAvcPublication::codedHeight==1088,"coded is not visible");
+    assert(NGVfAvcPublication::matchesCodedGeometry(1920,1088));
+    for(const auto dimensions:std::array<std::array<uint32_t,2>,4>{{{{1920,1080}},{{1280,720}},{{1920,1072}},{{1936,1088}}}})
+        assert(!NGVfAvcPublication::matchesCodedGeometry(dimensions[0],dimensions[1]));
     TglOwnedAvcScalingDefaults matrices;matrices.intra4.fill(6);matrices.inter4.fill(13);
     matrices.intra8.fill(20);matrices.inter8.fill(28);
     unsigned reads=0;bool mutate=false;

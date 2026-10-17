@@ -5791,6 +5791,8 @@ struct NativeOtherFrameBackend {
         auto owned=AvcInput::captureForContext(context,input,defaults,TglDarwinTypedCfReferenceApi{},&readMemory,admitted);
         if(!owned)return 5;
         auto* retained=owned.get();
+        if(retained && !NGVfAvcPublication::matchesCodedGeometry(
+            retained->codedGeometry().width,retained->codedGeometry().height))return 5;
         NgreenNativeAvcReservation::NativeAvcFrameOutputs outputs;
         if(!outputs.capture(context,input,retained->originalPayload(),output,&readMemory,&writableDataMemory,
             [&](uintptr_t address,size_t bytes) noexcept {
@@ -5911,7 +5913,8 @@ struct NativeOtherFrameBackend {
                                         static_cast<mach_msg_type_number_t>(size))==KERN_SUCCESS;
                             };
                             self.result=NgreenNativeAvcReservation::commit(self.producer+0x48,self.capability,
-                                self.capability.registryId,1920,1080,self.scratch,&readMemory,writeData,
+                                self.capability.registryId,NGVfAvcPublication::visibleWidth,
+                                NGVfAvcPublication::visibleHeight,self.scratch,&readMemory,writeData,
                                 &writableDataMemory,live);
                             const uint32_t record[]{0x4e475252,uint32_t(self.result.applied),
                                 uint32_t(self.result.mustStop),self.result.usedBytes};

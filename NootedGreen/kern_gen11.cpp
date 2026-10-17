@@ -6266,7 +6266,7 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 	auto live=[&](uint32_t words) {return same() && getMember<volatile uint32_t>(stream,0x34)==words;};
 	auto &words=getMember<volatile uint32_t>(stream,0x34);
 	const auto publication=NgreenAvcGen12::publish(span.commands,span.availableWords,span.reservedWords,
-		words,span.count,1920,1080,*entry->scratch,live,same);
+		words,span.count,NGVfAvcPublication::visibleWidth,NGVfAvcPublication::visibleHeight,*entry->scratch,live,same);
 	PANIC_COND(publication.mustStop,"ngreen","Lost owned AVC publication allocation/rollback");
 	if (!publication.published) {
 		entry->failed=true;

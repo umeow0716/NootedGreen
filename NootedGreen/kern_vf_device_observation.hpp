@@ -82,6 +82,13 @@ template<class Call> bool query(uint64_t expectedRegistryId,Call call,Reply& out
 namespace NGVfAvcPublication {
 constexpr uint32_t selector=0x4E470003U,version=1,profile=1;
 constexpr uint32_t routeReady=1,maxInputWords=1024,maxOutputWords=1536;
+// Profile 1 is the existing 1080p NV12 publication contract, not a promise
+// of arbitrary geometry. Coded allocation height includes macroblock padding.
+constexpr uint32_t visibleWidth=1920,visibleHeight=1080;
+constexpr uint32_t codedWidth=(visibleWidth+15U)&~15U,codedHeight=(visibleHeight+15U)&~15U;
+inline bool matchesCodedGeometry(uint32_t width,uint32_t height) noexcept {
+    return width==codedWidth && height==codedHeight;
+}
 struct Reply {
     uint32_t abiVersion,bytes;
     uint64_t registryId;
