@@ -97,9 +97,50 @@ static void testBackingPages() {
     assert(records==1); // Native mapped lookup could allocate; diagnostics MUST NOT call it.
 }
 
+static void testCpuAliasPages() {
+    const uint8_t code[]={0x55,0x48,0x89,0xe5,0xc3};
+    uint64_t reference=UINT64_C(14695981039346656037);
+    for(auto byte:code)reference=(reference^byte)*UINT64_C(1099511628211);
+    assert(NGFlightTrace::boundedCodeHash(code,5)==reference);
+    assert(!NGFlightTrace::boundedCodeHash(nullptr,5));
+    assert(!NGFlightTrace::boundedCodeHash(code,0));
+    assert(!NGFlightTrace::boundedCodeHash(code,1025));
+    unsigned queries=0,records=0,checks=0;
+    const uint64_t cpu=UINT64_C(0xffffff8040000000);
+    auto query=[&](uint64_t address)->uint64_t {
+        assert(address==cpu+queries*4096);++queries;return 0x12300000+queries*4096;
+    };
+    assert(NGFlightTrace::observeCpuAliasPages(cpu,0,65536,0x40010000,0,query,
+        [](){return true;},[](){return 0U;},[&](const uint32_t *r,uint32_t count) {
+            assert(count==20 && r[0]==1 && r[1]==records && r[2]==16 && r[3]==15);
+            assert(r[4]==0x40010000+records*4096 && r[6]==records*4096);
+            assert(r[8]==0x12301000+records*4096 && r[10]==4096);
+            assert(!r[16] && !r[17] && !r[18] && !r[19]);++records;
+        }));
+    assert(queries==16 && records==16); // Native options0 never invokes a DMA getter.
+    auto forbidden=[](uint64_t)->uint64_t {assert(false);return 0;};
+    auto noEmit=[](const uint32_t *,uint32_t){assert(false);};
+    for(uint64_t bad:{UINT64_C(0),UINT64_C(0x40010000),cpu+1,UINT64_C(0xfffffffffffff000)})
+        assert(!NGFlightTrace::observeCpuAliasPages(bad,0,65536,0x40010000,0,forbidden,
+            [](){return true;},[](){return 0U;},noEmit));
+    records=0;
+    assert(!NGFlightTrace::observeCpuAliasPages(cpu,0,4096,0x40010000,0,forbidden,
+        [](){return false;},[](){return 1U;},[&](const uint32_t *r,uint32_t) {
+            assert(!r[3] && !r[8] && !r[10] && r[17]==1 && r[19]==1);++records;
+        }));
+    assert(records==1);
+    records=queries=checks=0;
+    unsigned mapperReads=0;
+    assert(!NGFlightTrace::observeCpuAliasPages(cpu,0,8192,0x40010000,0,query,
+        [&](){return ++checks==1;},[&](){return mapperReads++?1U:0U;},
+        [&](const uint32_t *r,uint32_t) {assert(r[3]==11 && r[17]==0 && r[19]==1);++records;}));
+    assert(records==1 && queries==1); // Identity changed: do not query the next page.
+}
+
 int main() {
     testFlightEnvelope();
     testBackingPages();
+    testCpuAliasPages();
     assert(NGVfTimeoutObservation::prefixEngineForChannel(0)==0);
     assert(NGVfTimeoutObservation::prefixEngineForChannel(3)==3);
     for(int32_t channel:{INT32_MIN,-1,1,2,4,5,6,INT32_MAX})

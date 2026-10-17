@@ -2,6 +2,28 @@
 
 ## 2026-10-18 CPU backing observation (local, not deployed)
 
+V381 runtime: native mapper options0 caused kind17 to decline the query as
+designed. Local V382 adds separate kind18 CPU-alias RAM observations, leaving
+the native mapper-query restriction intact. It resolves the native kernel-pmap
+nofault walk, verifies all57 wrapper bytes and816 walker/local-helper bytes
+(25G229 FNV64 8d33f3e48fddb6bd/ddd9ec77c57b4d13), verifies the relative call
+target, and requires the actual kernel_pmap to equal the wrapper's kernel-store
+LEA target. This is code verification, not a kernel text patch. Bind failure
+emits `V382: CPU RAM backing observer bound=0`; require bound1 before workload.
+Kernel-pmap dispatch avoids the foreign-pmap lock branch; the native walk reads
+CPU page tables, returns missing pages without paging them in, and restores
+preemption. Corrupted CPU page-table/physmap invariants may still trigger the
+native fail-stop; no recovery or policy is weakened.
+
+Kind18 has the same20-word extent layout as kind17 except words17/19 record
+system-mapper presence before/after (0 absent/1 present). It queries only a
+canonical kernel CPU alias, never a GPU VA; at most16 pages, before native
+submit/PT/CTB locking. No descriptor/DMA getter is called for kind18. Coverage
+is stored separately as `cpu_alias_backings`, not native mapper-domain proof.
+CPU RAM and device IOVA are distinct domains when a system mapper exists;
+even two absent reads are non-atomic observations, not GPU fetch/coherency
+or completion proof. No VM has exercised this V382 code yet.
+
 V380 flight proved CPU publication/native command identity, not the physical
 backing fetched by the GPU. The mapper-domain observation runs once after
 successful CPU publication in the existing Media-end native IOLock, before

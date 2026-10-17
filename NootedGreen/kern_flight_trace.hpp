@@ -8,6 +8,40 @@ using Callback=void (*)(uint32_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr
 constexpr uint32_t begin=0x06fe0000U,data=0x06fe0004U,end=0x06fe0008U;
 constexpr uint64_t magic=UINT64_C(0x4e47464c00000000);
 constexpr uint32_t maximumWords=1536;
+inline uint64_t boundedCodeHash(const volatile uint8_t *bytes,uint32_t count) {
+    if(!bytes || !count || count>1024)return 0;
+    uint64_t hash=UINT64_C(14695981039346656037);
+    for(uint32_t i=0;i<count;++i)hash=(hash^bytes[i])*UINT64_C(1099511628211);
+    return hash;
+}
+// CPU alias -> CPU RAM only. Mapper presence is evidence, never admission to
+// invoke a descriptor/DMA getter. Query is the pinned kernel-pmap nofault walk.
+template<class Query,class Stable,class Mapper,class Emit>
+inline bool observeCpuAliasPages(uint64_t cpuBase,uint64_t mapOffset,uint32_t bytes,
+                                uint64_t gpuBase,uint32_t mapperOptions,
+                                Query &&query,Stable &&stable,Mapper &&mapper,Emit &&emit) {
+    if((cpuBase>>48)!=0xffffU || !gpuBase || !bytes || bytes>65536 || ((cpuBase|mapOffset|gpuBase)&4095U) ||
+       cpuBase>UINT64_MAX-bytes || mapOffset>UINT64_MAX-bytes || gpuBase>UINT64_MAX-bytes)return false;
+    const uint32_t pages=(bytes+4095U)/4096U;
+    for(uint32_t i=0;i<pages;++i) {
+        const uint64_t offset=mapOffset+uint64_t(i)*4096U,gpu=gpuBase+uint64_t(i)*4096U;
+        const uint32_t needed=bytes-i*4096U<4096U?bytes-i*4096U:4096U;
+        const uint32_t mapperBefore=mapper();
+        uint64_t physical=0;uint32_t flags=0;
+        if(stable()) {
+            flags=3U;physical=query(cpuBase+uint64_t(i)*4096U);
+            if(stable())flags|=4U;
+            if(physical && !(physical&4095U) && physical<=UINT64_MAX-needed)flags|=8U;
+        }
+        const uint32_t record[]={1,i,pages,flags,uint32_t(gpu),uint32_t(gpu>>32),
+            uint32_t(offset),uint32_t(offset>>32),uint32_t(physical),uint32_t(physical>>32),
+            physical?needed:0U,0,uint32_t(mapOffset),uint32_t(mapOffset>>32),bytes,needed,
+            0,mapperBefore,mapperOptions,mapper()};
+        emit(record,20U);
+        if((flags&7U)!=7U)return false;
+    }
+    return true; // Not IOVA/GPU fetch/coherency/completion proof, even without a mapper.
+}
 // CPU-only, mapper-domain observations. The caller owns the native memory
 // lifetime and supplies a verified non-spinlock query site. Never authorizes
 // a PTE write, a command, or completion. No query after identity instability.

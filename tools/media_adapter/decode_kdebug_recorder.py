@@ -28,13 +28,15 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          10: 'timeout', 11: 'scope_end', 12: 'native_mapping_before_copy',
          13: 'ring_operand_leaf', 14: 'batch_leaf',
          15: 'retained_ring_metadata', 16: 'retained_ring_chunk',
-         17: 'mapper_backing_page'}
+         17: 'mapper_backing_page', 18: 'cpu_alias_ram_page'}
 
 
 def validate_leaf(kind, words):
-    if kind == 17:
+    if kind in (17, 18):
         if (len(words) != 20 or words[0] != 1 or not 1 <= words[2] <= 16 or
-                words[1] >= words[2] or words[3] & ~15 or words[16] or words[17] or words[19] or
+                words[1] >= words[2] or words[3] & ~15 or words[16] or
+                (kind == 17 and (words[17] or words[19])) or
+                (kind == 18 and (words[17] not in (0, 1) or words[19] not in (0, 1))) or
                 not 1 <= words[14] <= 65536 or words[2] != (words[14]+4095)//4096 or
                 words[15] != min(4096, words[14]-4096*words[1])):
             raise ValueError('invalid mapper backing page schema')
@@ -42,7 +44,7 @@ def validate_leaf(kind, words):
             words[i] | words[i+1] << 32 for i in (4, 6, 8, 10, 12))
         if (gpu & 4095 or map_offset & 4095 or offset != map_offset + words[1]*4096 or
                 offset > MASK64-words[15] or gpu > MASK64-words[15] or
-                (words[3] & 1 and (not words[3] & 2 or not words[18] & 0x800)) or
+                (words[3] & 1 and (not words[3] & 2 or (kind == 17 and not words[18] & 0x800))) or
                 (words[3] & 4 and words[3] & 3 != 3) or
                 (words[3] & 8 and (not words[3] & 1 or not physical or physical & 4095 or
                                     physical > MASK64-words[15] or length < words[15])) or
@@ -309,6 +311,7 @@ class DiskSink:
         self.db.execute('CREATE INDEX by_group_kind ON records(group_id,kind)')
         self.db.execute('CREATE TABLE rings (identity TEXT PRIMARY KEY, group_id INTEGER, bytes INTEGER, tail INTEGER, admitted INTEGER, captured INTEGER) WITHOUT ROWID')
         self.db.execute('CREATE TABLE backings (identity TEXT, group_id INTEGER, pages INTEGER, captured INTEGER, valid INTEGER, bytes INTEGER, map_offset TEXT, options INTEGER, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
+        self.db.execute('CREATE TABLE cpu_backings (identity TEXT, group_id INTEGER, pages INTEGER, captured INTEGER, valid INTEGER, bytes INTEGER, map_offset TEXT, options INTEGER, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.commit()
         self.pending = 0
         self.sideband_file = None
@@ -346,7 +349,8 @@ class DiskSink:
         validate_leaf(record['kind'], words)
         if self.db.execute('SELECT 1 FROM records WHERE id=?', (record['record_id'],)).fetchone():
             raise ValueError('duplicate completed flight record ID')
-        if record['kind'] == 17:
+        if record['kind'] in (17, 18):
+            table = 'backings' if record['kind'] == 17 else 'cpu_backings'
             gpu = words[4] | words[5] << 32
             if gpu != int(record['identity'], 16)+words[1]*4096:
                 raise ValueError('mapper backing GPU identity mismatch')
@@ -354,14 +358,14 @@ class DiskSink:
             config = (words[2], words[14], f'{words[13]:08x}{words[12]:08x}', words[18])
             if words[1] == 0:
                 try:
-                    self.db.execute('INSERT INTO backings VALUES (?,?,?,0,0,?,?,?)',
+                    self.db.execute(f'INSERT INTO {table} VALUES (?,?,?,0,0,?,?,?)',
                                     key+(config[0],)+config[1:])
                 except sqlite3.IntegrityError as exc:
                     raise ValueError('duplicate mapper backing capture') from exc
-            current = self.db.execute('SELECT pages,bytes,map_offset,options,captured FROM backings WHERE identity=? AND group_id=?', key).fetchone()
+            current = self.db.execute(f'SELECT pages,bytes,map_offset,options,captured FROM {table} WHERE identity=? AND group_id=?', key).fetchone()
             if current != config+(words[1],):
                 raise ValueError('missing/duplicate/out-of-order/mismatched mapper backing page')
-            self.db.execute('UPDATE backings SET captured=captured+1,valid=valid+? WHERE identity=? AND group_id=?',
+            self.db.execute(f'UPDATE {table} SET captured=captured+1,valid=valid+? WHERE identity=? AND group_id=?',
                             (int(words[3] == 15),)+key)
         elif record['kind'] == 15:
             try:
@@ -385,8 +389,9 @@ class DiskSink:
         except sqlite3.IntegrityError as exc:
             raise ValueError('duplicate completed flight record ID') from exc
 
-    def backing_report(self):
-        total, covered, valid = self.db.execute('SELECT COUNT(*),COALESCE(SUM(captured=pages),0),COALESCE(SUM(captured=pages AND valid=pages),0) FROM backings').fetchone()
+    def backing_report(self, cpu_alias=False):
+        table = 'cpu_backings' if cpu_alias else 'backings'
+        total, covered, valid = self.db.execute(f'SELECT COUNT(*),COALESCE(SUM(captured=pages),0),COALESCE(SUM(captured=pages AND valid=pages),0) FROM {table}').fetchone()
         return {'captures': total, 'complete_page_coverage': covered,
                 'all_pages_stable_valid': valid, 'gpu_execution_proven': False}
 
@@ -413,6 +418,17 @@ def self_test():
     backing = [1, 0, 16, 15, 0x40010000, 0, 0, 0, 0x12300000, 3,
                65536, 0, 0, 0, 65536, 4096, 0, 0, 0x888, 0]
     validate_leaf(17, backing)
+    cpu_alias = list(backing)
+    cpu_alias[18] = 0
+    validate_leaf(18, cpu_alias)  # CPU RAM, not the native mapper-domain getter.
+    for index in (17, 19):
+        bad = list(cpu_alias)
+        bad[index] = 2
+        try:
+            validate_leaf(18, bad)
+        except ValueError:
+            continue
+        raise AssertionError('invalid CPU mapper-presence observation accepted')
     for index, value in ((0, 2), (1, 16), (2, 17), (3, 16), (4, 1), (6, 4096),
                          (8, 1), (10, 4095), (12, 1), (14, 65537), (15, 1),
                          (16, 1), (17, 1), (18, 0), (19, 1)):
@@ -592,6 +608,21 @@ def self_test():
             save(dict(backing_record, record_id=201+i, words=page))
         assert save.backing_report() == {'captures': 1, 'complete_page_coverage': 1,
                                           'all_pages_stable_valid': 1, 'gpu_execution_proven': False}
+        assert save.backing_report(cpu_alias=True)['captures'] == 0
+        save(dict(backing_record, record_id=250, kind=18, words=cpu_alias))
+        assert save.backing_report(cpu_alias=True)['complete_page_coverage'] == 0
+        assert save.backing_report()['complete_page_coverage'] == 1
+        for i in range(1, 16):
+            page = list(cpu_alias)
+            page[1], page[4], page[6], page[8], page[10] = i, 0x40010000+i*4096, i*4096, 0x12300000+i*4096, 65536-i*4096
+            save(dict(backing_record, record_id=250+i, kind=18, words=page))
+        assert save.backing_report(cpu_alias=True)['complete_page_coverage'] == 1
+        try:
+            save(dict(backing_record, record_id=280, kind=18, words=cpu_alias))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('duplicate CPU alias capture accepted')
         sideband = Decoder(lambda _: None, save.sideband)
         for item in archive[:6]:
             sideband.packet(*item)
@@ -629,6 +660,7 @@ if __name__ == '__main__':
             error = str(exc)
         ring_report = sink.ring_report()
         backing_report = sink.backing_report()
+        cpu_alias_report = sink.backing_report(cpu_alias=True)
         try:
             sink.close()
         except (OSError, sqlite3.Error) as exc:
@@ -636,6 +668,7 @@ if __name__ == '__main__':
         report = decoder.report()
         report['rings'] = ring_report
         report['backings'] = backing_report
+        report['cpu_alias_backings'] = cpu_alias_report
         if error:
             report['error'] = error
             report['capture_transport_complete'] = False

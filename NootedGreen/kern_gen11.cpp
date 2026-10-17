@@ -182,6 +182,10 @@ static mach_vm_address_t gVfNativeBatchMapGetter = 0;
 static bool gVfNativeBatchLayoutBound = false;
 static mach_vm_address_t gVfMediaSysMemoryVtable = 0;
 static bool gVfMediaMapOffsetLayoutVerified = false;
+static mach_vm_address_t gVfCpuBackingLookup = 0;
+static void **gVfCpuKernelPmapSlot = nullptr;
+static void *gVfCpuKernelPmapStore = nullptr;
+static void **gVfCpuSystemMapperSlot = nullptr;
 // Optional AVC producer integration handles. Resolving these does not enable
 // a route, map memory, invoke a getter, or authorize a command-buffer write.
 bool gVfMediaPublicationAbiVerified = false;
@@ -2900,6 +2904,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			gVfMediaKernelMappedMemoryVtable = 0;
 			gVfMediaKernelMappedMemoryLength = 0;
 			gVfMediaMapOffsetLayoutVerified = false;
+			gVfCpuBackingLookup=0;gVfCpuKernelPmapSlot=nullptr;
+			gVfCpuKernelPmapStore=nullptr;gVfCpuSystemMapperSlot=nullptr;
 			gVfMediaMapAddress = gVfMediaMapLength = gVfMediaMapDescriptor = gVfMediaMapOptions = 0;
 			const auto process = patcher.solveSymbol(index,
 				"__ZN15IOAccelContext218processDataBuffersEj", address, size);
@@ -2927,6 +2933,23 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				0x48,0x8b,0x07,0xff,0x90,0x38,0x01,0x00,0x00};
 			gVfMediaMapOffsetLayoutVerified=mapPhysical &&
 				anchorMatches(mapPhysical+0x53,mapOffsetUse,sizeof(mapOffsetUse));
+			const auto cpuLookup=patcher.solveSymbol(KernelPatcher::KernelID,"_pmap_find_phys_nofault");
+			const auto cpuFindPa=patcher.solveSymbol(KernelPatcher::KernelID,"_pmap_find_pa");
+			const auto kernelPmap=patcher.solveSymbol(KernelPatcher::KernelID,"_kernel_pmap");
+			const auto systemMapper=patcher.solveSymbol(KernelPatcher::KernelID,"__ZN8IOMapper7gSystemE");
+			// Exact 25G229 complete code spans, including the local leaf walker.
+			// RIP displacements survive the kernel slide. No code is patched.
+			if(cpuLookup && cpuFindPa && kernelPmap && systemMapper &&
+			   NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(cpuLookup),57)==UINT64_C(0x8d33f3e48fddb6bd) &&
+			   NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(cpuFindPa),816)==UINT64_C(0xddd9ec77c57b4d13) &&
+			   cpuLookup+0x33+getMember<int32_t>(reinterpret_cast<void *>(cpuLookup),0x2f)==cpuFindPa) {
+				void *store=reinterpret_cast<void *>(cpuLookup+7+getMember<int32_t>(reinterpret_cast<void *>(cpuLookup),3));
+				if(*reinterpret_cast<void **>(kernelPmap)==store) {
+					gVfCpuBackingLookup=cpuLookup;gVfCpuKernelPmapSlot=reinterpret_cast<void **>(kernelPmap);
+					gVfCpuKernelPmapStore=store;gVfCpuSystemMapperSlot=reinterpret_cast<void **>(systemMapper);
+				}
+			}
+			SYSLOG("ngreen","V382: CPU RAM backing observer bound=%u",gVfCpuBackingLookup?1U:0U);
 			constexpr uint8_t parseCall[] = {0xff,0x90,0x08,0x0a,0,0};
 			constexpr uint8_t endCall[] = {0xff,0x90,0x38,0x0a,0,0};
 			constexpr uint8_t classBase[] = {0x4c,0x8d,0xbb,0xe0,0x06,0,0};
@@ -6375,6 +6398,19 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 				vfFlightRecord(17,entry->flightGroup,span.gpuBase,record,count);
 			});
 		SYSLOG("ngreen","V381: mapper-domain backing CPU observation sampled=%u atomic=0",sampled?1U:0U);
+		if(gVfCpuBackingLookup && gVfCpuKernelPmapSlot && gVfCpuSystemMapperSlot) {
+			const auto stableCpu=[&]() {
+				return stableBacking() && *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore;
+			};
+			using CpuPage=uint32_t (*)(void *,uint64_t);
+			const uint64_t cpuBase=reinterpret_cast<uint64_t>(span.commands)-span.offset;
+			const bool cpuSampled=NGFlightTrace::observeCpuAliasPages(cpuBase,mapOffset,span.bytes,span.gpuBase,mapperOptions,
+				[&](uint64_t address) {
+					return uint64_t(reinterpret_cast<CpuPage>(gVfCpuBackingLookup)(gVfCpuKernelPmapStore,address))<<12;
+				},stableCpu,[](){return *gVfCpuSystemMapperSlot?1U:0U;},
+				[&](const uint32_t *record,uint32_t count) {vfFlightRecord(18,entry->flightGroup,span.gpuBase,record,count);});
+			SYSLOG("ngreen","V382: CPU RAM backing observation sampled=%u atomic=0",cpuSampled?1U:0U);
+		}
 	}
 	};
 	auto &words=getMember<volatile uint32_t>(stream,0x34);
