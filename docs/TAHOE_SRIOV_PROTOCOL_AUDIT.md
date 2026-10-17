@@ -1,5 +1,27 @@
 # Tahoe SR-IOV protocol audit — in progress
 
+## 2026-10-18 V384 exact BootKC-linked observer fingerprints
+
+V383's current-boot trace resolves every RAM/copy symbol, Family layout and TGL
+batch/caller anchor. All four observed kernel hashes differ from the standalone
+kernel, but match the already archived BootKC's complete corresponding spans:
+lookup57B=51b84c628134c4ea, walker816B=88e1cd84195161db,
+copy362B=d8a37de28d61bb88, physical208B=292f758de9058cc4.
+The embedded kernel UUID remains1291D44A-C0CD-3AC7-A9E4-CA2749B33959;
+collection linking changes RIP-relative displacements before the runtime slide.
+The paired lookup LEA and kernel_pmap cell both name kernel_pmap_store1223d40;
+lookup/copy callees resolve to the same4b1880/4c8b10 symbols. This closes the
+observer's wrong-image fingerprint defect, not the earlier PF/GPU hang.
+
+V384 requires only these exact linked hashes, never masks/normalizes bytes or
+accepts the old standalone fingerprints. Existing symbol/callee/store/owner/
+mapper policy/native-once gates remain. The bounded native test verifies the
+embedded Mach-O/UUID, all four code bodies, call displacements and store cell;
+1749 changed-byte mutations reject. Actual admission ASan/UBSan includes19
+independent refusals, with all four standalone fingerprints explicitly rejected.
+V383 media execution was0, early close/full cooldown/status0; V384 has not yet
+executed in Guest and cannot claim observer admission or H264/PF completion.
+
 ## 2026-10-18 V382 runtime admission / V383 binding diagnostics
 
 V382 was installed and loaded with its exact UUID. Its native flight collector

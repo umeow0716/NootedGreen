@@ -110,7 +110,7 @@ if sys.argv[1:2] == ['--resource-layout']:
         print('PASS production CPU resource parser matches independent offline inventory for saved publication and native batch; no GPU call')
 elif sys.argv[1:]:
     if len(sys.argv) not in (4, 5) or sys.argv[1] != '--native':
-        raise SystemExit('usage: vf_sync_batch_observer_test.py [--native TGL KERNEL [FAMILY]]')
+        raise SystemExit('usage: vf_sync_batch_observer_test.py [--native TGL BOOTKC [FAMILY]]')
     def bounded(path, offset, size):
         assert 0 < size <= 1024
         with Path(path).open('rb') as file:
@@ -126,9 +126,10 @@ elif sys.argv[1:]:
     mutations = 0
     for path, offset, size, digest in (
             (sys.argv[2], 0x42f7a, 242, 0x6c30a64a7547b329),
-            (sys.argv[3], 0x1e4dc0, 362, 0x648d5b7fd7277f0e),
-            (sys.argv[3], 0x1e0b10, 208, 0xf9172f81775ea555),
-            (sys.argv[3], 0x1c9880, 816, 0xddd9ec77c57b4d13)):
+            (sys.argv[3], 0x2b1bc0, 57, 0x51b84c628134c4ea),
+            (sys.argv[3], 0x2ccdc0, 362, 0xd8a37de28d61bb88),
+            (sys.argv[3], 0x2c8b10, 208, 0x292f758de9058cc4),
+            (sys.argv[3], 0x2b1880, 816, 0x88e1cd84195161db)):
         data = bounded(path, offset, size)
         assert f'0x{digest:016x}' in source and fnv(data) == digest
         for index in range(size):
@@ -138,12 +139,31 @@ elif sys.argv[1:]:
     assert bounded(sys.argv[2], 0x42f7a, 14) == bytes.fromhex('554889e54156534883ec104989f6')
     caller = bounded(sys.argv[2], 0x4c828, 47)
     assert caller == bytes.fromhex('498bbc2430010000498b7618498b4e20458b4630450fb64e6a410fb64669488b1f4883ec084489fa50ff9318010000')
-    copier = bounded(sys.argv[3], 0x1e4dc0, 362)
+    # Paired embedded Mach-O identity, not an identically named standalone file.
+    outer=struct.unpack('<8I',bounded(sys.argv[3],0,32))
+    assert outer[0]==0xfeedfacf and outer[1]==0x01000007 and outer[3]==0xc
+    header=bounded(sys.argv[3],0xe8000,32)
+    fields=struct.unpack('<8I',header)
+    assert fields[0]==0xfeedfacf and fields[3]==2 and fields[4]==21 and fields[5]<=8192
+    commands=b''.join(bounded(sys.argv[3],0xe8020+off,min(1024,fields[5]-off))
+                      for off in range(0,fields[5],1024))
+    at=0;uuids=[]
+    for _ in range(fields[4]):
+        kind,length=struct.unpack_from('<II',commands,at)
+        assert 8<=length<=4096 and at+length<=len(commands)
+        if kind==0x1b:uuids.append(commands[at+8:at+24].hex())
+        at+=length
+    assert at==len(commands) and uuids==['1291d44ac0cd3ac7a9e4ca2749b33959']
+    lookup=bounded(sys.argv[3],0x2b1bc0,57)
+    assert 0xffffff80004b1bc0+7+struct.unpack_from('<i',lookup,3)[0]==0xffffff8001223d40
+    assert 0xffffff80004b1bc0+0x33+struct.unpack_from('<i',lookup,0x2f)[0]==0xffffff80004b1880
+    assert struct.unpack('<Q',bounded(sys.argv[3],0x6a6f0,8))[0]==0xffffff8001223d40
+    copier = bounded(sys.argv[3], 0x2ccdc0, 362)
     for displacement, next_instruction, target in (
-            (0x31, 0x35, 0xffffff80003c9880),
-            (0x7b, 0x7f, 0xffffff80003c9880),
-            (0x12d, 0x131, 0xffffff80003e0b10)):
-        assert 0xffffff80003e4dc0 + next_instruction + struct.unpack_from('<i', copier, displacement)[0] == target
+            (0x31, 0x35, 0xffffff80004b1880),
+            (0x7b, 0x7f, 0xffffff80004b1880),
+            (0x12d, 0x131, 0xffffff80004c8b10)):
+        assert 0xffffff80004ccdc0 + next_instruction + struct.unpack_from('<i', copier, displacement)[0] == target
     if len(sys.argv) == 5:
         family = sys.argv[4]
         for offset, size, digest in ((0x1ce9e, 22, 0x8af5292e747d0d15),
@@ -192,9 +212,12 @@ template<class T>T getMember(void *p,unsigned offset){T v;std::memcpy(&v,static_
 namespace NGFlightTrace {
  uint64_t boundedCodeHash(const volatile uint8_t *p,unsigned length){
   const unsigned offsets[]={4096,8192,20480,24576},sizes[]={57,816,362,208};
-  const uint64_t hashes[]={UINT64_C(0x8d33f3e48fddb6bd),UINT64_C(0xddd9ec77c57b4d13),
+  const uint64_t hashes[]={UINT64_C(0x51b84c628134c4ea),UINT64_C(0x88e1cd84195161db),
+    UINT64_C(0xd8a37de28d61bb88),UINT64_C(0x292f758de9058cc4)};
+  const uint64_t standalone[]={UINT64_C(0x8d33f3e48fddb6bd),UINT64_C(0xddd9ec77c57b4d13),
     UINT64_C(0x648d5b7fd7277f0e),UINT64_C(0xf9172f81775ea555)};
-  for(unsigned i=0;i<4;++i)if(p==arena+offsets[i]){assert(length==sizes[i]);return hashes[i]^(scenario==i+7?1:0);}
+  for(unsigned i=0;i<4;++i)if(p==arena+offsets[i]){assert(length==sizes[i]);
+    return scenario==i+16?standalone[i]:hashes[i]^(scenario==i+7?1:0);}
   assert(false);return 0;
  }
 }
@@ -207,7 +230,7 @@ __ACTUAL_RAM__
 __ACTUAL_COPY__
 }
 int main(){
- for(scenario=0;scenario<=15;++scenario){
+ for(scenario=0;scenario<=19;++scenario){
   std::memset(arena,0,sizeof(arena));logs=0;
   gVfCpuBackingLookup=gVfBatchCpuCopy=0;gVfCpuKernelPmapSlot=gVfCpuSystemMapperSlot=nullptr;gVfCpuKernelPmapStore=nullptr;
   displacement(4096,3,7,28672);displacement(4096,0x2f,0x33,8192+(scenario==11?1:0));
@@ -216,11 +239,11 @@ int main(){
   displacement(20480,0x12d,0x131,24576+(scenario==14?1:0));
   *reinterpret_cast<void **>(arena+12288)=arena+28672+(scenario==15?8:0);
   actualBinding();assert(logs==3);
-  const bool ramOk=scenario==0 || scenario==5 || scenario==6 || scenario==9 || scenario==10 || scenario==12 || scenario==13 || scenario==14;
+  const bool ramOk=scenario==0 || scenario==5 || scenario==6 || scenario==9 || scenario==10 || scenario==12 || scenario==13 || scenario==14 || scenario==18 || scenario==19;
   assert(bool(gVfCpuBackingLookup)==ramOk);assert(bool(gVfBatchCpuCopy)==(scenario==0));
   assert(bool(gVfCpuKernelPmapSlot)==ramOk && bool(gVfCpuSystemMapperSlot)==ramOk && bool(gVfCpuKernelPmapStore)==ramOk);
  }
- std::puts("PASS actual RAM/copy binding admission: positive and 15 independent refusals; no native helper invocation");
+ std::puts("PASS actual RAM/copy binding admission: positive and 19 independent refusals including all four standalone hashes; no native helper invocation");
 }
 '''.replace('__ACTUAL_RAM__',source[ram_begin:ram_end]).replace('__ACTUAL_COPY__',source[copy_begin:copy_end])
 with tempfile.TemporaryDirectory(prefix='ngreen-bindings-') as directory:

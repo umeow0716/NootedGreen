@@ -2946,14 +2946,16 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			const auto systemMapper=patcher.solveSymbol(KernelPatcher::KernelID,"__ZN8IOMapper7gSystemE");
 			const auto cpuLookupHash=cpuLookup?NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(cpuLookup),57):0;
 			const auto cpuFindPaHash=cpuFindPa?NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(cpuFindPa),816):0;
-			const bool cpuLookupCall=cpuLookup && cpuFindPa && cpuLookupHash==UINT64_C(0x8d33f3e48fddb6bd) &&
+			const bool cpuLookupCall=cpuLookup && cpuFindPa && cpuLookupHash==UINT64_C(0x51b84c628134c4ea) &&
 				cpuLookup+0x33+getMember<int32_t>(reinterpret_cast<void *>(cpuLookup),0x2f)==cpuFindPa;
 			bool cpuStoreMatch=false;
-			// Exact 25G229 complete code spans, including the local leaf walker.
-			// RIP displacements survive the kernel slide. No code is patched.
+			// Exact BootKC-linked 25G229 spans, including the local leaf walker.
+			// The same-UUID standalone kernel has DIFFERENT RIP displacements:
+			// collection linking precedes the uniform runtime slide. No masking,
+			// standalone fallback, code patch or new DMA mapping is permitted.
 			if(cpuLookup && cpuFindPa && kernelPmap && systemMapper &&
-			   cpuLookupHash==UINT64_C(0x8d33f3e48fddb6bd) &&
-			   cpuFindPaHash==UINT64_C(0xddd9ec77c57b4d13) && cpuLookupCall) {
+			   cpuLookupHash==UINT64_C(0x51b84c628134c4ea) &&
+			   cpuFindPaHash==UINT64_C(0x88e1cd84195161db) && cpuLookupCall) {
 				void *store=reinterpret_cast<void *>(cpuLookup+7+getMember<int32_t>(reinterpret_cast<void *>(cpuLookup),3));
 				cpuStoreMatch=*reinterpret_cast<void **>(kernelPmap)==store;
 				if(cpuStoreMatch) {
@@ -2971,7 +2973,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			const auto nofaultCopyHash=nofaultCopy?NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(nofaultCopy),362):0;
 			const auto physicalCopyHash=physicalCopy?NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(physicalCopy),208):0;
 			unsigned copyCalls=0;
-			if(nofaultCopy && nofaultCopyHash==UINT64_C(0x648d5b7fd7277f0e)) {
+			if(nofaultCopy && nofaultCopyHash==UINT64_C(0xd8a37de28d61bb88)) {
 				if(cpuFindPa && nofaultCopy+0x35+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x31)==cpuFindPa)copyCalls|=1U;
 				if(cpuFindPa && nofaultCopy+0x7f+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x7b)==cpuFindPa)copyCalls|=2U;
 				if(physicalCopy && nofaultCopy+0x131+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x12d)==physicalCopy)copyCalls|=4U;
@@ -3002,8 +3004,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// rejects non-RAM/missing pages and returns a SHORT byte count.
 			// It never enters descriptor DMA mapping or faults pages in.
 			if(gVfCpuBackingLookup && nofaultCopy && physicalCopy &&
-			   nofaultCopyHash==UINT64_C(0x648d5b7fd7277f0e) &&
-			   physicalCopyHash==UINT64_C(0xf9172f81775ea555) && copyCalls==7U)
+			   nofaultCopyHash==UINT64_C(0xd8a37de28d61bb88) &&
+			   physicalCopyHash==UINT64_C(0x292f758de9058cc4) && copyCalls==7U)
 				gVfBatchCpuCopy=nofaultCopy;
 			SYSLOG("ngreen","V383: CPU copy binding symbols=%x copy-hash=%llx physical-hash=%llx calls=%x map-layout=%u",
 				(nofaultCopy?1U:0U)|(physicalCopy?2U:0U),static_cast<unsigned long long>(nofaultCopyHash),
