@@ -54,6 +54,8 @@ bool ownedExecutableMemory(uintptr_t address,size_t length) noexcept;
 uintptr_t qualifiedIoAcceleratorFramework(uintptr_t address) noexcept;
 uintptr_t qualifiedAppleGvaFramework(uintptr_t address) noexcept;
 int dispatchOwnedContextFrame(void*,const void*,void**) noexcept;
+uint64_t dispatchOwnedAvcSize(void*,const void*,uint32_t*,uint32_t*) noexcept;
+uint64_t dispatchOwnedAvcBuilder(void*,const void*,void*) noexcept;
 struct NativeDataPointerWriter {
     bool operator()(uintptr_t address,uintptr_t value) const noexcept {
         // Caller holds exact owner/physical exclusive admission. A failed write
@@ -171,10 +173,18 @@ struct NativeCodecBackend {
             const auto context=batch.contexts[i];
             if(!context)continue; // Native NULL request entries have no owner/table to publish.
             auto lease=owners().pinExclusive(scope.image(),physical,scope.generation(),context);
-            if(!lease.get() || !lease.exclusive() || !lease.get()->publishFrame(lease,hook,
-                [&](uintptr_t image,uintptr_t parent,uint64_t generation,uintptr_t object) noexcept {
-                    return object==context && scope.matches(image,parent,generation) && image==scope.image() && parent==physical;
-                },&ownedExecutableMemory))return 5;
+            TglNativeMixedContextFrameBinding binding;
+            if(!lease.get() || !lease.exclusive() ||
+               !binding.resolve(scope.image(),context,&readMemory,NativeTglImageAdmission{scope.image()},&executableMemory))return 5;
+            auto sameOwner=[&](uintptr_t image,uintptr_t parent,uint64_t generation,uintptr_t object) noexcept {
+                return object==context && scope.matches(image,parent,generation) && image==scope.image() && parent==physical;
+            };
+            const bool published=binding.frame==scope.image()+0x27724?
+                lease.get()->publishAvcInputCallbacks(lease,hook,
+                    reinterpret_cast<uintptr_t>(&dispatchOwnedAvcSize),
+                    reinterpret_cast<uintptr_t>(&dispatchOwnedAvcBuilder),sameOwner,&ownedExecutableMemory):
+                lease.get()->publishFrame(lease,hook,sameOwner,&ownedExecutableMemory);
+            if(!published)return 5;
         }
         selected->framesPublished=true;return 0;
     }
@@ -5535,9 +5545,10 @@ struct NativeFactoryFrameBatch {
         const auto index=current->items.nextIndex();
         return current->items.runNext(reinterpret_cast<uintptr_t>(codec),reinterpret_cast<uintptr_t>(input),
             reinterpret_cast<uintptr_t>(output),&readMemory,[&]() noexcept -> int {
-                if(index>=current->owners.size() || !current->owners[index].get() ||
-                    current->owners[index].get()->context()!=reinterpret_cast<uintptr_t>(codec))return 5;
-                return current->request.dispatch(current->request.context,current->owners[index],current->physical,
+                const size_t ownerIndex=current->items.ownerIndex(index);
+                if(ownerIndex>=current->owners.size() || !current->owners[ownerIndex].get() ||
+                    current->owners[ownerIndex].get()->context()!=reinterpret_cast<uintptr_t>(codec))return 5;
+                return current->request.dispatch(current->request.context,current->owners[ownerIndex],current->physical,
                     current->image,current->address,current->generation,
                     reinterpret_cast<uintptr_t>(input),reinterpret_cast<uintptr_t>(output));
             });
@@ -5551,6 +5562,9 @@ struct NativeFactoryFrameBatch {
         NativeFactoryFrameBatch batch{scope,binding.image,physical,generation,request,{}, {}};
         if(!batch.items.capture(reinterpret_cast<uintptr_t>(input),reinterpret_cast<uintptr_t>(output),&readMemory))return 5;
         for(uint32_t i=0;i<batch.items.count();++i) {
+            // A repeated context shares its batch-long pin; otherwise its own
+            // duplicate pins would prevent sole-owner AVC promotion forever.
+            if(batch.items.ownerIndex(i)!=i)continue;
             batch.owners[i]=NativeCodecBackend::owners().pin(binding.image,physical,generation,batch.items.context(i));
             if(!batch.owners[i].get())return 5;
             const auto& table=batch.owners[i].get()->frameTable();const auto* entries=table.addressPoint();
@@ -5572,9 +5586,10 @@ struct NativeFactoryFrameBatch {
 int dispatchOwnedContextFrame(void* context,const void* input,void** output) noexcept {
     return NativeFactoryFrameBatch::frame(context,input,output);
 }
-// Candidate entries only: not published until the outer frame establishes
-// the complete input/owner/phase authority. Never patch native Apple text.
-[[maybe_unused]] uint64_t dispatchOwnedAvcSize(void* context,const void* input,uint32_t* used,uint32_t* capacity) noexcept {
+// Exact AVC tables publish the pair together. Outer admission still requires
+// the complete input/owner/phase before reserve; missing phase cannot fall
+// through to borrowed native inputs. Never patch native Apple text.
+uint64_t dispatchOwnedAvcSize(void* context,const void* input,uint32_t* used,uint32_t* capacity) noexcept {
     return NgreenNativeAvcReservation::sizeOrStop(reinterpret_cast<uintptr_t>(context),
         reinterpret_cast<uintptr_t>(input),used,capacity,
         [](uintptr_t entry,uintptr_t object,uintptr_t request,uint32_t* bytes,uint32_t* words) noexcept {
@@ -5582,7 +5597,7 @@ int dispatchOwnedContextFrame(void* context,const void* input,void** output) noe
             return reinterpret_cast<Native>(entry)(object,request,bytes,words);
         },[]() noexcept {_exit(70);});
 }
-[[maybe_unused]] uint64_t dispatchOwnedAvcBuilder(void* context,const void* input,void* token) noexcept {
+uint64_t dispatchOwnedAvcBuilder(void* context,const void* input,void* token) noexcept {
     return NgreenNativeAvcReservation::builderOrStop(reinterpret_cast<uintptr_t>(context),
         reinterpret_cast<uintptr_t>(input),reinterpret_cast<uintptr_t>(token),
         [](uintptr_t entry,uintptr_t object,uintptr_t request,uintptr_t nativeToken) noexcept {
@@ -5592,7 +5607,8 @@ int dispatchOwnedContextFrame(void* context,const void* input,void** output) noe
 }
 struct NativeOtherFrameBackend {
     using Lease=NativeFactoryFrameBatch::Lease;
-    static bool queryPublication(Lease& lease,NativePhysicalFrameScope& scope,uintptr_t image,
+    template<class FrameLease>
+    static bool queryPublication(FrameLease& lease,NativePhysicalFrameScope& scope,uintptr_t image,
         uintptr_t physical,uint64_t generation,NGVfAvcPublication::Reply& output) noexcept {
         auto* owner=lease.get();auto api=TglDarwinDeviceObservationApi::resolve();
         const auto framework=qualifiedIoAcceleratorFramework(library.resourceCreate);
@@ -5735,6 +5751,23 @@ struct NativeOtherFrameBackend {
         });
     }
     static int dispatch(Lease& lease,NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,
+        uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
+        auto* owner=lease.get();
+        if(!owner || !scope.matches(image,physical,generation))return 5;
+        if(owner->frameTable().nativeFrame()!=image+0x27724)
+            return dispatchPinned(lease,scope,image,physical,generation,input,output);
+        auto& registry=NativeCodecBackend::owners();
+        auto exclusive=registry.promoteExclusive(lease,image,physical,generation,owner->context());
+        if(!exclusive.get())return 5;
+        const int result=dispatchPinned(exclusive,scope,image,physical,generation,input,output);
+        lease=registry.demoteExclusive(exclusive,image,physical,generation,owner->context());
+        // Losing the transfer is not permission to continue a native batch
+        // without its batch-long owner pin, even if the native call returned0.
+        if(!lease.get())_exit(70);
+        return result;
+    }
+    template<class FrameLease>
+    static int dispatchPinned(FrameLease& lease,NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,
         uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
         auto* owner=lease.get();
         if(!owner || owner->family()!=TglNativeContextFamily::NativeOther ||

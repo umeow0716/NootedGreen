@@ -29196,6 +29196,11 @@ public:
     uint32_t count() const noexcept {return ready_?count_:0;}
     uint32_t nextIndex() const noexcept {return next_;}
     uintptr_t context(size_t index) const noexcept {return ready_ && index<count_?contexts_[index]:0;}
+    size_t ownerIndex(size_t index) const noexcept {
+        if(!ready_ || index>=count_)return Capacity;
+        for(size_t i=0;i<index;++i)if(contexts_[i]==contexts_[index])return i;
+        return index;
+    }
     template<class Read> bool unchanged(Read read) const noexcept {
         uint32_t count=0;uintptr_t inputs=0,outputs=0;
         return ready_ && read(input_,&count,4) && count==count_ && (!count_ ||
@@ -29369,6 +29374,45 @@ public:
             return owner_ && pins_ && pins_->load(std::memory_order_acquire)==SIZE_MAX;
         }
     };
+    // Transfer a sole existing frame pin without an unpinned interval. On
+    // refusal the caller keeps its original pin unchanged. No owner/native
+    // callbacks execute while the registry gate is held.
+    ExclusiveOwnerLease promoteExclusive(ContextLease& lease,uintptr_t image,
+        uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
+        if(!image || !physical || !generation || !context || !lease.owner_ || !lease.pins_ ||
+           gate_.test_and_set(std::memory_order_acquire))return {};
+        Unlock unlock{gate_};
+        for(size_t i=0;i<Capacity;++i) {
+            const auto& e=entries_[i];
+            if(!matches(e,image,physical,generation) || e.context!=context || e.quarantined ||
+               e.owner!=lease.owner_ || lease.pins_!=&contextPins_[i])continue;
+            size_t sole=1;
+            if(!contextPins_[i].compare_exchange_strong(sole,SIZE_MAX,std::memory_order_acq_rel))return {};
+            auto* owner=lease.owner_;
+            lease.owner_=nullptr;lease.pins_=nullptr;
+            return ExclusiveOwnerLease(owner,contextPins_[i]);
+        }
+        return {};
+    }
+    ContextLease demoteExclusive(ExclusiveOwnerLease& lease,uintptr_t image,
+        uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
+        if(!lease.owner_ || !lease.pins_)return {};
+        // The exclusive sentinel already prevents replacement/removal of this
+        // entry. Do not fail hand-back on an unrelated registry callback's
+        // transient gate ownership, and do not inspect unrelated entries.
+        for(size_t i=0;i<Capacity;++i) {
+            if(lease.pins_!=&contextPins_[i] ||
+               contextPins_[i].load(std::memory_order_acquire)!=SIZE_MAX)continue;
+            const auto& e=entries_[i];
+            if(!matches(e,image,physical,generation) || e.context!=context ||
+               e.owner!=lease.owner_)return {};
+            auto* owner=lease.owner_;
+            contextPins_[i].store(1,std::memory_order_release);
+            lease.owner_=nullptr;lease.pins_=nullptr;
+            return ContextLease(owner,contextPins_[i]);
+        }
+        return {};
+    }
     ExclusiveOwnerLease pinExclusive(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
         if(!context || gate_.test_and_set(std::memory_order_acquire)) return {};
         Unlock unlock{gate_};

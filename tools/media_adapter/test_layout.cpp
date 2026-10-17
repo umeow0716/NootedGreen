@@ -95,6 +95,75 @@ void testAvcMiAddressSpaces(const std::array<uint32_t,512>& frame,size_t used,si
     packet=store;packet[1]|=2U;examine(packet,false); // Reserved address bit1.
 }
 
+void testAvcFrameLeasePromotion() {
+    for(bool sameContext:{false,true}) {
+        auto read=[&](uintptr_t at,void* out,size_t n) noexcept {
+            if(at==0x1000 && n==4){const uint32_t count=2;std::memcpy(out,&count,4);return true;}
+            if(n!=8)return false;
+            uintptr_t value=0;
+            if(at==0x1008)value=0x2000;else if(at==0x3008)value=0x4000;
+            else if(at==0x2000)value=0x5000;else if(at==0x2008)value=0x6000;
+            else if(at==0x5018)value=0x7000;else if(at==0x6018)value=sameContext?0x7000:0x8000;
+            else return false;
+            std::memcpy(out,&value,8);return true;
+        };
+        TglNativeFrameBatchRequests<2> items;
+        assert(items.ownerIndex(0)==2 && items.capture(0x1000,0x3000,read));
+        assert(items.ownerIndex(0)==0 && items.ownerIndex(1)==(sameContext?0u:1u));
+        assert(items.ownerIndex(2)==2 && items.ownerIndex(SIZE_MAX)==2);
+        unsigned calls=0;
+        for(size_t i=0;i<2;++i)
+            assert(items.runNext(items.context(i),0x5000+i*0x1000,0x4000+i*8,read,
+                [&]() noexcept -> int {++calls;return 0;})==0);
+        assert(calls==2 && items.finish(0,read)==0); // Deduplicate pins, NOT native calls.
+    }
+    struct Owner {uintptr_t object;uintptr_t context() const noexcept{return object;}};
+    Owner owner{0x4000},other{0x5000};
+    using Registry=TglOwnedContextOwnerRegistry<Owner,2>;
+    Registry registry,foreign;
+    assert(registry.adopt(0x1000,0x2000,7,&owner));
+    assert(registry.adopt(0x1000,0x2000,7,&other));
+    auto frame=registry.pin(0x1000,0x2000,7,owner.context());
+    assert(frame.get()==&owner);
+    assert(!foreign.promoteExclusive(frame,0x1000,0x2000,7,owner.context()).get());
+    for(const auto& scope:std::array<std::array<uintptr_t,4>,4>{{
+        {0x1001,0x2000,7,0x4000},{0x1000,0x2001,7,0x4000},
+        {0x1000,0x2000,8,0x4000},{0x1000,0x2000,7,0x5000}}}) {
+        assert(!registry.promoteExclusive(frame,scope[0],scope[1],scope[2],scope[3]).get());
+        assert(frame.get()==&owner);
+    }
+    {
+        auto conflict=registry.pin(0x1000,0x2000,7,owner.context());
+        assert(conflict.get()==&owner);
+        assert(!registry.promoteExclusive(frame,0x1000,0x2000,7,owner.context()).get());
+        assert(frame.get()==&owner && conflict.get()==&owner);
+    }
+    {
+        auto exclusive=registry.promoteExclusive(frame,0x1000,0x2000,7,owner.context());
+        assert(!frame.get() && exclusive.get()==&owner && exclusive.exclusive());
+        assert(!registry.pin(0x1000,0x2000,7,owner.context()).get());
+        assert(!registry.pinExclusive(0x1000,0x2000,7,owner.context()).get());
+        assert(!registry.promoteExclusive(frame,0x1000,0x2000,7,owner.context()).get());
+        assert(registry.pin(0x1000,0x2000,7,other.context()).get()==&other);
+        auto moved=std::move(exclusive);
+        assert(!exclusive.get() && moved.exclusive());
+        assert(!foreign.demoteExclusive(moved,0x1000,0x2000,7,owner.context()).get());
+        assert(!registry.demoteExclusive(moved,0x1000,0x2000,8,owner.context()).get());
+        assert(moved.exclusive());
+        assert(registry.withOwner(0x1000,0x2000,7,other.context(),[&](Owner&) noexcept -> int {
+            frame=registry.demoteExclusive(moved,0x1000,0x2000,7,owner.context());
+            return frame.get()==&owner?0:5;
+        })==0); // Hand-back also succeeds while an unrelated callback holds gate_.
+        assert(!moved.get() && frame.get()==&owner);
+        auto repeated=registry.promoteExclusive(frame,0x1000,0x2000,7,owner.context());
+        assert(!frame.get() && repeated.exclusive());
+        frame=registry.demoteExclusive(repeated,0x1000,0x2000,7,owner.context());
+        assert(frame.get()==&owner && !repeated.get());
+    }
+    // Release restores ordinary pinning without underflow or a leaked sentinel.
+    auto again=registry.pin(0x1000,0x2000,7,owner.context());
+    assert(again.get()==&owner);
+}
 void testOwnedAvcHookFailStop() {
     using namespace NgreenNativeAvcReservation;
     for(unsigned mode=0;mode<10;++mode) {
@@ -19524,6 +19593,7 @@ static void testActualNv12LayoutSnapshot() {
     assert(uvRow==32);
 }
 int main() {
+    testAvcFrameLeasePromotion();
     testOwnedAvcHookFailStop();
     {
         TglOwnedAvcScalingDefaults defaults;

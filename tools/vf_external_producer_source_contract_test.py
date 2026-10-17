@@ -31,6 +31,23 @@ def block(source, marker, end_marker):
 
 def adapter_frame_contract(source):
     body = block(source, "struct NativeOtherFrameBackend {", "struct NativeLateFactoryBatch {")
+    adoption = block(source, "struct NativeCodecBackend {", "selected->framesPublished=true;return 0;")
+    for required in (
+        "binding.frame==scope.image()+0x27724?",
+        "publishAvcInputCallbacks(lease,hook,",
+        "reinterpret_cast<uintptr_t>(&dispatchOwnedAvcSize)",
+        "reinterpret_cast<uintptr_t>(&dispatchOwnedAvcBuilder),sameOwner",
+    ):
+        assert required in adoption, "adapter: exact AVC callback pair not published"
+    for required in (
+        "registry.promoteExclusive(lease,image,physical,generation,owner->context())",
+        "if(!exclusive.get())return 5;",
+        "dispatchPinned(exclusive,scope,image,physical,generation,input,output)",
+        "registry.demoteExclusive(exclusive,image,physical,generation,owner->context())",
+    ):
+        assert required in body, "adapter: AVC frame owner transfer missing"
+    assert "const size_t ownerIndex=current->items.ownerIndex(index);" in source and \
+        "if(batch.items.ownerIndex(i)!=i)continue;" in source, "adapter: repeated-context batch pin not shared"
     gate = "if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady,physical,generation,context,request))return 5;"
     assert body.count(gate) == 1, "adapter: exact AVC publication refusal missing or changed"
     before, after = body.split(gate)
@@ -61,6 +78,11 @@ def adapter_frame_mutations(source):
     gate = "if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady,physical,generation,context,request))return 5;"
     phase = "if(!NgreenNativeAvcReservation::framePhaseAdmission(image,owner->frameTable().nativeFrame(),physical,generation,owner->context(),input))return 5;"
     mutations = (
+        source.replace("publishAvcInputCallbacks(lease,hook,", "publishFrame(lease,hook,", 1),
+        source.replace("binding.frame==scope.image()+0x27724?", "false?", 1),
+        source.replace("registry.promoteExclusive(lease,image,physical,generation,owner->context())", "decltype(exclusive){}", 1),
+        source.replace("registry.demoteExclusive(exclusive,image,physical,generation,owner->context())", "decltype(lease){}", 1),
+        source.replace("if(batch.items.ownerIndex(i)!=i)continue;", "", 1),
         source.replace(gate, "", 1),
         source.replace(gate, gate.replace("if(!", "if("), 1),
         source.replace(gate, gate.replace("entry,publicationReady", "entry,true"), 1),
