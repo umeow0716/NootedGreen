@@ -257,6 +257,21 @@ public:
         // return-zero stub with no list/count outputs. Do not treat it as
         // an implemented counterpart of8b4f or fabricate initialized lists.
         if(fieldPicture)return {};
+        //9073 has no local record bound: opcode3 is its only normal loop
+        // terminator. Qualify at most32 triples per list in this owned path;
+        // this is an admission budget, not full reorder operand semantics.
+        constexpr size_t flags[]{0x48,0x1cc},records[]{0x4c,0x1d0};
+        for(size_t list=0;list<2;++list) {
+            uint32_t active=0;std::memcpy(&active,first+flags[list],4);
+            if(!active)continue;
+            bool terminated=false;
+            for(size_t i=0;i<32;++i) {
+                uint32_t operation=0;std::memcpy(&operation,first+records[list]+12*i,4);
+                if(operation==3){terminated=true;break;}
+                if(operation>3)return {};
+            }
+            if(!terminated)return {};
+        }
         std::memcpy(&overridden,first+0x38,4);
         std::memcpy(minusOne,overridden?first+0x3c:owned->picture_->data()+0x90,sizeof(minusOne));
         if(minusOne[0]+uint32_t(1)>32 || minusOne[1]+uint32_t(1)>32)return {};

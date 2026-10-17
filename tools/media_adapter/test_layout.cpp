@@ -19328,6 +19328,26 @@ int main() {
                 assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));
             }
             const uint32_t framePicture=0;std::memcpy(slice.data()+0x14,&framePicture,4);
+            slice[0x100]=0; // mutation marker aliases list0's opcode at index15
+            for(size_t list=0;list<2;++list) {
+                const size_t flag=list?0x1cc:0x48,records=list?0x1d0:0x4c;
+                const uint32_t active=1,stop=3,zero=0;
+                std::memcpy(slice.data()+flag,&active,4);fullHeader=savedFullHeader;
+                assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));
+                for(size_t end:{size_t(0),size_t(31)}) {
+                    std::memcpy(slice.data()+records+12*end,&stop,4);fullHeader=savedFullHeader;
+                    assert(FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));
+                    std::memcpy(slice.data()+records+12*end,&zero,4);
+                }
+                for(uint32_t invalid:{4U,UINT32_MAX}) {
+                    std::memcpy(slice.data()+records,&invalid,4);fullHeader=savedFullHeader;
+                    assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));
+                }
+                std::memcpy(slice.data()+flag,&zero,4);fullHeader=savedFullHeader;
+                assert(FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead)); // inactive records unused
+                std::memcpy(slice.data()+records,&zero,4);
+            }
+            slice[0x100]=0x65;
             for(uint32_t qp:{51U,52U,255U,UINT32_MAX}) {
                 fullHeader=savedFullHeader;std::memcpy(fullHeader.data()+0x438,&qp,4);
                 assert(bool(FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead))==(qp==51));
