@@ -5,6 +5,7 @@
 #include <IOKit/IOUserClient.h>
 #include "kern_guc_ring.hpp"
 #include "kern_flight_trace.hpp"
+#include "kern_vf_cpu_range.hpp"
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
 #include "kern_ggtt_rotation.hpp"

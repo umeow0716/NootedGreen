@@ -418,6 +418,13 @@ else
     failed=1
 fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/vf_cpu_range_test.cpp -o "$task_output/vf-cpu-range-test" && \
+    "$task_output/vf-cpu-range-test"; then
+    printf 'PASS offline native CPU receipt correlation (not lifetime admission)\n'
+else
+    failed=1
+fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/vf_submission_gate_test.cpp -o "$task_output/vf-submission-gate-test" && \
     "$task_output/vf-submission-gate-test"; then
     printf 'PASS offline VF native-producer admission tests\n'
