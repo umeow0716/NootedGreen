@@ -25,9 +25,13 @@ struct TglAvcSequenceConsumedFields {
     uint32_t level=0,chroma=0,frameOnly=0,mbaff=0,direct8x8=0;
     uint32_t log2MaxFrameNumMinus4=0;
 };
+struct TglOwnedAvcSliceHeaderTemplate {
+    uint32_t command=0x70480000U,control=0;
+};
 struct TglOwnedAvcSliceHeaderPacket {
     std::array<uint32_t,258> data{};
     size_t words=0;
+    TglOwnedAvcSliceHeaderTemplate templateAfter{};
 };
 struct TglOwnedAvcNalBudget {uint32_t meaningfulBits=0,physicalBytes=0;};
 struct TglOwnedAvcScalingDefaults {
@@ -277,9 +281,14 @@ inline bool tglBudgetOwnedTahoeAvcSlice(const void* sequence,size_t sequenceByte
 }
 // Exact2618d inline slice-header profile: owned input only, no resource or
 // original request mutation. Not wired into native submission/index selection.
-inline bool tglBuildOwnedAvcSliceHeaderPacket(const void* source,size_t extent,
-    uint32_t bitCount,TglOwnedAvcSliceHeaderPacket& output) noexcept {
+inline bool tglBuildOwnedAvcSliceHeaderPacketFromTemplate(const void* source,size_t extent,
+    uint32_t bitCount,TglOwnedAvcSliceHeaderTemplate state,
+    TglOwnedAvcSliceHeaderPacket& output) noexcept {
     if(!source || !bitCount || bitCount>8192 || extent>1024)return false;
+    // Exact2618d preserves template bit15/high18..31, replaces the low
+    // generated fields, copies the packet, then clears template bit14.
+    // This reviewed profile admits bit15 but not unsupported high flags.
+    if((state.command&~0xfffU)!=0x70480000U || (state.control&0xfffc0000U))return false;
     const size_t bytes=(bitCount+7U)/8U,payloadWords=(bytes+3U)/4U;
     const uintptr_t start=reinterpret_cast<uintptr_t>(source);
     const uintptr_t target=reinterpret_cast<uintptr_t>(&output);
@@ -288,10 +297,15 @@ inline bool tglBuildOwnedAvcSliceHeaderPacket(const void* source,size_t extent,
     TglOwnedAvcSliceHeaderPacket candidate;
     const uint32_t lastBits=bitCount%32U?bitCount%32U:32U;
     candidate.words=payloadWords+2;
-    candidate.data[0]=0x70480000U|static_cast<uint32_t>(payloadWords);
-    candidate.data[1]=0x404cU|(lastBits<<8);
+    candidate.data[0]=(state.command&0xfffff000U)|static_cast<uint32_t>(payloadWords);
+    candidate.data[1]=(state.control&0xfffc8000U)+0x4048U+(lastBits<<8|4U);
+    candidate.templateAfter={candidate.data[0],candidate.data[1]&~0x4000U};
     std::memcpy(candidate.data.data()+2,source,bytes);
     output=candidate;return true;
+}
+inline bool tglBuildOwnedAvcSliceHeaderPacket(const void* source,size_t extent,
+    uint32_t bitCount,TglOwnedAvcSliceHeaderPacket& output) noexcept {
+    return tglBuildOwnedAvcSliceHeaderPacketFromTemplate(source,extent,bitCount,{},output);
 }
 inline bool tglProjectTahoeAvcSequenceConsumedFields(const void* source,size_t bytes,
     uint32_t width,uint32_t height,TglAvcSequenceConsumedFields& output) noexcept {

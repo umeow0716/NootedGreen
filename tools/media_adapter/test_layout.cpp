@@ -19053,6 +19053,27 @@ int main() {
         assert(tglBuildOwnedAvcSliceHeaderPacket(source.data(),10,78,packet));
         const uint32_t native[]={1883766787,20044,620822528,4194488,39939};
         assert(packet.words==5 && std::memcmp(packet.data.data(),native,sizeof(native))==0);
+        for(uint32_t bits:{1U,32U,78U,102U,8192U})for(uint32_t carry:{0U,0x8000U}) {
+            const TglOwnedAvcSliceHeaderTemplate state{0x704800ffU,carry|0x7fffU};
+            assert(tglBuildOwnedAvcSliceHeaderPacketFromTemplate(source.data(),source.size(),bits,state,packet));
+            const uint32_t tail=bits%32?bits%32:32;
+            assert(packet.data[1]==carry+0x4048U+(tail<<8|4U));
+            assert(packet.templateAfter.command==packet.data[0]);
+            assert(packet.templateAfter.control==(packet.data[1]&~0x4000U));
+            TglOwnedAvcSliceHeaderPacket next;
+            assert(tglBuildOwnedAvcSliceHeaderPacketFromTemplate(source.data(),source.size(),bits,
+                packet.templateAfter,next));
+            assert(next.data==packet.data && next.words==packet.words);
+        }
+        for(auto state:{TglOwnedAvcSliceHeaderTemplate{0x70481000U,0},
+                        TglOwnedAvcSliceHeaderTemplate{0x70800000U,0},
+                        TglOwnedAvcSliceHeaderTemplate{0x70480000U,0x40000U}}) {
+            const auto frozen=packet;
+            assert(!tglBuildOwnedAvcSliceHeaderPacketFromTemplate(source.data(),source.size(),78,state,packet));
+            assert(packet.data==frozen.data && packet.words==frozen.words &&
+                packet.templateAfter.command==frozen.templateAfter.command &&
+                packet.templateAfter.control==frozen.templateAfter.control);
+        }
         for(uint32_t bits:{1U,32U,78U,98U,100U,102U,8192U}){
             assert(tglBuildOwnedAvcSliceHeaderPacket(source.data(),source.size(),bits,packet));
             assert(packet.words==2+(bits+31)/32);
