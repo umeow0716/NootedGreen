@@ -238,6 +238,13 @@ public:
         if(!owned->picture_)return {};
         owned->sliceNal_=SliceNal::captureRoots(count,table,metadata,read);
         if(!owned->sliceNal_)return {};
+        // Validate the bytes native will actually see, not an earlier
+        // borrowed preflight.2737e's uint32 increment/wrap is intentional.
+        const auto* first=reinterpret_cast<const uint8_t*>(owned->sliceNal_->sliceTable()[0]);
+        uint32_t overridden=0,minusOne[2]{};
+        std::memcpy(&overridden,first+0x38,4);
+        std::memcpy(minusOne,overridden?first+0x3c:owned->picture_->data()+0x90,sizeof(minusOne));
+        if(minusOne[0]+uint32_t(1)>32 || minusOne[1]+uint32_t(1)>32)return {};
         return owned;
     }
     const uint8_t* sequenceBytes() const noexcept {return sequence_->data();}
