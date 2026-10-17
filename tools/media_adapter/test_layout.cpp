@@ -245,7 +245,7 @@ void testOwnedAvcHookFailStop() {
     }
 }
 
-template<class T,class Released> void testNativeOtherInputRetirement(std::unique_ptr<T>& input,Released released) {
+template<class T,class Released> void testNativeOtherInputRetirement(std::unique_ptr<T>& input,Released released,void (*whileRetained)(void*) noexcept=nullptr,void* retainedState=nullptr) {
     TglNativeOtherPendingFrames pending;
     const uintptr_t image=0x10000000,physical=0x9000,context=0x8000;
     const auto ticket=pending.reserve(image,physical,1,context);
@@ -254,6 +254,8 @@ template<class T,class Released> void testNativeOtherInputRetirement(std::unique
     assert(!pending.retainInput(foreign,image,physical,1,context,input) && input.get()==original);
     assert(!pending.retainInput(ticket,image,physical,2,context,input) && input.get()==original);
     assert(pending.retainInput(ticket,image,physical,1,context,input) && !input && !released());
+    if(whileRetained)whileRetained(retainedState);
+    assert(!input && !released()); // Callback completion cannot release GPU-owned inputs.
     auto duplicate=std::make_unique<unsigned>(7);
     assert(!pending.retainInput(ticket,image,physical,1,context,duplicate) && duplicate);
     TglNativeOtherContextEventLineage lineage{context,physical,0x1000,0x2000,0,8,true};
@@ -396,7 +398,25 @@ template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputA
         assert(built.invoked && !built.mustStop && pair.complete());
     }
     assert(inputState.releases==0); // CPU scope exit is NOT GPU retirement.
-    testNativeOtherInputRetirement(input,[&]() noexcept {return inputState.releases==5;});
+    {
+        Pair pair(id,input->callbackRequest(),&id,live);
+        auto whileRetained=[&]() noexcept {
+            assert(!input && inputState.releases==0 && !pair.started());
+            uint32_t used=0,capacity=0;uintptr_t privateRequest=0;
+            const auto sized=pair.size(id.context,id.request,&used,&capacity,
+                [&](uintptr_t,uintptr_t,uintptr_t request,uint32_t*,uint32_t*) noexcept -> uint64_t {
+                    assert(request!=id.request);privateRequest=request;return 0;
+                });
+            assert(sized.invoked && !sized.mustStop && pair.started() && !pair.complete());
+            const auto built=pair.builder(id.context,id.request,0x7770,
+                [&](uintptr_t,uintptr_t,uintptr_t request,uintptr_t) noexcept -> uint64_t {
+                    assert(request==privateRequest && inputState.releases==0);return 0;
+                });
+            assert(built.invoked && !built.mustStop && pair.complete() && !inputState.releases);
+        };
+        testNativeOtherInputRetirement(input,[&]() noexcept {return inputState.releases==5;},
+            [](void* raw) noexcept {(*static_cast<decltype(whileRetained)*>(raw))();},&whileRetained);
+    }
     assert(!input && inputState.releases==5);
     downscaleSurfaces=savedDownscales;
     for(unsigned fail=0;fail<3;++fail) {
