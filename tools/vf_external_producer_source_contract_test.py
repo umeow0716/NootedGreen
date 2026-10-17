@@ -410,12 +410,16 @@ def contract(source, path="<source>"):
     for token in ('!gVfNativeBatchMapGetter',
                   '(getMember<volatile uint32_t>(gpuMap,0x10)&0x40U)',
                   'getMember<volatile uint64_t>(gpuMap,0x98)',
-                  'gpuBase>UINT64_MAX-bytes', 'out.gpuMap=gpuMap;out.gpuBase=gpuBase;'):
+                  'gpuBase>UINT64_MAX-bytes', 'bytes>backingBytes',
+                  'getMember<volatile uint64_t>(backing,0x40)',
+                  'out.gpuMap=gpuMap;out.gpuBase=gpuBase;'):
         assert token in media_map, f'{path}: missing GPU address-mode/span proof: {token}'
     assert media_map.index('getMember<void *>(backing,0xD0)!=descriptor') < \
         media_map.index(rotation) < media_map.index('out.reason="map-getters"'), \
         f'{path}: rotation read must follow exact map identity'
     assert 'matches(sysPhysical,sysPhysicalBody,sizeof(sysPhysicalBody))' in source
+    assert 'matches(sysLength,sysLengthBody,sizeof(sysLengthBody))' in source
+    assert 'getMember<mach_vm_address_t>(reinterpret_cast<void *>(sysTable+16U),0x120)==sysLength' in source
     assert '0x170U<=size-(sysTable-address)' in source
     assert 'getMember<mach_vm_address_t>(reinterpret_cast<void *>(sysTable+16U),0x158)==sysPhysical' in source
     assert 'if (getMember<uint32_t>(context,0x6DC)!=1)return false;' in media_map
@@ -445,6 +449,7 @@ def contract(source, path="<source>"):
                   'publication.mustStop', 'current.resource==span.resource',
                   'current.mapped==span.mapped', 'current.map==span.map',
                   'current.gpuMap==span.gpuMap', 'current.gpuBase==span.gpuBase',
+                  'current.backingBytes==span.backingBytes',
                   'current.used==span.used', 'current.commands==span.commands'):
         assert token in media_end, f"{path}: missing native AVC publication ownership: {token}"
     assert media_end.index('bindLocked(')<media_end.index('NgreenAvcGen12::publish(')<\
@@ -494,6 +499,9 @@ def mutation_contract(source, path):
         ('getMember<void *>(backing,0xD0)!=descriptor', 'false', 1),
         ('(getMember<volatile uint32_t>(gpuMap,0x10)&0x40U)', 'false', 1),
         ('gpuBase>UINT64_MAX-bytes', 'false', 1),
+        ('bytes>backingBytes', 'false', 1),
+        ('current.backingBytes==span.backingBytes', 'true', 1),
+        ('matches(sysLength,sysLengthBody,sizeof(sysLengthBody))', 'true', 1),
         ('current.gpuBase==span.gpuBase', 'true', 1),
         ('current.gpuMap==span.gpuMap', 'true', 1),
         ('if (getMember<volatile uint8_t>(gpuMap,0x11C)!=0U)return false;', '', 1),

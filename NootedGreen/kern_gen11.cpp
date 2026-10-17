@@ -1268,7 +1268,7 @@ private:
 struct VfMediaMappedSpan {
 	void *resource,*mapped,*map,*descriptor;
 	void *gpuMap;
-	uint64_t gpuBase;
+	uint64_t gpuBase,backingBytes;
 	volatile uint32_t *commands;
 	uint32_t bytes,offset,used;
 	size_t availableWords,reservedWords;
@@ -1328,6 +1328,7 @@ static bool vfCaptureMediaMappedSpan(const VfMediaSubmission &entry,void *stream
 	    getMember<void *>(gpuMap,0x18)!=backing ||
 	    getMember<mach_vm_address_t>(backing,0)!=gVfMediaSysMemoryVtable ||
 	    getMember<void *>(backing,0xD0)!=descriptor)return false;
+	const uint64_t backingBytes=getMember<volatile uint64_t>(backing,0x40);
 	// Command publication uses a linear CPU span. Native rotated mappings use
 	// a different PTE iterator and cannot inherit the linear backing proof.
 	out.reason="rotated-command-map";
@@ -1363,9 +1364,9 @@ static bool vfCaptureMediaMappedSpan(const VfMediaSubmission &entry,void *stream
 	if (!bytes || bytes!=resourceBytes || bytes>length || ((bytes|offset|used)&3) ||
     offset>used || used>bytes || words<2 || words>1536 || uint64_t(words)*4>used-offset)return false;
 	out.reason="gpu-address-span";
-	if (!gpuBase || (gpuBase&3U) || gpuBase>UINT64_MAX-bytes)return false;
+	if (!gpuBase || (gpuBase&3U) || gpuBase>UINT64_MAX-bytes || bytes>backingBytes)return false;
 	out.resource=resource;out.mapped=mapped;out.map=map;out.descriptor=descriptor;
-	out.gpuMap=gpuMap;out.gpuBase=gpuBase;
+	out.gpuMap=gpuMap;out.gpuBase=gpuBase;out.backingBytes=backingBytes;
 	out.commands=reinterpret_cast<volatile uint32_t *>(base+offset);
 	out.bytes=bytes;out.offset=offset;out.used=used;
 	out.availableWords=(bytes-offset)/4U;out.reservedWords=(used-offset)/4U;
@@ -3181,6 +3182,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				const auto sysTable=patcher.solveSymbol(index,"__ZTV16IGAccelSysMemory",address,size);
 				const auto sysPhysical=patcher.solveSymbol(index,
 					"__ZN16IGAccelSysMemory18getPhysicalSegmentEyPy",address,size);
+				const auto sysLength=patcher.solveSymbol(index,
+					"__ZNK13IOAccelMemory9getLengthEv",address,size);
+				static constexpr uint8_t sysLengthBody[]={
+					0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x40,0x5d,0xc3};
 				static constexpr uint8_t sysPhysicalBody[]={
 					0x55,0x48,0x89,0xe5,0x53,0x50,0x48,0x89,0xd3,0x31,0xc0,0x48,0x8d,0x55,0xf0,0x48,
 					0x89,0x02,0x48,0x8b,0x47,0x28,0x48,0x8b,0xbf,0xd0,0x00,0x00,0x00,0x48,0x8b,0x80,
@@ -3189,6 +3194,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					0x83,0xc4,0x08,0x5b,0x5d,0xc3};
 				gVfMediaSysMemoryVtable=sysTable && sysTable>=address && sysTable-address<=size &&
 					0x170U<=size-(sysTable-address) && matches(sysPhysical,sysPhysicalBody,sizeof(sysPhysicalBody)) &&
+					matches(sysLength,sysLengthBody,sizeof(sysLengthBody)) &&
+					getMember<mach_vm_address_t>(reinterpret_cast<void *>(sysTable+16U),0x120)==sysLength &&
 					getMember<mach_vm_address_t>(reinterpret_cast<void *>(sysTable+16U),0x158)==sysPhysical?
 					sysTable+16U:0;
 				SYSLOG("ngreen", "V377: native batch CPU provenance observation bound=%u",
@@ -6250,6 +6257,7 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 		return vfCaptureMediaMappedSpan(*entry,stream,current) && current.resource==span.resource &&
 			current.mapped==span.mapped && current.map==span.map && current.descriptor==span.descriptor &&
 			current.gpuMap==span.gpuMap && current.gpuBase==span.gpuBase &&
+			current.backingBytes==span.backingBytes &&
 			current.commands==span.commands && current.bytes==span.bytes && current.offset==span.offset &&
 			current.used==span.used && current.availableWords==span.availableWords && current.reservedWords==span.reservedWords;
 	};
