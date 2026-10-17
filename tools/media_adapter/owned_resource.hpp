@@ -281,6 +281,9 @@ inline bool tglBudgetOwnedTahoeAvcSlice(const void* sequence,size_t sequenceByte
 }
 // Exact2618d inline slice-header profile: owned input only, no resource or
 // original request mutation. Not wired into native submission/index selection.
+// Gen12 VDEnc bit14 stores an initial header template and hardware generates
+// per-slice headers. This CPU serializer does NOT justify per-slice replacement
+// of native index0 or any extra packet/word insertion into a submitted frame.
 inline bool tglBuildOwnedAvcSliceHeaderPacketFromTemplate(const void* source,size_t extent,
     uint32_t bitCount,TglOwnedAvcSliceHeaderTemplate state,
     TglOwnedAvcSliceHeaderPacket& output) noexcept {
