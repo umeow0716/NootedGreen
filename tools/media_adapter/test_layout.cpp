@@ -19205,6 +19205,94 @@ int main() {
     {
         std::array<uint32_t,512> input{},output{};size_t used=0;
         {
+            using Nal=NgreenNativeAvcReservation::OwnedTemplateNalInput;
+            static_assert(!std::is_copy_constructible_v<Nal> && !std::is_move_constructible_v<Nal>);
+            std::array<uint8_t,0x68> metadata{};
+            std::array<std::array<uint8_t,16>,5> data{};
+            std::array<uint32_t,32> lengths{};lengths.fill(32);
+            lengths[0]=78;lengths[1]=98;lengths[2]=100;lengths[3]=102;
+            std::array<uintptr_t,32> pointers{};pointers.fill(UINTPTR_MAX);
+            pointers[0]=reinterpret_cast<uintptr_t>(data[4].data());
+            auto store=[&](size_t at,const auto& value){std::memcpy(metadata.data()+at,&value,sizeof(value));};
+            constexpr size_t flagAt[]{0,0x14,0x24,0x34},pointerAt[]{8,0x18,0x28,0x38},bitsAt[]{0x10,0x20,0x30,0x40};
+            for(size_t i=0;i<5;++i)data[i].fill(uint8_t(0xa0+i));
+            for(size_t i=0;i<4;++i) {
+                const uint32_t flag=1,bits=uint32_t(i*7+1);
+                const auto address=reinterpret_cast<uintptr_t>(data[i].data());
+                store(flagAt[i],flag);store(pointerAt[i],address);store(bitsAt[i],bits);
+            }
+            store(0x58,reinterpret_cast<uintptr_t>(pointers.data()));
+            store(0x60,reinterpret_cast<uintptr_t>(lengths.data()));
+            const auto root=reinterpret_cast<uintptr_t>(metadata.data());
+            auto read=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                auto region=[&](const auto& item) noexcept {
+                    const auto base=reinterpret_cast<uintptr_t>(item.data());
+                    return address>=base && bytes<=sizeof(item) && address-base<=sizeof(item)-bytes;
+                };
+                bool allowed=region(metadata) || region(pointers) || region(lengths);
+                for(const auto& part:data)allowed=allowed || region(part);
+                if(!allowed)return false;
+                std::memcpy(target,reinterpret_cast<void*>(address),bytes);return true;
+            };
+            const auto before=metadata;const auto beforeData=data;const auto beforeLengths=lengths;
+            auto owned=Nal::capture(root,4,read);assert(owned && owned->sliceCount()==4);
+            assert(metadata==before && data==beforeData && lengths==beforeLengths);
+            auto value=[&](size_t at){uintptr_t result=0;std::memcpy(&result,owned->metadataBytes()+at,8);return result;};
+            const auto sources=reinterpret_cast<const uintptr_t*>(value(0x58));
+            const auto frozenBits=reinterpret_cast<const uint32_t*>(value(0x60));
+            for(size_t i=0;i<4;++i)assert(frozenBits[i]==lengths[i]);
+            assert(sources[0]!=pointers[0] && sources[1]==0 && sources[2]==0 && sources[3]==0);
+            for(size_t i=0;i<4;++i)assert(*reinterpret_cast<const uint8_t*>(value(pointerAt[i]))==uint8_t(0xa0+i));
+            metadata.fill(0);for(auto& part:data)part.fill(0);lengths.fill(UINT32_MAX);pointers.fill(0);
+            assert(frozenBits[0]==78 && *reinterpret_cast<const uint8_t*>(sources[0])==0xa4);
+            assert(reinterpret_cast<const uint8_t*>(sources[0])[10]==0 &&
+                   reinterpret_cast<const uint8_t*>(sources[0])[11]==0);
+            TglOwnedAvcSliceHeaderPacket packet;
+            assert(tglBuildOwnedAvcSliceHeaderPacket(reinterpret_cast<const void*>(sources[0]),10,frozenBits[0],packet));
+            assert(packet.words==5 && reinterpret_cast<const uint8_t*>(packet.data.data()+2)[0]==0xa4);
+            metadata=before;data=beforeData;lengths=beforeLengths;
+            pointers.fill(UINTPTR_MAX);pointers[0]=reinterpret_cast<uintptr_t>(data[4].data());
+            assert(Nal::capture(root,32,read));
+            assert(!Nal::capture(root,0,read) && !Nal::capture(root,33,read));
+            assert(!Nal::capture(UINTPTR_MAX-0x60,4,read));
+            for(uint32_t bad:{uint32_t(Nal::MaxPayloadBytes*8U+1),UINT32_MAX-7U,UINT32_MAX}) {
+                lengths[0]=bad;assert(!Nal::capture(root,4,read));
+            }
+            lengths=beforeLengths;
+            const uint32_t tooLongForSource=129;store(bitsAt[0],tooLongForSource);
+            assert(!Nal::capture(root,4,read)); // 17 bytes must not cross a 16-byte source allocation
+            const uint32_t disabled=0;store(flagAt[0],disabled);
+            const uintptr_t invalid=UINTPTR_MAX;store(pointerAt[0],invalid);
+            assert(Nal::capture(root,4,read)); // inactive source is not read
+            metadata=before;
+            auto denied=[](uintptr_t,void*,size_t) noexcept {return false;};
+            assert(!Nal::capture(root,4,denied));
+            unsigned aliasReads=0;
+            auto selfAlias=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                ++aliasReads;
+                if(!read(address,target,bytes))return false;
+                if(address==root) {
+                    const auto ownedAddress=reinterpret_cast<uintptr_t>(target);
+                    std::memcpy(static_cast<uint8_t*>(target)+0x60,&ownedAddress,8);
+                }
+                return true;
+            };
+            assert(!Nal::capture(root,4,selfAlias) && aliasReads==1);
+            auto large=std::make_unique<std::array<uint8_t,Nal::MaxPayloadBytes>>();large->fill(0x5a);
+            const auto largeAddress=reinterpret_cast<uintptr_t>(large->data());
+            const uint32_t maximumBits=Nal::MaxPayloadBytes*8U;
+            store(pointerAt[0],largeAddress);store(bitsAt[0],maximumBits);
+            auto largeRead=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                if(address==largeAddress && bytes<=large->size()) {
+                    std::memcpy(target,large->data(),bytes);return true;
+                }
+                return read(address,target,bytes);
+            };
+            assert(Nal::capture(root,4,largeRead));
+            const auto originalView=owned->metadataBytes();auto transferred=std::move(owned);
+            assert(!owned && transferred->metadataBytes()==originalView && frozenBits[0]==78);
+        }
+        {
             std::array<uint8_t,0x28> request{};
             std::array<uint8_t,0x440> payload{};
             const auto rq=reinterpret_cast<uintptr_t>(request.data());

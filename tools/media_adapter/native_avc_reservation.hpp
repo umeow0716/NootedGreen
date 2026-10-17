@@ -2,6 +2,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <array>
+#include <memory>
+#include <new>
 #include "../../NootedGreen/kern_avc_gen12_commands.hpp"
 #include "../../NootedGreen/kern_vf_device_observation.hpp"
 
@@ -84,6 +87,83 @@ bool framePreflight(uintptr_t request,Read read) noexcept {
     return referenceIndices(request,read,payload) && quantizerIndex(request,read,payload) &&
         activeReferenceCounts(request,read,payload);
 }
+// Owned subgraph for the EXACT native VDEnc template path: size reads all
+// slice lengths, while 2663c calls 2618d with source index0 only. This does
+// not enable indexed substitution, capture SPS/PPS/slices/surface ownership,
+// or authorize native submission. Not connected to runtime callbacks yet.
+// Read must enforce authenticated SOURCE allocation extents/lifetime; a
+// readable VM page alone is not that authority. Capture is not atomic with
+// external writers. Validate the resulting complete frame before native use.
+class OwnedTemplateNalInput {
+public:
+    static constexpr size_t MaxSlices=32;
+    // Native 12-bit PAK payload length, not a source-allocation size claim.
+    static constexpr size_t MaxPayloadBytes=0xfffU*4U;
+    OwnedTemplateNalInput(const OwnedTemplateNalInput&)=delete;
+    OwnedTemplateNalInput& operator=(const OwnedTemplateNalInput&)=delete;
+    OwnedTemplateNalInput(OwnedTemplateNalInput&&)=delete;
+    OwnedTemplateNalInput& operator=(OwnedTemplateNalInput&&)=delete;
+    template<class Read>
+    static std::unique_ptr<OwnedTemplateNalInput> capture(uintptr_t metadata,size_t slices,Read read) noexcept {
+        if(!metadata || metadata>UINTPTR_MAX-0x68 || !slices || slices>MaxSlices)return {};
+        auto owned=std::unique_ptr<OwnedTemplateNalInput>(new(std::nothrow) OwnedTemplateNalInput{});
+        if(!owned || !owned->initialize(metadata,slices,read))return {};
+        return owned;
+    }
+    const uint8_t* metadataBytes() const noexcept {return metadata_.data();}
+    size_t sliceCount() const noexcept {return slices_;}
+private:
+    OwnedTemplateNalInput()=default;
+    template<class T> T field(size_t offset) const noexcept {
+        T value{};std::memcpy(&value,metadata_.data()+offset,sizeof(value));return value;
+    }
+    void pointer(size_t offset,uintptr_t value) noexcept {
+        std::memcpy(metadata_.data()+offset,&value,sizeof(value));
+    }
+    template<class Read> bool initialize(uintptr_t metadata,size_t slices,Read read) noexcept {
+        static_assert(sizeof(uintptr_t)==8,"exact native x86_64 NAL pointer ABI");
+        const auto self=reinterpret_cast<uintptr_t>(this);
+        if(self>UINTPTR_MAX-sizeof(*this))return false;
+        auto source=[&](uintptr_t address,void* output,size_t bytes) noexcept {
+            if(!bytes)return true;
+            if(!address || address>UINTPTR_MAX-bytes ||
+               (address<self+sizeof(*this) && self<address+bytes))return false;
+            return read(address,output,bytes);
+        };
+        if(!source(metadata,metadata_.data(),metadata_.size()))return false;
+        const auto lengths=field<uintptr_t>(0x60),headers=field<uintptr_t>(0x58);
+        if(!source(lengths,lengths_.data(),slices*sizeof(uint32_t)))return false;
+        for(size_t i=0;i<slices;++i)if(lengths_[i]>MaxPayloadBytes*8U)return false;
+        auto copy=[&](size_t index,uintptr_t address,uint32_t bits) noexcept {
+            if(bits>MaxPayloadBytes*8U)return false;
+            const auto bytes=size_t((uint64_t(bits)+7U)/8U);
+            return source(address,payloads_[index].data(),bytes);
+        };
+        // flag/source/bits triples from25f96/2603d/260e5/25eee.
+        constexpr size_t flags[]{0,0x14,0x24,0x34};
+        constexpr size_t pointers[]{8,0x18,0x28,0x38};
+        constexpr size_t bits[]{0x10,0x20,0x30,0x40};
+        for(size_t i=0;i<4;++i) {
+            if(field<uint32_t>(flags[i])) {
+                if(!copy(i,field<uintptr_t>(pointers[i]),field<uint32_t>(bits[i])))return false;
+                pointer(pointers[i],reinterpret_cast<uintptr_t>(payloads_[i].data()));
+            } else pointer(pointers[i],0); // no borrowed pointer for an inactive record
+        }
+        uintptr_t first=0;
+        if(!source(headers,&first,sizeof(first)) || !copy(4,first,lengths_[0]))return false;
+        // Other source entries are deliberately absent: only the current
+        // exact index0 template consumer is qualified, not an indexed reader.
+        sources_[0]=reinterpret_cast<uintptr_t>(payloads_[4].data());
+        pointer(0x58,reinterpret_cast<uintptr_t>(sources_.data()));
+        pointer(0x60,reinterpret_cast<uintptr_t>(lengths_.data()));
+        slices_=slices;return true;
+    }
+    alignas(8) std::array<uint8_t,0x68> metadata_{};
+    std::array<uintptr_t,MaxSlices> sources_{};
+    std::array<uint32_t,MaxSlices> lengths_{};
+    std::array<std::array<uint8_t,MaxPayloadBytes>,5> payloads_{};
+    size_t slices_=0;
+};
 struct Builder {
     uintptr_t argument=0,connection=0,base=0,cursor=0,end=0;
     uint32_t previousUsed=0,classes=0;
