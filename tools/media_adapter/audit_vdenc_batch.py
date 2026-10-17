@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Offline packet/rebase audit; NEVER emits a GPU-submittable command buffer.
 
-Input is the saved pre-relocation AVC command buffer, not a live mapping.
+Input is a saved pre-relocation AVC buffer, publication log, or explicitly
+decoded publication artifact, never a live mapping. Missing source/BEGIN
+labels are preserved; no mode reconstructs missing command bytes.
 Gen12 sizes are pinned to intel/media-driver 2a32c7fafd8fa169112e962587777969cc8c654f.
 Size differences describe producer ABI, not hardware validity or a hang verdict.
 """
 import argparse
 import base64
+import hashlib
 import json
 import re
 import struct
@@ -35,7 +38,7 @@ def mode_template_fields(words):
     """
     result = {'status': 'GEN12_FIELDS_CPU_ONLY_NOT_ADMISSION',
               'complete_packet_walk': False, 'mfx_modes': [], 'pak_headers': [], 'walkers': [],
-              'pipeline_flushes': [], 'mi_flushes': []}
+              'pipeline_flushes': [], 'mi_flushes': [], 'mi_operands': [], 'mi_profile_issues': []}
     if not words or len(words) > 1536 or any(type(x) is not int or not 0 <= x <= 0xffffffff for x in words):
         result['refusal'] = 'word-extent-or-value'
         return result
@@ -48,7 +51,8 @@ def mode_template_fields(words):
         elif op == 0x70480000:
             count = (header & 0xfff) + 2
         elif op in SIZES:
-            count = (header & (0x3f if op == 0x13000000 else 0xfff)) + 2
+            length_mask = {0x13000000: 0x3f, 0x10000000: 0x3ff, 0x12000000: 0xff}.get(op, 0xfff)
+            count = (header & length_mask) + 2
             if count not in (SIZES[op], EXPANSIONS.get(op, SIZES[op])):
                 result.update(refusal='packet-shape', stopped_word=at)
                 return result
@@ -75,9 +79,73 @@ def mode_template_fields(words):
                 parser_done=(control >> 4) & 1, vdenc_flush=(control >> 17) & 1))
         elif op == 0x13000000:
             result['mi_flushes'].append(dict(word=at, header=header))
+        if op in (0x10000000, 0x12000000, 0x13000000):
+            # Packet-shape walk only. Never dereference GPU addresses or treat
+            # a clean field report as ownership, cache visibility or admission.
+            low, high = words[at+1:at+3] if op != 0x12000000 else words[at+2:at+4]
+            operand = dict(word=at, opcode=f'{op:08x}', header=f'{header:08x}',
+                           address_words=[f'{low:08x}', f'{high:08x}'])
+            if op != 0x12000000:
+                operand['immediate_words'] = [f'{value:08x}' for value in words[at+3:at+5]]
+            issues = []
+            if op == 0x13000000:
+                operand.update(address_hex=f'{((high & 0xffff) << 32) | (low & ~7):016x}',
+                               ggtt=(low >> 2) & 1, hws_index=(header >> 21) & 1,
+                               post_sync=(header >> 14) & 3)
+                if header & 0x005b3c40: issues.append('flush-header-reserved')
+                if low & 3 or high & 0xffff0000: issues.append('flush-address-reserved')
+                if operand['ggtt'] or operand['hws_index']: issues.append('flush-address-space')
+                if operand['post_sync'] == 2: issues.append('flush-postsync')
+            else:
+                operand.update(address_hex=f'{(high << 32) | (low & ~3):016x}', ggtt=(header >> 22) & 1)
+                if op == 0x10000000:
+                    operand.update(core_mode=low & 1, store_qword=(header >> 21) & 1,
+                                   inline_mocs=(header >> 20) & 1, mocs=(header >> 13) & 0x7f)
+                    if header & 0x1c00: issues.append('store-header-reserved')
+                    if low & 2: issues.append('store-address-reserved')
+                    if operand['ggtt']: issues.append('store-global-gtt')
+                else:
+                    operand.update(register_hex=f'{words[at+1]:08x}', cs_offset=(header >> 19) & 1,
+                                   mmio_remap=(header >> 17) & 1)
+                    if header & 0x0035ff00: issues.append('srm-header-reserved')
+                    if low & 3: issues.append('srm-address-reserved')
+                    if operand['ggtt']: issues.append('srm-global-gtt')
+            result['mi_operands'].append(operand)
+            result['mi_profile_issues'].extend(dict(word=at, reason=reason) for reason in issues)
         at += count
     result['complete_packet_walk'] = True
     return result
+
+def decoded_publication_fields(data):
+    """Inspect an existing decoded artifact without upgrading its provenance."""
+    if not data or len(data) > 32768:
+        raise ValueError('decoded publication requires 1..32768 bytes')
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate decoded publication key')
+            result[key] = value
+        return result
+    decoded = json.loads(data, object_pairs_hook=unique_pairs)
+    if not isinstance(decoded, dict) or not isinstance(decoded.get('published'), list):
+        raise ValueError('decoded published word array required')
+    words = decoded['published']
+    fields = mode_template_fields(words)
+    if fields.get('refusal') == 'word-extent-or-value':
+        raise ValueError('invalid decoded publication words')
+    metadata = {}
+    for name in ('status', 'source_status'):
+        value = decoded.get(name, 'NOT_PROVIDED')
+        if not isinstance(value, str) or len(value) > 128:
+            raise ValueError('invalid decoded publication provenance label')
+        metadata[name] = value
+    return dict(status='DECODED_CPU_PUBLICATION_FIELDS_ONLY_NOT_ADMISSION',
+                input_status=metadata['status'], source_status=metadata['source_status'],
+                source_decoded_by_this_mode=False,
+                artifact_sha256=hashlib.sha256(data).hexdigest(),
+                capture_authenticity='NOT_VERIFIED_BY_THIS_TOOL', published_words=len(words),
+                gen12_mode_template_fields=fields)
 
 def audit(data):
     if not data or len(data) > 65536 or len(data) % 4:
@@ -260,6 +328,52 @@ def selftest():
     assert flush['complete_packet_walk'] and flush['mi_flushes'][0]['word'] == 2
     assert all(flush['pipeline_flushes'][0][name] == 1 for name in
                ('vdenc_done', 'mfx_done', 'parser_done', 'vdenc_flush'))
+    mi = mode_template_fields([0x10600003, 0x2000, 0x80000000, 1, 0,
+                              0x1320c003, 0x1004, 0, 1, 0,
+                              0x12480002, 0x8a0, 0x3000, 0x80000000])
+    assert mi['complete_packet_walk'] and len(mi['mi_operands']) == 3
+    assert mi['mi_operands'][0]['address_hex'] == '8000000000002000'
+    assert mi['mi_operands'][1]['post_sync'] == 3 and mi['mi_operands'][1]['hws_index'] == 1
+    assert mi['mi_operands'][2]['cs_offset'] == 1 and mi['mi_operands'][2]['ggtt'] == 1
+    assert [issue['reason'] for issue in mi['mi_profile_issues']] == [
+        'store-global-gtt', 'flush-address-space', 'srm-global-gtt']
+    invalid_flush = mode_template_fields([0x13008003, 3, 0x10000, 0, 0])
+    assert [issue['reason'] for issue in invalid_flush['mi_profile_issues']] == [
+        'flush-address-reserved', 'flush-postsync']
+    for header, packet, mask, reason in (
+            (0x10200003, [0x2000, 0, 1, 0], 0x1c00, 'store-header-reserved'),
+            (0x13004003, [0x1000, 0, 1, 0], 0x005b3c40, 'flush-header-reserved'),
+            (0x12080002, [0x8a0, 0x3000, 0], 0x0035ff00, 'srm-header-reserved')):
+        for bit in range(32):
+            if mask & (1 << bit):
+                fields = mode_template_fields([header | (1 << bit)] + packet)
+                assert fields['complete_packet_walk']
+                assert reason in [issue['reason'] for issue in fields['mi_profile_issues']]
+    decoded = decoded_publication_fields(json.dumps(dict(status='BEGIN_MISSING', source_status='NOT_DECODED',
+        published=[0x13000003, 0, 0, 0, 0])).encode())
+    assert decoded['input_status'] == 'BEGIN_MISSING' and decoded['source_status'] == 'NOT_DECODED'
+    assert decoded['capture_authenticity'] == 'NOT_VERIFIED_BY_THIS_TOOL' and decoded['published_words'] == 5
+    assert not decoded['source_decoded_by_this_mode']
+    unknown = decoded_publication_fields(b'{"published":[1]}')
+    assert not unknown['gen12_mode_template_fields']['complete_packet_walk']
+    assert unknown['gen12_mode_template_fields']['refusal'] == 'unreviewed-opcode'
+    for words in ([-1], [0x100000000], [0]*1537):
+        try:
+            decoded_publication_fields(json.dumps(dict(published=words)).encode())
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('invalid decoded word extent/value accepted')
+    for invalid in (b'', b'{}', b'[]', b'{"published":[true]}', b' ' * 32769,
+                    b'{"published":[0],"source_status":false}',
+                    json.dumps(dict(published=[0], status='x'*129)).encode(),
+                    b'{"published":[0],"published":[0]}'):
+        try:
+            decoded_publication_fields(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('invalid decoded publication accepted')
     for invalid in ([], [True], [0x100000000], [0xffffffff], [0x70480001, 0x4e4c],
                     [0x70870003, 0, 0, 0, 0], [0]*1537):
         assert not mode_template_fields(invalid)['complete_packet_walk']
@@ -346,9 +460,23 @@ if __name__ == '__main__':
     parser.add_argument('--publication-log', type=Path)
     parser.add_argument('--native-batch-log', type=Path)
     parser.add_argument('--published-only', action='store_true', help='require complete published stream; never claim source completeness')
+    parser.add_argument('--decoded-publication', type=Path, help='bounded existing JSON artifact; preserves missing-source/provenance labels')
     args = parser.parse_args()
+    if args.decoded_publication and (args.self_test or args.batch or args.publication_log or args.native_batch_log or args.published_only):
+        parser.error('decoded publication conflicts with other input modes')
     if args.self_test:
         selftest()
+    elif args.decoded_publication:
+        with args.decoded_publication.open('rb') as source:
+            chunks, total = [], 0
+            while total < 32769:
+                part = source.read(min(4096, 32769-total))
+                if not part:
+                    break
+                chunks.append(part)
+                total += len(part)
+            data = b''.join(chunks)
+        print(json.dumps(decoded_publication_fields(data), separators=(',', ':')))
     elif args.native_batch_log:
         if args.publication_log or args.published_only or args.native_batch_log.stat().st_size > 2097152:
             parser.error('native batch log exceeds 2MiB or conflicting mode')
