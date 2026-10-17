@@ -250,6 +250,21 @@ template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputA
             assert(contextual && geometryReads==4 && !inputState.releases);
             assert(contextual->nativeContext()==context && contextual->matchesContext(context,contextRead,[]() noexcept {return true;}));
             assert(!contextual->matchesContext(context+8,contextRead,[]() noexcept {return true;}));
+            assert(contextual->matchesOriginalRequest(inputRead,[]() noexcept {return true;}));
+            for(size_t changed=0;changed<sizeof(originalRequest);++changed) {
+                reinterpret_cast<unsigned char*>(originalRequest.data())[changed]^=1;
+                assert(!contextual->matchesOriginalRequest(inputRead,[]() noexcept {return true;}));
+                originalRequest=savedRequest;
+            }
+            assert(!contextual->matchesOriginalRequest(inputRead,[]() noexcept {return false;}));
+            unsigned requestReads=0;
+            auto changedSecond=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(!inputRead(at,out,bytes))return false;
+                if(++requestReads==2)static_cast<unsigned char*>(out)[0]^=1;
+                return true;
+            };
+            assert(!contextual->matchesOriginalRequest(changedSecond,[]() noexcept {return true;}));
+            assert(requestReads==2 && originalRequest==savedRequest);
             contextual.reset();assert(inputState.releases==5);
         } else {
             assert(!contextual && inputState.retains==inputState.releases);

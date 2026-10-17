@@ -52,6 +52,18 @@ public:
     uintptr_t callbackRequest() const noexcept {
         return ready_?reinterpret_cast<uintptr_t>(bytes_.data()):0;
     }
+    // Outer still consumes the ORIGINAL request. Reconstruct its captured
+    // bytes, not the private callback payload pointer. Observation only:
+    // the caller must retain content exclusion across native use.
+    template<class Read,class Admit>
+    bool matchesOriginal(uintptr_t original,uintptr_t originalPayload,Read read,Admit admit) const noexcept {
+        if(!ready_ || !original || original>UINTPTR_MAX-bytes_.size() || !originalPayload || !admit())return false;
+        auto expected=bytes_;
+        std::memcpy(expected.data()+0x20,&originalPayload,sizeof(originalPayload));
+        std::array<unsigned char,0x28> first{},second{};
+        return read(original,first.data(),first.size()) && admit() && first==expected &&
+            read(original,second.data(),second.size()) && admit() && second==expected;
+    }
 };
 // Synchronous size->builder pairing only. The surrounding frame owner retains
 // input/object pins and supplies the SAME live authority throughout. This is
@@ -602,6 +614,9 @@ public:
         return input;
     }
     uintptr_t nativeContext() const noexcept {return nativeContext_;}
+    template<class Read,class Admit> bool matchesOriginalRequest(Read read,Admit admit) const noexcept {
+        return request_.matchesOriginal(originalRequest_,originalPayload_,read,admit);
+    }
     template<class Read,class Admit> bool matchesContext(uintptr_t context,Read read,Admit admit) const noexcept {
         NativeAvcCodedGeometry current;
         return nativeContext_ && context==nativeContext_ &&
