@@ -14,6 +14,7 @@
 #include <spawn.h>
 #include <sys/wait.h>
 #include <sys/statvfs.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include "../../NootedGreen/kern_flight_trace.hpp"
 #if defined(__APPLE__)
@@ -288,8 +289,13 @@ bool platform(Platform& out) {
     (void)out;return false;
 #endif
 }
-int capture(const char* path,unsigned seconds,bool unified=false) {
+int capture(const char* path,unsigned seconds,bool unified=false,bool readyFile=false) {
     if(geteuid()!=0 || !nativeVersion() || !seconds || seconds>600)return 2;
+    if(readyFile){
+        struct stat status{};
+        if(fstat(3,&status) || !S_ISREG(status.st_mode) || status.st_uid ||
+           status.st_nlink!=1 || (status.st_mode&0777)!=0600)return 2;
+    }
     Platform source{};if(!platform(source))return 2;
     BufferInfo before{};
     if(!info(before)){perror("kdebug read policy");return 3;}
@@ -330,6 +336,7 @@ int capture(const char* path,unsigned seconds,bool unified=false) {
     }
     // Do not admit a workload until provenance and calibration are durable.
     ok=ok && !fsync(fd);
+    if(ok && readyFile)ok=dprintf(3,"boot_uuid=%s\npid=%ld\ncalibrated=1\n",source.bootUUID,long(getpid()))>0 && !fsync(3);
     if(ok){fprintf(stderr,"NGREEN_KTRACE_LIVE buffer_bytes=%zu upstream_complete=0\n",size_t(armed.events)*sizeof(Event));fflush(stderr);}
     if(ok && unified){fprintf(stderr,"NGREEN_MEDIA_ROOT_LOGGER_LIVE\n");fflush(stderr);}
     const auto began=std::chrono::steady_clock::now();auto syncAt=began;
@@ -372,6 +379,7 @@ int capture(const char* path,unsigned seconds,bool unified=false) {
     BufferInfo last{};if(!info(last) || last.owner!=getpid() || last.flags&wrapped)ok=false;
     if(!owner.close())ok=false;
     if(!sink.packet(ok?3U:4U,&last,sizeof(last)))ok=false;
+    if(readyFile){(void)dprintf(3,"terminal=%s\n",ok?"complete":"failed");if(fsync(3))ok=false;}
     if(fsync(fd))ok=false;
     close(fd);return ok?0:8;
 }
@@ -430,10 +438,11 @@ int main(int argc,char** argv) {
         printf("KDEBUG_READONLY_PROBE owner=%d disabled=%d flags=%x event_bytes=%zu\n",b.owner,b.disabled,b.flags,sizeof(Event));
         return b.owner==-1 && b.disabled && compatibleFilters(b.flags)?0:4;
     }
-    if((argc==4 || (argc==5 && !strcmp(argv[4],"--unified-log"))) && !strcmp(argv[1],"--capture")) {
+    if((argc==4 || ((argc==5 || (argc==6 && !strcmp(argv[5],"--ready-fd3"))) &&
+        !strcmp(argv[4],"--unified-log"))) && !strcmp(argv[1],"--capture")) {
         char* end=nullptr;errno=0;unsigned long seconds=strtoul(argv[3],&end,10);
         if(errno || !end || *end || seconds==0 || seconds>600)return 2;
-        return capture(argv[2],unsigned(seconds),argc==5);
+        return capture(argv[2],unsigned(seconds),argc>=5,argc==6);
     }
     fprintf(stderr,"usage: kdebug-recorder --probe | --self-test | --capture EXCLUSIVE_FILE SECONDS [--unified-log]\n");return 2;
 }
