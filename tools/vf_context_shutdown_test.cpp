@@ -9,6 +9,10 @@
 using NGVfContextShutdown::Action;
 
 int main() {
+    assert(NGVfTimeoutObservation::prefixEngineForChannel(0)==0);
+    assert(NGVfTimeoutObservation::prefixEngineForChannel(3)==3);
+    for(int32_t channel:{INT32_MIN,-1,1,2,4,5,6,INT32_MAX})
+        assert(NGVfTimeoutObservation::prefixEngineForChannel(channel)==NGVfTimeoutObservation::engineCount);
     {
         using NGVfTimeoutObservation::Reference;
         Reference reference{};
@@ -56,7 +60,7 @@ int main() {
             }
             for(unsigned j=0;j<3;++j)assert(((value>>((2-j)*8))&255U)==i*3+j);
         }
-        int extra=std::snprintf(message+used,sizeof(message)-used," V366: P=%x/%x/%.256s",UINT32_MAX,UINT32_MAX,encoded);
+        int extra=std::snprintf(message+used,sizeof(message)-used," V379: E=%x V366: P=%x/%x/%.256s",UINT32_MAX,UINT32_MAX,UINT32_MAX,encoded);
         assert(extra>0 && size_t(extra)<sizeof(message)-used);used+=size_t(extra);
         assert(used<950 && std::strlen(message)==used && std::strstr(message," T5=") && std::strstr(message," V366: P="));
         for(uint32_t bytes=256;bytes<=0x200000;bytes*=2)

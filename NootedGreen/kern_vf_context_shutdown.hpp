@@ -415,6 +415,11 @@ inline void encodeRingPrefix(const uint32_t (&words)[48], char (&output)[257]) {
     output[256] = 0;
 }
 constexpr uint32_t engineCount = 6;
+// Only these event-channel/engine associations have pinned runtime evidence.
+// Unsupported channels still retain all six frames, without guessing a prefix.
+inline uint32_t prefixEngineForChannel(int32_t channel) {
+    return channel==0?0U:channel==3?3U:engineCount;
+}
 struct Reference {
 	uint32_t id, descriptorLo, descriptorHi;
 	uint64_t serial;

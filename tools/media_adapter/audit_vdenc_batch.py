@@ -317,7 +317,54 @@ def native_batch(lines):
             'metadata': metadata, 'words': words}
 
 
+def timeout_ring(text):
+    """V379 selected retained CPU ring; never a GPU PC or completion proof."""
+    text = text.replace('\\/', '/').replace('\\n', '\n')
+    channels = re.findall(r'V267: refusing VF event timeout recovery channel=(-?[0-9]{1,10}) V364:', text)
+    windows = re.findall(r'V379: E=([0-9a-f]{1,8}) V366: P=([0-9a-f]{1,8})/([0-9a-f]{1,8})/([A-Za-z0-9+/=]+)', text)
+    if len(channels) != 1 or len(windows) != 1:
+        raise ValueError('missing or ambiguous selected timeout prefix')
+    engine, flags, size = (int(value, 16) for value in windows[0][:3])
+    channel = int(channels[0])
+    if channel not in (0, 3) or engine != channel or flags != 1:
+        raise ValueError('unsupported channel or mismatched prefix identity')
+    frames = re.findall(rf' T{engine}=([0-9a-f]{{1,8}}(?:/[0-9a-f]{{1,8}}){{8}})(?=\s)', text)
+    if len(frames) != 1:
+        raise ValueError('missing or ambiguous selected frame')
+    frame = [int(value, 16) for value in frames[0].split('/')]
+    head, tail = frame[7:9]
+    if frame[1] & 15 != 15 or head != 0 or tail < 32 or tail > 192 or tail & 7:
+        raise ValueError('unqualified selected CPU frame or invalid span')
+    if size < 256 or size > 0x200000 or size & (size - 1) or tail >= size:
+        raise ValueError('invalid ring allocation bound')
+    encoded = windows[0][3]
+    raw = base64.b64decode(encoded, validate=True)
+    if len(encoded) != 256 or len(raw) != 192 or base64.b64encode(raw).decode() != encoded or any(raw[tail:]):
+        raise ValueError('truncated, noncanonical, or nonzero padded prefix')
+    return {'engine_index': engine, 'native_channel': channel, 'ring_allocation_bytes': size,
+            'head': head, 'tail': tail, 'words': list(struct.unpack(f'<{tail // 4}I', raw[:tail])),
+            'cpu_snapshot_only': True, 'live_instruction_pointer': False, 'completion_proof': False}
+
+
 def selftest():
+    ring = [0x13000003] + [0xffffffff] * 33 + [0] * 14
+    encoded = base64.b64encode(struct.pack('<48I', *ring)).decode()
+    saved = ('V267: refusing VF event timeout recovery channel=0 V364: capture=1 '
+             'T0=1bc1/f/5/1/0/88/0/0/88 V379: E=0 V366: P=1/1000/' + encoded)
+    assert timeout_ring(saved)['words'] == ring[:34]
+    assert timeout_ring(saved.replace('/', '\\/'))['engine_index'] == 0
+    assert timeout_ring(saved.replace('channel=0','channel=3').replace('E=0','E=3').replace('T0=','T3='))['engine_index'] == 3
+    for bad in (saved[:-1], saved + '\n' + saved, saved.replace('E=0', 'E=3'),
+                saved.replace('P=1/', 'P=0/'), saved.replace('/0/0/88 ', '/0/8/88 '),
+                saved.replace('/1000/', '/80/'), saved.replace('V379: E=0 ', ''),
+                saved.replace('1bc1/', '1bc112345/'),
+                saved.replace(encoded, base64.b64encode(b'\xff' * 192).decode())):
+        try:
+            timeout_ring(bad)
+        except (ValueError, base64.binascii.Error):
+            continue
+        raise AssertionError('bad selected timeout CPU prefix accepted')
+    print('SELECTED_TIMEOUT_CPU_RING_SELFTEST_OK')
     fields = mode_template_fields([0x68000100, 0x70000003, 0x626d2, 0, 0, 0,
                                   0x70480001, 0x4e4c, 0,
                                   0x70870002, 0, 17, 0, 0x12080002, 0x8a0, 0, 0])
@@ -459,12 +506,29 @@ if __name__ == '__main__':
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--publication-log', type=Path)
     parser.add_argument('--native-batch-log', type=Path)
+    parser.add_argument('--timeout-panic', type=Path, help='selected V379 retained CPU ring only; not a GPU snapshot')
     parser.add_argument('--published-only', action='store_true', help='require complete published stream; never claim source completeness')
     parser.add_argument('--decoded-publication', type=Path, help='bounded existing JSON artifact; preserves missing-source/provenance labels')
     args = parser.parse_args()
+    if args.timeout_panic and (args.self_test or args.batch or args.publication_log or args.native_batch_log or args.published_only or args.decoded_publication):
+        parser.error('timeout panic conflicts with other modes')
     if args.decoded_publication and (args.self_test or args.batch or args.publication_log or args.native_batch_log or args.published_only):
         parser.error('decoded publication conflicts with other input modes')
-    if args.self_test:
+    if args.timeout_panic:
+        if args.timeout_panic.stat().st_size > 1048576:
+            parser.error('panic report exceeds 1MiB')
+        chunks = []
+        with args.timeout_panic.open('rb') as source:
+            for _ in range(257):
+                part = source.read(4096)
+                if not part:
+                    break
+                chunks.append(part)
+        data = b''.join(chunks)
+        if len(data) > 1048576:
+            parser.error('panic report grew beyond 1MiB')
+        print(json.dumps(timeout_ring(data.decode('utf-8')), separators=(',', ':')))
+    elif args.self_test:
         selftest()
     elif args.decoded_publication:
         with args.decoded_publication.open('rb') as source:

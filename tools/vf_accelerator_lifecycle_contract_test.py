@@ -6629,7 +6629,11 @@ def source_contract(path):
     fail_stop = timeout_reject.find("PANIC_COND(true")
     if not (0 <= fault < fail_stop < timeout_reject.find("return nullptr;")):
         raise AssertionError(f"{path}: VF event timeout returns before admission closure/fail-stop")
-    capture_call = "vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames)"
+    capture_call = "vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames, prefixEngine)"
+    if "const uint32_t prefixEngine = NGVfTimeoutObservation::prefixEngineForChannel(channel);" not in timeout_reject or \
+       "NG_TIMEOUT_WINDOW_ARGS(frames[prefixEngine < NGVfTimeoutObservation::engineCount ? prefixEngine : 0])" not in timeout_reject or \
+       'V379: E=%x' not in timeout_reject:
+        raise AssertionError(f"{path}: timeout prefix must identify its proven selected engine")
     if timeout_reject.count(capture_call) != 1 or timeout_reject.find(capture_call) >= fault:
         raise AssertionError(f"{path}: timeout snapshot must precede unchanged fail-stop exactly once")
     # Permit only the already UUID-pinned CPU-mapping leaf, not arbitrary
@@ -6659,7 +6663,7 @@ def source_contract(path):
                       "ReadRegister32(", "WriteRegister32(", "IOSleep(", "IOMalloc", "->retain(", "->release("):
         if forbidden in capture:
             raise AssertionError(f"{path}: timeout CPU snapshot gained side effect: {forbidden}")
-    for required in ("engine == 3 && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking",
+    for required in ("engine == prefixEngine && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking",
                      "image + 0x102C);", "(control & 0x001FF000U) + PAGE_SIZE", "(control & 1U)",
                      "frame.ringTail == entry.submissionCoverage.coveredTail",
                      "NGVfTimeoutObservation::ringPrefixAdmitted(bytes,",
@@ -7774,7 +7778,7 @@ def timeout_capture_mutations(path):
         ("image + 0x102C);", "image + 0x1028);"),
         ("(control & 0x001FF000U) + PAGE_SIZE", "PAGE_SIZE"),
         ("(control & 1U)", "true"),
-        ("engine == 3 && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking", "entry.ringBacking"),
+        ("engine == prefixEngine && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking", "entry.ringBacking"),
         ("frame.ringTail == entry.submissionCoverage.coveredTail", "true"),
         ("NGVfTimeoutObservation::ringPrefixAdmitted(bytes,", "NGVfTimeoutObservation::ringPrefixAdmitted(256,"),
         ("getMember<uint64_t>(entry.ringBacking, kVfMappedBufferLengthOffset)", "UINT64_MAX"),
@@ -7810,8 +7814,9 @@ def timeout_capture_mutations(path):
     for forbidden in ("ReadRegister32(0);", "WriteRegister32(0,0);", "vfSendCtbFastAction();", "IOSleep(1);", "IOMalloc(64);", "backing->release();"):
         mutants.append(source.replace(capture, capture[:1] + "\n" + forbidden + capture[1:], 1))
     # The only permitted callback remains the exact leaf mapping accessor.
-    mutants.append(source.replace("vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames)",
-                                  "vfCaptureTimeoutFrames(callback ? callback->oIOAccelGetCommandBufferPtrNoInc : 0, frames)", 1))
+    mutants.append(source.replace("vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames, prefixEngine)",
+                                  "vfCaptureTimeoutFrames(callback ? callback->oIOAccelGetCommandBufferPtrNoInc : 0, frames, prefixEngine)", 1))
+    mutants.append(source.replace("NGVfTimeoutObservation::prefixEngineForChannel(channel)","3U",1))
     source_contract(path)
     for mutation_index, mutated in enumerate(mutants):
         def read(self, *args, **kwargs):

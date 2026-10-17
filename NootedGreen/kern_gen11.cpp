@@ -10973,7 +10973,7 @@ struct VfTimeoutContextFrame {
 static_assert(sizeof(VfTimeoutContextFrame) == 304, "six bounded CPU frames with short ring prefix");
 
 static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
-	VfTimeoutContextFrame (&frames)[NGVfTimeoutObservation::engineCount]) {
+	VfTimeoutContextFrame (&frames)[NGVfTimeoutObservation::engineCount], uint32_t prefixEngine) {
 	VfContextOperationGuard operation;
 	if (!operation || gVfIdentity != VfIdentity::Virtual || !getter ||
 	    !gVfAccelerator || !gVfContextLock || !gVfContexts ||
@@ -11016,9 +11016,9 @@ static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
 		frame.reportedHead = *reinterpret_cast<volatile uint32_t *>(image + 0x10);
 		frame.ringHead = *reinterpret_cast<volatile uint32_t *>(image + 0x1014);
 		frame.ringTail = *reinterpret_cast<volatile uint32_t *>(image + 0x101C);
-		// V366: only VCS0's last published short zero-head CPU ring prefix.
+		// V379: select the proven timeout channel, not VCS0 unconditionally.
 		// No MMIO or batch traversal. Saved LRCA head is NOT a live instruction pointer.
-		if (engine == 3 && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking) {
+		if (engine == prefixEngine && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking) {
 			const uint32_t control = *reinterpret_cast<volatile uint32_t *>(image + 0x102C);
 			const uint32_t bytes = (control & 0x001FF000U) + PAGE_SIZE;
 			if ((control & 1U) && frame.ringTail == entry.submissionCoverage.coveredTail &&
@@ -11058,15 +11058,17 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	// fabricate completion while a direct GuC context may still DMA. Guest
 	// fail-stop is not PF containment; the independent host watcher is required.
 	VfTimeoutContextFrame frames[NGVfTimeoutObservation::engineCount] {};
-	const uint32_t capture = vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames);
+	const uint32_t prefixEngine = NGVfTimeoutObservation::prefixEngineForChannel(channel);
+	const uint32_t capture = vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames, prefixEngine);
 	vfMarkProtocolFault("VF native event timeout without verified GPU quiescence");
 	PANIC_COND(true, "ngreen", "V267: refusing VF event timeout recovery channel=%d V364: capture=%x"
 		" T0=" NG_TIMEOUT_FRAME_FORMAT " T1=" NG_TIMEOUT_FRAME_FORMAT
 		" T2=" NG_TIMEOUT_FRAME_FORMAT " T3=" NG_TIMEOUT_FRAME_FORMAT
-		" T4=" NG_TIMEOUT_FRAME_FORMAT " T5=" NG_TIMEOUT_FRAME_FORMAT " V366: P=" NG_TIMEOUT_WINDOW_FORMAT,
+		" T4=" NG_TIMEOUT_FRAME_FORMAT " T5=" NG_TIMEOUT_FRAME_FORMAT " V379: E=%x V366: P=" NG_TIMEOUT_WINDOW_FORMAT,
 		channel,capture,NG_TIMEOUT_FRAME_ARGS(frames[0]),NG_TIMEOUT_FRAME_ARGS(frames[1]),
 		NG_TIMEOUT_FRAME_ARGS(frames[2]),NG_TIMEOUT_FRAME_ARGS(frames[3]),
-		NG_TIMEOUT_FRAME_ARGS(frames[4]),NG_TIMEOUT_FRAME_ARGS(frames[5]),NG_TIMEOUT_WINDOW_ARGS(frames[3]));
+		NG_TIMEOUT_FRAME_ARGS(frames[4]),NG_TIMEOUT_FRAME_ARGS(frames[5]),prefixEngine,
+		NG_TIMEOUT_WINDOW_ARGS(frames[prefixEngine < NGVfTimeoutObservation::engineCount ? prefixEngine : 0]));
 	return nullptr;
 }
 
