@@ -36,7 +36,8 @@ def adapter_frame_contract(source):
     assert "if(publicationReady) {" in after, "adapter: lost ready-only reservation path"
     ready = after.split("if(publicationReady) {", 1)[1]
     reference_gate = ("if(!NgreenNativeAvcReservation::referenceIndices(request,&readMemory) ||\n"
-                      "                       !NgreenNativeAvcReservation::quantizerIndex(request,&readMemory))return 5;")
+                      "                       !NgreenNativeAvcReservation::quantizerIndex(request,&readMemory) ||\n"
+                      "                       !NgreenNativeAvcReservation::activeReferenceCounts(request,&readMemory))return 5;")
     assert ready.lstrip().startswith(reference_gate), "adapter: native reference slot admission missing or late"
     assert "NGRN_RUNTIME_SNAPSHOT_ARM" not in body and "snapshotAttempted" not in body, \
         "adapter: untranslated snapshot fallback restored"
@@ -56,6 +57,8 @@ def adapter_frame_mutations(source):
         source.replace("if(!NgreenNativeAvcReservation::referenceIndices", "if(NgreenNativeAvcReservation::referenceIndices", 1),
         source.replace("!NgreenNativeAvcReservation::quantizerIndex(request,&readMemory)", "false", 1),
         source.replace("quantizerIndex(request,&readMemory)", "quantizerIndex(context,&readMemory)", 1),
+        source.replace("!NgreenNativeAvcReservation::activeReferenceCounts(request,&readMemory)", "false", 1),
+        source.replace("activeReferenceCounts(request,&readMemory)", "activeReferenceCounts(context,&readMemory)", 1),
     )
     for candidate in mutations:
         assert candidate != source, "adapter mutation did not change source"

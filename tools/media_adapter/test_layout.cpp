@@ -19257,14 +19257,76 @@ int main() {
             }
             const uint32_t validQp=26;std::memcpy(payload.data()+0x438,&validQp,4);
             rootReads=0;assert(!NgreenNativeAvcReservation::quantizerIndex(rq,moved));
+            std::array<uint8_t,0x98> picture{};
+            std::array<uint8_t,0x44> firstSlice{};
+            uintptr_t firstSlicePointer=reinterpret_cast<uintptr_t>(firstSlice.data());
+            const auto picturePointer=reinterpret_cast<uintptr_t>(picture.data());
+            const auto tablePointer=reinterpret_cast<uintptr_t>(&firstSlicePointer);
+            std::memcpy(payload.data()+0x418,&picturePointer,8);
+            std::memcpy(payload.data()+0x430,&tablePointer,8);
+            auto countRead=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                auto within=[&](uintptr_t base,size_t extent) noexcept {
+                    return address>=base && bytes<=extent && address-base<=extent-bytes;
+                };
+                if(within(picturePointer,picture.size()) ||
+                   within(reinterpret_cast<uintptr_t>(firstSlice.data()),firstSlice.size()) ||
+                   within(tablePointer,sizeof(firstSlicePointer))) {
+                    std::memcpy(target,reinterpret_cast<void*>(address),bytes);return true;
+                }
+                return read(address,target,bytes);
+            };
+            auto counts=[&](uint32_t flag,uint32_t a,uint32_t b) {
+                std::memcpy(firstSlice.data()+0x38,&flag,4);
+                const uint32_t values[]{a,b};
+                std::memcpy(flag?firstSlice.data()+0x3c:picture.data()+0x90,values,sizeof(values));
+            };
+            for(uint32_t flag:{0U,1U,2U}) {
+                for(uint32_t count=0;count<=32;++count)for(unsigned list=0;list<2;++list) {
+                    const uint32_t minusOne=count-1U;
+                    counts(flag,list?31:minusOne,list?minusOne:31);
+                    const auto p=picture;const auto s=firstSlice;
+                    assert(NgreenNativeAvcReservation::activeReferenceCounts(rq,countRead));
+                    assert(picture==p && firstSlice==s);
+                }
+                for(uint32_t bad:{32U,254U,255U,0x7fffffffU,0xfffffffeU})for(unsigned list=0;list<2;++list) {
+                    counts(flag,list?0:bad,list?bad:0);
+                    assert(!NgreenNativeAvcReservation::activeReferenceCounts(rq,countRead));
+                }
+            }
+            counts(0,0,31);
+            unsigned countRootReads=0;
+            auto movedCounts=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                if(address==rq+0x20 && ++countRootReads==2) {
+                    const uintptr_t changed=pl+8;std::memcpy(target,&changed,8);return true;
+                }
+                return countRead(address,target,bytes);
+            };
+            assert(!NgreenNativeAvcReservation::activeReferenceCounts(rq,movedCounts) && countRootReads==2);
+            auto shortCounts=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                return address!=picturePointer+0x90 && countRead(address,target,bytes);
+            };
+            assert(!NgreenNativeAvcReservation::activeReferenceCounts(rq,shortCounts));
+            const auto originalSlice=firstSlicePointer;
+            for(uintptr_t bad:{uintptr_t(0),UINTPTR_MAX-0x30}) {
+                firstSlicePointer=bad;
+                assert(!NgreenNativeAvcReservation::activeReferenceCounts(rq,countRead));
+            }
+            firstSlicePointer=originalSlice;
+            for(uintptr_t bad:{uintptr_t(0),UINTPTR_MAX-0x80}) {
+                std::memcpy(payload.data()+0x418,&bad,8);
+                assert(!NgreenNativeAvcReservation::activeReferenceCounts(rq,countRead));
+            }
+            std::memcpy(payload.data()+0x418,&picturePointer,8);
             auto denied=[](uintptr_t,void*,size_t) noexcept {return false;};
             assert(!NgreenNativeAvcReservation::referenceIndices(rq,denied));
             assert(!NgreenNativeAvcReservation::quantizerIndex(rq,denied));
+            assert(!NgreenNativeAvcReservation::activeReferenceCounts(rq,denied));
             assert(!NgreenNativeAvcReservation::referenceIndices(UINTPTR_MAX-0x20,read));
             const uintptr_t overflow=UINTPTR_MAX-0x400;
             std::memcpy(request.data()+0x20,&overflow,8);
             assert(!NgreenNativeAvcReservation::referenceIndices(rq,read));
             assert(!NgreenNativeAvcReservation::quantizerIndex(rq,read));
+            assert(!NgreenNativeAvcReservation::activeReferenceCounts(rq,countRead));
         }
         auto add=[&](uint32_t header,size_t n){size_t start=used;input[used++]=header;
             used+=n-1;return start;};

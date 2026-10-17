@@ -46,6 +46,30 @@ bool quantizerIndex(uintptr_t request,Read read) noexcept {
        payload>UINTPTR_MAX-0x43c || !read(payload+0x438,&qp,sizeof(qp)) || qp>51)return false;
     return read(request+0x20,&current,sizeof(current)) && current==payload;
 }
+// Exact2737e stores the first slice's override (or PPS default) plus one
+// into outer+ac0/ac4 = builder-view+998/99c. Exact25cf6 consumes those
+// counts using an eight-bit loop cursor and a 32-byte output array.
+// Preserve native uint32 increment/wrap: ffffffff becomes the zero count.
+// Like the other preflights, this is not an immutable-input/lifetime proof.
+template<class Read>
+bool activeReferenceCounts(uintptr_t request,Read read) noexcept {
+    uintptr_t payload=0,table=0,slice=0,current=0;
+    uint32_t overridden=0,minusOne[2]{};
+    if(!request || request>UINTPTR_MAX-0x28 ||
+       !read(request+0x20,&payload,sizeof(payload)) || !payload || payload>UINTPTR_MAX-0x438 ||
+       !read(payload+0x430,&table,sizeof(table)) || !table || table>UINTPTR_MAX-8 ||
+       !read(table,&slice,sizeof(slice)) || !slice || slice>UINTPTR_MAX-0x3c ||
+       !read(slice+0x38,&overridden,sizeof(overridden)))return false;
+    if(overridden) {
+        if(slice>UINTPTR_MAX-0x44 || !read(slice+0x3c,minusOne,sizeof(minusOne)))return false;
+    } else {
+        uintptr_t picture=0;
+        if(!read(payload+0x418,&picture,sizeof(picture)) || !picture || picture>UINTPTR_MAX-0x98 ||
+           !read(picture+0x90,minusOne,sizeof(minusOne)))return false;
+    }
+    if(minusOne[0]+uint32_t(1)>32 || minusOne[1]+uint32_t(1)>32)return false;
+    return read(request+0x20,&current,sizeof(current)) && current==payload;
+}
 struct Builder {
     uintptr_t argument=0,connection=0,base=0,cursor=0,end=0;
     uint32_t previousUsed=0,classes=0;
