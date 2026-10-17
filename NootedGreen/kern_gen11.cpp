@@ -1278,8 +1278,10 @@ struct VfMediaMappedSpan {
 };
 
 // Called only AFTER bindLocked authenticates the sole processDataBuffers
-// native caller. Its IOLock, outer producer lease and retained context enclose
-// all reads; no getKernelData/map creation or use-count increment is performed.
+// native caller. The current CPU read interval is inside its native IOLock;
+// the outer scope retains context/accelerator, but nested maps are borrowed.
+// This is not an exclusive backing pin across native waits or an ABA proof.
+// No getKernelData/map creation or use-count increment is performed.
 static bool vfCaptureMediaMappedSpan(const VfMediaSubmission &entry,void *stream,VfMediaMappedSpan &out)
 {
 	void *context=entry.context;
@@ -9726,8 +9728,10 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 // Borrow retained ring/image only under the context lock, then query the
 // exact native CPU leaf reader after releasing that spinlock. No GPU VA is
 // dereferenced; these are first-page translations, not batch-content capture.
-// Existing producer lease/native IOLock and this thread's Media-end scope pin
-// the same resource/map/record. Under PTlock, never ctxspin; no GPU walk.
+// Under PTlock, briefly take ctxspin only to select the same-thread Media-end
+// scope, then release ctxspin before reading borrowed resource/map/record data.
+// The scope retains context/accelerator, not those nested objects. Matching
+// before/after metadata is non-atomic and is not a backing-lifetime guarantee.
 static void vfObserveNativeBatchProvenance(void *task,const NGVfTimeoutObservation::BatchTargets &targets) {
 	if (!gVfNativeBatchLayoutBound || !gVfNativeBatchMapVtable || !targets.complete || !targets.count) return;
 	VfMediaSubmission *selected=nullptr;
