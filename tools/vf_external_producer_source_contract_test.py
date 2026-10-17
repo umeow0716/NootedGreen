@@ -472,6 +472,13 @@ def contract(source, path="<source>"):
                   'V372 AVC_CPU_BEGIN', 'V372 AVC_CPU_BLOCK', 'V372 AVC_CPU_END'):
         assert token in media_end, f'{path}: missing bounded pinned CPU publication record: {token}'
     assert media_end.index('Lost owned AVC mapping after count publication') < media_end.index('V372 AVC_CPU_BEGIN') < media_end.index('V372 AVC_CPU_END') < media_end.rindex('FunctionCast(vfMediaEnd,')
+    final_guard = 'PANIC_COND(!live(static_cast<uint32_t>(publication.preparation.words)),"ngreen",\n\t\t"Lost owned AVC mapping before native submission");'
+    assert final_guard in media_end, 'missing post-diagnostic native-submit revalidation'
+    final_tail = media_end[media_end.index('V372 AVC_CPU_END'):]
+    assert final_tail.index('OSSynchronizeIO();') < final_tail.index(final_guard) < final_tail.rindex('FunctionCast(vfMediaEnd,')
+    after_guard = final_tail[final_tail.index(final_guard) + len(final_guard):]
+    assert after_guard.strip() == 'FunctionCast(vfMediaEnd,callback->oVfMediaEnd)(that,stream);\n}', \
+        'native-submit revalidation must immediately precede native continuation'
     assert 'return mediaScope.failed()?kIOReturnBadArgument:result;' in media_submit
     assert 'slot->thread != owner || slot->translating' in media_exit
     assert 'releaseSlot();' in media_exit
@@ -514,6 +521,14 @@ def mutation_contract(source, path):
         ('0x170U<=size-(sysTable-address)', 'true', 1),
         ('if (entry->failed) return;', '', 1),
         ('if (entry->failed) return;', 'if (entry->failed) {}', 1),
+        ('"Lost owned AVC mapping before native submission"',
+         '"missing final submit guard"', 1),
+        ('PANIC_COND(!live(static_cast<uint32_t>(publication.preparation.words)),"ngreen",\n\t\t"Lost owned AVC mapping before native submission");',
+         '', 1),
+        ('PANIC_COND(!live(static_cast<uint32_t>(publication.preparation.words)),"ngreen",\n\t\t"Lost owned AVC mapping before native submission");',
+         'PANIC_COND(false,"ngreen",\n\t\t"Lost owned AVC mapping before native submission");', 1),
+        ('"Lost owned AVC mapping before native submission");',
+         '"Lost owned AVC mapping before native submission");\n\tSYSLOG("ngreen","late diagnostic");', 1),
         ('gVfMediaPublicationRouteReady=true;','gVfMediaPublicationRouteReady=false;',1),
         ('0xA48)==videoEnd','0xA48)!=videoEnd',1),
         ('matches(videoEnd+0x22e,nativeSubmit,sizeof(nativeSubmit))','true',1),

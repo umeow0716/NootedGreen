@@ -6299,6 +6299,11 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 		}
 		SYSLOG("ngreen","V372 AVC_CPU_END source=%u published=%u",sourceWords,publishedWords);
 	}
+	// Diagnostic formatting/logging occurs after count publication. Do not
+	// carry its earlier identity check across that interval into native submit.
+	OSSynchronizeIO();
+	PANIC_COND(!live(static_cast<uint32_t>(publication.preparation.words)),"ngreen",
+		"Lost owned AVC mapping before native submission");
 	FunctionCast(vfMediaEnd,callback->oVfMediaEnd)(that,stream);
 }
 
