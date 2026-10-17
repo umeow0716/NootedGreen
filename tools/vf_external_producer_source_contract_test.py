@@ -25,6 +25,39 @@ def block(source, marker, end_marker):
     return source[start:end]
 
 
+def adapter_frame_contract(source):
+    body = block(source, "struct NativeOtherFrameBackend {", "struct NativeLateFactoryBatch {")
+    gate = "if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady))return 5;"
+    assert body.count(gate) == 1, "adapter: exact AVC publication refusal missing or changed"
+    before, after = body.split(gate)
+    assert "queryPublication(lease,active,image,physical,generation,publication)" in before, \
+        "adapter: frame admission precedes readiness query"
+    assert "invoke()" not in before, "adapter: native invocation precedes publication refusal"
+    assert "if(publicationReady) {" in after, "adapter: lost ready-only reservation path"
+    assert "NGRN_RUNTIME_SNAPSHOT_ARM" not in body and "snapshotAttempted" not in body, \
+        "adapter: untranslated snapshot fallback restored"
+
+
+def adapter_frame_mutations(source):
+    adapter_frame_contract(source)
+    gate = "if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady))return 5;"
+    mutations = (
+        source.replace(gate, "", 1),
+        source.replace(gate, gate.replace("if(!", "if("), 1),
+        source.replace(gate, gate.replace("entry,publicationReady", "entry,true"), 1),
+        source.replace(gate, "return invoke();\n" + gate, 1),
+        source.replace(gate, gate + '\n// NGRN_RUNTIME_SNAPSHOT_ARM', 1),
+    )
+    for candidate in mutations:
+        assert candidate != source, "adapter mutation did not change source"
+        try:
+            adapter_frame_contract(candidate)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError("adapter: publication refusal mutation escaped")
+    print(f"PASS {len(mutations)} adapter frame-publication refusal mutations rejected")
+
+
 def contract(source, path="<source>"):
     provenance = function_body(source, 'static void vfObserveNativeBatchProvenance(')
     stable = provenance[provenance.index('const bool stable='):]
@@ -650,6 +683,8 @@ def main():
     source = path.read_text()
     contract(source, str(path))
     mutation_contract(source, str(path))
+    adapter = pathlib.Path(__file__).resolve().parent / "media_adapter/adapter.cpp"
+    adapter_frame_mutations(adapter.read_text())
 
 
 if __name__ == "__main__":
