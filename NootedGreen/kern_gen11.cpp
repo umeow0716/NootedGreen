@@ -179,6 +179,7 @@ static bool gVfLeafObservationDummyBound = false;
 static mach_vm_address_t gVfNativeBatchMapVtable = 0;
 static mach_vm_address_t gVfNativeBatchMapGetter = 0;
 static bool gVfNativeBatchLayoutBound = false;
+static mach_vm_address_t gVfMediaSysMemoryVtable = 0;
 // Optional AVC producer integration handles. Resolving these does not enable
 // a route, map memory, invoke a getter, or authorize a command-buffer write.
 bool gVfMediaPublicationAbiVerified = false;
@@ -1309,6 +1310,18 @@ static bool vfCaptureMediaMappedSpan(const VfMediaSubmission &entry,void *stream
 	void *map=getMember<void *>(mapped,0x30),*descriptor=getMember<void *>(mapped,0x28);
 	out.reason="map-descriptor";
 	if (!map || !descriptor)return false;
+	// CPU cache presence does not prove that GPU backing still uses its descriptor.
+	// Authenticate the exact native subtype before following its private D0 field.
+	out.reason="cpu-gpu-descriptor";
+	void *gpuMap=getMember<void *>(resource,0x40);
+	void *backing=getMember<void *>(resource,0x88);
+	if (!gVfNativeBatchMapVtable || !gVfMediaSysMemoryVtable || !gpuMap || !backing ||
+	    getMember<mach_vm_address_t>(gpuMap,0)!=gVfNativeBatchMapVtable ||
+	    getMember<void *>(gpuMap,0x88)!=entry.accelerator ||
+	    getMember<void *>(gpuMap,0x90)!=entry.gpuTask ||
+	    getMember<void *>(gpuMap,0x18)!=backing ||
+	    getMember<mach_vm_address_t>(backing,0)!=gVfMediaSysMemoryVtable ||
+	    getMember<void *>(backing,0xD0)!=descriptor)return false;
 	void *table=getMember<void *>(map,0);
 	out.reason="map-getters";
 	if (!table || getMember<mach_vm_address_t>(table,0x118)!=gVfMediaMapAddress ||
@@ -3147,6 +3160,19 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				gVfNativeBatchMapVtable=batchMapTable && batchMapTable>=address &&
 					batchMapTable-address<=size && 0x150U<=size-(batchMapTable-address) && batchEnd &&
 					matches(batchEnd+0x124U,batchRecordIdentity,sizeof(batchRecordIdentity))?batchMapTable+16U:0;
+				const auto sysTable=patcher.solveSymbol(index,"__ZTV16IGAccelSysMemory",address,size);
+				const auto sysPhysical=patcher.solveSymbol(index,
+					"__ZN16IGAccelSysMemory18getPhysicalSegmentEyPy",address,size);
+				static constexpr uint8_t sysPhysicalBody[]={
+					0x55,0x48,0x89,0xe5,0x53,0x50,0x48,0x89,0xd3,0x31,0xc0,0x48,0x8d,0x55,0xf0,0x48,
+					0x89,0x02,0x48,0x8b,0x47,0x28,0x48,0x8b,0xbf,0xd0,0x00,0x00,0x00,0x48,0x8b,0x80,
+					0x60,0x12,0x00,0x00,0x8b,0x88,0x88,0x00,0x00,0x00,0x48,0x8b,0x07,0xff,0x90,0x38,
+					0x01,0x00,0x00,0x48,0x85,0xdb,0x74,0x07,0x48,0x8b,0x4d,0xf0,0x48,0x89,0x0b,0x48,
+					0x83,0xc4,0x08,0x5b,0x5d,0xc3};
+				gVfMediaSysMemoryVtable=sysTable && sysTable>=address && sysTable-address<=size &&
+					0x170U<=size-(sysTable-address) && matches(sysPhysical,sysPhysicalBody,sizeof(sysPhysicalBody)) &&
+					getMember<mach_vm_address_t>(reinterpret_cast<void *>(sysTable+16U),0x158)==sysPhysical?
+					sysTable+16U:0;
 				SYSLOG("ngreen", "V377: native batch CPU provenance observation bound=%u",
 				       gVfNativeBatchLayoutBound && gVfNativeBatchMapVtable && gVfLeafObservationReader ? 1U:0U);
 			}

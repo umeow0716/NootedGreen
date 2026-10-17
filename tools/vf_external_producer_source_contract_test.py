@@ -391,6 +391,18 @@ def contract(source, path="<source>"):
         assert token in locked_media, f"{path}: missing locked media identity gate: {token}"
     media_exit = function_body(source, '~VfMediaSubmissionScope()')
     media_map=function_body(source,'static bool vfCaptureMediaMappedSpan(')
+    for token in ('!gVfNativeBatchMapVtable || !gVfMediaSysMemoryVtable',
+                  'getMember<mach_vm_address_t>(gpuMap,0)!=gVfNativeBatchMapVtable',
+                  'getMember<void *>(gpuMap,0x90)!=entry.gpuTask',
+                  'getMember<void *>(gpuMap,0x18)!=backing',
+                  'getMember<mach_vm_address_t>(backing,0)!=gVfMediaSysMemoryVtable',
+                  'getMember<void *>(backing,0xD0)!=descriptor'):
+        assert token in media_map, f'{path}: lost CPU/GPU descriptor admission: {token}'
+    assert media_map.index('getMember<mach_vm_address_t>(backing,0)!=gVfMediaSysMemoryVtable') < \
+        media_map.index('getMember<void *>(backing,0xD0)!=descriptor')
+    assert 'matches(sysPhysical,sysPhysicalBody,sizeof(sysPhysicalBody))' in source
+    assert '0x170U<=size-(sysTable-address)' in source
+    assert 'getMember<mach_vm_address_t>(reinterpret_cast<void *>(sysTable+16U),0x158)==sysPhysical' in source
     assert 'if (getMember<uint32_t>(context,0x6DC)!=1)return false;' in media_map
     assert 'anchorMatches(submit+0x10b,optionalRecordSkip,sizeof(optionalRecordSkip))' in source
     assert 'anchorMatches(submit+0x168,nextRecord,sizeof(nextRecord))' in source
@@ -458,6 +470,12 @@ def contract(source, path="<source>"):
 
 def mutation_contract(source, path):
     mutations = (
+        ('getMember<void *>(backing,0xD0)!=descriptor', 'false', 1),
+        ('getMember<void *>(gpuMap,0x18)!=backing', 'false', 1),
+        ('getMember<void *>(gpuMap,0x90)!=entry.gpuTask', 'false', 1),
+        ('getMember<mach_vm_address_t>(backing,0)!=gVfMediaSysMemoryVtable', 'false', 1),
+        ('matches(sysPhysical,sysPhysicalBody,sizeof(sysPhysicalBody))', 'true', 1),
+        ('0x170U<=size-(sysTable-address)', 'true', 1),
         ('if (entry->failed) return;', '', 1),
         ('if (entry->failed) return;', 'if (entry->failed) {}', 1),
         ('gVfMediaPublicationRouteReady=true;','gVfMediaPublicationRouteReady=false;',1),
