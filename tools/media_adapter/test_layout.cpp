@@ -19317,6 +19317,67 @@ int main() {
                 assert(!NgreenNativeAvcReservation::activeReferenceCounts(rq,countRead));
             }
             std::memcpy(payload.data()+0x418,&picturePointer,8);
+            // An independently stable root in each helper is not one stable
+            // root across the combined preflight: A passes slot checks, B
+            // has invalid slots but passes the later QP/count checks.
+            auto alternate=payload;
+            const auto alternatePointer=reinterpret_cast<uintptr_t>(alternate.data());
+            const uint32_t badAlternateSlot=16;
+            std::memcpy(alternate.data()+0x408,&badAlternateSlot,4);
+            auto bothRead=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                if(address>=alternatePointer && bytes<=alternate.size() &&
+                   address-alternatePointer<=alternate.size()-bytes) {
+                    std::memcpy(target,reinterpret_cast<void*>(address),bytes);return true;
+                }
+                return countRead(address,target,bytes);
+            };
+            unsigned observations=0;
+            auto switched=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                if(address==rq+0x20) {
+                    assert(bytes==8);
+                    const auto root=++observations<=2?pl:alternatePointer;
+                    std::memcpy(target,&root,8);return true;
+                }
+                return bothRead(address,target,bytes);
+            };
+            assert(NgreenNativeAvcReservation::referenceIndices(rq,switched) &&
+                   NgreenNativeAvcReservation::quantizerIndex(rq,switched) &&
+                   NgreenNativeAvcReservation::activeReferenceCounts(rq,switched));
+            assert(observations==6);
+            assert(NgreenNativeAvcReservation::framePreflight(rq,countRead));
+            observations=0;
+            assert(!NgreenNativeAvcReservation::framePreflight(rq,switched) && observations==3);
+            auto allAlternate=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                if(address==rq+0x20) {
+                    assert(bytes==8);std::memcpy(target,&alternatePointer,8);return true;
+                }
+                return bothRead(address,target,bytes);
+            };
+            assert(!NgreenNativeAvcReservation::referenceIndices(rq,allAlternate));
+            assert(!NgreenNativeAvcReservation::framePreflight(rq,allAlternate));
+            assert(!NgreenNativeAvcReservation::referenceIndices(rq,countRead,alternatePointer));
+            assert(!NgreenNativeAvcReservation::quantizerIndex(rq,countRead,alternatePointer));
+            assert(!NgreenNativeAvcReservation::activeReferenceCounts(rq,countRead,alternatePointer));
+            for(unsigned changeAt=2;changeAt<=7;++changeAt) {
+                unsigned seen=0;
+                auto changedAt=[&](uintptr_t address,void* target,size_t bytes) noexcept {
+                    if(address==rq+0x20) {
+                        assert(bytes==8);const auto root=++seen<changeAt?pl:alternatePointer;
+                        std::memcpy(target,&root,8);return true;
+                    }
+                    return bothRead(address,target,bytes);
+                };
+                assert(!NgreenNativeAvcReservation::framePreflight(rq,changedAt) && seen==changeAt);
+            }
+            std::memcpy(alternate.data()+0x408,&duplicate,4);
+            assert(NgreenNativeAvcReservation::framePreflight(rq,allAlternate));
+            const uint32_t invalidQp=52,invalidCount=32,zeroCount=0;
+            std::memcpy(payload.data()+0x438,&invalidQp,4);
+            assert(!NgreenNativeAvcReservation::framePreflight(rq,countRead));
+            std::memcpy(payload.data()+0x438,&validQp,4);
+            std::memcpy(picture.data()+0x90,&invalidCount,4);
+            assert(!NgreenNativeAvcReservation::framePreflight(rq,countRead));
+            std::memcpy(picture.data()+0x90,&zeroCount,4);
             auto denied=[](uintptr_t,void*,size_t) noexcept {return false;};
             assert(!NgreenNativeAvcReservation::referenceIndices(rq,denied));
             assert(!NgreenNativeAvcReservation::quantizerIndex(rq,denied));

@@ -35,9 +35,7 @@ def adapter_frame_contract(source):
     assert "invoke()" not in before, "adapter: native invocation precedes publication refusal"
     assert "if(publicationReady) {" in after, "adapter: lost ready-only reservation path"
     ready = after.split("if(publicationReady) {", 1)[1]
-    reference_gate = ("if(!NgreenNativeAvcReservation::referenceIndices(request,&readMemory) ||\n"
-                      "                       !NgreenNativeAvcReservation::quantizerIndex(request,&readMemory) ||\n"
-                      "                       !NgreenNativeAvcReservation::activeReferenceCounts(request,&readMemory))return 5;")
+    reference_gate = "if(!NgreenNativeAvcReservation::framePreflight(request,&readMemory))return 5;"
     assert ready.lstrip().startswith(reference_gate), "adapter: native reference slot admission missing or late"
     assert "NGRN_RUNTIME_SNAPSHOT_ARM" not in body and "snapshotAttempted" not in body, \
         "adapter: untranslated snapshot fallback restored"
@@ -52,13 +50,9 @@ def adapter_frame_mutations(source):
         source.replace(gate, gate.replace("entry,publicationReady", "entry,true"), 1),
         source.replace(gate, "return invoke();\n" + gate, 1),
         source.replace(gate, gate + '\n// NGRN_RUNTIME_SNAPSHOT_ARM', 1),
-        source.replace("!NgreenNativeAvcReservation::referenceIndices(request,&readMemory)", "false", 1),
-        source.replace("referenceIndices(request,&readMemory)", "referenceIndices(context,&readMemory)", 1),
-        source.replace("if(!NgreenNativeAvcReservation::referenceIndices", "if(NgreenNativeAvcReservation::referenceIndices", 1),
-        source.replace("!NgreenNativeAvcReservation::quantizerIndex(request,&readMemory)", "false", 1),
-        source.replace("quantizerIndex(request,&readMemory)", "quantizerIndex(context,&readMemory)", 1),
-        source.replace("!NgreenNativeAvcReservation::activeReferenceCounts(request,&readMemory)", "false", 1),
-        source.replace("activeReferenceCounts(request,&readMemory)", "activeReferenceCounts(context,&readMemory)", 1),
+        source.replace("!NgreenNativeAvcReservation::framePreflight(request,&readMemory)", "false", 1),
+        source.replace("framePreflight(request,&readMemory)", "framePreflight(context,&readMemory)", 1),
+        source.replace("if(!NgreenNativeAvcReservation::framePreflight", "if(NgreenNativeAvcReservation::framePreflight", 1),
     )
     for candidate in mutations:
         assert candidate != source, "adapter mutation did not change source"
@@ -71,6 +65,12 @@ def adapter_frame_mutations(source):
 
 
 def avc_phase_contract(header, reservation):
+    preflight = function_body(reservation, "bool framePreflight(")
+    assert "!read(request+0x20,&payload,sizeof(payload)) || !payload" in preflight
+    assert ("return referenceIndices(request,read,payload) && quantizerIndex(request,read,payload) &&\n"
+            "        activeReferenceCounts(request,read,payload);") in preflight
+    for helper in ("referenceIndices", "quantizerIndex", "activeReferenceCounts"):
+        assert "(expectedPayload && payload!=expectedPayload)" in function_body(reservation, "bool " + helper + "(")
     strict = function_body(header, "inline Result produce(")
     size = function_body(header, "inline PreRelocationSize sizeBeforeRelocation(")
     inspection = function_body(header, "inline Result inspectOrProduce(")
@@ -93,6 +93,11 @@ def avc_phase_mutations(header, reservation):
         (header.replace("surfaceHeight,!MeasureOnly)", "surfaceHeight,false)", 1), reservation),
         (header.replace("if(MeasureOnly) {", "if(false) {", 1), reservation),
         (header, reservation.replace("NgreenAvcGen12::sizeBeforeRelocation", "NgreenAvcGen12::produce", 1)),
+        *((header, reservation.replace(helper + "(request,read,payload)", "true", 1))
+          for helper in ("referenceIndices", "quantizerIndex", "activeReferenceCounts")),
+        *((header, reservation.replace(helper + "(request,read,payload)", helper + "(request,read,0)", 1))
+          for helper in ("referenceIndices", "quantizerIndex", "activeReferenceCounts")),
+        (header, reservation.replace("(expectedPayload && payload!=expectedPayload)", "false", 1)),
     )
     for changed_header, changed_reservation in variants:
         assert (changed_header, changed_reservation) != (header, reservation)

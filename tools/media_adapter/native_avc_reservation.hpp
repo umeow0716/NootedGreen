@@ -22,10 +22,11 @@ inline bool frameAdmission(uintptr_t image,uintptr_t entry,bool publicationReady
 // This bounded observation does not freeze caller memory or prove lifetime;
 // the caller still needs the same exclusive input graph throughout native use.
 template<class Read>
-bool referenceIndices(uintptr_t request,Read read) noexcept {
+bool referenceIndices(uintptr_t request,Read read,uintptr_t expectedPayload=0) noexcept {
     uintptr_t payload=0;
     if(!request || request>UINTPTR_MAX-0x28 ||
        !read(request+0x20,&payload,sizeof(payload)) || !payload ||
+       (expectedPayload && payload!=expectedPayload) ||
        payload>UINTPTR_MAX-0x40c)return false;
     for(size_t i=0;i<16;++i) {
         uint64_t handle=0;uint32_t index=0;
@@ -39,10 +40,11 @@ bool referenceIndices(uintptr_t request,Read read) noexcept {
 // directly by payload438. This is the supported 8-bit AVC QP domain,
 // not permission to clamp unsupported input or change native rate control.
 template<class Read>
-bool quantizerIndex(uintptr_t request,Read read) noexcept {
+bool quantizerIndex(uintptr_t request,Read read,uintptr_t expectedPayload=0) noexcept {
     uintptr_t payload=0,current=0;uint32_t qp=0;
     if(!request || request>UINTPTR_MAX-0x28 ||
        !read(request+0x20,&payload,sizeof(payload)) || !payload ||
+       (expectedPayload && payload!=expectedPayload) ||
        payload>UINTPTR_MAX-0x43c || !read(payload+0x438,&qp,sizeof(qp)) || qp>51)return false;
     return read(request+0x20,&current,sizeof(current)) && current==payload;
 }
@@ -52,11 +54,12 @@ bool quantizerIndex(uintptr_t request,Read read) noexcept {
 // Preserve native uint32 increment/wrap: ffffffff becomes the zero count.
 // Like the other preflights, this is not an immutable-input/lifetime proof.
 template<class Read>
-bool activeReferenceCounts(uintptr_t request,Read read) noexcept {
+bool activeReferenceCounts(uintptr_t request,Read read,uintptr_t expectedPayload=0) noexcept {
     uintptr_t payload=0,table=0,slice=0,current=0;
     uint32_t overridden=0,minusOne[2]{};
     if(!request || request>UINTPTR_MAX-0x28 ||
-       !read(request+0x20,&payload,sizeof(payload)) || !payload || payload>UINTPTR_MAX-0x438 ||
+       !read(request+0x20,&payload,sizeof(payload)) || !payload ||
+       (expectedPayload && payload!=expectedPayload) || payload>UINTPTR_MAX-0x438 ||
        !read(payload+0x430,&table,sizeof(table)) || !table || table>UINTPTR_MAX-8 ||
        !read(table,&slice,sizeof(slice)) || !slice || slice>UINTPTR_MAX-0x3c ||
        !read(slice+0x38,&overridden,sizeof(overridden)))return false;
@@ -69,6 +72,17 @@ bool activeReferenceCounts(uintptr_t request,Read read) noexcept {
     }
     if(minusOne[0]+uint32_t(1)>32 || minusOne[1]+uint32_t(1)>32)return false;
     return read(request+0x20,&current,sizeof(current)) && current==payload;
+}
+// One observed payload identity for ALL component checks, not three
+// independently stable roots. This is still only a preflight: field mutation,
+// unobserved ABA and lifetime across native use require stronger ownership.
+template<class Read>
+bool framePreflight(uintptr_t request,Read read) noexcept {
+    uintptr_t payload=0;
+    if(!request || request>UINTPTR_MAX-0x28 ||
+       !read(request+0x20,&payload,sizeof(payload)) || !payload)return false;
+    return referenceIndices(request,read,payload) && quantizerIndex(request,read,payload) &&
+        activeReferenceCounts(request,read,payload);
 }
 struct Builder {
     uintptr_t argument=0,connection=0,base=0,cursor=0,end=0;
