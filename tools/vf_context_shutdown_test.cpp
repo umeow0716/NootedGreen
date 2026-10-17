@@ -58,8 +58,44 @@ static void testFlightEnvelope() {
 
 using NGVfContextShutdown::Action;
 
+static void testBackingPages() {
+    unsigned queries=0,records=0,checks=0;
+    auto query=[&](uint64_t offset,uint64_t *length) {
+        ++queries;*length=65536-offset;return UINT64_C(0x12300000)+offset;
+    };
+    auto emit=[&](const uint32_t *r,uint32_t n) {
+        assert(n==20 && r[0]==1 && r[1]==records && r[2]==16 && r[3]==15);
+        assert(r[4]==0x40010000U+records*4096 && !r[5]);
+        assert(r[6]==records*4096 && !r[7] && r[8]==0x12300000U+records*4096);
+        assert(r[14]==65536 && r[15]==4096 && !r[16] && !r[17] && r[18]==0x88 && !r[19]);
+        ++records;
+    };
+    assert(NGFlightTrace::observeBackingPages(0,65536,0x40010000,0x88,query,[](){return true;},emit));
+    assert(queries==16 && records==16);
+    auto forbidden=[](uint64_t,uint64_t *)->uint64_t {assert(false);return 0;};
+    auto noEmit=[](const uint32_t *,uint32_t){assert(false);};
+    for(uint32_t bytes:{0U,65537U})
+        assert(!NGFlightTrace::observeBackingPages(0,bytes,0x40010000,0,forbidden,[](){return true;},noEmit));
+    for(uint64_t offset:{UINT64_C(1),UINT64_C(0xfffffffffffff000)})
+        assert(!NGFlightTrace::observeBackingPages(offset,65536,0x40010000,0,forbidden,[](){return true;},noEmit));
+    records=queries=0;
+    assert(!NGFlightTrace::observeBackingPages(0,4096,0x40010000,0,forbidden,[](){return false;},
+        [&](const uint32_t *r,uint32_t){assert(r[3]==0 && !r[8] && !r[10]);++records;}));
+    assert(records==1);
+    records=queries=checks=0;
+    assert(!NGFlightTrace::observeBackingPages(0,8192,0x40010000,0,query,[&](){return ++checks==1;},
+        [&](const uint32_t *r,uint32_t){assert(r[3]==11);++records;}));
+    assert(queries==1 && records==1);
+    records=0;
+    assert(NGFlightTrace::observeBackingPages(4096,1,0x40010000,0,
+        [](uint64_t offset,uint64_t *length)->uint64_t {assert(offset==4096);*length=0;return 0;},
+        [](){return true;},[&](const uint32_t *r,uint32_t){assert(r[3]==7 && r[15]==1);++records;}));
+    assert(records==1); // Query failure remains evidence, not a fabricated valid physical page.
+}
+
 int main() {
     testFlightEnvelope();
+    testBackingPages();
     assert(NGVfTimeoutObservation::prefixEngineForChannel(0)==0);
     assert(NGVfTimeoutObservation::prefixEngineForChannel(3)==3);
     for(int32_t channel:{INT32_MIN,-1,1,2,4,5,6,INT32_MAX})

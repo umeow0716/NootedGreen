@@ -27,10 +27,28 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          7: 'submit_identity', 8: 'g2h_raw', 9: 'publication_mapping',
          10: 'timeout', 11: 'scope_end', 12: 'native_mapping_before_copy',
          13: 'ring_operand_leaf', 14: 'batch_leaf',
-         15: 'retained_ring_metadata', 16: 'retained_ring_chunk'}
+         15: 'retained_ring_metadata', 16: 'retained_ring_chunk',
+         17: 'mapper_backing_page'}
 
 
 def validate_leaf(kind, words):
+    if kind == 17:
+        if (len(words) != 20 or words[0] != 1 or not 1 <= words[2] <= 16 or
+                words[1] >= words[2] or words[3] & ~15 or words[16] or words[17] or words[19] or
+                not 1 <= words[14] <= 65536 or words[2] != (words[14]+4095)//4096 or
+                words[15] != min(4096, words[14]-4096*words[1])):
+            raise ValueError('invalid mapper backing page schema')
+        gpu, offset, physical, length, map_offset = (
+            words[i] | words[i+1] << 32 for i in (4, 6, 8, 10, 12))
+        if (gpu & 4095 or map_offset & 4095 or offset != map_offset + words[1]*4096 or
+                offset > MASK64-words[15] or gpu > MASK64-words[15] or
+                (words[3] & 1 and not words[3] & 2) or
+                (words[3] & 4 and words[3] & 3 != 3) or
+                (words[3] & 8 and (not words[3] & 1 or not physical or physical & 4095 or
+                                    physical > MASK64-words[15] or length < words[15])) or
+                (not words[3] & 1 and (physical or length))):
+            raise ValueError('invalid mapper backing page identity/extent')
+        return
     if kind == 15:
         if (len(words) != 13 or words[0] != 1 or words[6] < 4096 or words[6] > 2097152 or
                 words[6] & (words[6]-1) or words[7] >= words[6] or words[9] not in (0, 1) or words[10]):
@@ -290,6 +308,7 @@ class DiskSink:
         self.db.execute('CREATE TABLE records (id INTEGER PRIMARY KEY, group_id INTEGER, kind INTEGER, metadata TEXT, payload BLOB) WITHOUT ROWID')
         self.db.execute('CREATE INDEX by_group_kind ON records(group_id,kind)')
         self.db.execute('CREATE TABLE rings (identity TEXT PRIMARY KEY, group_id INTEGER, bytes INTEGER, tail INTEGER, admitted INTEGER, captured INTEGER) WITHOUT ROWID')
+        self.db.execute('CREATE TABLE backings (identity TEXT, group_id INTEGER, pages INTEGER, captured INTEGER, valid INTEGER, bytes INTEGER, map_offset TEXT, options INTEGER, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.commit()
         self.pending = 0
         self.sideband_file = None
@@ -327,7 +346,24 @@ class DiskSink:
         validate_leaf(record['kind'], words)
         if self.db.execute('SELECT 1 FROM records WHERE id=?', (record['record_id'],)).fetchone():
             raise ValueError('duplicate completed flight record ID')
-        if record['kind'] == 15:
+        if record['kind'] == 17:
+            gpu = words[4] | words[5] << 32
+            if gpu != int(record['identity'], 16)+words[1]*4096:
+                raise ValueError('mapper backing GPU identity mismatch')
+            key = (record['identity'], record['group'])
+            config = (words[2], words[14], f'{words[13]:08x}{words[12]:08x}', words[18])
+            if words[1] == 0:
+                try:
+                    self.db.execute('INSERT INTO backings VALUES (?,?,?,0,0,?,?,?)',
+                                    key+(config[0],)+config[1:])
+                except sqlite3.IntegrityError as exc:
+                    raise ValueError('duplicate mapper backing capture') from exc
+            current = self.db.execute('SELECT pages,bytes,map_offset,options,captured FROM backings WHERE identity=? AND group_id=?', key).fetchone()
+            if current != config+(words[1],):
+                raise ValueError('missing/duplicate/out-of-order/mismatched mapper backing page')
+            self.db.execute('UPDATE backings SET captured=captured+1,valid=valid+? WHERE identity=? AND group_id=?',
+                            (int(words[3] == 15),)+key)
+        elif record['kind'] == 15:
             try:
                 self.db.execute('INSERT INTO rings VALUES (?,?,?,?,?,0)',
                                 (record['identity'], record['group'], words[6], words[7], words[9]))
@@ -349,6 +385,11 @@ class DiskSink:
         except sqlite3.IntegrityError as exc:
             raise ValueError('duplicate completed flight record ID') from exc
 
+    def backing_report(self):
+        total, covered, valid = self.db.execute('SELECT COUNT(*),COALESCE(SUM(captured=pages),0),COALESCE(SUM(captured=pages AND valid=pages),0) FROM backings').fetchone()
+        return {'captures': total, 'complete_page_coverage': covered,
+                'all_pages_stable_valid': valid, 'gpu_execution_proven': False}
+
     def ring_report(self):
         total, complete = self.db.execute('SELECT COUNT(*),COALESCE(SUM(admitted=1 AND captured=bytes),0) FROM rings').fetchone()
         missing = [dict(zip(('identity', 'bytes', 'captured', 'admitted'), row)) for row in
@@ -369,6 +410,28 @@ class DiskSink:
 
 
 def self_test():
+    backing = [1, 0, 16, 15, 0x40010000, 0, 0, 0, 0x12300000, 3,
+               65536, 0, 0, 0, 65536, 4096, 0, 0, 0x88, 0]
+    validate_leaf(17, backing)
+    for index, value in ((0, 2), (1, 16), (2, 17), (3, 16), (4, 1), (6, 4096),
+                         (8, 1), (10, 4095), (12, 1), (14, 65537), (15, 1),
+                         (16, 1), (17, 1), (19, 1)):
+        bad = list(backing)
+        bad[index] = value
+        try:
+            validate_leaf(17, bad)
+        except ValueError:
+            continue
+        raise AssertionError('invalid mapper backing schema accepted')
+    for size in (0, 19, 21):
+        try:
+            validate_leaf(17, (backing+[0])[:size])
+        except ValueError:
+            continue
+        raise AssertionError('invalid mapper backing record length accepted')
+    denied = list(backing)
+    denied[3], denied[8], denied[9], denied[10] = 0, 0, 0, 0
+    validate_leaf(17, denied)  # Explicit absence, never physical validity.
     timeout = [1, 3, 1, 3, 3, 42, 31, 2, 1, 0, 0xb8, 0x64, 0, 0xb8, 1, 184]
     validate_leaf(10, timeout)
     for index, value in ((0, 2), (2, 8), (3, 6), (4, 7), (15, 193)):
@@ -502,6 +565,33 @@ def self_test():
         else:
             raise AssertionError('duplicate ring range accepted')
         assert save.ring_report()['complete_cpu_copies'] == 1
+        backing_record = dict(saved[0], record_id=200, kind=17, identity='0000000040010000', words=backing)
+        save(backing_record)
+        assert save.backing_report()['complete_page_coverage'] == 0
+        try:
+            save(dict(backing_record, record_id=201))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('duplicate mapper backing accepted')
+        assert save.backing_report()['complete_page_coverage'] == 0
+        next_page = list(backing)
+        next_page[1], next_page[4], next_page[6], next_page[8], next_page[10] = 1, 0x40011000, 4096, 0x12301000, 61440
+        save.db.execute("CREATE TEMP TRIGGER backing_failure BEFORE INSERT ON records WHEN NEW.id=201 BEGIN SELECT RAISE(ABORT,'owned backing injected write failure'); END")
+        try:
+            save(dict(backing_record, record_id=201, words=next_page))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('injected backing write failure accepted')
+        assert save.db.execute('SELECT captured FROM backings').fetchone()[0] == 1
+        save.db.execute('DROP TRIGGER backing_failure')
+        for i in range(1, 16):
+            page = list(backing)
+            page[1], page[4], page[6], page[8], page[10] = i, 0x40010000+i*4096, i*4096, 0x12300000+i*4096, 65536-i*4096
+            save(dict(backing_record, record_id=201+i, words=page))
+        assert save.backing_report() == {'captures': 1, 'complete_page_coverage': 1,
+                                          'all_pages_stable_valid': 1, 'gpu_execution_proven': False}
         sideband = Decoder(lambda _: None, save.sideband)
         for item in archive[:6]:
             sideband.packet(*item)
@@ -538,12 +628,14 @@ if __name__ == '__main__':
         except (ValueError, OSError, struct.error, sqlite3.Error) as exc:
             error = str(exc)
         ring_report = sink.ring_report()
+        backing_report = sink.backing_report()
         try:
             sink.close()
         except (OSError, sqlite3.Error) as exc:
             error = str(exc)
         report = decoder.report()
         report['rings'] = ring_report
+        report['backings'] = backing_report
         if error:
             report['error'] = error
             report['capture_transport_complete'] = False

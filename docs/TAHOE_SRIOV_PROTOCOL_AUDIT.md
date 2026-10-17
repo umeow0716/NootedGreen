@@ -1,5 +1,32 @@
 # Tahoe SR-IOV protocol audit — in progress
 
+## 2026-10-18 CPU backing observation (local, not deployed)
+
+V380 flight proved CPU publication/native command identity, not the physical
+backing fetched by the GPU. The mapper-domain observation runs once after
+successful CPU publication in the existing Media-end native IOLock, before
+native submission acquires PT/CTB locks. It does **not** call
+`IOMemoryMap::getPhysicalSegment` under the PT lock: that method takes the
+global memory lock. The exact native `IGAccelSysMemory` getter instead supplies
+the same manager IOMapper options used by native linear `commitRange`.
+
+Record kind17 (`mapper_backing_page`) covers at most sixteen pages/64KiB.
+Its20 DWORDs are version/index/page-count/flags, GPUVA, descriptor-relative
+offset, physical segment, segment length, CPU map offset (each address/length
+as low/high), total bytes, page bytes, atomic0, reserved0, mapper options,
+reserved0. Flags1=query,2=identity before,4=identity after,8=valid segment extent.
+Only flags15 is a stable valid CPU sample. Every call rechecks the same backing,
+descriptor, map offset, manager/options, accelerator and borrowed native owner.
+The map-offset layout is admitted only by the exact kernel method anchor;
+the SysMemory vtable/getter/length remain exact native-anchor qualified.
+
+SQL coverage rejects missing/out-of-order/duplicate pages, mismatched capture
+identities/options/extents, and rolls coverage back if a record write fails.
+Complete page coverage and valid samples do not authorize PTE changes or prove
+GPU coherency, execution, completion, or PF safety. Native commands, gates,
+recovery and results are unchanged. Historical sections below are not current
+deployment status; current runtime state is in the progress map/checkpoint.
+
 Updated: 2026-10-08. The last deployed driver is exact V316 commit
 `fdc9224577fbbad946d75863222e0f0a172715b7`. Its sole contained start and
 retained-panic recovery are sealed respectively under

@@ -181,6 +181,7 @@ static mach_vm_address_t gVfNativeBatchMapVtable = 0;
 static mach_vm_address_t gVfNativeBatchMapGetter = 0;
 static bool gVfNativeBatchLayoutBound = false;
 static mach_vm_address_t gVfMediaSysMemoryVtable = 0;
+static bool gVfMediaMapOffsetLayoutVerified = false;
 // Optional AVC producer integration handles. Resolving these does not enable
 // a route, map memory, invoke a getter, or authorize a command-buffer write.
 bool gVfMediaPublicationAbiVerified = false;
@@ -2898,6 +2899,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			gVfMediaEndCaller = 0;
 			gVfMediaKernelMappedMemoryVtable = 0;
 			gVfMediaKernelMappedMemoryLength = 0;
+			gVfMediaMapOffsetLayoutVerified = false;
 			gVfMediaMapAddress = gVfMediaMapLength = gVfMediaMapDescriptor = gVfMediaMapOptions = 0;
 			const auto process = patcher.solveSymbol(index,
 				"__ZN15IOAccelContext218processDataBuffersEj", address, size);
@@ -2916,6 +2918,15 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				"__ZN11IOMemoryMap19getMemoryDescriptorEv");
 			const auto mapOptions = patcher.solveSymbol(KernelPatcher::KernelID,
 				"__ZN11IOMemoryMap13getMapOptionsEv");
+			const auto mapPhysical = patcher.solveSymbol(KernelPatcher::KernelID,
+				"__ZN11IOMemoryMap18getPhysicalSegmentEyPyj");
+			// Exact native method reads descriptor+10 and adds map+20 to the
+			// requested offset before descriptor virtual138. Never call this
+			// method under PTlock: its prologue acquires the global memory lock.
+			constexpr uint8_t mapOffsetUse[]={0x48,0x8b,0x7b,0x10,0x48,0x03,0x73,0x20,
+				0x48,0x8b,0x07,0xff,0x90,0x38,0x01,0x00,0x00};
+			gVfMediaMapOffsetLayoutVerified=mapPhysical &&
+				anchorMatches(mapPhysical+0x53,mapOffsetUse,sizeof(mapOffsetUse));
 			constexpr uint8_t parseCall[] = {0xff,0x90,0x08,0x0a,0,0};
 			constexpr uint8_t endCall[] = {0xff,0x90,0x38,0x0a,0,0};
 			constexpr uint8_t classBase[] = {0x4c,0x8d,0xbb,0xe0,0x06,0,0};
@@ -6332,6 +6343,40 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 			current.used==span.used && current.availableWords==span.availableWords && current.reservedWords==span.reservedWords;
 	};
 	auto live=[&](uint32_t words) {return same() && getMember<volatile uint32_t>(stream,0x34)==words;};
+	auto observeBacking=[&]() {
+	// Sole same-thread Media-end native IOLock, BEFORE native submit/PTlock/
+	// CTB acquisition. Do not move this query into vfObserveNativeBatchProvenance.
+	// Borrow only the exact SysMemory/descriptor already authenticated above.
+	// Read ALL <=16 backing pages once; no physical address is dereferenced.
+	static volatile UInt32 backingObserved=0;
+	if(vfFlightEnabled() && gVfMediaMapOffsetLayoutVerified && gVfMediaSysMemoryVtable &&
+	   callback->vfAccelSysMemoryGetPhysicalSegment && OSCompareAndSwap(0,1,&backingObserved)) {
+		void *backing=getMember<void *>(span.resource,0x88);
+		const uint64_t mapOffset=getMember<volatile uint64_t>(span.map,0x20);
+		void *manager=getMember<void *>(entry->accelerator,0x1260);
+		const uint32_t mapperOptions=manager?getMember<volatile uint32_t>(manager,0x88):0;
+		const auto stableBacking=[&]() {
+			return manager && same() && getMember<void *>(entry->accelerator,0x1260)==manager &&
+				getMember<volatile uint32_t>(manager,0x88)==mapperOptions &&
+				getMember<void *>(span.resource,0x88)==backing &&
+				getMember<mach_vm_address_t>(backing,0)==gVfMediaSysMemoryVtable &&
+				getMember<mach_vm_address_t>(reinterpret_cast<void *>(gVfMediaSysMemoryVtable),0x158)==
+					callback->vfAccelSysMemoryGetPhysicalSegment &&
+				getMember<void *>(backing,0x28)==entry->accelerator &&
+				getMember<void *>(backing,0xD0)==span.descriptor &&
+				getMember<volatile uint64_t>(span.map,0x20)==mapOffset &&
+				mapOffset<=span.backingBytes && span.bytes<=span.backingBytes-mapOffset;
+		};
+		using Physical=uint64_t (*)(void *,uint64_t,uint64_t *);
+		const bool sampled=NGFlightTrace::observeBackingPages(mapOffset,span.bytes,span.gpuBase,mapperOptions,
+			[&](uint64_t offset,uint64_t *length) {
+				return reinterpret_cast<Physical>(callback->vfAccelSysMemoryGetPhysicalSegment)(backing,offset,length);
+			},stableBacking,[&](const uint32_t *record,uint32_t count) {
+				vfFlightRecord(17,entry->flightGroup,span.gpuBase,record,count);
+			});
+		SYSLOG("ngreen","V381: mapper-domain backing CPU observation sampled=%u atomic=0",sampled?1U:0U);
+	}
+	};
 	auto &words=getMember<volatile uint32_t>(stream,0x34);
 	const auto publication=NgreenAvcGen12::publish(span.commands,span.availableWords,span.reservedWords,
 		words,span.count,NGVfAvcPublication::visibleWidth,NGVfAvcPublication::visibleHeight,*entry->scratch,live,same);
@@ -6352,6 +6397,7 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 	vfFlightRecord(9,entry->flightGroup,flightAddress,flightMetadata,arrsize(flightMetadata));
 	vfFlightRecord(2,entry->flightGroup,flightAddress,entry->scratch->source,span.count);
 	vfFlightRecord(3,entry->flightGroup,flightAddress,span.commands,static_cast<uint32_t>(publication.preparation.words));
+	observeBacking(); // Consume the one-shot budget only after successful CPU publication.
 	// One complete CPU-side publication record per boot, while the existing
 	// owner/lock/mapping scope is still pinned. Never traverse GPU addresses.
 	// This is not an atomic GPU snapshot or evidence of device execution.
