@@ -5572,6 +5572,24 @@ struct NativeFactoryFrameBatch {
 int dispatchOwnedContextFrame(void* context,const void* input,void** output) noexcept {
     return NativeFactoryFrameBatch::frame(context,input,output);
 }
+// Candidate entries only: not published until the outer frame establishes
+// the complete input/owner/phase authority. Never patch native Apple text.
+[[maybe_unused]] uint64_t dispatchOwnedAvcSize(void* context,const void* input,uint32_t* used,uint32_t* capacity) noexcept {
+    return NgreenNativeAvcReservation::sizeOrStop(reinterpret_cast<uintptr_t>(context),
+        reinterpret_cast<uintptr_t>(input),used,capacity,
+        [](uintptr_t entry,uintptr_t object,uintptr_t request,uint32_t* bytes,uint32_t* words) noexcept {
+            using Native=uint64_t(*)(uintptr_t,uintptr_t,uint32_t*,uint32_t*);
+            return reinterpret_cast<Native>(entry)(object,request,bytes,words);
+        },[]() noexcept {_exit(70);});
+}
+[[maybe_unused]] uint64_t dispatchOwnedAvcBuilder(void* context,const void* input,void* token) noexcept {
+    return NgreenNativeAvcReservation::builderOrStop(reinterpret_cast<uintptr_t>(context),
+        reinterpret_cast<uintptr_t>(input),reinterpret_cast<uintptr_t>(token),
+        [](uintptr_t entry,uintptr_t object,uintptr_t request,uintptr_t nativeToken) noexcept {
+            using Native=uint64_t(*)(uintptr_t,uintptr_t,uintptr_t);
+            return reinterpret_cast<Native>(entry)(object,request,nativeToken);
+        },[]() noexcept {_exit(70);});
+}
 struct NativeOtherFrameBackend {
     using Lease=NativeFactoryFrameBatch::Lease;
     static bool queryPublication(Lease& lease,NativePhysicalFrameScope& scope,uintptr_t image,

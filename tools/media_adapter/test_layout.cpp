@@ -10,6 +10,63 @@
 #include "../../NootedGreen/kern_avc_gen12_commands.hpp"
 #include "native_avc_reservation.hpp"
 #include <memory>
+#include <csignal>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+void testOwnedAvcHookFailStop() {
+    using namespace NgreenNativeAvcReservation;
+    for(unsigned mode=0;mode<10;++mode) {
+        const auto child=fork();assert(child>=0);
+        if(!child) {
+            const rlimit noCore{0,0};if(setrlimit(RLIMIT_CORE,&noCore))_exit(79);
+            alarm(3); // Owned CPU child only; no Apple/native/GPU execution.
+            const uintptr_t context=0x8000,payload=0x1000,owned=0x2000;
+            std::array<uintptr_t,5> request{};request[4]=payload;
+            const auto original=reinterpret_cast<uintptr_t>(request.data());
+            uint32_t used=0,capacity=0;
+            auto size=[&](uintptr_t entry,uintptr_t c,uintptr_t r,uint32_t* u,uint32_t* s) noexcept -> uint64_t {
+                assert(entry==0x1002732c && c==context && r!=original);
+                *u=123;*s=456;return mode==2?31:0;
+            };
+            auto builder=[&](uintptr_t entry,uintptr_t c,uintptr_t r,uintptr_t token) noexcept -> uint64_t {
+                assert(entry==0x1002737e && c==context && r!=original && token==0x7770);
+                return mode==7?31:0;
+            };
+            auto stop=[&]() noexcept {
+                const bool nativeRan=mode==2 || mode==4 || mode==6 || mode==7;
+                assert(used==(nativeRan?123U:0U) && capacity==(nativeRan?456U:0U));
+                if(mode!=9)_exit(77);
+            };
+            if(mode==0 || mode==9) {
+                (void)sizeOrStop(context,original,&used,&capacity,size,stop);_exit(78);
+            }
+            OwnedAvcCallbackRequest view;
+            auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(at!=original || bytes!=sizeof(request))return false;
+                std::memcpy(out,request.data(),bytes);return true;
+            };
+            assert(view.capture(original,payload,owned,read,
+                [](uintptr_t,uintptr_t,uintptr_t) noexcept {return true;}));
+            bool active=true;
+            OwnedAvcCallbackPhase phase({0x10000000,0x9000,context,original,1},view,&active,
+                [](void* p,const auto&) noexcept {return *static_cast<bool*>(p);});
+            assert(phase.bound());
+            if(mode==1)(void)builderOrStop(context,original,0x7770,builder,stop);
+            if(mode==3)active=false;
+            assert(sizeOrStop(context,mode==5?original+8:original,&used,&capacity,size,stop)==0);
+            if(mode==4)(void)sizeOrStop(context,original,&used,&capacity,size,stop);
+            if(mode==6)active=false;
+            assert(builderOrStop(context,original,0x7770,builder,stop)==0);
+            assert(phase.complete() && used==123 && capacity==456 && request[4]==payload);
+            _exit(mode==8?0:78);
+        }
+        int status=0;assert(waitpid(child,&status,0)==child);
+        if(mode==9)assert(WIFSIGNALED(status) && WTERMSIG(status)==SIGABRT);
+        else assert(WIFEXITED(status) && WEXITSTATUS(status)==(mode==8?0:77));
+    }
+}
 
 template<class T,class Released> void testNativeOtherInputRetirement(std::unique_ptr<T>& input,Released released) {
     TglNativeOtherPendingFrames pending;
@@ -19186,6 +19243,7 @@ static void testActualNv12LayoutSnapshot() {
     assert(uvRow==32);
 }
 int main() {
+    testOwnedAvcHookFailStop();
     {
         TglOwnedAvcScalingDefaults defaults;
         defaults.intra4.fill(6);defaults.inter4.fill(10);

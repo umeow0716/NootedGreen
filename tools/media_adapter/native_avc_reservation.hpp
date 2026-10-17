@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <array>
 #include <memory>
 #include <new>
@@ -115,6 +116,26 @@ public:
         return finish(Stage::BuilderRunning,Stage::Done,status);
     }
 };
+// Actual hook bridges cannot return a refusal EAX to outer27724: it ignores
+// that result and would submit anyway. Stop must terminate the owned process;
+// abort is a last resort if a broken Stop unexpectedly returns.
+template<class Invoke,class Stop>
+uint64_t sizeOrStop(uintptr_t context,uintptr_t request,uint32_t* used,uint32_t* capacity,
+    Invoke invoke,Stop stop) noexcept {
+    if(auto* phase=OwnedAvcCallbackPhase::current(context)) {
+        const auto result=phase->size(context,request,used,capacity,invoke);
+        if(result.invoked && !result.mustStop)return result.nativeStatus;
+    }
+    stop();std::abort();
+}
+template<class Invoke,class Stop>
+uint64_t builderOrStop(uintptr_t context,uintptr_t request,uintptr_t token,Invoke invoke,Stop stop) noexcept {
+    if(auto* phase=OwnedAvcCallbackPhase::current(context)) {
+        const auto result=phase->builder(context,request,token,invoke);
+        if(result.invoked && !result.mustStop)return result.nativeStatus;
+    }
+    stop();std::abort();
+}
 // The exact AVC frame cannot fall back to untranslated native submission when
 // the kernel publication handshake is absent. Other frame families retain
 // their existing admission; this is not a claim that readiness proves safety.
