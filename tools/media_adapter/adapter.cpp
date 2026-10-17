@@ -5543,7 +5543,7 @@ struct NativeFactoryFrameBatch {
     static int frame(void* codec,const void* input,void** output) noexcept {
         auto* current=active;if(!current || !current->physical.matches(current->image,current->address,current->generation))return 5;
         const auto index=current->items.nextIndex();
-        return current->items.runNext(reinterpret_cast<uintptr_t>(codec),reinterpret_cast<uintptr_t>(input),
+        const int result=current->items.runNext(reinterpret_cast<uintptr_t>(codec),reinterpret_cast<uintptr_t>(input),
             reinterpret_cast<uintptr_t>(output),&readMemory,[&]() noexcept -> int {
                 const size_t ownerIndex=current->items.ownerIndex(index);
                 if(ownerIndex>=current->owners.size() || !current->owners[ownerIndex].get() ||
@@ -5552,6 +5552,13 @@ struct NativeFactoryFrameBatch {
                     current->image,current->address,current->generation,
                     reinterpret_cast<uintptr_t>(input),reinterpret_cast<uintptr_t>(output));
             });
+        if(result) {
+            static std::atomic_flag reported=ATOMIC_FLAG_INIT;
+            if(!reported.test_and_set(std::memory_order_relaxed))os_log_error(OS_LOG_DEFAULT,
+                "NGRN_OWNED_BATCH_FRAME_REFUSED stage=batch-item index=%{public}u result=%{public}d",
+                unsigned(index),result);
+        }
+        return result;
     }
     static int invoke(void* raw,NativePhysicalFrameScope& scope,const TglNativeFrameBatchBinding& binding,
         uintptr_t physical,uint64_t generation,const void* input,void* output) noexcept {
@@ -5770,8 +5777,17 @@ struct NativeOtherFrameBackend {
     }
     static int dispatchAvc(ExclusiveLease& lease,NativePhysicalFrameScope& scope,uintptr_t image,
         uintptr_t physical,uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
+        static std::atomic<unsigned> observations{0};
+        auto ticket=observations.load(std::memory_order_relaxed);
+        while(ticket<8 && !observations.compare_exchange_weak(ticket,ticket+1,std::memory_order_relaxed)) {}
+        auto observed=[ticket](const char* stage,int result) noexcept {
+            if(ticket<8)os_log_error(OS_LOG_DEFAULT,
+                "NGRN_AVC_FRAME_ADMISSION ticket=%{public}u stage=%{public}s result=%{public}d",
+                ticket,stage,result);
+            return result;
+        };
         auto* owner=lease.get();
-        if(!owner || !lease.exclusive() || !scope.matches(image,physical,generation))return 5;
+        if(!owner || !lease.exclusive() || !scope.matches(image,physical,generation))return observed("exclusive-owner",5);
         const uintptr_t context=owner->context();
         auto admitted=[&]() noexcept {
             uintptr_t vptr=0;
@@ -5786,19 +5802,21 @@ struct NativeOtherFrameBackend {
         TglOwnedAvcScalingDefaults defaults;
         if(!NgreenNativeAvcReservation::captureScalingDefaults(image,defaults,&readMemory,
             [](uintptr_t at,size_t bytes) noexcept {
-                return leafMemoryPermissions(at,bytes,VM_PROT_READ,VM_PROT_WRITE|VM_PROT_EXECUTE);
-            },admitted))return 5;
+                // Exact320fc0..32123f is __TEXT,__const: its native mapping
+                // is r-x. Executability is not permission to modify data.
+                return leafMemoryPermissions(at,bytes,VM_PROT_READ,VM_PROT_WRITE);
+            },admitted))return observed("native-scaling-defaults",5);
         auto owned=AvcInput::captureForContext(context,input,defaults,TglDarwinTypedCfReferenceApi{},&readMemory,admitted);
-        if(!owned)return 5;
+        if(!owned)return observed("owned-input-capture",5);
         auto* retained=owned.get();
         if(retained && !NGVfAvcPublication::matchesCodedGeometry(
-            retained->codedGeometry().width,retained->codedGeometry().height))return 5;
+            retained->codedGeometry().width,retained->codedGeometry().height))return observed("coded-profile",5);
         NgreenNativeAvcReservation::NativeAvcFrameOutputs outputs;
         if(!outputs.capture(context,input,retained->originalPayload(),output,&readMemory,&writableDataMemory,
             [&](uintptr_t address,size_t bytes) noexcept {
                 return admitted() && retained->excludesOwnedStorage(address,bytes) &&
                     owner->excludesPublishedAvcLinearCpuSpan(lease,address,bytes);
-            }))return 5;
+            }))return observed("native-output-exclusion",5);
         struct Authority {
             ExclusiveLease& lease;NativeCodecOwner* owner;NativePhysicalFrameScope& scope;
             AvcInput& input;const NgreenNativeAvcReservation::NativeAvcFrameOutputs& outputs;
@@ -5817,10 +5835,11 @@ struct NativeOtherFrameBackend {
         } authority{lease,owner,scope,*retained,outputs};
         NgreenNativeAvcReservation::OwnedAvcCallbackPhase phase(
             {image,physical,context,input,generation},retained->callbackRequest(),&authority,&Authority::live);
-        if(!phase.bound())return 5;
+        if(!phase.bound())return observed("paired-phase",5);
+        observed("captured",0);
         const int result=dispatchPinned(lease,scope,image,physical,generation,input,output,&owned);
         if((phase.started() || result==0) && !phase.complete())_exit(70);
-        return result;
+        return observed("frame-return",result);
     }
     template<class FrameLease>
     static int dispatchPinned(FrameLease& lease,NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,
@@ -5964,9 +5983,19 @@ struct NativeLateFactoryBatch {
         if(!raw || !owner.get() || !physical.matches(image,address,generation))return 5;
         auto& self=*static_cast<NativeLateFactoryBatch*>(raw);
         const int vpCompletion=NativePhysicalBackend::serviceNativeCompletedFramesScoped(physical,image,address,generation);
-        if(vpCompletion)return vpCompletion;
+        if(vpCompletion) {
+            static std::atomic_flag reported=ATOMIC_FLAG_INIT;
+            if(!reported.test_and_set(std::memory_order_relaxed))os_log_error(OS_LOG_DEFAULT,
+                "NGRN_OWNED_BATCH_FRAME_REFUSED stage=vp-completion result=%{public}d",vpCompletion);
+            return vpCompletion;
+        }
         const int completion=NativeOtherFrameBackend::poll(physical,image,address,generation,self.retired);
-        if(completion)return completion;
+        if(completion) {
+            static std::atomic_flag reported=ATOMIC_FLAG_INIT;
+            if(!reported.test_and_set(std::memory_order_relaxed))os_log_error(OS_LOG_DEFAULT,
+                "NGRN_OWNED_BATCH_FRAME_REFUSED stage=other-completion result=%{public}d",completion);
+            return completion;
+        }
         if(owner.get()->family()==TglNativeContextFamily::NativeOther)
             return NativeOtherFrameBackend::dispatch(owner,physical,image,address,generation,input,output);
         if(self.busy || !self.serviceShapeValid())return 5;

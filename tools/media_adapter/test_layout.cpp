@@ -110,11 +110,21 @@ void testAvcFrameOutputs() {
         return true;
     };
     auto admit=[]() noexcept {return true;};
-    auto qualify=[](uintptr_t at,size_t n) noexcept {return at==0x420fc0 && n==640;};
+    unsigned nativeProtection=5; // Mach VM_PROT_READ | VM_PROT_EXECUTE (__TEXT).
+    auto qualify=[&](uintptr_t at,size_t n) noexcept {
+        return at==0x420fc0 && n==640 && (nativeProtection&1U) && !(nativeProtection&2U);
+    };
     TglOwnedAvcScalingDefaults captured;
     assert(NgreenNativeAvcReservation::captureScalingDefaults(0x100000,captured,matrixRead,qualify,admit));
     assert(captured.intra4==matrices.intra4 && captured.inter4==matrices.inter4 &&
         captured.intra8==matrices.intra8 && captured.inter8==matrices.inter8);
+    for(unsigned protection:{0U,2U,3U,7U}) {
+        nativeProtection=protection;
+        assert(!NgreenNativeAvcReservation::captureScalingDefaults(0x100000,captured,matrixRead,qualify,admit));
+    }
+    nativeProtection=1;
+    assert(NgreenNativeAvcReservation::captureScalingDefaults(0x100000,captured,matrixRead,qualify,admit));
+    nativeProtection=5;
     mutate=true;reads=0;
     assert(!NgreenNativeAvcReservation::captureScalingDefaults(0x100000,captured,matrixRead,qualify,admit));
     mutate=false;matrices.inter8[63]=0;

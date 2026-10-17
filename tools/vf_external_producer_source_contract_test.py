@@ -56,7 +56,7 @@ def adapter_frame_contract(source):
     reserve = body.index("const auto reservation=owner->reserveNativeOtherFrame")
     for required in (
         "NgreenNativeAvcReservation::captureScalingDefaults(image,defaults,&readMemory,",
-        "leafMemoryPermissions(at,bytes,VM_PROT_READ,VM_PROT_WRITE|VM_PROT_EXECUTE)",
+        "leafMemoryPermissions(at,bytes,VM_PROT_READ,VM_PROT_WRITE)",
         "AvcInput::captureForContext(context,input,defaults,TglDarwinTypedCfReferenceApi{},&readMemory,admitted)",
         "outputs.capture(context,input,retained->originalPayload(),output,&readMemory,&writableDataMemory,",
         "self.input.matchesContext(id.context,&readMemory,admit) &&",
@@ -89,6 +89,10 @@ def adapter_frame_mutations(source):
     gate = "if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady,physical,generation,context,request))return 5;"
     phase = "if(!NgreenNativeAvcReservation::framePhaseAdmission(image,owner->frameTable().nativeFrame(),physical,generation,owner->context(),input))return 5;"
     mutations = (
+        source.replace("leafMemoryPermissions(at,bytes,VM_PROT_READ,VM_PROT_WRITE)",
+                       "leafMemoryPermissions(at,bytes,VM_PROT_READ,VM_PROT_WRITE|VM_PROT_EXECUTE)",1),
+        source.replace("leafMemoryPermissions(at,bytes,VM_PROT_READ,VM_PROT_WRITE)",
+                       "leafMemoryPermissions(at,bytes,VM_PROT_READ,0)",1),
         source.replace("publishAvcInputCallbacks(lease,hook,", "publishFrame(lease,hook,", 1),
         source.replace("binding.frame==scope.image()+0x27724?", "false?", 1),
         source.replace("registry.promoteExclusive(lease,image,physical,generation,owner->context())", "decltype(exclusive){}", 1),
