@@ -18589,12 +18589,14 @@ static void testRetainedVeboxFrames() {
             assert(removalStage==1 && entry==image+0x15128 && physical==0xf200 && original!=input);
             using NativeInput=TglNativeRemovedContextBatch<2>::NativeInput;
             const auto& captured=*static_cast<const NativeInput*>(original);
-            assert(captured.count==2 && captured.reserved==0 && captured.contexts[0]==batchContexts[0] &&
-                captured.contexts[1]==batchContexts[1]);
+            assert(captured.count==2 && captured.reserved==0 && captured.contexts[0]==0x46000 &&
+                captured.contexts[1]==0x47000);
+            assert(batchCount==129 && !removalArrayReadable && batchContexts[0]==0xdead000);
             removalStage=2;return 0;
         };
         auto preparedReconcile=[&](uintptr_t physical,const TglNativeRemovedContextBatch<2>& batch) noexcept -> int {
-            assert(removalStage==2 && physical==0xf200 && batch.valid && batch.contexts==batchContexts);
+            assert(removalStage==2 && physical==0xf200 && batch.valid && batch.count==2 &&
+                batch.contexts[0]==0x46000 && batch.contexts[1]==0x47000);
             removalStage=3;return 0;
         };
         const void* activeRemovalScope=nullptr;
@@ -18613,11 +18615,15 @@ static void testRetainedVeboxFrames() {
             [&](auto& scope,uintptr_t physical,const auto& batch) noexcept -> int {
                 assert(scope.matches(image,physical,preparedPhysical.ticket.generation));
                 assert(!scope.matches(image,physical,preparedPhysical.ticket.generation+1));
-                activeRemovalScope=&scope;return prepareOwners(physical,batch);
+                activeRemovalScope=&scope;
+                const int prepared=prepareOwners(physical,batch);
+                batchContexts={0xdead000,0xbeef000};batchCount=129;removalArrayReadable=false;
+                return prepared;
             },[&](auto& scope,uintptr_t physical,const auto& batch) noexcept -> int {
                 assert(activeRemovalScope==&scope && scope.matches(image,physical,preparedPhysical.ticket.generation));
                 return preparedReconcile(physical,batch);
             },preparedNative)==0 && removalStage==3);
+        batchContexts={0x46000,0x47000};batchCount=2;removalArrayReadable=true;
         removalStage=0;prepareStatus=31;
         assert(preparedCallbacks.removePreparedContextsAndReconcileBatch<2>(preparedPhysical.ticket,0xf200,input,
             prepareOwners,preparedReconcile,preparedNative)==31 && removalStage==1);
