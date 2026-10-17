@@ -19082,7 +19082,9 @@ int main() {
         packet.data.fill(0xdeadbeef);packet.words=77;const auto before=packet;
         auto denied=[&](const void* data,size_t extent,uint32_t bits){
             assert(!tglBuildOwnedAvcSliceHeaderPacket(data,extent,bits,packet));
-            assert(packet.words==before.words && packet.data==before.data);};
+            assert(packet.words==before.words && packet.data==before.data &&
+                packet.templateAfter.command==before.templateAfter.command &&
+                packet.templateAfter.control==before.templateAfter.control);};
         denied(nullptr,10,78);denied(source.data(),10,0);denied(source.data(),1024,8193);
         for(uint32_t bits:{UINT32_MAX,UINT32_MAX-1U,UINT32_MAX-6U,
                            UINT32_MAX-7U,0x80000000U})
