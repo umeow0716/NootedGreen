@@ -6186,6 +6186,9 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 	}
 	auto *entry=VfMediaSubmissionScope::find(that);
 	PANIC_COND(!entry,"ngreen","Unscoped owned AVC Media end refused");
+	// Native BindDataBuffer may end/begin again within this submission.
+	// A previous refusal must remain terminal even if native stream state resets.
+	if (entry->failed) return;
 	const auto caller=reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0));
 	VfMediaMappedSpan span{};
 	if (!VfMediaSubmissionScope::bindLocked(*entry,stream,caller) ||

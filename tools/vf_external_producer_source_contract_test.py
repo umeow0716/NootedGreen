@@ -422,6 +422,10 @@ def contract(source, path="<source>"):
     assert media_end.index('bindLocked(')<media_end.index('NgreenAvcGen12::publish(')<\
         media_end.index('OSSynchronizeIO();')<media_end.rindex('FunctionCast(vfMediaEnd,'), \
         f"{path}: AVC publication/native submission ordering changed"
+    assert 'if (entry->failed) return;' in media_end, f'{path}: lost sticky submission failure'
+    assert media_end.index('VfMediaSubmissionScope::find(that)') < \
+        media_end.index('if (entry->failed) return;') < media_end.index('bindLocked('), \
+        f'{path}: failed submission can reach publication'
     rejected=media_end[media_end.index('if (!publication.published)'):media_end.index('OSSynchronizeIO();')]
     assert 'entry->failed=true;' in rejected and 'return;' in rejected and 'FunctionCast' not in rejected
     assert media_end.count('FunctionCast(vfMediaEnd,')==2
@@ -454,6 +458,8 @@ def contract(source, path="<source>"):
 
 def mutation_contract(source, path):
     mutations = (
+        ('if (entry->failed) return;', '', 1),
+        ('if (entry->failed) return;', 'if (entry->failed) {}', 1),
         ('gVfMediaPublicationRouteReady=true;','gVfMediaPublicationRouteReady=false;',1),
         ('0xA48)==videoEnd','0xA48)!=videoEnd',1),
         ('matches(videoEnd+0x22e,nativeSubmit,sizeof(nativeSubmit))','true',1),
