@@ -361,11 +361,16 @@ def cpu_ring_packets(words, maximum_words=524288, allow_pipe_control=True):
             return {'complete': False, 'stopped_offset': at * 4, 'reason': 'truncated_packet', 'packets': packets}
         if packet['opcode'] == 'PIPE_CONTROL':
             control = words[at+1]
-            # Pinned mhw_mi_hwcmd_g12_X.h DW1. Reserved-field observations
-            # identify a schema difference, not a stepping/hang verdict.
+            # Contrast the older media header with Intel compute-runtime
+            # 413bd626955908f8a599e56a70808677d5d66634 gen12lp PIPE_CONTROL.
+            # DW1 bit30 is L3FabricFlush: the old schema alone is insufficient
+            # to call this invalid, much less the cause of a hardware hang.
             packet.update(control=f'{control:08x}', post_sync=(control >> 14) & 3,
                           cs_stall=bool(control & (1 << 20)), tlb_invalidate=bool(control & (1 << 18)),
                           pinned_gen12_reserved_dw1=f'{control & 0xc8400040:08x}',
+                          intel_gen12lp_l3_fabric_flush=bool(control & (1 << 30)),
+                          intel_gen12lp_reserved_dw1=f'{control & 0x80400000:08x}',
+                          legacy_only_schema_bits=f'{control & 0x48000040:08x}',
                           address=f'{(words[at+2] & ~3) | words[at+3] << 32:016x}',
                           address_space='GGTT' if control & (1 << 24) else 'PPGTT',
                           immediate=words[at+4] | words[at+5] << 32)
@@ -435,6 +440,12 @@ def selftest():
     rcs = [0x7a000004, 0x50105021, 0x40000000, 0, 0, 0]
     pipe = cpu_ring_packets(rcs)['packets'][0]
     assert pipe['pinned_gen12_reserved_dw1'] == '40000000'
+    assert pipe['intel_gen12lp_l3_fabric_flush']
+    assert pipe['intel_gen12lp_reserved_dw1'] == '00000000'
+    assert pipe['legacy_only_schema_bits'] == '40000000'
+    reserved = cpu_ring_packets([0x7a000004, 0x80000000, 0, 0, 0, 0])['packets'][0]
+    assert reserved['intel_gen12lp_reserved_dw1'] == '80000000'
+    assert reserved['legacy_only_schema_bits'] == '00000000'
     assert pipe['cs_stall'] and pipe['post_sync'] == 1 and pipe['address_space'] == 'PPGTT'
     assert not timeout_ring_packets(rcs)['complete']  # Old selected-prefix grammar unchanged.
     for length in range(1, 6):
