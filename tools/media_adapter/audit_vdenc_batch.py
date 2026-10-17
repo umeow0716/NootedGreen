@@ -25,6 +25,52 @@ EXPANSIONS = {0x70800000: 6, 0x70830000: 10,
 MFC_REGISTERS = {0x128a0: 0x1c08a0, 0x128a4: 0x1c08a4,
                  0x128b4: 0x1c08b4, 0x128b8: 0x1c08b8}
 
+def mode_template_fields(words):
+    """Bounded Gen12 field interpretation, not codec legality or GPU proof.
+
+    Accept reviewed legacy/expanded lengths for inventory only. An unknown
+    shape stops the walk; never scan payload DWORDs for apparent opcodes.
+    Gen12's AVC walker producer leaves FirstSuperSlice at constructor zero;
+    its HEVC/VP9 branches setting that bit must not become an AVC requirement.
+    """
+    result = {'status': 'GEN12_FIELDS_CPU_ONLY_NOT_ADMISSION',
+              'complete_packet_walk': False, 'mfx_modes': [], 'pak_headers': [], 'walkers': []}
+    if not words or len(words) > 1536 or any(type(x) is not int or not 0 <= x <= 0xffffffff for x in words):
+        result['refusal'] = 'word-extent-or-value'
+        return result
+    at = 0
+    while at < len(words):
+        header = words[at]
+        op = header & (0xff800000 if header < 0x60000000 else 0xffff0000)
+        if header in (0, 0x68000100):
+            count = 1
+        elif op == 0x70480000:
+            count = (header & 0xfff) + 2
+        elif op in SIZES:
+            count = (header & (0x3f if op == 0x13000000 else 0xfff)) + 2
+            if count not in (SIZES[op], EXPANSIONS.get(op, SIZES[op])):
+                result.update(refusal='packet-shape', stopped_word=at)
+                return result
+        else:
+            result.update(refusal='unreviewed-opcode', stopped_word=at)
+            return result
+        if count > len(words) - at:
+            result.update(refusal='truncated-packet', stopped_word=at)
+            return result
+        if op == 0x70000000:
+            control = words[at+1]
+            result['mfx_modes'].append(dict(word=at, control=control, standard=control & 15,
+                encode=(control >> 4) & 1, vdenc=(control >> 13) & 1, standalone=(control >> 14) & 1))
+        elif op == 0x70480000:
+            control = words[at+1]
+            result['pak_headers'].append(dict(word=at, control=control, template=(control >> 14) & 1))
+        elif op == 0x70870000:
+            result['walkers'].append(dict(word=at, start_y=words[at+1] & 0x1ff,
+                end_y=words[at+2] & 0x3ff, first_super_slice=(words[at+1] >> 28) & 1))
+        at += count
+    result['complete_packet_walk'] = True
+    return result
+
 def audit(data):
     if not data or len(data) > 65536 or len(data) % 4:
         raise ValueError('bounded nonempty dword-aligned batch required')
@@ -102,7 +148,8 @@ def audit(data):
     return {'status': 'AUDIT_ONLY_NOT_SUBMITTABLE', 'native_dwords': len(words),
             'proposed_dwords': new, 'packets': packets,
             'registers': registers, 'buffer_controls': controls,
-            'surface_controls': surfaces, 'relocation_coupling': coupling}, mapping
+            'surface_controls': surfaces, 'relocation_coupling': coupling,
+            'gen12_mode_template_fields': mode_template_fields(list(words))}, mapping
 
 def publication(lines, published_only=False):
     counts = None
@@ -148,7 +195,8 @@ def publication(lines, published_only=False):
         raise ValueError('missing publication terminal')
     return {'status': 'CPU_PUBLICATION_ONLY_NOT_GPU_EXECUTION',
             'source_status': 'NOT_DECODED' if published_only else 'COMPLETE',
-            'source': None if published_only else streams[0], 'published': streams[1]}
+            'source': None if published_only else streams[0], 'published': streams[1],
+            'gen12_mode_template_fields': mode_template_fields(streams[1])}
 
 def native_batch(lines):
     """One terminal, stable, native-record-bound CPU span; not GPU proof."""
@@ -194,6 +242,15 @@ def native_batch(lines):
 
 
 def selftest():
+    fields = mode_template_fields([0x68000100, 0x70000003, 0x626d2, 0, 0, 0,
+                                  0x70480001, 0x4e4c, 0,
+                                  0x70870002, 0, 17, 0, 0x12080002, 0x8a0, 0, 0])
+    assert fields['complete_packet_walk'] and fields['mfx_modes'][0]['vdenc'] == 1
+    assert fields['mfx_modes'][0]['standalone'] == 0 and fields['pak_headers'][0]['template'] == 1
+    assert fields['walkers'][0]['first_super_slice'] == 0
+    for invalid in ([], [True], [0x100000000], [0xffffffff], [0x70480001, 0x4e4c],
+                    [0x70870003, 0, 0, 0, 0], [0]*1537):
+        assert not mode_template_fields(invalid)['complete_packet_walk']
     data = struct.pack('<7I', 0x70000003, 0, 0, 0, 0, 0x70800000, 0)
     report, mapping = audit(data)
     assert report['proposed_dwords'] == 13
