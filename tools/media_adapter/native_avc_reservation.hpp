@@ -223,15 +223,25 @@ public:
     template<class Read> static std::unique_ptr<OwnedAvcSyntaxInput>
     capture(uintptr_t payload,uint32_t width,uint32_t height,TglOwnedAvcScalingDefaults defaults,Read read) noexcept {
         if(!payload || payload>UINTPTR_MAX-0x488)return {};
-        std::array<uint8_t,0x78> header{};
-        if(!read(payload+0x410,header.data(),header.size()))return {};
-        uintptr_t sequence=0,picture=0,table=0,metadata=0;uint32_t count=0;
-        std::memcpy(&sequence,header.data(),8);std::memcpy(&picture,header.data()+8,8);
-        std::memcpy(&count,header.data()+0x10,4);std::memcpy(&table,header.data()+0x20,8);
-        std::memcpy(&metadata,header.data()+0x70,8);
-        if(!count || count>TglOwnedAvcSliceInputTable::MaxSlices)return {};
         auto owned=std::unique_ptr<OwnedAvcSyntaxInput>(new(std::nothrow) OwnedAvcSyntaxInput{});
         if(!owned)return {};
+        const auto self=reinterpret_cast<uintptr_t>(owned.get());
+        if(self>UINTPTR_MAX-sizeof(*owned) || (payload<self+sizeof(*owned) && self<payload+0x488) ||
+           !read(payload,owned->input_.data(),owned->input_.size()))return {};
+        const auto* header=owned->input_.data()+0x410;
+        uintptr_t sequence=0,picture=0,table=0,metadata=0;uint32_t count=0;
+        std::memcpy(&sequence,header,8);std::memcpy(&picture,header+8,8);
+        std::memcpy(&count,header+0x10,4);std::memcpy(&table,header+0x20,8);
+        std::memcpy(&metadata,header+0x70,8);
+        if(!count || count>TglOwnedAvcSliceInputTable::MaxSlices)return {};
+        uint32_t qp=0;std::memcpy(&qp,owned->input_.data()+0x438,4);
+        if(qp>51)return {};
+        for(size_t i=0;i<16;++i) {
+            uint64_t handle=0;uint32_t index=0;
+            std::memcpy(&handle,owned->input_.data()+0x38+0x40*i,8);
+            std::memcpy(&index,owned->input_.data()+0x48+0x40*i,4);
+            if(handle && index>=16)return {};
+        }
         owned->sequence_=TglOwnedAvcConsumedSequenceInput::capture(sequence,width,height,read);
         if(!owned->sequence_)return {};
         owned->picture_=TglOwnedAvcPictureInput::capture(picture,defaults,read);
@@ -254,6 +264,10 @@ public:
     const uint8_t* nalMetadata() const noexcept {return sliceNal_->nalMetadata();}
 private:
     OwnedAvcSyntaxInput()=default;
+    // Input span through metadata480, excluding outer output pointer488 and
+    // outputs498..4a0. Contains BORROWED handle identities/table440: never
+    // expose it as a native payload until a qualified lease/rebind exists.
+    std::array<uint8_t,0x488> input_{};
     std::unique_ptr<TglOwnedAvcConsumedSequenceInput> sequence_;
     std::unique_ptr<TglOwnedAvcPictureInput> picture_;
     std::unique_ptr<SliceNal> sliceNal_;

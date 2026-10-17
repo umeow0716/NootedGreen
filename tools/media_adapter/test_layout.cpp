@@ -19301,16 +19301,16 @@ int main() {
                 return false;
             };
             using FullGraph=NgreenNativeAvcReservation::OwnedAvcSyntaxInput;
-            std::array<uint8_t,0x78> fullHeader{};
+            std::array<uint8_t,0x488> fullHeader{};
             std::array<uint32_t,0xc18/4> sps{};
             std::array<uint8_t,0x488> pps{};
             sps[0]=1;sps[0x24/4]=40;sps[0x2c/4]=1;sps[0x830/4]=1;sps[0x838/4]=1;
             pps[0x20]=0x73;
             const uintptr_t spsAddress=reinterpret_cast<uintptr_t>(sps.data()),ppsAddress=reinterpret_cast<uintptr_t>(pps.data());
-            std::memcpy(fullHeader.data(),&spsAddress,8);std::memcpy(fullHeader.data()+8,&ppsAddress,8);
-            std::memcpy(fullHeader.data()+0x10,initialHeader.data(),initialHeader.size());
+            std::memcpy(fullHeader.data()+0x410,&spsAddress,8);std::memcpy(fullHeader.data()+0x418,&ppsAddress,8);
+            std::memcpy(fullHeader.data()+0x420,initialHeader.data(),initialHeader.size());
             const auto savedFullHeader=fullHeader;
-            const uintptr_t fullStart=reinterpret_cast<uintptr_t>(fullHeader.data()),fullPayload=fullStart-0x410;
+            const uintptr_t fullStart=reinterpret_cast<uintptr_t>(fullHeader.data()),fullPayload=fullStart;
             unsigned fullReads=0;
             auto fullRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
                 if(at==fullStart && bytes==fullHeader.size()) {
@@ -19323,6 +19323,17 @@ int main() {
             auto full=FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead);
             assert(full && fullReads==1 && full->sliceCount()==2 && full->pictureBytes()[0x20]==0x73);
             uint32_t level=0;std::memcpy(&level,full->sequenceBytes()+0x1c,4);assert(level==40);
+            for(uint32_t qp:{51U,52U,255U,UINT32_MAX}) {
+                fullHeader=savedFullHeader;std::memcpy(fullHeader.data()+0x438,&qp,4);
+                assert(bool(FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead))==(qp==51));
+            }
+            for(size_t index=0;index<16;++index) {
+                const uintptr_t borrowedHandle=0x1234;const uint32_t badIndex=16;
+                fullHeader=savedFullHeader;
+                std::memcpy(fullHeader.data()+0x38+0x40*index,&borrowedHandle,8);
+                std::memcpy(fullHeader.data()+0x48+0x40*index,&badIndex,4);
+                assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));
+            }
             fullHeader=savedFullHeader;sps[0x40/4]=1;
             assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));sps[0x40/4]=0;
             fullHeader=savedFullHeader;pps[0xbc]=2;
