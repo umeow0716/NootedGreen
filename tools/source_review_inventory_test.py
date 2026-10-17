@@ -118,7 +118,6 @@ EXPECTED_TOOL_DATA = {
     "tools/linux_mmio_mapper/mapping.schema.json",
     "tools/linux_mmio_mapper/sample_mapping.json",
     "tools/parsed.gdt",
-    "tools/vf-dynamic-test.freeze",
 }
 
 EXPECTED_PAYLOAD_BUNDLES = {
@@ -331,7 +330,7 @@ def verify_tool_ledger(paths):
         path for path in paths
         if path.startswith("tools/") and Path(path).suffix in program_suffixes
     }
-    assert len(programs) == 76, f"tool program count changed: {len(programs)}"
+    assert len(programs) == 77, f"tool program count changed: {len(programs)}"
 
     check_static = (ROOT / "tools/check-static.sh").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/build-kext.yml").read_text(
