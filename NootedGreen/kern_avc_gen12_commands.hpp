@@ -319,4 +319,22 @@ inline Publication publish(volatile uint32_t* backing,size_t available,size_t re
     if(nativeWords!=changed || !live(static_cast<uint32_t>(changed))){restore();return r;}
     r.published=true;return r;
 }
+// Revalidate CPU command contents after diagnostics and before native submit.
+// This bounded comparison neither freezes other writers nor proves GPU cache
+// visibility; the integration still needs its same pinned allocation/lock.
+inline bool matchesPublishedBytes(const volatile uint32_t* backing,size_t available,
+                                 const volatile uint32_t& nativeWords,
+                                 const PublishScratch& scratch,const Publication& publication) noexcept {
+    const size_t expected=publication.preparation.words;
+    const uintptr_t start=reinterpret_cast<uintptr_t>(backing),work=reinterpret_cast<uintptr_t>(&scratch);
+    const uintptr_t counter=reinterpret_cast<uintptr_t>(&nativeWords);
+    if(!publication.published || publication.mustStop || !publication.preparation.ok ||
+       !backing || (start&3U) || expected<2 || expected>1536 || expected>available ||
+       available>SIZE_MAX/4 || start>UINTPTR_MAX-available*4 || work>UINTPTR_MAX-sizeof(scratch) ||
+       counter>UINTPTR_MAX-4 || (work<start+available*4 && start<work+sizeof(scratch)) ||
+       (counter<start+available*4 && start<counter+4) ||
+       (counter<work+sizeof(scratch) && work<counter+4) || nativeWords!=expected)return false;
+    for(size_t i=0;i<expected;++i)if(backing[i]!=scratch.produced[i])return false;
+    return nativeWords==expected;
+}
 }

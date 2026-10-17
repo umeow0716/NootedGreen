@@ -20693,6 +20693,31 @@ int main() {
             *scratch,live,[](){return true;});
         assert(publication.published && !publication.mustStop && count==used+67);
         assert(backing[count-1]==0 && backing[count-2]==0 && backing[count]==0xaabbccdd);
+        assert(NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,*scratch,publication));
+        const auto publishedBacking=backing;
+        for(size_t i=0;i<count;++i) {
+            backing[i]^=1;const auto changed=backing;
+            assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,*scratch,publication));
+            assert(backing==changed);backing=publishedBacking;
+        }
+        ++count;assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,*scratch,publication));--count;
+        for(unsigned bad=0;bad<5;++bad) {
+            auto invalid=publication;
+            if(bad==0)invalid.published=false;
+            if(bad==1)invalid.mustStop=true;
+            if(bad==2)invalid.preparation.ok=false;
+            if(bad==3)invalid.preparation.words=1537;
+            if(bad==4)invalid.preparation.words=1;
+            assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,*scratch,invalid));
+        }
+        assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),count-1,count,*scratch,publication));
+        assert(!NgreenAvcGen12::matchesPublishedBytes(nullptr,backing.size(),count,*scratch,publication));
+        assert(!NgreenAvcGen12::matchesPublishedBytes(reinterpret_cast<const uint32_t*>(scratch.get()),1536,count,*scratch,publication));
+        assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),backing[0],*scratch,publication));
+        assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),scratch->source[0],*scratch,publication));
+        assert(!NgreenAvcGen12::matchesPublishedBytes(reinterpret_cast<const uint32_t*>(UINTPTR_MAX-3),1536,count,*scratch,publication));
+        assert(!NgreenAvcGen12::matchesPublishedBytes(reinterpret_cast<const uint32_t*>(reinterpret_cast<uintptr_t>(backing.data())+1),backing.size(),count,*scratch,publication));
+        assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),SIZE_MAX,count,*scratch,publication));
         for(unsigned failure:{1U,2U,3U,4U,5U}) {
             backing=originalBacking;count=static_cast<uint32_t>(used);unsigned observations=0;
             auto unstable=[&](uint32_t expected){return ++observations!=failure && count==expected;};

@@ -4,6 +4,10 @@
 import pathlib
 import sys
 
+FINAL_MEDIA_GUARD = ('PANIC_COND(!live(static_cast<uint32_t>(publication.preparation.words)) ||\n'
+                     '\t\t!NgreenAvcGen12::matchesPublishedBytes(span.commands,span.availableWords,words,*entry->scratch,publication) ||\n'
+                     '\t\t!live(static_cast<uint32_t>(publication.preparation.words)),"ngreen",\n'
+                     '\t\t"Lost owned AVC mapping before native submission");')
 
 def function_body(source, signature):
     start = source.index(signature)
@@ -582,7 +586,7 @@ def contract(source, path="<source>"):
                   'V372 AVC_CPU_BEGIN', 'V372 AVC_CPU_BLOCK', 'V372 AVC_CPU_END'):
         assert token in media_end, f'{path}: missing bounded pinned CPU publication record: {token}'
     assert media_end.index('Lost owned AVC mapping after count publication') < media_end.index('V372 AVC_CPU_BEGIN') < media_end.index('V372 AVC_CPU_END') < media_end.rindex('FunctionCast(vfMediaEnd,')
-    final_guard = 'PANIC_COND(!live(static_cast<uint32_t>(publication.preparation.words)),"ngreen",\n\t\t"Lost owned AVC mapping before native submission");'
+    final_guard = FINAL_MEDIA_GUARD
     assert final_guard in media_end, 'missing post-diagnostic native-submit revalidation'
     final_tail = media_end[media_end.index('V372 AVC_CPU_END'):]
     assert final_tail.index('OSSynchronizeIO();') < final_tail.index(final_guard) < final_tail.rindex('FunctionCast(vfMediaEnd,')
@@ -633,10 +637,10 @@ def mutation_contract(source, path):
         ('if (entry->failed) return;', 'if (entry->failed) {}', 1),
         ('"Lost owned AVC mapping before native submission"',
          '"missing final submit guard"', 1),
-        ('PANIC_COND(!live(static_cast<uint32_t>(publication.preparation.words)),"ngreen",\n\t\t"Lost owned AVC mapping before native submission");',
-         '', 1),
-        ('PANIC_COND(!live(static_cast<uint32_t>(publication.preparation.words)),"ngreen",\n\t\t"Lost owned AVC mapping before native submission");',
+        (FINAL_MEDIA_GUARD, '', 1),
+        (FINAL_MEDIA_GUARD,
          'PANIC_COND(false,"ngreen",\n\t\t"Lost owned AVC mapping before native submission");', 1),
+        ('!NgreenAvcGen12::matchesPublishedBytes(', 'false && !NgreenAvcGen12::matchesPublishedBytes(', 1),
         ('"Lost owned AVC mapping before native submission");',
          '"Lost owned AVC mapping before native submission");\n\tSYSLOG("ngreen","late diagnostic");', 1),
         ('gVfMediaPublicationRouteReady=true;','gVfMediaPublicationRouteReady=false;',1),
