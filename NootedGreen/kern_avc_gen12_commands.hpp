@@ -269,10 +269,13 @@ struct Publication {
 // still needs its native IO synchronization before invoking the native submit.
 template<class Live,class SamePinnedAllocation>
 inline Publication publish(volatile uint32_t* backing,size_t available,size_t reservedWords,
-                           volatile uint32_t& nativeWords,uint32_t width,uint32_t height,
+                           volatile uint32_t& nativeWords,uint32_t capturedWords,uint32_t width,uint32_t height,
                            PublishScratch& scratch,Live live,SamePinnedAllocation canRestore) noexcept {
     Publication r;
     const uint32_t original=nativeWords;
+    // Bind the stream to the independently captured mapping snapshot, not
+    // whichever count happens to be current when publication starts.
+    if(original!=capturedWords){r.preparation.reason="captured-count";return r;}
     const uintptr_t start=reinterpret_cast<uintptr_t>(backing);
     const uintptr_t work=reinterpret_cast<uintptr_t>(&scratch);
     const uintptr_t counter=reinterpret_cast<uintptr_t>(&nativeWords);

@@ -15,6 +15,52 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+void testAvcCapturedCountRefusal(std::array<uint32_t,512>& backing,size_t used,volatile uint32_t& count,NgreenAvcGen12::PublishScratch& scratch) {
+    const auto originalBacking=backing;
+    const auto untouchedScratch=scratch;
+    for(uint32_t captured:{0U,static_cast<uint32_t>(used-1),static_cast<uint32_t>(used+1),UINT32_MAX}) {
+        unsigned callbacks=0;
+        const auto refused=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,captured,1920,1080,
+            scratch,[&](uint32_t) noexcept {++callbacks;return true;},[&]() noexcept {++callbacks;return true;});
+        assert(!refused.published && !refused.mustStop && !callbacks);
+        assert(!std::strcmp(refused.preparation.reason,"captured-count"));
+        assert(count==used && backing==originalBacking && !std::memcmp(&scratch,&untouchedScratch,sizeof(scratch)));
+    }
+    unsigned firstObservation=0;
+    const auto changedBeforeCopy=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,static_cast<uint32_t>(used),1920,1080,
+        scratch,[&](uint32_t expected) noexcept {++firstObservation;++count;return count==expected;},[]() noexcept {return true;});
+    assert(!changedBeforeCopy.published && !changedBeforeCopy.mustStop && firstObservation==1 && count==used+1);
+    assert(backing==originalBacking && !std::memcmp(&scratch,&untouchedScratch,sizeof(scratch)));
+    count=static_cast<uint32_t>(used);
+}
+void testAvcPublishedByteRevalidation(std::array<uint32_t,512>& backing,volatile uint32_t& count,NgreenAvcGen12::PublishScratch& scratch,const NgreenAvcGen12::Publication& publication) {
+    assert(NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,scratch,publication));
+    const auto publishedBacking=backing;
+    for(size_t i=0;i<count;++i) {
+        backing[i]^=1;const auto changed=backing;
+        assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,scratch,publication));
+        assert(backing==changed);backing=publishedBacking;
+    }
+    ++count;assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,scratch,publication));--count;
+    for(unsigned bad=0;bad<5;++bad) {
+        auto invalid=publication;
+        if(bad==0)invalid.published=false;
+        if(bad==1)invalid.mustStop=true;
+        if(bad==2)invalid.preparation.ok=false;
+        if(bad==3)invalid.preparation.words=1537;
+        if(bad==4)invalid.preparation.words=1;
+        assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,scratch,invalid));
+    }
+    assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),count-1,count,scratch,publication));
+    assert(!NgreenAvcGen12::matchesPublishedBytes(nullptr,backing.size(),count,scratch,publication));
+    assert(!NgreenAvcGen12::matchesPublishedBytes(reinterpret_cast<const uint32_t*>(&scratch),1536,count,scratch,publication));
+    assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),backing[0],scratch,publication));
+    assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),scratch.source[0],scratch,publication));
+    assert(!NgreenAvcGen12::matchesPublishedBytes(reinterpret_cast<const uint32_t*>(UINTPTR_MAX-3),1536,count,scratch,publication));
+    assert(!NgreenAvcGen12::matchesPublishedBytes(reinterpret_cast<const uint32_t*>(reinterpret_cast<uintptr_t>(backing.data())+1),backing.size(),count,scratch,publication));
+    assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),SIZE_MAX,count,scratch,publication));
+}
+
 void testOwnedAvcHookFailStop() {
     using namespace NgreenNativeAvcReservation;
     for(unsigned mode=0;mode<10;++mode) {
@@ -20689,39 +20735,16 @@ int main() {
         for(size_t i=used;i<backing.size();++i)backing[i]=0xaabbccdd;
         const auto originalBacking=backing;volatile uint32_t count=static_cast<uint32_t>(used);
         auto live=[&](uint32_t expected){return count==expected;};
-        auto publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,1920,1080,
+        testAvcCapturedCountRefusal(backing,used,count,*scratch);
+        auto publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,static_cast<uint32_t>(used),1920,1080,
             *scratch,live,[](){return true;});
         assert(publication.published && !publication.mustStop && count==used+67);
         assert(backing[count-1]==0 && backing[count-2]==0 && backing[count]==0xaabbccdd);
-        assert(NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,*scratch,publication));
-        const auto publishedBacking=backing;
-        for(size_t i=0;i<count;++i) {
-            backing[i]^=1;const auto changed=backing;
-            assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,*scratch,publication));
-            assert(backing==changed);backing=publishedBacking;
-        }
-        ++count;assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,*scratch,publication));--count;
-        for(unsigned bad=0;bad<5;++bad) {
-            auto invalid=publication;
-            if(bad==0)invalid.published=false;
-            if(bad==1)invalid.mustStop=true;
-            if(bad==2)invalid.preparation.ok=false;
-            if(bad==3)invalid.preparation.words=1537;
-            if(bad==4)invalid.preparation.words=1;
-            assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),count,*scratch,invalid));
-        }
-        assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),count-1,count,*scratch,publication));
-        assert(!NgreenAvcGen12::matchesPublishedBytes(nullptr,backing.size(),count,*scratch,publication));
-        assert(!NgreenAvcGen12::matchesPublishedBytes(reinterpret_cast<const uint32_t*>(scratch.get()),1536,count,*scratch,publication));
-        assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),backing[0],*scratch,publication));
-        assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),backing.size(),scratch->source[0],*scratch,publication));
-        assert(!NgreenAvcGen12::matchesPublishedBytes(reinterpret_cast<const uint32_t*>(UINTPTR_MAX-3),1536,count,*scratch,publication));
-        assert(!NgreenAvcGen12::matchesPublishedBytes(reinterpret_cast<const uint32_t*>(reinterpret_cast<uintptr_t>(backing.data())+1),backing.size(),count,*scratch,publication));
-        assert(!NgreenAvcGen12::matchesPublishedBytes(backing.data(),SIZE_MAX,count,*scratch,publication));
+        testAvcPublishedByteRevalidation(backing,count,*scratch,publication);
         for(unsigned failure:{1U,2U,3U,4U,5U}) {
             backing=originalBacking;count=static_cast<uint32_t>(used);unsigned observations=0;
             auto unstable=[&](uint32_t expected){return ++observations!=failure && count==expected;};
-            publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,1920,1080,
+            publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,static_cast<uint32_t>(used),1920,1080,
                 *scratch,unstable,[](){return true;});
             assert(!publication.published && publication.restored && count==used && backing==originalBacking);
             assert(publication.mustStop==(failure>=4));
@@ -20729,7 +20752,7 @@ int main() {
         for(unsigned failure:{4U,5U}) {
             backing=originalBacking;count=static_cast<uint32_t>(used);
             unsigned observations=0,restoreChecks=0;
-            publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,1920,1080,*scratch,
+            publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,count,static_cast<uint32_t>(used),1920,1080,*scratch,
                 [&](uint32_t expected){return ++observations!=failure && count==expected;},
                 [&](){++restoreChecks;return false;});
             assert(!publication.published && publication.mustStop && !publication.restored);
@@ -20742,14 +20765,14 @@ int main() {
         }
         // Input/counter alias must fail before touching the backing.
         backing=originalBacking;
-        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,backing[0],1920,1080,
+        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used+67,backing[0],backing[0],1920,1080,
             *scratch,[](uint32_t){return true;},[](){return true;});
         assert(!publication.published && backing==originalBacking);
         backing=originalBacking;count=static_cast<uint32_t>(used);
-        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used,count,1920,1080,
+        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used,count,static_cast<uint32_t>(used),1920,1080,
             *scratch,live,[](){return true;});
         assert(!publication.published && !publication.mustStop && count==used && backing==originalBacking);
-        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used-1,count,1920,1080,
+        publication=NgreenAvcGen12::publish(backing.data(),backing.size(),used-1,count,static_cast<uint32_t>(used),1920,1080,
             *scratch,live,[](){return true;});
         assert(!publication.published && backing==originalBacking);
         {
