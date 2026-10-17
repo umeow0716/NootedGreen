@@ -116,6 +116,8 @@ def main() -> None:
         "i915 0000:00:02.0: [drm] *ERROR* Atomic update failure on pipe A",
         "i915 0000:00:02.0: [drm] *ERROR* GPU HANG: ecode 12:1",
         "i915 0000:00:02.0: GuC reset timed out",
+        "Fence expiration time out i915-0000:00:02.0:kwin_wayland[2601]:3e5ca!",
+        "Fence expiration time out i915-0000:00:02.0:QSGRenderThread[3355]:1e92c!",
         "DMAR: [DMA Read NO_PASID] device [00:02.0] fault addr 0x1000",
     )
     for line in trigger_examples:
@@ -125,6 +127,8 @@ def main() -> None:
         "i915 0000:00:02.0: VF1 FLR",
         "amdgpu 0000:03:00.0: Atomic update failure on pipe A",
         "DMAR: device [00:14.0] fault addr 0x1000",
+        "Fence expiration time out i915-0000:03:00.0:kwin_wayland[2601]:3e5ca!",
+        "Fence expiration time out amdgpu-0000:00:02.0:kwin_wayland[2601]:3e5ca!",
     )
     for line in non_trigger_examples:
         if grep_matches(runner_trigger, line):
