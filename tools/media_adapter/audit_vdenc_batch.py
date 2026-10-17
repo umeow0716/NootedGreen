@@ -34,7 +34,8 @@ def mode_template_fields(words):
     its HEVC/VP9 branches setting that bit must not become an AVC requirement.
     """
     result = {'status': 'GEN12_FIELDS_CPU_ONLY_NOT_ADMISSION',
-              'complete_packet_walk': False, 'mfx_modes': [], 'pak_headers': [], 'walkers': []}
+              'complete_packet_walk': False, 'mfx_modes': [], 'pak_headers': [], 'walkers': [],
+              'pipeline_flushes': [], 'mi_flushes': []}
     if not words or len(words) > 1536 or any(type(x) is not int or not 0 <= x <= 0xffffffff for x in words):
         result['refusal'] = 'word-extent-or-value'
         return result
@@ -67,6 +68,13 @@ def mode_template_fields(words):
         elif op == 0x70870000:
             result['walkers'].append(dict(word=at, start_y=words[at+1] & 0x1ff,
                 end_y=words[at+2] & 0x3ff, first_super_slice=(words[at+1] >> 28) & 1))
+        elif op == 0x77800000:
+            control = words[at+1]
+            result['pipeline_flushes'].append(dict(word=at, control=control,
+                vdenc_done=(control >> 1) & 1, mfx_done=(control >> 3) & 1,
+                parser_done=(control >> 4) & 1, vdenc_flush=(control >> 17) & 1))
+        elif op == 0x13000000:
+            result['mi_flushes'].append(dict(word=at, header=header))
         at += count
     result['complete_packet_walk'] = True
     return result
@@ -248,6 +256,10 @@ def selftest():
     assert fields['complete_packet_walk'] and fields['mfx_modes'][0]['vdenc'] == 1
     assert fields['mfx_modes'][0]['standalone'] == 0 and fields['pak_headers'][0]['template'] == 1
     assert fields['walkers'][0]['first_super_slice'] == 0
+    flush = mode_template_fields([0x77800000, 0x2001a, 0x13000083, 0, 0, 0, 0])
+    assert flush['complete_packet_walk'] and flush['mi_flushes'][0]['word'] == 2
+    assert all(flush['pipeline_flushes'][0][name] == 1 for name in
+               ('vdenc_done', 'mfx_done', 'parser_done', 'vdenc_flush'))
     for invalid in ([], [True], [0x100000000], [0xffffffff], [0x70480001, 0x4e4c],
                     [0x70870003, 0, 0, 0, 0], [0]*1537):
         assert not mode_template_fields(invalid)['complete_packet_walk']
