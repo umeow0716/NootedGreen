@@ -131,12 +131,13 @@ start_kernel_watch() {
 		>"$fifo" 2>"${evidence_dir}/journalctl.stderr" &
 	journal_pid=$!
 	(
+		local triggered=0
 		while IFS= read -r line; do
 			printf '%s\n' "$line" >> "${evidence_dir}/kernel-follow.log"
-			if grep -Eiq "$trigger_pattern" <<< "$line"; then
+			if ((triggered == 0)) && grep -Eiq "$trigger_pattern" <<< "$line"; then
 				printf '%s\n' "$line" > "${evidence_dir}/kernel.trigger"
-				bounded_destroy "$evidence_dir" "kernel-trigger"
-				exit 0
+				bounded_destroy "$evidence_dir" "kernel-trigger" || exit 1
+				triggered=1
 			fi
 		done < "$fifo"
 	) &
@@ -396,8 +397,15 @@ internal_run_mode() {
 
 	stop_deadline "$deadline_unit"
 	log_line "$evidence_dir" "COOLDOWN ${cooldown_seconds}s with kernel watcher still active"
+	local cooldown_observer_failed=0
 	for ((second = 0; second < cooldown_seconds; second++)); do
 		sleep 1
+		if ((cooldown_observer_failed == 0)) &&
+		   { ! kill -0 "$watcher_pid" 2>/dev/null || ! kill -0 "$journal_pid" 2>/dev/null; }; then
+			log_line "$evidence_dir" "FAIL kernel observer exited during cooldown"
+			cooldown_observer_failed=1
+			run_failed=1
+		fi
 	done
 	if ! stop_trace_capture "$evidence_dir"; then
 		run_failed=1

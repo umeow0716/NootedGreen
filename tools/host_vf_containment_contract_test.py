@@ -4,6 +4,7 @@
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parent
@@ -177,6 +178,35 @@ def main() -> None:
     require(runner, "export LC_ALL=C", "locale-independent controller")
     require(runner, 'readonly cooldown_seconds=20', "fixed cooldown")
     require(runner, "journalctl -k -f -n0", "new-message kernel watcher")
+    watcher = runner[require(runner, "start_kernel_watch()", "watcher function"):
+                     require(runner, "schedule_deadline()", "deadline function")]
+    require(watcher, "local triggered=0", "one-shot containment state")
+    require(watcher, 'if ((triggered == 0)) && grep', "first trigger only")
+    require(watcher, '"kernel-trigger" || exit 1', "destroy failure is fatal")
+    require(watcher, "triggered=1", "continue collecting after containment")
+    if "exit 0" in watcher:
+        raise AssertionError("watcher exits after its first fault instead of collecting cooldown")
+    # Run only the extracted watcher with journal/destroy/log stubs. Never
+    # source the controller entrypoint or invoke libvirt/systemd/hardware.
+    with tempfile.TemporaryDirectory(prefix="ngreen-watcher-test-") as evidence:
+        stub = """set -euo pipefail
+trigger_pattern='GPU HANG'
+journalctl() { printf '%s\\n' 'GPU HANG first' 'GPU HANG second' 'after fault'; exec sleep 3; }
+bounded_destroy() { printf '%s\\n' "$2" >> "$1/destroy.calls"; }
+log_line() { :; }
+"""
+        check = """
+trap 'kill "$watcher_pid" "$journal_pid" 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+start_kernel_watch "$1"
+kill -0 "$watcher_pid" "$journal_pid"
+[[ $(< "$1/kernel.trigger") == 'GPU HANG first' ]]
+[[ $(< "$1/destroy.calls") == 'kernel-trigger' ]]
+[[ $(wc -l < "$1/kernel-follow.log") == 3 ]]
+grep -qx 'after fault' "$1/kernel-follow.log"
+"""
+        subprocess.run(["bash", "-c", stub + watcher + check, "watcher-test", evidence],
+                       check=True, timeout=5, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    require(internal, "FAIL kernel observer exited during cooldown", "cooldown observer health")
     require(runner, 'readonly tracefs_root="/sys/kernel/tracing"',
             "private tracefs root")
     require(runner, 'printf \'%s\\n\' mono > "${trace_instance}/trace_clock"',
