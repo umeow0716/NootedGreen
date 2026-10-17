@@ -25743,6 +25743,32 @@ public:
 class TglNativeOtherPendingFrames {
 public:
     struct Ticket {const void* owner=nullptr;uint64_t serial=0;size_t slot=32;};
+    // Move-only, allocation-free type erasure. Caller destroys completed input
+    // OUTSIDE owner/physical gates; no CF callbacks inside complete().
+    class RetainedInput {
+        friend class TglNativeOtherPendingFrames;
+        void* value_=nullptr;void(*destroy_)(void*) noexcept=nullptr;
+        template<class T> void take(std::unique_ptr<T>& input) noexcept {
+            static_assert(std::is_nothrow_destructible_v<T>);
+            value_=input.release();destroy_=[](void* value) noexcept {delete static_cast<T*>(value);};
+        }
+        void quarantine() noexcept {value_=nullptr;destroy_=nullptr;}
+    public:
+        RetainedInput()=default;
+        RetainedInput(const RetainedInput&)=delete;
+        RetainedInput& operator=(const RetainedInput&)=delete;
+        RetainedInput(RetainedInput&& other) noexcept
+            :value_(other.value_),destroy_(other.destroy_) {other.quarantine();}
+        RetainedInput& operator=(RetainedInput&& other) noexcept {
+            if(this!=&other) {reset();value_=other.value_;destroy_=other.destroy_;other.quarantine();}
+            return *this;
+        }
+        ~RetainedInput() noexcept {reset();}
+        void reset() noexcept {
+            auto value=value_;auto destroy=destroy_;quarantine();if(value)destroy(value);
+        }
+        explicit operator bool() const noexcept {return value_!=nullptr;}
+    };
 private:
     enum class State {Empty,Reserved,Bound,Ambiguous};
     struct Record {
@@ -25750,6 +25776,7 @@ private:
         uintptr_t image=0,physical=0,context=0;
         TglNativeFenceBackingObservation::Snapshot fence{};
         TglNativeFreshStampObservation::Snapshot fresh{};
+        RetainedInput input;
     };
     std::array<Record,32> records_{};uint64_t serial_=0;
     Record* find(Ticket ticket) noexcept {
@@ -25761,6 +25788,20 @@ public:
     TglNativeOtherPendingFrames()=default;
     TglNativeOtherPendingFrames(const TglNativeOtherPendingFrames&)=delete;
     TglNativeOtherPendingFrames& operator=(const TglNativeOtherPendingFrames&)=delete;
+    ~TglNativeOtherPendingFrames() noexcept {
+        // Destruction is NOT GPU retirement. A failed owner teardown must not
+        // release GPU-referenced inputs; existing owner state quarantine keeps
+        // these reachable normally. Last-resort direct destruction leaks them.
+        for(auto& record:records_)record.input.quarantine();
+    }
+    template<class T> bool retainInput(Ticket ticket,uintptr_t image,uintptr_t physical,
+        uint64_t generation,uintptr_t context,std::unique_ptr<T>& input) noexcept {
+        auto* record=find(ticket);
+        if(!record || record->state!=State::Reserved || record->input || !input ||
+           record->image!=image || record->physical!=physical || record->generation!=generation ||
+           record->context!=context)return false;
+        record->input.take(input);return true;
+    }
     bool pending() const noexcept {for(const auto& record:records_)if(record.state!=State::Empty)return true;return false;}
     Ticket reserve(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
         if(!image || !physical || !generation || !context || serial_==UINT64_MAX)return {};
@@ -25818,7 +25859,7 @@ public:
     bool complete(Ticket ticket,uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context,
         uint64_t registryId,const NGVfTaskCompletion::Reply& reply,
         const TglNativeFenceBackingObservation::Snapshot& expected,
-        const TglNativeFreshStampObservation::Snapshot& fresh) noexcept {
+        const TglNativeFreshStampObservation::Snapshot& fresh,RetainedInput* retired=nullptr) noexcept {
         auto* record=find(ticket);
         if(!record || record->state!=State::Bound || record->image!=image || record->physical!=physical ||
            record->generation!=generation || record->context!=context || !expected.valid || !fresh.valid)return false;
@@ -25836,6 +25877,8 @@ public:
             if(!fresh.active[i] || uint32_t(fresh.observed[i]-target)>uint32_t(INT32_MAX))return false;
         }
         if(!NGVfTaskCompletion::validReply(reply,registryId,request))return false;
+        if(record->input && (!retired || *retired))return false;
+        if(record->input)*retired=std::move(record->input);
         *record={};return true;
     }
 };
@@ -27511,6 +27554,17 @@ public:
            state_->table.publication()!=TglContextFramePublication::Published)return {};
         return state_->nativeOtherPending.reserve(state_->image,state_->physical,state_->generation,state_->context);
     }
+    template<class OwnerLease,class Scope,class Input>
+    bool retainNativeOtherFrameInput(const OwnerLease& lease,Scope& scope,
+        TglNativeOtherPendingFrames::Ticket ticket,std::unique_ptr<Input>& input) noexcept {
+        if(!state_ || lease.get()!=this || family()!=TglNativeContextFamily::NativeOther || !enter())return false;
+        Unlock unlock{state_->busy};
+        if(state_->removed || !state_->retainedIdentity() || !state_->nativeParentMatches() ||
+           !scope.matches(state_->image,state_->physical,state_->generation) ||
+           state_->table.publication()!=TglContextFramePublication::Published)return false;
+        return state_->nativeOtherPending.retainInput(ticket,state_->image,state_->physical,
+            state_->generation,state_->context,input);
+    }
     template<class OwnerLease,class Scope>
     bool bindNativeOtherFrame(const OwnerLease& lease,Scope& scope,TglNativeOtherPendingFrames::Ticket ticket,
         const TglNativeOtherContextEventLineage& lineage,const TglNativeFenceBackingObservation::Snapshot& fence,
@@ -27524,13 +27578,14 @@ public:
     template<class OwnerLease,class Scope>
     bool completeNativeOtherFrame(const OwnerLease& lease,Scope& scope,TglNativeOtherPendingFrames::Ticket ticket,
         uint64_t registryId,const NGVfTaskCompletion::Reply& reply,const TglNativeFenceBackingObservation::Snapshot& fence,
-        const TglNativeFreshStampObservation::Snapshot& fresh) noexcept {
+        const TglNativeFreshStampObservation::Snapshot& fresh,
+        TglNativeOtherPendingFrames::RetainedInput* retired=nullptr) noexcept {
         if(!state_ || lease.get()!=this || family()!=TglNativeContextFamily::NativeOther || !enter())return false;
         Unlock unlock{state_->busy};
         if(!state_->retainedIdentity() || !state_->nativeParentMatches() ||
            !scope.matches(state_->image,state_->physical,state_->generation))return false;
         return state_->nativeOtherPending.complete(ticket,state_->image,state_->physical,state_->generation,state_->context,
-            registryId,reply,fence,fresh);
+            registryId,reply,fence,fresh,retired);
     }
     template<class OwnerLease,class Scope,class Observe>
     int serviceNativeOtherFrames(const OwnerLease& lease,Scope& scope,Observe observe) noexcept {

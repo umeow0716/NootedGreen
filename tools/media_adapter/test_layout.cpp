@@ -11,6 +11,59 @@
 #include "native_avc_reservation.hpp"
 #include <memory>
 
+template<class T,class Released> void testNativeOtherInputRetirement(std::unique_ptr<T>& input,Released released) {
+    TglNativeOtherPendingFrames pending;
+    const uintptr_t image=0x10000000,physical=0x9000,context=0x8000;
+    const auto ticket=pending.reserve(image,physical,1,context);
+    auto* original=input.get();assert(ticket.serial && original);
+    auto foreign=ticket;foreign.owner=nullptr;
+    assert(!pending.retainInput(foreign,image,physical,1,context,input) && input.get()==original);
+    assert(!pending.retainInput(ticket,image,physical,2,context,input) && input.get()==original);
+    assert(pending.retainInput(ticket,image,physical,1,context,input) && !input && !released());
+    auto duplicate=std::make_unique<unsigned>(7);
+    assert(!pending.retainInput(ticket,image,physical,1,context,duplicate) && duplicate);
+    TglNativeOtherContextEventLineage lineage{context,physical,0x1000,0x2000,0,8,true};
+    TglNativeFenceBackingObservation::Snapshot fence;
+    fence.valid=true;fence.codec=context;fence.wrapper=lineage.wrapper;fence.event=lineage.event;
+    fence.frameworkContext=0x3000;fence.mapping=0x4000;fence.bytes=512;fence.count=8;
+    fence.expected.fill(UINT32_MAX);fence.expected[0]=uint64_t{7}<<32;
+    TglNativeFreshStampObservation::Snapshot fresh;
+    fresh.valid=true;fresh.device=0x5000;fresh.mapping=0x6000;fresh.table=0x7000;
+    fresh.channels=1;fresh.active[0]=true;fresh.observed[0]=6;
+    assert(pending.bind(ticket,lineage,fence,fresh) && !released());
+    NGVfTaskCompletion::Reply reply{};
+    reply.abiVersion=NGVfTaskCompletion::version;reply.bytes=sizeof(reply);reply.registryId=99;reply.recordCount=1;
+    std::memcpy(reply.familyUuid,NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid,16);
+    reply.records[0]={0,1,2,7,4};
+    TglNativeOtherPendingFrames::RetainedInput retired;
+    assert(!pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh,&retired));
+    assert(pending.pending() && !retired && !released());
+    fresh.observed[0]=7;
+    assert(!pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh)); // No release sink.
+    assert(!pending.complete(ticket,image,physical,2,context,99,reply,fence,fresh,&retired));
+    ++reply.records[0].stamp;
+    assert(!pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh,&retired));
+    --reply.records[0].stamp;
+    assert(!retired && !released() && pending.pending());
+    assert(pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh,&retired));
+    assert(retired && !pending.pending() && !released()); // No deletion in completion gate.
+    assert(!pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh,&retired));
+    auto moved=std::move(retired);assert(moved && !retired && !released());
+    moved.reset();assert(released()); // Explicit CPU fixture retirement outside all gates.
+    unsigned destroyed=0;
+    struct Tracked {unsigned* destroyed;~Tracked() noexcept {++*destroyed;}};
+    auto* quarantined=new Tracked{&destroyed};
+    {
+        TglNativeOtherPendingFrames unresolved;
+        const auto reserved=unresolved.reserve(image,physical,1,context);
+        auto owned=std::unique_ptr<Tracked>(quarantined);
+        assert(unresolved.retainInput(reserved,image,physical,1,context,owned));
+        assert(unresolved.markAmbiguous(reserved) && !owned);
+    }
+    assert(!destroyed); // Direct pending destruction is NOT retirement.
+    delete quarantined;assert(destroyed==1); // Never-submitted CPU fixture only.
+}
+
 template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputApi,std::array<uint8_t,0x488>& fullHeader,const std::array<uint8_t,0x488>& savedFullHeader,std::array<uintptr_t,17>& downscaleSurfaces,const std::array<uintptr_t,17>& savedDownscales,std::array<uintptr_t,5>& originalRequest,Read fullRead) {
     const auto fullPayload=reinterpret_cast<uintptr_t>(fullHeader.data());
     const auto originalRequestAddress=reinterpret_cast<uintptr_t>(originalRequest.data());
@@ -62,7 +115,8 @@ template<class CfApi,class Read> void testOwnedAvcCallbackInputUnit(CfApi inputA
         assert(built.invoked && !built.mustStop && pair.complete());
     }
     assert(inputState.releases==0); // CPU scope exit is NOT GPU retirement.
-    input.reset();assert(inputState.releases==5); // Test owner explicitly retires CPU-only fixture.
+    testNativeOtherInputRetirement(input,[&]() noexcept {return inputState.releases==5;});
+    assert(!input && inputState.releases==5);
     downscaleSurfaces=savedDownscales;
     for(unsigned fail=0;fail<3;++fail) {
         fullHeader=savedFullHeader;inputState={};
@@ -16587,6 +16641,19 @@ static void testRetainedVeboxFrames() {
                 } scope{image};
                 const auto pendingFrame=retained->reserveNativeOtherFrame(lease,scope);
                 assert(pendingFrame.serial && !retained->reserveNativeOtherFrame(lease,scope).serial);
+                unsigned inputDrops=0;
+                struct InputOwner {
+                    unsigned* drops;explicit InputOwner(unsigned& count) noexcept:drops(&count) {}
+                    ~InputOwner() noexcept {++*drops;}
+                };
+                auto input=std::unique_ptr<InputOwner>(new InputOwner(inputDrops));
+                if(avc) {
+                    scope.generation=2;
+                    assert(!retained->retainNativeOtherFrameInput(lease,scope,pendingFrame,input) && input);
+                    scope.generation=1;FamilyLease foreign{nullptr};
+                    assert(!retained->retainNativeOtherFrameInput(foreign,scope,pendingFrame,input) && input);
+                    assert(retained->retainNativeOtherFrameInput(lease,scope,pendingFrame,input) && !input && !inputDrops);
+                } else input.reset();
                 assert(!retained->nativeOtherWorkQuiescent());
                 assert(!retained->prepareRemoval(same));
                 TglNativeOtherContextEventLineage outputLineage;
@@ -16622,6 +16689,13 @@ static void testRetainedVeboxFrames() {
                 assert(!retained->prepareRemoval(same) && !retained->nativeOtherWorkQuiescent());
                 ready=true;
                 assert(retained->serviceNativeOtherFrames(lease,scope,observe)==0 && observations==2);
+                if(avc) {
+                    assert(!retained->nativeOtherWorkQuiescent() && !inputDrops);
+                    TglNativeOtherPendingFrames::RetainedInput retired;
+                    assert(retained->completeNativeOtherFrame(lease,scope,pendingFrame,99,completed,expected,current,&retired));
+                    assert(retired && !inputDrops);retired.reset();
+                }
+                assert(inputDrops==1);
                 assert(retained->nativeOtherWorkQuiescent());
                 assert(!retained->completeNativeOtherFrame(lease,scope,pendingFrame,99,completed,expected,current));
                 assert(!retained->confirmNativeRemoval(same));
