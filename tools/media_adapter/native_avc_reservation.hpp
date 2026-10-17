@@ -5,6 +5,7 @@
 #include <array>
 #include <memory>
 #include <new>
+#include "owned_resource.hpp"
 #include "../../NootedGreen/kern_avc_gen12_commands.hpp"
 #include "../../NootedGreen/kern_vf_device_observation.hpp"
 
@@ -186,6 +187,12 @@ public:
         std::memcpy(&count,header.data(),4);
         std::memcpy(&table,header.data()+0x10,8);
         std::memcpy(&metadata,header.data()+0x60,8);
+        return captureRoots(count,table,metadata,read);
+    }
+    // Roots already copied by a containing syntax graph; no borrowed root
+    // reread. These scalar roots do not authorize access or submission.
+    template<class Read> static std::unique_ptr<OwnedSliceNalInput>
+    captureRoots(uint32_t count,uintptr_t table,uintptr_t metadata,Read read) noexcept {
         if(!count || count>SliceInput::MaxSlices)return {};
         auto owned=std::unique_ptr<OwnedSliceNalInput>(new(std::nothrow) OwnedSliceNalInput{});
         if(!owned)return {};
@@ -202,6 +209,47 @@ private:
     OwnedSliceNalInput()=default;
     std::unique_ptr<SliceInput> slices_;
     std::unique_ptr<OwnedTemplateNalInput> nal_;
+};
+// All audited syntax inputs share one captured root header. This is NOT a
+// native frame: payload scalars/reference handles/downscale leases/output
+// aliases and complete SPS/PPS inheritance still require separate proof.
+class OwnedAvcSyntaxInput {
+    using SliceNal=OwnedSliceNalInput<TglOwnedAvcSliceInputTable>;
+public:
+    OwnedAvcSyntaxInput(const OwnedAvcSyntaxInput&)=delete;
+    OwnedAvcSyntaxInput& operator=(const OwnedAvcSyntaxInput&)=delete;
+    OwnedAvcSyntaxInput(OwnedAvcSyntaxInput&&)=delete;
+    OwnedAvcSyntaxInput& operator=(OwnedAvcSyntaxInput&&)=delete;
+    template<class Read> static std::unique_ptr<OwnedAvcSyntaxInput>
+    capture(uintptr_t payload,uint32_t width,uint32_t height,TglOwnedAvcScalingDefaults defaults,Read read) noexcept {
+        if(!payload || payload>UINTPTR_MAX-0x488)return {};
+        std::array<uint8_t,0x78> header{};
+        if(!read(payload+0x410,header.data(),header.size()))return {};
+        uintptr_t sequence=0,picture=0,table=0,metadata=0;uint32_t count=0;
+        std::memcpy(&sequence,header.data(),8);std::memcpy(&picture,header.data()+8,8);
+        std::memcpy(&count,header.data()+0x10,4);std::memcpy(&table,header.data()+0x20,8);
+        std::memcpy(&metadata,header.data()+0x70,8);
+        if(!count || count>TglOwnedAvcSliceInputTable::MaxSlices)return {};
+        auto owned=std::unique_ptr<OwnedAvcSyntaxInput>(new(std::nothrow) OwnedAvcSyntaxInput{});
+        if(!owned)return {};
+        owned->sequence_=TglOwnedAvcConsumedSequenceInput::capture(sequence,width,height,read);
+        if(!owned->sequence_)return {};
+        owned->picture_=TglOwnedAvcPictureInput::capture(picture,defaults,read);
+        if(!owned->picture_)return {};
+        owned->sliceNal_=SliceNal::captureRoots(count,table,metadata,read);
+        if(!owned->sliceNal_)return {};
+        return owned;
+    }
+    const uint8_t* sequenceBytes() const noexcept {return sequence_->data();}
+    const uint8_t* pictureBytes() const noexcept {return picture_->data();}
+    size_t sliceCount() const noexcept {return sliceNal_->sliceCount();}
+    const uintptr_t* sliceTable() const noexcept {return sliceNal_->sliceTable();}
+    const uint8_t* nalMetadata() const noexcept {return sliceNal_->nalMetadata();}
+private:
+    OwnedAvcSyntaxInput()=default;
+    std::unique_ptr<TglOwnedAvcConsumedSequenceInput> sequence_;
+    std::unique_ptr<TglOwnedAvcPictureInput> picture_;
+    std::unique_ptr<SliceNal> sliceNal_;
 };
 struct Builder {
     uintptr_t argument=0,connection=0,base=0,cursor=0,end=0;

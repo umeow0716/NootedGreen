@@ -19300,6 +19300,38 @@ int main() {
                 }
                 return false;
             };
+            using FullGraph=NgreenNativeAvcReservation::OwnedAvcSyntaxInput;
+            std::array<uint8_t,0x78> fullHeader{};
+            std::array<uint32_t,0xc18/4> sps{};
+            std::array<uint8_t,0x488> pps{};
+            sps[0]=1;sps[0x24/4]=40;sps[0x2c/4]=1;sps[0x830/4]=1;sps[0x838/4]=1;
+            pps[0x20]=0x73;
+            const uintptr_t spsAddress=reinterpret_cast<uintptr_t>(sps.data()),ppsAddress=reinterpret_cast<uintptr_t>(pps.data());
+            std::memcpy(fullHeader.data(),&spsAddress,8);std::memcpy(fullHeader.data()+8,&ppsAddress,8);
+            std::memcpy(fullHeader.data()+0x10,initialHeader.data(),initialHeader.size());
+            const auto savedFullHeader=fullHeader;
+            const uintptr_t fullStart=reinterpret_cast<uintptr_t>(fullHeader.data()),fullPayload=fullStart-0x410;
+            unsigned fullReads=0;
+            auto fullRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(at==fullStart && bytes==fullHeader.size()) {
+                    ++fullReads;std::memcpy(out,fullHeader.data(),bytes);fullHeader.fill(0);return true;
+                }
+                if(at==spsAddress && bytes==sizeof(sps)){std::memcpy(out,sps.data(),bytes);return true;}
+                if(at==ppsAddress && bytes==pps.size()){std::memcpy(out,pps.data(),bytes);return true;}
+                return read(at,out,bytes);
+            };
+            auto full=FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead);
+            assert(full && fullReads==1 && full->sliceCount()==2 && full->pictureBytes()[0x20]==0x73);
+            uint32_t level=0;std::memcpy(&level,full->sequenceBytes()+0x1c,4);assert(level==40);
+            fullHeader=savedFullHeader;sps[0x40/4]=1;
+            assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));sps[0x40/4]=0;
+            fullHeader=savedFullHeader;pps[0xbc]=2;
+            assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));pps[0xbc]=0;
+            fullHeader=savedFullHeader;denied=true;
+            assert(!FullGraph::capture(fullPayload,16,16,TglOwnedAvcScalingDefaults{},fullRead));denied=false;
+            sps.fill(0);pps.fill(0);
+            assert(full->pictureBytes()[0x20]==0x73);
+            std::memcpy(&level,full->sequenceBytes()+0x1c,4);assert(level==40);
             denied=true;assert(!Graph::capture(payload,read)); // NAL failure exposes no partial graph
             header=initialHeader;denied=false;headerReads=0;
             auto graph=Graph::capture(payload,read);
@@ -19311,6 +19343,7 @@ int main() {
             lengths.fill(0);slice.fill(0);nalByte=0;metadata.fill(0);table.fill(0);nalSource=0;
             assert(reinterpret_cast<const uint8_t*>(graph->sliceTable()[0])[0x100]==0x65);
             assert(reinterpret_cast<const uint32_t*>(ownedLengths)[1]==8 && *reinterpret_cast<const uint8_t*>(ownedSource)==0xa5);
+            assert(reinterpret_cast<const uint8_t*>(full->sliceTable()[0])[0x100]==0x65);
             for(uint32_t bad:{0U,33U}) {
                 header=initialHeader;std::memcpy(header.data(),&bad,4);assert(!Graph::capture(payload,read));
             }
