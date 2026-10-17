@@ -452,6 +452,33 @@ public:
         if(!result || !admit())return {};
         return result;
     }
+    // Callback-only borrowed view: graph AND pins AND external content/phase
+    // authority must outlive every native read. Not an outer27724 request or
+    // an output buffer. No fallback to original syntax/table pointers.
+    template<class Api,class Admit>
+    bool materializeCallbackPayload(std::array<uint8_t,0x488>& output,
+        const OwnedAvcSurfaceReferences<Api>& pins,Admit admit) const noexcept {
+        const auto destination=reinterpret_cast<uintptr_t>(output.data());
+        const auto self=reinterpret_cast<uintptr_t>(this);
+        if((destination<self+sizeof(*this) && self<destination+output.size()) || !admit())return false;
+        auto pinned=[&](size_t offset,bool required=false) noexcept {
+            uintptr_t handle=0;std::memcpy(&handle,input_.data()+offset,8);
+            return handle?pins.owns(handle):!required;
+        };
+        if(!pinned(8,true) || !pinned(0x478,true))return false;
+        for(size_t i=0;i<16;++i)if(!pinned(0x38+i*0x40))return false;
+        for(auto handle:downscale_)if(handle && !pins.owns(handle))return false;
+        auto candidate=input_;
+        auto bind=[&](size_t offset,const void* data) noexcept {
+            const auto pointer=reinterpret_cast<uintptr_t>(data);
+            std::memcpy(candidate.data()+offset,&pointer,8);
+        };
+        bind(0x410,sequence_->data());bind(0x418,picture_->data());
+        bind(0x430,sliceNal_->sliceTable());bind(0x440,downscale_.data());
+        bind(0x480,sliceNal_->nalMetadata());
+        if(!admit())return false;
+        output=candidate;return true;
+    }
 private:
     OwnedAvcSyntaxInput()=default;
     // Input span through metadata480, excluding outer output pointer488 and

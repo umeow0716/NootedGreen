@@ -19505,6 +19505,52 @@ int main() {
             auto surfacePins=full->pinSurfaces(cf,[]() noexcept {return true;});
             assert(surfacePins && surfacePins->size()==5 && surfacePins->owns(referenceSurface));
             assert(surfacePins->owns(savedDownscales[16]));
+            std::array<uint8_t,0x488> callbackPayload{};callbackPayload.fill(0xa5);
+            const auto untouchedPayload=callbackPayload;
+            assert(!full->materializeCallbackPayload(callbackPayload,*surfacePins,[]() noexcept {return false;}));
+            assert(callbackPayload==untouchedPayload);
+            unsigned grants=0;
+            assert(!full->materializeCallbackPayload(callbackPayload,*surfacePins,[&]() noexcept {return ++grants==1;}));
+            assert(grants==2 && callbackPayload==untouchedPayload);
+            assert(full->materializeCallbackPayload(callbackPayload,*surfacePins,[]() noexcept {return true;}));
+            const auto validPayload=callbackPayload;
+            auto expectedPayload=savedFullHeader;
+            for(size_t offset:{size_t(0x410),size_t(0x418),size_t(0x430),size_t(0x440),size_t(0x480)}) {
+                uintptr_t oldRoot=0,newRoot=0;
+                std::memcpy(&oldRoot,savedFullHeader.data()+offset,8);
+                std::memcpy(&newRoot,callbackPayload.data()+offset,8);
+                assert(newRoot && newRoot!=oldRoot);
+                std::memcpy(expectedPayload.data()+offset,&newRoot,8);
+                if(offset==0x410)assert(newRoot==reinterpret_cast<uintptr_t>(full->sequenceBytes()));
+                if(offset==0x418)assert(newRoot==reinterpret_cast<uintptr_t>(full->pictureBytes()));
+                if(offset==0x430)assert(newRoot==reinterpret_cast<uintptr_t>(full->sliceTable()));
+                if(offset==0x480)assert(newRoot==reinterpret_cast<uintptr_t>(full->nalMetadata()));
+                if(offset==0x440)assert(std::memcmp(reinterpret_cast<const void*>(newRoot),savedDownscales.data(),sizeof(savedDownscales))==0);
+            }
+            assert(callbackPayload==expectedPayload); // ONLY five root pointers differ.
+            std::array<uintptr_t,5> originalRequest{};originalRequest[4]=fullPayload;
+            const auto savedRequest=originalRequest;
+            NgreenNativeAvcReservation::OwnedAvcCallbackRequest callbackRequest;
+            const auto originalRequestAddress=reinterpret_cast<uintptr_t>(originalRequest.data());
+            auto requestRead=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                if(at!=originalRequestAddress || bytes!=sizeof(originalRequest))return false;
+                std::memcpy(out,originalRequest.data(),bytes);return true;
+            };
+            assert(callbackRequest.capture(originalRequestAddress,fullPayload,
+                reinterpret_cast<uintptr_t>(callbackPayload.data()),requestRead,
+                [&](uintptr_t r,uintptr_t p,uintptr_t o) noexcept {
+                    return r==originalRequestAddress && p==fullPayload && o==reinterpret_cast<uintptr_t>(callbackPayload.data());
+                }));
+            assert(originalRequest==savedRequest && callbackPayload==validPayload);
+            {
+                CfState foreignState{};CfApi foreignApi{&foreignState};
+                std::array<uintptr_t,35> foreignHandles{};
+                foreignHandles[0]=rawSurface;foreignHandles[1]=reconSurface;foreignHandles[2]=0x9999;
+                auto foreign=NgreenNativeAvcReservation::OwnedAvcSurfaceReferences<CfApi>::capture(
+                    foreignHandles,foreignApi,[]() noexcept {return true;});
+                assert(foreign && !full->materializeCallbackPayload(callbackPayload,*foreign,[]() noexcept {return true;}));
+                assert(callbackPayload==validPayload);
+            }
             assert((fullHeader==std::array<uint8_t,0x488>{})); // Source was already overwritten.
             surfacePins.reset();assert(cfState.retains==5 && cfState.releases==5);
             downscaleSurfaces=savedDownscales;
