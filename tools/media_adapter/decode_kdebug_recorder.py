@@ -28,10 +28,32 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          10: 'timeout', 11: 'scope_end', 12: 'native_mapping_before_copy',
          13: 'ring_operand_leaf', 14: 'batch_leaf',
          15: 'retained_ring_metadata', 16: 'retained_ring_chunk',
-         17: 'mapper_backing_page', 18: 'cpu_alias_ram_page'}
+         17: 'mapper_backing_page', 18: 'cpu_alias_ram_page',
+         19: 'synchronous_batch_metadata', 20: 'synchronous_batch_chunk'}
 
 
 def validate_leaf(kind, words):
+    if kind == 19:
+        if (len(words) != 13 or words[0] != 1 or not 1 <= words[1] <= 8 or
+                not 1 <= words[4] <= 16384 or words[5] != words[4]*4 or
+                words[6] > words[5] or words[7] & ~7 or
+                (not words[7] & 1 and (words[6] or words[7])) or
+                bool(words[7] & 2) != (words[6] == words[5]) or
+                words[9] not in (0, 1) or words[10] not in (0, 1) or
+                words[11] >= 4096 or words[11] & 3 or words[12]):
+            raise ValueError('invalid synchronous CPU batch metadata')
+        gpu = words[2] | words[3] << 32
+        if not gpu or gpu & 3 or gpu > MASK64-words[5]:
+            raise ValueError('invalid synchronous CPU batch address extent')
+        return
+    if kind == 20:
+        if (len(words) < 7 or words[0] != 1 or not 1 <= words[2] <= 16384 or
+                words[3] > words[2]*4 or not 1 <= words[4] <= 512 or
+                words[4] != len(words)-6 or words[1]+words[4] > words[3]//4 or
+                words[5] & ~7 or words[5] & 5 != 5 or
+                bool(words[5] & 2) != (words[3] == words[2]*4)):
+            raise ValueError('invalid synchronous CPU batch chunk')
+        return
     if kind in (17, 18):
         if (len(words) != 20 or words[0] != 1 or not 1 <= words[2] <= 16 or
                 words[1] >= words[2] or words[3] & ~15 or words[16] or
@@ -312,6 +334,7 @@ class DiskSink:
         self.db.execute('CREATE TABLE rings (identity TEXT PRIMARY KEY, group_id INTEGER, bytes INTEGER, tail INTEGER, admitted INTEGER, captured INTEGER) WITHOUT ROWID')
         self.db.execute('CREATE TABLE backings (identity TEXT, group_id INTEGER, pages INTEGER, captured INTEGER, valid INTEGER, bytes INTEGER, map_offset TEXT, options INTEGER, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.execute('CREATE TABLE cpu_backings (identity TEXT, group_id INTEGER, pages INTEGER, captured INTEGER, valid INTEGER, bytes INTEGER, map_offset TEXT, options INTEGER, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
+        self.db.execute('CREATE TABLE synchronous_batches (identity TEXT PRIMARY KEY, group_id INTEGER, gpu TEXT, words INTEGER, copied INTEGER, flags INTEGER, captured INTEGER) WITHOUT ROWID')
         self.db.commit()
         self.pending = 0
         self.sideband_file = None
@@ -349,7 +372,23 @@ class DiskSink:
         validate_leaf(record['kind'], words)
         if self.db.execute('SELECT 1 FROM records WHERE id=?', (record['record_id'],)).fetchone():
             raise ValueError('duplicate completed flight record ID')
-        if record['kind'] in (17, 18):
+        if record['kind'] == 19:
+            if int(record['identity'], 16) != words[1] or not record['group']:
+                raise ValueError('synchronous CPU batch identity/group mismatch')
+            try:
+                self.db.execute('INSERT INTO synchronous_batches VALUES (?,?,?,?,?,?,0)',
+                                (record['identity'], record['group'], f'{words[3]:08x}{words[2]:08x}',
+                                 words[4], words[6], words[7]))
+            except sqlite3.IntegrityError as exc:
+                raise ValueError('duplicate synchronous CPU batch identity') from exc
+        elif record['kind'] == 20:
+            current = self.db.execute('SELECT group_id,words,copied,flags,captured FROM synchronous_batches WHERE identity=?',
+                                      (record['identity'],)).fetchone()
+            if current != (record['group'], words[2], words[3], words[5], words[1]):
+                raise ValueError('missing/duplicate/out-of-order/mismatched synchronous CPU batch chunk')
+            self.db.execute('UPDATE synchronous_batches SET captured=captured+? WHERE identity=?',
+                            (words[4], record['identity']))
+        elif record['kind'] in (17, 18):
             table = 'backings' if record['kind'] == 17 else 'cpu_backings'
             gpu = words[4] | words[5] << 32
             if gpu != int(record['identity'], 16)+words[1]*4096:
@@ -401,6 +440,13 @@ class DiskSink:
                    self.db.execute('SELECT identity,bytes,captured,admitted FROM rings WHERE admitted!=1 OR captured!=bytes LIMIT 64')]
         return {'captures': total, 'complete_cpu_copies': complete, 'incomplete': total-complete,
                 'incomplete_examples': missing, 'gpu_execution_proof': False}
+
+    def synchronous_batch_report(self):
+        total, complete = self.db.execute('SELECT COUNT(*),COALESCE(SUM(flags=7 AND copied=words*4 AND captured=words),0) FROM synchronous_batches').fetchone()
+        return {'captures': total, 'complete_cpu_copies': complete, 'incomplete': total-complete,
+                'maximum_captures': 8, 'all_submissions_captured': False,
+                'optional_terminal_extent_included': False,
+                'atomic_snapshot': False, 'gpu_execution_proof': False}
 
     def close(self):
         if self.sideband_file is not None:
@@ -623,6 +669,48 @@ def self_test():
             pass
         else:
             raise AssertionError('duplicate CPU alias capture accepted')
+        batch = dict(saved[0], record_id=300, group=3, kind=19, identity='0000000000000001',
+                     words=[1, 1, 0x41d34000, 0, 1024, 4096, 4096, 7, 2, 0, 1, 0, 0])
+        save(batch)
+        chunk = dict(batch, record_id=301, kind=20, words=[1, 0, 1024, 4096, 512, 7]+[0]*512)
+        save(chunk)
+        assert save.synchronous_batch_report()['incomplete'] == 1
+        for bad in (dict(chunk, record_id=302), dict(chunk, record_id=302, group=4),
+                    dict(chunk, record_id=302, identity='0000000000000002')):
+            try:
+                save(bad)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('duplicate/mismatched synchronous chunk accepted')
+        assert save.db.execute('SELECT captured FROM synchronous_batches').fetchone()[0] == 512
+        second = list(chunk['words']); second[1] = 512
+        save(dict(chunk, record_id=302, words=second))
+        assert save.synchronous_batch_report()['complete_cpu_copies'] == 1
+        short = list(batch['words']); short[1], short[6], short[7] = 2, 3, 5
+        save(dict(batch, record_id=303, identity='0000000000000002', words=short))
+        assert save.synchronous_batch_report()['incomplete'] == 1
+        refused = list(batch['words']); refused[1], refused[6], refused[7] = 3, 0, 0
+        save.db.execute("CREATE TEMP TRIGGER sync_failure BEFORE INSERT ON records WHEN NEW.id=304 BEGIN SELECT RAISE(ABORT,'owned sync injected write failure'); END")
+        try:
+            save(dict(batch, record_id=304, identity='0000000000000003', words=refused))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('injected synchronous metadata write failure accepted')
+        assert save.synchronous_batch_report()['captures'] == 2
+        save.db.execute('DROP TRIGGER sync_failure')
+        save(dict(batch, record_id=304, identity='0000000000000003', words=refused))
+        assert save.synchronous_batch_report()['incomplete'] == 2
+        assert not save.synchronous_batch_report()['all_submissions_captured']
+        for index, value in ((5, 1), (6, 4097), (7, 5), (9, 2), (12, 1)):
+            bad = list(batch['words']); bad[index] = value
+            try:
+                validate_leaf(19, bad)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('invalid synchronous batch metadata accepted')
         sideband = Decoder(lambda _: None, save.sideband)
         for item in archive[:6]:
             sideband.packet(*item)
@@ -661,6 +749,7 @@ if __name__ == '__main__':
         ring_report = sink.ring_report()
         backing_report = sink.backing_report()
         cpu_alias_report = sink.backing_report(cpu_alias=True)
+        synchronous_batch_report = sink.synchronous_batch_report()
         try:
             sink.close()
         except (OSError, sqlite3.Error) as exc:
@@ -669,6 +758,7 @@ if __name__ == '__main__':
         report['rings'] = ring_report
         report['backings'] = backing_report
         report['cpu_alias_backings'] = cpu_alias_report
+        report['synchronous_batches'] = synchronous_batch_report
         if error:
             report['error'] = error
             report['capture_transport_complete'] = False

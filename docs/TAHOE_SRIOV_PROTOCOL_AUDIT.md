@@ -1,5 +1,37 @@
 # Tahoe SR-IOV protocol audit — in progress
 
+## 2026-10-18 synchronous CPU batch capture (local, not deployed)
+
+RCS pool slots may rotate after submit, and failure unwind may revoke their
+CPU mappings; retaining only a pool cannot qualify a late history sample.
+The reviewed native path instead passes the borrowed descriptor through
+Family submitCommands4d7e, TGL FIFO submitBuffer4c6c6 and ring
+submitBatchBuffer42f7a. An opt-in observation route at the latter entry
+requires the exact FIFO return PC4c857, same VF accelerator, one live Media
+group, complete242-byte native function identity and the relocation-free
+14-byte prologue. It neither rewrites nor traverses commands, GPUVAs or history.
+
+The bounded copy uses exact native ml_nofault_copy362B and bcopy_phys208B,
+both pmap_find_pa call targets and the existing816B walker verification.
+It copies present CPU RAM only; missing mappings return a short byte count.
+Eight boot-owned64KiB slots avoid allocation, native-pointer retention or
+buffer reuse in submit. Native runs once with unchanged arguments/result,
+including every denied, short-read, out-of-budget and nonmatching caller.
+Source lifetime is the synchronous native caller's borrow, NOT a new GPU lease.
+Native physmap invariants remain fail-stop; no universal no-panic claim.
+Both CPU-alias paths now require high17 bits set (bit47 sign extension),
+not merely high16 bits; noncanonical ffff0000 aliases are rejected before
+any native lookup/copy, with owned negative cases for both paths.
+
+Kind19 metadata identifies GPUVA/count/copied bytes/stability/flags and the
+CPU page offset without publishing a kernel address; kind20 carries bounded
+512DW chunks. The source count excludes any two optional terminal DWORDs the
+FIFO caller appended, so this is explicitly pre-BBS CPU content, not the full
+hardware-fetch extent or an atomic GPU snapshot. Decoder rejects missing,
+duplicate, mismatched and out-of-order chunks, never upgrades short or unstable
+copies to complete, and cannot prove execution/completion. Require both V382
+CPU-RAM and synchronous-batch bound1 markers before a future workload.
+
 ## 2026-10-18 CPU backing observation (local, not deployed)
 
 V381 runtime: native mapper options0 caused kind17 to decline the query as

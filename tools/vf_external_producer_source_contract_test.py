@@ -783,7 +783,13 @@ def mutation_contract(source, path):
     for mutation in mutations:
         old, new = mutation[:2]
         count = mutation[2] if len(mutation) == 3 else -1
-        candidate = source.replace(old, new, count)
+        if old == '__builtin_return_address(0)':
+            # Mutate the Media ownership boundary, not an unrelated observer
+            # that happens to precede it in the translation unit.
+            target = function_body(source, 'void Gen11::vfMediaEnd(')
+            candidate = source.replace(target, target.replace(old, new, count), 1)
+        else:
+            candidate = source.replace(old, new, count)
         try:
             contract(candidate, path)
         except (AssertionError, ValueError):

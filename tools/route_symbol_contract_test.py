@@ -292,7 +292,9 @@ def main() -> None:
     # lifecycle, GGTT, GuC/CTB, IRQ, native producer and System-KC routes.
     # Includes the opt-in, post-relocation Media end publication route.
     assert "__ZN24IGAccelVideoContextMedia16endCommandStreamER24IOAccelCommandStreamInfo" in routes
-    expected_route_count = 175
+    # One exact opt-in synchronous CPU batch observer, no command rewriting.
+    assert "__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb" in routes
+    expected_route_count = 176
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"

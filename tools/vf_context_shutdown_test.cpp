@@ -120,7 +120,7 @@ static void testCpuAliasPages() {
     assert(queries==16 && records==16); // Native options0 never invokes a DMA getter.
     auto forbidden=[](uint64_t)->uint64_t {assert(false);return 0;};
     auto noEmit=[](const uint32_t *,uint32_t){assert(false);};
-    for(uint64_t bad:{UINT64_C(0),UINT64_C(0x40010000),cpu+1,UINT64_C(0xfffffffffffff000)})
+    for(uint64_t bad:{UINT64_C(0),UINT64_C(0x40010000),cpu+1,UINT64_C(0xffff000040000000),UINT64_C(0xfffffffffffff000)})
         assert(!NGFlightTrace::observeCpuAliasPages(bad,0,65536,0x40010000,0,forbidden,
             [](){return true;},[](){return 0U;},noEmit));
     records=0;
@@ -137,10 +137,42 @@ static void testCpuAliasPages() {
     assert(records==1 && queries==1); // Identity changed: do not query the next page.
 }
 
+static void testBorrowedBatchCopy() {
+    uint32_t owned[16384]{};
+    const uint64_t cpu=UINT64_C(0xffffff8040010000),gpu=0x41d34000;
+    unsigned calls=0,checks=0;
+    auto copier=[&](uint64_t source,uint64_t destination,uint64_t bytes)->uint64_t {
+        assert(source==cpu && destination==reinterpret_cast<uintptr_t>(owned));
+        assert(bytes==sizeof(owned));++calls;
+        for(unsigned i=0;i<16384;++i)owned[i]=i^0x12345678U;
+        return bytes;
+    };
+    auto result=NGFlightTrace::copyBorrowedBatch(cpu,gpu,16384,owned,copier,[&](){++checks;return true;});
+    assert(calls==1 && checks==2 && result.bytes==65536 && result.copied==65536 && result.flags==7);
+    for(unsigned i=0;i<16384;++i)assert(owned[i]==(i^0x12345678U));
+    auto forbidden=[](uint64_t,uint64_t,uint64_t)->uint64_t {assert(false);return 0;};
+    for(uint32_t bad:{0U,16385U,UINT32_MAX})
+        assert(!NGFlightTrace::copyBorrowedBatch(cpu,gpu,bad,owned,forbidden,[](){return true;}).flags);
+    for(uint64_t bad:{UINT64_C(0),UINT64_C(0x40010000),cpu+1,UINT64_C(0xffff000040010000),UINT64_MAX-3})
+        assert(!NGFlightTrace::copyBorrowedBatch(bad,gpu,16,owned,forbidden,[](){return true;}).flags);
+    assert(!NGFlightTrace::copyBorrowedBatch(cpu,gpu,16,nullptr,forbidden,[](){return true;}).flags);
+    assert(!NGFlightTrace::copyBorrowedBatch(cpu,gpu,16,owned,forbidden,[](){return false;}).flags);
+    for(uint64_t amount:{UINT64_C(0),UINT64_C(3),UINT64_C(60),UINT64_C(65)}) {
+        result=NGFlightTrace::copyBorrowedBatch(cpu,gpu,16,owned,
+            [&](uint64_t,uint64_t,uint64_t bytes)->uint64_t {assert(bytes==64);return amount;},[](){return true;});
+        assert(result.flags==5 && result.copied==(amount<=64?amount:0));
+    }
+    checks=0;
+    result=NGFlightTrace::copyBorrowedBatch(cpu,gpu,16,owned,
+        [](uint64_t,uint64_t,uint64_t bytes)->uint64_t {return bytes;},[&](){return ++checks==1;});
+    assert(result.flags==3 && result.copied==64); // Full read, unstable owner: NOT complete evidence.
+}
+
 int main() {
     testFlightEnvelope();
     testBackingPages();
     testCpuAliasPages();
+    testBorrowedBatchCopy();
     assert(NGVfTimeoutObservation::prefixEngineForChannel(0)==0);
     assert(NGVfTimeoutObservation::prefixEngineForChannel(3)==3);
     for(int32_t channel:{INT32_MIN,-1,1,2,4,5,6,INT32_MAX})

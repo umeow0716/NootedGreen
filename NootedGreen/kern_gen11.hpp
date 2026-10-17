@@ -299,6 +299,9 @@ private:
 	mach_vm_address_t oVfContextSubmit {};
 	static void vfMediaEnd(void *that,void *stream);
 	mach_vm_address_t oVfMediaEnd {};
+	static bool vfObserveRingBatch(void *that,uint64_t gpu,uint32_t stamp,
+		uint32_t *cpu,uint32_t count,bool flagA,bool flagB);
+	mach_vm_address_t oVfObserveRingBatch {};
 	static IOReturn vf2DSetSurface(void *that, uint32_t surface,
 	                              uint32_t mode);
 	mach_vm_address_t oVf2DSetSurface {};

@@ -330,7 +330,7 @@ def verify_tool_ledger(paths):
         path for path in paths
         if path.startswith("tools/") and Path(path).suffix in program_suffixes
     }
-    assert len(programs) == 79, f"tool program count changed: {len(programs)}"
+    assert len(programs) == 80, f"tool program count changed: {len(programs)}"
 
     check_static = (ROOT / "tools/check-static.sh").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/build-kext.yml").read_text(
@@ -453,7 +453,7 @@ def verify_product_ownership():
     method_names = set(re.findall(
         r"\bGen11::([A-Za-z_][A-Za-z0-9_]*)\s*\(", gen11_cpp
     ))
-    assert len(method_names) == 171, (
+    assert len(method_names) == 172, (
         f"Gen11 definition inventory changed: {len(method_names)}"
     )
     for name in method_names:
@@ -466,7 +466,7 @@ def verify_product_ownership():
     route_fields = re.findall(
         r"\bmach_vm_address_t\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{", gen11_header
     )
-    assert len(route_fields) == 105, (
+    assert len(route_fields) == 106, (
         f"Gen11 route/original field inventory changed: {len(route_fields)}"
     )
     for name in route_fields:

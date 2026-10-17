@@ -186,6 +186,12 @@ static mach_vm_address_t gVfCpuBackingLookup = 0;
 static void **gVfCpuKernelPmapSlot = nullptr;
 static void *gVfCpuKernelPmapStore = nullptr;
 static void **gVfCpuSystemMapperSlot = nullptr;
+static mach_vm_address_t gVfBatchCpuCopy = 0;
+static mach_vm_address_t gVfBatchCaller = 0;
+// Boot-owned copies, not retained native pointers. Unique tickets avoid any
+// reuse while emitting; no allocation, waits or new locks in native submit.
+static uint32_t gVfBatchCpuCopies[8][16384] {};
+static volatile UInt32 gVfBatchCpuTickets = 0;
 // Optional AVC producer integration handles. Resolving these does not enable
 // a route, map memory, invoke a getter, or authorize a command-buffer write.
 bool gVfMediaPublicationAbiVerified = false;
@@ -2950,6 +2956,19 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				}
 			}
 			SYSLOG("ngreen","V382: CPU RAM backing observer bound=%u",gVfCpuBackingLookup?1U:0U);
+			const auto nofaultCopy=patcher.solveSymbol(KernelPatcher::KernelID,"_ml_nofault_copy");
+			const auto physicalCopy=patcher.solveSymbol(KernelPatcher::KernelID,"_bcopy_phys");
+			gVfBatchCpuCopy=0;
+			// Complete exact code, plus both actual callees. This native helper
+			// rejects non-RAM/missing pages and returns a SHORT byte count.
+			// It never enters descriptor DMA mapping or faults pages in.
+			if(gVfCpuBackingLookup && nofaultCopy && physicalCopy &&
+			   NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(nofaultCopy),362)==UINT64_C(0x648d5b7fd7277f0e) &&
+			   NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(physicalCopy),208)==UINT64_C(0xf9172f81775ea555) &&
+			   nofaultCopy+0x35+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x31)==cpuFindPa &&
+			   nofaultCopy+0x7f+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x7b)==cpuFindPa &&
+			   nofaultCopy+0x131+getMember<int32_t>(reinterpret_cast<void *>(nofaultCopy),0x12d)==physicalCopy)
+				gVfBatchCpuCopy=nofaultCopy;
 			constexpr uint8_t parseCall[] = {0xff,0x90,0x08,0x0a,0,0};
 			constexpr uint8_t endCall[] = {0xff,0x90,0x38,0x0a,0,0};
 			constexpr uint8_t classBase[] = {0x4c,0x8d,0xbb,0xe0,0x06,0,0};
@@ -3376,6 +3395,28 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				OSSynchronizeIO();
 				gVfMediaPublicationRouteReady=true;
 				SYSLOG("ngreen","Gen12 AVC post-relocation publication route ready=1 profile=1");
+				const auto batchSubmit=patcher.solveSymbol(index,
+					"__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb",address,size);
+				const auto fifoSubmit=patcher.solveSymbol(index,
+					"__ZN18IGAccelFIFOChannel12submitBufferEP24IOAccelCommandDescriptor",address,size);
+				static constexpr uint8_t batchCall[]={0x49,0x8b,0xbc,0x24,0x30,0x01,0,0,
+					0x49,0x8b,0x76,0x18,0x49,0x8b,0x4e,0x20,0x45,0x8b,0x46,0x30,
+					0x45,0x0f,0xb6,0x4e,0x6a,0x41,0x0f,0xb6,0x46,0x69,0x48,0x8b,0x1f,
+					0x48,0x83,0xec,0x08,0x44,0x89,0xfa,0x50,0xff,0x93,0x18,0x01,0,0};
+				// Entry's first 14 bytes end on complete non-PC-relative instructions.
+				// Never trampoline the earlier Media LEA thunk or read ring history.
+				if(gVfBatchCpuCopy && contains(batchSubmit,0,242) &&
+				   NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(batchSubmit),242)==UINT64_C(0x6c30a64a7547b329) &&
+				   contains(fifoSubmit,0x162,sizeof(batchCall)) && matches(fifoSubmit+0x162,batchCall,sizeof(batchCall))) {
+					gVfBatchCaller=fifoSubmit+0x191;
+					KernelPatcher::RouteRequest batchRoute[]={
+						{"__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb",vfObserveRingBatch,this->oVfObserveRingBatch}
+					};
+					patcher.clearError();
+					PANIC_COND(!patcher.routeMultiple(index,batchRoute,address,size) || !this->oVfObserveRingBatch,
+						"ngreen","Cannot route exact synchronous CPU batch observer");
+				}
+				SYSLOG("ngreen","V382: synchronous CPU batch observer bound=%u",this->oVfObserveRingBatch?1U:0U);
 			}
 			// Tahoe's telemetry manager and per-stamp usage objects are created
 			// before startGraphicsEngine(). TelemetryDisable only gates the trace
@@ -6329,6 +6370,65 @@ IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
 	const IOReturn result=FunctionCast(vfContextSubmit, callback->oVfContextSubmit)(
 		that, input, output, options, stamp);
 	return mediaScope.failed()?kIOReturnBadArgument:result;
+}
+
+bool Gen11::vfObserveRingBatch(void *that,uint64_t gpu,uint32_t stamp,
+                              uint32_t *cpu,uint32_t count,bool flagA,bool flagB)
+{
+	PANIC_COND(!callback || !callback->oVfObserveRingBatch,"ngreen","Missing native ring batch continuation");
+	const auto caller=reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0));
+	VfContextOperationGuard operation;
+	// Original callback receiver and arguments are NEVER substituted. All
+	// failures below only omit diagnostic bytes, then native runs exactly once.
+	if(operation && vfFlightEnabled() && gVfBatchCpuCopy && caller==gVfBatchCaller &&
+	   gVfCpuKernelPmapSlot && *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore &&
+	   that && cpu && gpu && count && count<=16384U && !(gpu&3U) &&
+	   (reinterpret_cast<uintptr_t>(that)>>47)==0x1ffffU &&
+	   reinterpret_cast<uintptr_t>(that)<=UINTPTR_MAX-0x18U &&
+	   (reinterpret_cast<uintptr_t>(cpu)>>47)==0x1ffffU &&
+	   !(reinterpret_cast<uintptr_t>(cpu)&3U) &&
+	   reinterpret_cast<uintptr_t>(cpu)<=UINTPTR_MAX-uint64_t(count)*4U &&
+	   gpu<=UINT64_MAX-uint64_t(count)*4U) {
+		using Copy=uint64_t (*)(uint64_t,uint64_t,uint64_t);
+		const auto copy=reinterpret_cast<Copy>(gVfBatchCpuCopy);
+		void *owner=nullptr;
+		const uint32_t group=vfFlightCurrentGroup();
+		if(group && copy(reinterpret_cast<uintptr_t>(that)+0x10U,reinterpret_cast<uintptr_t>(&owner),sizeof(owner))==sizeof(owner) &&
+		   owner && owner==gVfAccelerator) {
+			uint32_t ticket=8;
+			for(uint32_t attempt=0;attempt<8;++attempt) {
+				const uint32_t next=gVfBatchCpuTickets;
+				if(next>=8)break;
+				if(OSCompareAndSwap(next,next+1,&gVfBatchCpuTickets)){ticket=next;break;}
+			}
+			if(ticket<8) {
+				auto *owned=gVfBatchCpuCopies[ticket];
+				const auto sample=NGFlightTrace::copyBorrowedBatch(reinterpret_cast<uintptr_t>(cpu),gpu,count,owned,copy,[&]() {
+					void *after=nullptr;
+					return copy(reinterpret_cast<uintptr_t>(that)+0x10U,reinterpret_cast<uintptr_t>(&after),sizeof(after))==sizeof(after) &&
+						after==owner && owner==gVfAccelerator && *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore;
+				});
+				// An identity change before copying is an explicit refused sample.
+				const uint32_t bytes=count*4U,copied=sample.copied;
+				const uint32_t flags=sample.flags;
+				const uint32_t metadata[]={1,ticket+1,uint32_t(gpu),uint32_t(gpu>>32),count,bytes,
+					copied<=bytes?uint32_t(copied):0U,flags,stamp,flagA?1U:0U,flagB?1U:0U,
+					uint32_t(reinterpret_cast<uintptr_t>(cpu)&4095U),0U}; // final zero = atomicity NOT claimed.
+				vfFlightRecord(19,group,ticket+1,metadata,arrsize(metadata));
+				// Only emit the bytes the native helper actually returned; a short
+				// or unstable sample cannot silently become a complete zero batch.
+				if((flags&5U)==5U && copied<=bytes)for(uint32_t first=0;first<copied/4U;) {
+					const uint32_t valid=copied/4U-first<512U?uint32_t(copied/4U)-first:512U;
+					const uint32_t prefix[]={1,first,count,uint32_t(copied),valid,flags};
+					NGFlightTrace::emitCpuWordsPrefixed(gVfFlightTrace,[]() {
+						return static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+					},20,group,ticket+1,prefix,arrsize(prefix),owned+first,valid);
+					first+=valid;
+				}
+			}
+		}
+	}
+	return FunctionCast(vfObserveRingBatch,callback->oVfObserveRingBatch)(that,gpu,stamp,cpu,count,flagA,flagB);
 }
 
 void Gen11::vfMediaEnd(void *that,void *stream)

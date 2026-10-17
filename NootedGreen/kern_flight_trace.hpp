@@ -8,6 +8,23 @@ using Callback=void (*)(uint32_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr
 constexpr uint32_t begin=0x06fe0000U,data=0x06fe0004U,end=0x06fe0008U;
 constexpr uint64_t magic=UINT64_C(0x4e47464c00000000);
 constexpr uint32_t maximumWords=1536;
+struct BorrowedBatchCopy {uint32_t bytes=0,copied=0,flags=0;};
+// Synchronous borrowed CPU buffer only. The native nofault copier is supplied
+// by the exact kernel binder; this helper never dereferences the source.
+template<class Copy,class Stable>
+inline BorrowedBatchCopy copyBorrowedBatch(uint64_t cpu,uint64_t gpu,uint32_t count,
+                                         void *owned,Copy &&copy,Stable &&stable) {
+    BorrowedBatchCopy out{};
+    if(!owned || !gpu || !count || count>16384U || (cpu>>47)!=0x1ffffU ||
+       ((cpu|gpu)&3U) || cpu>UINT64_MAX-uint64_t(count)*4U ||
+       gpu>UINT64_MAX-uint64_t(count)*4U || !stable())return out;
+    out.bytes=count*4U;out.flags=1;
+    const uint64_t copied=copy(cpu,reinterpret_cast<uintptr_t>(owned),out.bytes);
+    if(copied<=out.bytes)out.copied=static_cast<uint32_t>(copied);
+    if(copied==out.bytes)out.flags|=2U;
+    if(stable())out.flags|=4U;
+    return out; // Neither atomicity, CPU allocation extent nor GPU fetch proof.
+}
 inline uint64_t boundedCodeHash(const volatile uint8_t *bytes,uint32_t count) {
     if(!bytes || !count || count>1024)return 0;
     uint64_t hash=UINT64_C(14695981039346656037);
@@ -20,7 +37,7 @@ template<class Query,class Stable,class Mapper,class Emit>
 inline bool observeCpuAliasPages(uint64_t cpuBase,uint64_t mapOffset,uint32_t bytes,
                                 uint64_t gpuBase,uint32_t mapperOptions,
                                 Query &&query,Stable &&stable,Mapper &&mapper,Emit &&emit) {
-    if((cpuBase>>48)!=0xffffU || !gpuBase || !bytes || bytes>65536 || ((cpuBase|mapOffset|gpuBase)&4095U) ||
+    if((cpuBase>>47)!=0x1ffffU || !gpuBase || !bytes || bytes>65536 || ((cpuBase|mapOffset|gpuBase)&4095U) ||
        cpuBase>UINT64_MAX-bytes || mapOffset>UINT64_MAX-bytes || gpuBase>UINT64_MAX-bytes)return false;
     const uint32_t pages=(bytes+4095U)/4096U;
     for(uint32_t i=0;i<pages;++i) {

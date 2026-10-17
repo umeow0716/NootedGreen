@@ -38,7 +38,8 @@ def mode_template_fields(words):
     """
     result = {'status': 'GEN12_FIELDS_CPU_ONLY_NOT_ADMISSION',
               'complete_packet_walk': False, 'mfx_modes': [], 'pak_headers': [], 'walkers': [],
-              'pipeline_flushes': [], 'mi_flushes': [], 'mi_operands': [], 'mi_profile_issues': []}
+              'pipeline_flushes': [], 'mi_flushes': [], 'mi_operands': [], 'mi_profile_issues': [],
+              'vdenc_pipe_resources': [], 'resource_coverage': 'VDENC_PIPE_ONLY_OTHER_PACKETS_NOT_INVENTORIED'}
     if not words or len(words) > 1536 or any(type(x) is not int or not 0 <= x <= 0xffffffff for x in words):
         result['refusal'] = 'word-extent-or-value'
         return result
@@ -79,6 +80,28 @@ def mode_template_fields(words):
                 parser_done=(control >> 4) & 1, vdenc_flush=(control >> 17) & 1))
         elif op == 0x13000000:
             result['mi_flushes'].append(dict(word=at, header=header))
+        elif op == 0x70840000 and count == 71:
+            # Pinned Gen12 hwcmd: 3DW address/control records. DW7..9 is
+            # reserved and DW61 is a histogram OFFSET, neither is an address.
+            # Addresses are observations, NOT resource extents/ownership or
+            # proof that a disabled mode will actually access the operand.
+            slots = ((1, 'ds_fwd0'), (4, 'ds_fwd1_or_bwd0'), (10, 'source'),
+                     (13, 'streamin'), (16, 'rowstore'), (19, 'colocated_mv'),
+                     (22, 'fwd0'), (25, 'fwd1'), (28, 'fwd2'), (31, 'bwd0'),
+                     (34, 'statistics'), (37, 'ds_fwd0_4x'), (40, 'ds_fwd1_or_bwd0_4x'),
+                     (43, 'cu_record_out'), (46, 'lcu_pak'), (49, 'scaled8x'),
+                     (52, 'scaled4x'), (55, 'vp9_map_in'), (58, 'vp9_map_out'),
+                     (62, 'tile_rowstore'), (65, 'cumulative_cu'), (68, 'palette'))
+            for index, name in slots:
+                low, high, control = words[at+index:at+index+3]
+                result['vdenc_pipe_resources'].append(dict(
+                    packet_word=at, address_word=at+index, role=name,
+                    raw=[f'{value:08x}' for value in (low, high, control)],
+                    address_hex=f'{((high & 0xffff) << 32) | (low & ~63):016x}',
+                    cache_select=(control >> 12) & 1,
+                    address_domain='INTERNAL_MEDIA_STORAGE' if control & 0x1000 else 'LLC_BUFFER_ADDRESS',
+                    reserved_bits=bool(low & 63 or high & 0xffff0000 or control & 0xffff8800),
+                    extent_bytes=None, mapping_proven=False, gpu_fetch_proven=False))
         if op in (0x10000000, 0x12000000, 0x13000000):
             # Packet-shape walk only. Never dereference GPU addresses or treat
             # a clean field report as ownership, cache visibility or admission.
@@ -499,6 +522,22 @@ def selftest():
     invalid_flush = mode_template_fields([0x13008003, 3, 0x10000, 0, 0])
     assert [issue['reason'] for issue in invalid_flush['mi_profile_issues']] == [
         'flush-address-reserved', 'flush-postsync']
+    pipe = [0]*71
+    pipe[0] = 0x70840045
+    pipe[7:10] = [0xffffffff]*3  # Reserved, never enumerate as a resource.
+    pipe[10:13] = [0x40002000, 0x1234, 2]
+    pipe[16:19] = [0x4000, 0, 0x1000]
+    pipe[61] = 0xffffffff  # Histogram offset, not a pointer.
+    resources = mode_template_fields(pipe)
+    assert resources['complete_packet_walk'] and len(resources['vdenc_pipe_resources']) == 22
+    by_name = {item['role']: item for item in resources['vdenc_pipe_resources']}
+    assert by_name['source']['address_hex'] == '0000123440002000'
+    assert by_name['rowstore']['address_domain'] == 'INTERNAL_MEDIA_STORAGE'
+    assert not by_name['source']['reserved_bits'] and by_name['source']['extent_bytes'] is None
+    assert all(item['address_word'] not in (7, 8, 9, 61) and not item['mapping_proven']
+               for item in resources['vdenc_pipe_resources'])
+    pipe[10] |= 1
+    assert mode_template_fields(pipe)['vdenc_pipe_resources'][2]['reserved_bits']
     for header, packet, mask, reason in (
             (0x10200003, [0x2000, 0, 1, 0], 0x1c00, 'store-header-reserved'),
             (0x13004003, [0x1000, 0, 1, 0], 0x005b3c40, 'flush-header-reserved'),
