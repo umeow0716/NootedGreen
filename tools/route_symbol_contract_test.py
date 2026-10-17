@@ -294,7 +294,8 @@ def main() -> None:
     assert "__ZN24IGAccelVideoContextMedia16endCommandStreamER24IOAccelCommandStreamInfo" in routes
     # One exact opt-in synchronous CPU batch observer, no command rewriting.
     assert "__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb" in routes
-    expected_route_count = 176
+    assert "__ZL17get_surface_stateRK16surface_params_tjj12Blt3DOptMode6Intentj" in routes
+    expected_route_count = 177
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"

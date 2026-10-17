@@ -302,6 +302,10 @@ private:
 	static bool vfObserveRingBatch(void *that,uint64_t gpu,uint32_t stamp,
 		uint32_t *cpu,uint32_t count,bool flagA,bool flagB);
 	mach_vm_address_t oVfObserveRingBatch {};
+	// Explicit machine ABI: preserve hidden sret RDI and native RAX exactly.
+	static void *vfObserveSurfaceState(void *output,const void *parameters,
+		uint32_t a,uint32_t b,uint32_t mode,uint32_t intent,uint32_t flags);
+	mach_vm_address_t oVfObserveSurfaceState {};
 	static IOReturn vf2DSetSurface(void *that, uint32_t surface,
 	                              uint32_t mode);
 	mach_vm_address_t oVf2DSetSurface {};

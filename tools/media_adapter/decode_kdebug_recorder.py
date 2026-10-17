@@ -31,7 +31,8 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          17: 'mapper_backing_page', 18: 'cpu_alias_ram_page',
          19: 'synchronous_batch_metadata', 20: 'synchronous_batch_chunk',
          21: 'resource_base_metadata', 22: 'resource_base_leaf',
-         23: 'cpu_map_header_pair', 24: 'cpu_map_list_boundary'}
+         23: 'cpu_map_header_pair', 24: 'cpu_map_list_boundary',
+         25: 'native_render_surface_output'}
 RESOURCE_SLOTS = {
     1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
     2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
@@ -39,6 +40,21 @@ RESOURCE_SLOTS = {
 
 
 def validate_leaf(kind, words):
+    if kind == 25:
+        if (len(words) != 52 or words[0] != 1 or words[1] > 2 or
+                words[2] & ~31 or words[3] > 48 or words[4] > 48 or words[5] > 64 or words[11]):
+            raise ValueError('invalid native surface output extent/flags')
+        for bit, count, full, raw in ((1, words[3], 48, words[12:24]),
+                                     (2, words[4], 48, words[24:36]),
+                                     (4, words[5], 64, words[36:52])):
+            if bool(words[2] & bit) != (count == full):
+                raise ValueError('native surface copy status mismatch')
+            if any(struct.pack(f'<{len(raw)}I', *raw)[count:]):
+                raise ValueError('native surface short-copy padding')
+        stable = words[3] == words[4] == 48 and words[12:24] == words[24:36]
+        if bool(words[2] & 8) != stable:
+            raise ValueError('native surface parameter stability mismatch')
+        return
     if kind in (23, 24):
         version=words[0] if words else 0
         extended=kind==23 and version==2
@@ -470,6 +486,8 @@ class DiskSink:
         validate_leaf(record['kind'], words)
         if self.db.execute('SELECT 1 FROM records WHERE id=?', (record['record_id'],)).fetchone():
             raise ValueError('duplicate completed flight record ID')
+        if record['kind'] == 25 and (not record['group'] or int(record['identity'], 16)):
+            raise ValueError('surface output requires owning flight group and no pointer identity')
         if record['kind'] in (23, 24):
             key = (record['identity'], record['group'], words[1], words[2])
             if not int(record['identity'], 16) or not record['group']:

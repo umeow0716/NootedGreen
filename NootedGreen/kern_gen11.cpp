@@ -189,6 +189,8 @@ static void *gVfCpuKernelPmapStore = nullptr;
 static void **gVfCpuSystemMapperSlot = nullptr;
 static mach_vm_address_t gVfBatchCpuCopy = 0;
 static mach_vm_address_t gVfBatchCaller = 0;
+static mach_vm_address_t gVfSurfaceCallers[3] {};
+static volatile UInt32 gVfSurfaceTickets = 0;
 static bool gVfMapSnapshotLayoutBound = false;
 static bool gVfNativeObjectLayoutBound = false;
 // Boot-owned copies, not retained native pointers. Unique tickets avoid any
@@ -3481,6 +3483,44 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 						"ngreen","Cannot route exact synchronous CPU batch observer");
 				}
 				SYSLOG("ngreen","V382: synchronous CPU batch observer bound=%u",this->oVfObserveRingBatch?1U:0U);
+				if(checkKernelArgument("-ngreencaptureonly")) {
+					const auto surface=patcher.solveSymbol(index,
+						"__ZL17get_surface_stateRK16surface_params_tjj12Blt3DOptMode6Intentj",address,size);
+					const auto rect=patcher.solveSymbol(index,
+						"__ZL22blit3d_submit_rectlistP23IGHardwareBlit3DContextP15blit3d_params_tPK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyE",address,size);
+					// Lilu's 14-byte entry jump spans 20 complete non-PC-relative
+					// bytes here. The first RIP-relative instruction starts at +26.
+					static constexpr uint8_t surfaceEntry[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+						0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0x88,0,0,0};
+					static constexpr uint8_t surfaceReturn[]={0x48,0x89,0xd8,0x48,0x81,0xc4,0x88,0,0,0,
+						0x5b,0x41,0x5c,0x41,0x5d,0x41,0x5e,0x41,0x5f,0x5d,0xc3};
+					static constexpr uint8_t surfaceCalls[3][5]={{0xe8,0xf5,0x10,0,0},
+						{0xe8,0x03,0x0f,0,0},{0xe8,0xf0,0x0d,0,0}};
+					static constexpr uint32_t offsets[]={0x143a,0x162c,0x173f};
+					static constexpr uint32_t deltas[]={0x10f5,0xf03,0xdf0};
+					bool exact=contains(surface,0,20) && matches(surface,surfaceEntry,20) &&
+						contains(surface,0x789,sizeof(surfaceReturn)) &&
+						matches(surface+0x789,surfaceReturn,sizeof(surfaceReturn));
+					for(uint32_t i=0;i<3;++i) {
+						exact=exact && contains(rect,offsets[i],5) &&
+							matches(rect+offsets[i],surfaceCalls[i],5);
+						// Independently require each signed rel32 to name this callee.
+						if(exact) {
+							exact=rect+offsets[i]+5+deltas[i]==surface;
+						}
+					}
+					if(exact && gVfBatchCpuCopy) {
+						for(uint32_t i=0;i<3;++i)gVfSurfaceCallers[i]=rect+offsets[i]+5;
+						KernelPatcher::RouteRequest surfaceRoute[]={
+							{"__ZL17get_surface_stateRK16surface_params_tjj12Blt3DOptMode6Intentj",
+							 vfObserveSurfaceState,this->oVfObserveSurfaceState}
+						};
+						patcher.clearError();
+						PANIC_COND(!patcher.routeMultiple(index,surfaceRoute,address,size) || !this->oVfObserveSurfaceState,
+							"ngreen","Cannot route exact capture-only surface producer");
+					}
+					SYSLOG("ngreen","V385: native surface output observer bound=%u",this->oVfObserveSurfaceState?1U:0U);
+				}
 				SYSLOG("ngreen","V382: bounded CPU batch and resource observers bound=%u",
 					this->oVfObserveRingBatch && gVfLeafObservationReader && gVfRootObservationVtable && gVfRootObservationGetter &&
 					gVfNativeBatchLayoutBound && gVfNativeBatchMapVtable && gVfNativeBatchMapGetter &&
@@ -6439,6 +6479,48 @@ IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
 	const IOReturn result=FunctionCast(vfContextSubmit, callback->oVfContextSubmit)(
 		that, input, output, options, stamp);
 	return mediaScope.failed()?kIOReturnBadArgument:result;
+}
+
+void *Gen11::vfObserveSurfaceState(void *output,const void *parameters,
+                                  uint32_t a,uint32_t b,uint32_t mode,uint32_t intent,uint32_t flags)
+{
+	PANIC_COND(!callback || !callback->oVfObserveSurfaceState,"ngreen","Missing native surface continuation");
+	using Native=void *(*)(void *,const void *,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
+	const auto native=reinterpret_cast<Native>(callback->oVfObserveSurfaceState);
+	const auto caller=reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0));
+	uint32_t site=3;
+	for(uint32_t i=0;i<3;++i)if(caller==gVfSurfaceCallers[i])site=i;
+	// Raw machine-ABI pass-through preserves the original hidden sret pointer,
+	// five scalar arguments (including stack argument), and returned RAX.
+	if(!checkKernelArgument("-ngreencaptureonly") || vfIdentifyDevice()!=VfIdentity::Virtual || site==3)
+		return native(output,parameters,a,b,mode,intent,flags);
+	VfContextOperationGuard operation;
+	const uint32_t group=operation?vfFlightCurrentGroup():0;
+	uint32_t raw[40]{},before=0,after=0,copied=0;
+	bool admitted=group && vfFlightEnabled() && gVfBatchCpuCopy &&
+		NGVfCpuRange::kernelRange(reinterpret_cast<uintptr_t>(parameters),48) &&
+		NGVfCpuRange::kernelRange(reinterpret_cast<uintptr_t>(output),64);
+	if(admitted) {
+		const uint32_t ticket=gVfSurfaceTickets;
+		admitted=ticket<64 && OSCompareAndSwap(ticket,ticket+1,&gVfSurfaceTickets);
+	}
+	using Copy=uint64_t (*)(uint64_t,uint64_t,uint64_t);
+	const auto copy=reinterpret_cast<Copy>(gVfBatchCpuCopy);
+	if(admitted)before=uint32_t(copy(reinterpret_cast<uintptr_t>(parameters),reinterpret_cast<uintptr_t>(raw),48));
+	void *const result=native(output,parameters,a,b,mode,intent,flags);
+	if(admitted) {
+		after=uint32_t(copy(reinterpret_cast<uintptr_t>(parameters),reinterpret_cast<uintptr_t>(raw+12),48));
+		copied=uint32_t(copy(reinterpret_cast<uintptr_t>(output),reinterpret_cast<uintptr_t>(raw+24),64));
+		bool stable=before==48 && after==48;
+		for(uint32_t i=0;i<12;++i)stable=stable && raw[i]==raw[12+i];
+		const uint32_t status=(before==48?1U:0U)|(after==48?2U:0U)|(copied==64?4U:0U)|
+			(stable?8U:0U)|(result==output?16U:0U);
+		const uint32_t prefix[]={1,site,status,before,after,copied,a,b,mode,intent,flags,0};
+		NGFlightTrace::emitCpuWordsPrefixed(gVfFlightTrace,[]() {
+			return static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+		},25,group,0,prefix,arrsize(prefix),raw,arrsize(raw));
+	}
+	return result;
 }
 
 bool Gen11::vfObserveRingBatch(void *that,uint64_t gpu,uint32_t stamp,
