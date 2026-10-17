@@ -11,6 +11,8 @@
 #include <cstring>
 #include <fcntl.h>
 #include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
 #include "../../NootedGreen/kern_flight_trace.hpp"
@@ -19,6 +21,7 @@
 #include <mach/mach_time.h>
 #include <dlfcn.h>
 #endif
+extern char** environ;
 
 namespace {
 constexpr uint32_t traceFirst=0x06fe0000U,traceLast=0x06ff0000U; // exclusive end
@@ -32,6 +35,11 @@ bool compatibleFilters(uint32_t flags) {
 }
 struct Event {uint64_t timestamp,args[5];uint32_t debugid,cpu;uint64_t unused;};
 struct BufferInfo {int events,disabled;uint32_t flags;int threads,owner;};
+bool qualifiedLive(const BufferInfo& state,int owner,size_t maximumEvents) {
+    return state.owner==owner && !state.disabled && state.events>0 &&
+        size_t(state.events)<=maximumEvents && (state.flags&lp64) &&
+        !(state.flags&wrapped) && compatibleFilters(state.flags);
+}
 struct Register {uint32_t type,first,last,reserved1,reserved2;};
 struct Packet {uint32_t magic,kind,bytes,crc;uint64_t sequence;};
 struct Clock {uint64_t wallNs,absoluteTicks,continuousTicks;uint32_t numer,denom;};
@@ -102,7 +110,7 @@ bool stream64(const void* raw,size_t bytes) {
 struct Sink {
     int fd;uint64_t sequence=0,total=0;
     bool packet(uint32_t kind,const void* data,size_t bytes) {
-        if(bytes>eventCapacity*sizeof(Event) || total+bytes>uint64_t(64)*1024*1024*1024)return false;
+        if(bytes>eventCapacity*sizeof(Event) || total+sizeof(Packet)+bytes>uint64_t(64)*1024*1024*1024)return false;
         Packet h{0x444b474eU,kind,uint32_t(bytes),0,sequence};
         h.crc=~crc32(data,bytes,crc32(&h,sizeof(h)));
         if(!exactWrite(fd,&h,sizeof(h)) || (bytes && !exactWrite(fd,data,bytes)))return false;
@@ -111,8 +119,75 @@ struct Sink {
         if(!exactWrite(STDOUT_FILENO,"NGKD H=",7) || !stream64(&h,sizeof(h)) ||
            !exactWrite(STDOUT_FILENO," P=",3) || !stream64(data,bytes) ||
            !exactWrite(STDOUT_FILENO,"\n",1))return false;
-        ++sequence;total+=bytes;return true;
+        ++sequence;total+=sizeof(Packet)+bytes;return true;
     }
+};
+// Only the parent writes Sink/PTY. Child output travels through a bounded
+// nonblocking pipe, so log stream cannot interleave a native packet's base64.
+struct UnifiedLog {
+    int fd=-1;pid_t pid=-1;bool ended=false,ready=false;
+    std::array<char,256> greeting{};size_t greetingBytes=0;
+    bool start(const char* executable,char* const argv[]) {
+        int pipefd[2];if(pipe(pipefd))return false;
+        posix_spawn_file_actions_t actions;
+        if(posix_spawn_file_actions_init(&actions)){close(pipefd[0]);close(pipefd[1]);return false;}
+        bool ok=!posix_spawn_file_actions_addopen(&actions,STDIN_FILENO,"/dev/null",O_RDONLY,0) &&
+            !posix_spawn_file_actions_adddup2(&actions,pipefd[1],STDOUT_FILENO) &&
+            !posix_spawn_file_actions_adddup2(&actions,pipefd[1],STDERR_FILENO) &&
+            !posix_spawn_file_actions_addclose(&actions,pipefd[0]) &&
+            !posix_spawn_file_actions_addclose(&actions,pipefd[1]);
+        if(ok)ok=!posix_spawn(&pid,executable,&actions,nullptr,argv,environ);
+        posix_spawn_file_actions_destroy(&actions);close(pipefd[1]);
+        if(!ok){close(pipefd[0]);pid=-1;return false;}
+        fd=pipefd[0];int flags=fcntl(fd,F_GETFL);
+        return flags>=0 && !fcntl(fd,F_SETFL,flags|O_NONBLOCK);
+    }
+    bool drain(Sink& sink) {
+        std::array<uint8_t,65536> chunk{};
+        // Bound per-iteration work to preserve native trace drain fairness.
+        ssize_t n=read(fd,chunk.data(),chunk.size());
+        if(n>0){
+            if(!ready){
+                for(ssize_t i=0;i<n;++i){
+                    if(greetingBytes==greeting.size()-1){
+                        memmove(greeting.data(),greeting.data()+1,--greetingBytes);
+                    }
+                    greeting[greetingBytes++]=char(chunk[size_t(i)]);greeting[greetingBytes]=0;
+                    if(strstr(greeting.data(),"Filtering the log data using"))ready=true;
+                }
+            }
+            return sink.packet(9,chunk.data(),size_t(n));
+        }
+        if(n==0){ended=true;return false;}
+        return errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR;
+    }
+    bool stop(Sink* sink=nullptr) {
+        bool ok=true;
+        if(pid>0){
+            (void)kill(pid,SIGTERM);
+            bool reaped=false;
+            for(unsigned i=0;i<100;++i){
+                if(sink && fd>=0 && !ended && !drain(*sink) && !ended)ok=false;
+                pid_t result=waitpid(pid,nullptr,WNOHANG);
+                if(result==pid || (result<0 && errno==ECHILD)){reaped=true;break;}
+                usleep(10000);
+            }
+            if(!reaped){ok=false;(void)kill(pid,SIGKILL);while(waitpid(pid,nullptr,0)<0 && errno==EINTR){}}
+            pid=-1;
+        }
+        // Preserve remaining pipe bytes, but do not wait indefinitely if an
+        // unexpected descendant retained the writer. Missing EOF is failure.
+        if(sink && fd>=0){
+            for(unsigned i=0;i<32 && !ended;++i){
+                if(!drain(*sink) && !ended){ok=false;break;}
+                if(!ended)usleep(1000);
+            }
+            ok=ok && ended;
+        }
+        if(fd>=0){close(fd);fd=-1;}
+        return ok;
+    }
+    ~UnifiedLog(){stop();}
 };
 bool calibrate(Sink& sink,std::array<Event,eventCapacity>& events) {
 #if defined(__APPLE__)
@@ -213,13 +288,13 @@ bool platform(Platform& out) {
     (void)out;return false;
 #endif
 }
-int capture(const char* path,unsigned seconds) {
+int capture(const char* path,unsigned seconds,bool unified=false) {
     if(geteuid()!=0 || !nativeVersion() || !seconds || seconds>600)return 2;
     Platform source{};if(!platform(source))return 2;
     BufferInfo before{};
     if(!info(before)){perror("kdebug read policy");return 3;}
     if(before.owner!=-1 || !before.disabled || !compatibleFilters(before.flags)){fprintf(stderr,"kdebug owned/enabled or conflicting filter; refusing takeover/reset\n");return 4;}
-    int fd=open(path,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+    int fd=open(path,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
     if(fd<0){perror("exclusive archive");return 5;}
     struct statvfs initialSpace{};
     if(fstatvfs(fd,&initialSpace) || uint64_t(initialSpace.f_bavail)*initialSpace.f_frsize<(uint64_t(1)<<30)){close(fd);return 5;}
@@ -234,25 +309,40 @@ int capture(const char* path,unsigned seconds) {
     if(!configured){(void)owner.close();close(fd);perror("ktrace configure");return 7;}
     signal(SIGINT,stop);signal(SIGTERM,stop);signal(SIGPIPE,SIG_IGN);
     std::array<Event,eventCapacity> events{};
-    BufferInfo armed{};bool ok=info(armed) && armed.owner==getpid() && armed.events>0 &&
-        size_t(armed.events)<=2*bufferEvents &&
-        (armed.flags&lp64) && !(armed.flags&wrapped) && sink.packet(1,&armed,sizeof(armed));
+    BufferInfo armed{};bool ok=info(armed) && qualifiedLive(armed,getpid(),2*bufferEvents) &&
+        sink.packet(1,&armed,sizeof(armed));
     Clock anchor{};ok=ok && clockAnchor(anchor) && sink.packet(5,&anchor,sizeof(anchor));
     const char origin[]="NATIVE_ROOT_TRACE";
     ok=ok && sink.packet(6,origin,sizeof(origin)-1);
     ok=ok && sink.packet(7,&source,sizeof(source));
     ok=ok && calibrate(sink,events);
+    UnifiedLog log;
+    if(ok && unified){
+        char executable[]="/usr/bin/log",stream[]="stream",style[]="--style",compact[]="compact";
+        char level[]="--level",debug[]="debug",predicate[]="--predicate";
+        char filter[]="(process == \"kernel\" AND (eventMessage CONTAINS[c] \"NootedGreen\" OR eventMessage CONTAINS[c] \"ngreen\" OR eventMessage CONTAINS[c] \"Lilu\" OR eventMessage CONTAINS[c] \"AppleIntelTGLGraphics\" OR eventMessage CONTAINS[c] \"CODE SIGNING\" OR eventMessage CONTAINS[c] \"vm_map_protect\")) OR process == \"VTEncoderXPCService\" OR process == \"VTDecoderXPCService\"";
+        char* args[]={executable,stream,style,compact,level,debug,predicate,filter,nullptr};
+        ok=log.start(executable,args);
+        for(unsigned attempt=0;ok && !log.ready && attempt<100;++attempt){
+            ok=log.drain(sink);if(!log.ready)usleep(10000);
+        }
+        ok=ok && log.ready;
+    }
+    // Do not admit a workload until provenance and calibration are durable.
+    ok=ok && !fsync(fd);
     if(ok){fprintf(stderr,"NGREEN_KTRACE_LIVE buffer_bytes=%zu upstream_complete=0\n",size_t(armed.events)*sizeof(Event));fflush(stderr);}
+    if(ok && unified){fprintf(stderr,"NGREEN_MEDIA_ROOT_LOGGER_LIVE\n");fflush(stderr);}
     const auto began=std::chrono::steady_clock::now();auto syncAt=began;
     while(ok && !interrupted && std::chrono::steady_clock::now()-began<std::chrono::seconds(seconds)) {
         BufferInfo state{};
-        if(!info(state) || state.owner!=getpid() || !(state.flags&lp64) || state.flags&wrapped){ok=false;break;}
+        if(!info(state) || !qualifiedLive(state,getpid(),2*bufferEvents)){ok=false;break;}
         bytes=sizeof(events);
         if(control(readTrace,0,events.data(),&bytes)){ok=false;break;}
         size_t payload=0;
         if(!readableCount(bytes,events.size(),payload)){ok=false;break;}
         if(payload && !sink.packet(2,events.data(),payload)){ok=false;break;}
         if(lostEvents(events.data(),bytes)){ok=false;break;}
+        if(unified && !log.drain(sink)){ok=false;break;}
         auto now=std::chrono::steady_clock::now();
         if(now-syncAt>=std::chrono::seconds(1)) {
             struct statvfs space{};
@@ -275,6 +365,9 @@ int capture(const char* path,unsigned seconds) {
         if(lostEvents(events.data(),bytes)){ok=false;break;}
     }
     ok=ok && drained;
+    // A bounded shutdown may omit logd's pending messages: never label the
+    // unified sideband complete, even when native kdebug drains successfully.
+    if(unified && !log.stop(&sink))ok=false;
     // A stop/deadline and intact file are not proof of GPU completion.
     BufferInfo last{};if(!info(last) || last.owner!=getpid() || last.flags&wrapped)ok=false;
     if(!owner.close())ok=false;
@@ -283,6 +376,31 @@ int capture(const char* path,unsigned seconds) {
     close(fd);return ok?0:8;
 }
 void selfTest() {
+    {
+        UnifiedLog child;
+        char executable[]="/usr/bin/printf",message[]="OWNED_PIPE_FIXTURE";
+        char* args[]={executable,message,nullptr};
+        assert(child.start(executable,args));
+        char captured[64]{};ssize_t count=-1;
+        for(unsigned attempt=0;attempt<100;++attempt){
+            count=read(child.fd,captured,sizeof(captured));
+            if(count>=0)break;
+            assert(errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR);usleep(10000);
+        }
+        assert(count==ssize_t(strlen(message)) && !memcmp(captured,message,size_t(count)));
+        int discarded=open("/dev/null",O_WRONLY);assert(discarded>=0);
+        Sink sink{discarded};assert(child.stop(&sink));close(discarded);
+        assert(child.ended && child.fd==-1 && child.pid==-1);
+    }
+    BufferInfo live{int(bufferEvents),0,lp64,1,123};
+    assert(qualifiedLive(live,123,2*bufferEvents));
+    assert(!qualifiedLive(live,124,2*bufferEvents));
+    for(uint32_t flag:{wrapped,0x2U,0x10U,0x40U,0x800U,0x400000U}) {
+        auto bad=live;bad.flags|=flag;assert(!qualifiedLive(bad,123,2*bufferEvents));
+    }
+    {auto bad=live;bad.disabled=1;assert(!qualifiedLive(bad,123,2*bufferEvents));}
+    {auto bad=live;bad.events=0;assert(!qualifiedLive(bad,123,2*bufferEvents));}
+    assert(!qualifiedLive(live,123,bufferEvents-1));
     assert(compatibleFilters(lp64));
     for(uint32_t flag:{0x2U,0x10U,0x40U,0x800U,0x400000U})assert(!compatibleFilters(lp64|flag));
     {Owner o;o.call=&testControl;o.readInfo=&testInfo;assert(o.close() && testCalls==0);}
@@ -312,10 +430,10 @@ int main(int argc,char** argv) {
         printf("KDEBUG_READONLY_PROBE owner=%d disabled=%d flags=%x event_bytes=%zu\n",b.owner,b.disabled,b.flags,sizeof(Event));
         return b.owner==-1 && b.disabled && compatibleFilters(b.flags)?0:4;
     }
-    if(argc==4 && !strcmp(argv[1],"--capture")) {
+    if((argc==4 || (argc==5 && !strcmp(argv[4],"--unified-log"))) && !strcmp(argv[1],"--capture")) {
         char* end=nullptr;errno=0;unsigned long seconds=strtoul(argv[3],&end,10);
         if(errno || !end || *end || seconds==0 || seconds>600)return 2;
-        return capture(argv[2],unsigned(seconds));
+        return capture(argv[2],unsigned(seconds),argc==5);
     }
-    fprintf(stderr,"usage: kdebug-recorder --probe | --self-test | --capture EXCLUSIVE_FILE SECONDS\n");return 2;
+    fprintf(stderr,"usage: kdebug-recorder --probe | --self-test | --capture EXCLUSIVE_FILE SECONDS [--unified-log]\n");return 2;
 }

@@ -72,8 +72,10 @@ def text_packets(source):
 
 
 class Decoder:
-    def __init__(self, save):
+    def __init__(self, save, sideband=None):
         self.save = save
+        self.sideband = sideband
+        self.unified_bytes = 0
         self.sequence = self.complete_records = self.events = 0
         self.kind_counts = {name: 0 for name in KINDS.values()}
         self.active = {}
@@ -172,11 +174,11 @@ class Decoder:
                 raise ValueError('invalid native terminal')
             events, disabled, flags, threads, owner = INFO.unpack(payload)
             self.loss |= bool(flags & 8)
-            self.terminal = 'collector_complete' if kind == 3 else 'collector_failed'
             if kind == 3 and (owner != self.info['owner'] or not disabled or not flags & 0x100):
                 raise ValueError('unqualified final native state')
             if kind == 3 and not self.calibration_seen:
                 raise ValueError('uncalibrated native terminal')
+            self.terminal = 'collector_complete' if kind == 3 else 'collector_failed'
         elif kind == 6:
             if (self.clock is None or self.origin is not None or self.events or
                     payload not in (b'NATIVE_ROOT_TRACE', b'OWNED_CPU_FIXTURE')):
@@ -198,6 +200,11 @@ class Decoder:
             if build != expected or (self.origin == 'NATIVE_ROOT_TRACE' and not set(boot)-{'0', '-'}):
                 raise ValueError('native platform/fixture mismatch')
             self.platform = {'build': build, 'boot_uuid': boot}
+        elif kind == 9:
+            if self.platform is None or not self.calibration_seen or not length or self.sideband is None:
+                raise ValueError('unqualified/unhandled unified log sideband')
+            self.sideband(payload)
+            self.unified_bytes += length
         elif kind == 8:
             if self.platform is None or self.calibration is not None or length != EVENT.size:
                 raise ValueError('missing/duplicate native ABI calibration')
@@ -218,6 +225,8 @@ class Decoder:
                 'platform': self.platform,
                 'abi_calibration_event_seen': self.calibration_seen,
                 'native_events': self.events, 'terminal': self.terminal or 'MISSING',
+                'unified_log_bytes': self.unified_bytes,
+                'unified_log_complete': False,
                 'native_loss_observed': self.loss,
                 'capture_transport_complete': self.terminal == 'collector_complete' and not self.active and not self.loss,
                 'upstream_complete': False, 'gpu_execution_proof': False}
@@ -241,6 +250,16 @@ class DiskSink:
         self.db.execute('CREATE INDEX by_group_kind ON records(group_id,kind)')
         self.db.commit()
         self.pending = 0
+        self.sideband_file = None
+
+    def sideband(self, data):
+        if self.sideband_file is None:
+            fd = os.open(self.path.parent/'unified.log', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            self.sideband_file = os.fdopen(fd, 'wb')
+        space = os.statvfs(self.path)
+        if space.f_bavail*space.f_frsize < 1024**3:
+            raise ValueError('decoder sideband disk free floor reached')
+        self.sideband_file.write(data)
 
     def __call__(self, record):
         metadata = {key: value for key, value in record.items() if key != 'words'}
@@ -260,6 +279,11 @@ class DiskSink:
             self.pending = 0
 
     def close(self):
+        if self.sideband_file is not None:
+            self.sideband_file.flush()
+            os.fsync(self.sideband_file.fileno())
+            self.sideband_file.close()
+            os.chmod(self.path.parent/'unified.log', 0o400)
         self.db.commit()  # Preserve completed records even if a later frame is corrupt.
         self.db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
         self.db.close()
@@ -299,6 +323,30 @@ def self_test():
     assert list(binary_packets(io.BytesIO(binary))) == archive
     text = b''.join(b'NGKD H='+base64.b64encode(header)+b' P='+base64.b64encode(data)+b'\r\n' for header,data in archive)
     assert list(text_packets(io.BytesIO(b'Password:\r\n'+text))) == archive
+    def rejected(items):
+        candidate = Decoder(lambda _: None)
+        try:
+            for item in items:
+                candidate.packet(*item)
+        except (ValueError, struct.error):
+            assert not candidate.report()['capture_transport_complete']
+            return
+        raise AssertionError('invalid native envelope accepted')
+    damaged = bytearray(archive[5][0])
+    damaged[12] ^= 1
+    rejected(archive[:5]+[(bytes(damaged), archive[5][1])])
+    rejected(archive[:5]+[packet(2, 6, archive[5][1])])
+    rejected(archive[:2]+[packet(6, 2, b'UNKNOWN')])
+    rejected(archive[:3]+[packet(7, 3, PLATFORM.pack(b'25G229', b'00000000-0000-0000-0000-000000000000'))])
+    rejected(archive[:4]+[packet(8, 4, event(CALIBRATION_ID, CALIBRATION_MAGIC, 55, EVENT.size, 999))])
+    rejected(archive[:4]+[packet(3, 4, INFO.pack(262144, 1, 0x100, 2, 123))])
+    rejected(archive[:6]+[packet(3, 6, INFO.pack(262144, 0, 0x100, 2, 123))])
+    for terminal_kind, loss in ((4, False), (3, True)):
+        candidate = Decoder(lambda _: None)
+        for item in archive[:6]:
+            candidate.packet(*item)
+        candidate.packet(*packet(terminal_kind, 6, INFO.pack(262144, 1, 0x108 if loss else 0x100, 2, 123)))
+        assert not candidate.report()['capture_transport_complete']
     for bad in (records[1:], records[:-1]+[records[-1][:-16]],
                 records[:2]+records[1:], records[:2]+[event(0x06fe0004, (1<<32)|6, 7, thread=78)]+records[3:],
                 records[:-1]+[event(0x06fe0008, FLIGHT|1, 42, 7, hashed^1)]):
@@ -324,7 +372,14 @@ def self_test():
             pass
         else:
             raise AssertionError('record overwritten')
+        sideband = Decoder(lambda _: None, save.sideband)
+        for item in archive[:6]:
+            sideband.packet(*item)
+        sideband.packet(*packet(9, 6, b'owned unified fixture\n'))
+        sideband.packet(*packet(3, 7, INFO.pack(262144, 1, 0x100, 2, 123)))
+        assert sideband.report()['unified_log_bytes'] == 22
         save.close()
+        assert (Path(tmp)/'records'/'unified.log').read_bytes() == b'owned unified fixture\n'
     print('KDEBUG_STREAM_DECODER_SELFTEST_OK owned-fixtures-only')
 
 
@@ -343,7 +398,7 @@ if __name__ == '__main__':
         if not args.input or not args.output_dir:
             parser.error('--input and fresh --output-dir required')
         sink = DiskSink(args.output_dir)
-        decoder = Decoder(sink)
+        decoder = Decoder(sink, sink.sideband)
         error = None
         try:
             with args.input.open('rb') as source:
