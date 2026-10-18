@@ -87,6 +87,61 @@ struct DrainRequest {
         return true;
     }
 };
+// 1=reaped exact owned child, 0=still live, -1=ownership/wait failure.
+// No blocking waitpid, including after SIGKILL. EINTR consumes the bounded
+// attempt budget too; a failed reap must never authorize a complete archive.
+template<class Wait,class Pause>
+int reapChildBounded(pid_t pid,int* status,unsigned attempts,Wait wait,Pause pause) {
+    for(unsigned i=0;i<attempts;++i){
+        const pid_t result=wait(pid,status,WNOHANG);
+        if(result==pid)return 1;
+        if(result<0 && errno!=EINTR)return -1;
+        pause();
+    }
+    return 0;
+}
+int reapChildBounded(pid_t pid,int* status,unsigned attempts) {
+    return reapChildBounded(pid,status,attempts,
+        [](pid_t child,int* value,int options){return waitpid(child,value,options);},
+        [](){usleep(10000);});
+}
+bool ownedChildPolicy() {
+    struct sigaction disposition{};
+    return !sigaction(SIGCHLD,nullptr,&disposition) && disposition.sa_handler==SIG_DFL &&
+           !(disposition.sa_flags&SA_NOCLDWAIT);
+}
+struct BoundedChildResult {int code=125;bool spawned=false,reaped=false,deadline=false;};
+BoundedChildResult runBoundedChild(const char* executable,char* const argv[],unsigned milliseconds) {
+    BoundedChildResult result;
+    if(!milliseconds || milliseconds>30000 || !ownedChildPolicy())return result;
+    if(interrupted){result.code=130;return result;}
+    pid_t child=-1;
+    if(posix_spawn(&child,executable,nullptr,nullptr,argv,environ))return result;
+    result.spawned=true;
+    const auto start=std::chrono::steady_clock::now();
+    int status=0,state=0;
+    while(!interrupted){
+        state=reapChildBounded(child,&status,1);
+        if(state!=0)break;
+        if(std::chrono::steady_clock::now()-start>=std::chrono::milliseconds(milliseconds)){
+            result.deadline=true;break;
+        }
+    }
+    if(state==1){
+        result.reaped=true;
+        result.code=WIFEXITED(status)?WEXITSTATUS(status):WIFSIGNALED(status)?128+WTERMSIG(status):125;
+        return result;
+    }
+    if(state<0)return result; // Lost ownership: never signal an arbitrary PID.
+    // Default SIGCHLD and no competing reaper keep an exited child as a zombie
+    // until our wait, preventing PID reuse between this check and the signal.
+    (void)kill(child,SIGTERM);
+    state=reapChildBounded(child,&status,100);
+    if(state==0){(void)kill(child,SIGKILL);state=reapChildBounded(child,&status,100);}
+    result.reaped=state==1;
+    result.code=result.reaped?(result.deadline?124:130):125;
+    return result;
+}
 // Status is not a durability ACK until the archive barrier has completed.
 // Always report failure after an unsuccessful barrier; never short-circuit
 // the status writer merely because the earlier native acquisition failed.
@@ -173,6 +228,7 @@ struct UnifiedLog {
     int fd=-1;pid_t pid=-1;bool ended=false,ready=false;
     std::array<char,256> greeting{};size_t greetingBytes=0;
     bool start(const char* executable,char* const argv[]) {
+        if(!ownedChildPolicy())return false;
         int pipefd[2];if(pipe(pipefd))return false;
         posix_spawn_file_actions_t actions;
         if(posix_spawn_file_actions_init(&actions)){close(pipefd[0]);close(pipefd[1]);return false;}
@@ -209,15 +265,23 @@ struct UnifiedLog {
     bool stop(Sink* sink=nullptr) {
         bool ok=true;
         if(pid>0){
-            (void)kill(pid,SIGTERM);
-            bool reaped=false;
-            for(unsigned i=0;i<100;++i){
+            const int initial=reapChildBounded(pid,nullptr,1);
+            bool reaped=initial==1;
+            if(initial<0)ok=false;
+            if(initial==0)(void)kill(pid,SIGTERM);
+            for(unsigned i=0;i<100 && !reaped && initial>=0;++i){
                 if(sink && fd>=0 && !ended && !drain(*sink) && !ended)ok=false;
                 pid_t result=waitpid(pid,nullptr,WNOHANG);
-                if(result==pid || (result<0 && errno==ECHILD)){reaped=true;break;}
+                if(result==pid){reaped=true;break;}
+                if(result<0 && errno!=EINTR){ok=false;break;}
                 usleep(10000);
             }
-            if(!reaped){ok=false;(void)kill(pid,SIGKILL);while(waitpid(pid,nullptr,0)<0 && errno==EINTR){}}
+            if(!reaped && initial>=0){
+                ok=false;
+                // Only signal a child that is still ours and unreaped now.
+                const int state=reapChildBounded(pid,nullptr,1);
+                if(state==0){(void)kill(pid,SIGKILL);(void)reapChildBounded(pid,nullptr,100);}
+            }
             pid=-1;
         }
         // Preserve remaining pipe bytes, but do not wait indefinitely if an
@@ -446,6 +510,48 @@ int capture(const char* path,unsigned seconds,bool unified=false,bool readyFile=
     return ok?0:8;
 }
 void selfTest() {
+    {
+        char executable[]="/usr/bin/true";char* args[]={executable,nullptr};
+        const auto child=runBoundedChild(executable,args,1000);
+        assert(child.spawned && child.reaped && child.code==0 && !child.deadline);
+    }
+    {
+        char executable[]="/bin/sleep",seconds[]="5";char* args[]={executable,seconds,nullptr};
+        const auto child=runBoundedChild(executable,args,20);
+        assert(child.spawned && child.reaped && child.code==124 && child.deadline);
+    }
+    {
+        char executable[]="/nonexistent-ngreen-owned-child";char* args[]={executable,nullptr};
+        const auto child=runBoundedChild(executable,args,20);
+        assert(!child.spawned && !child.reaped && child.code==125);
+    }
+    {
+        char executable[]="/usr/bin/true";char* args[]={executable,nullptr};
+        interrupted=1;
+        const auto cancelled=runBoundedChild(executable,args,20);
+        assert(!cancelled.spawned && cancelled.code==130);interrupted=0;
+        struct sigaction ignored{},saved{},actual{};
+        ignored.sa_handler=SIG_IGN;sigemptyset(&ignored.sa_mask);
+        assert(!sigaction(SIGCHLD,&ignored,&saved));
+        const auto denied=runBoundedChild(executable,args,20);
+        assert(!sigaction(SIGCHLD,nullptr,&actual));
+        assert(!denied.spawned && denied.code==125 && actual.sa_handler==SIG_IGN);
+        assert(!sigaction(SIGCHLD,&saved,nullptr));
+    }
+    {UnifiedLog wrong;wrong.pid=getpid();assert(!wrong.stop() && wrong.pid==-1);}
+    for(int scenario=0;scenario<4;++scenario){
+        unsigned calls=0,pauses=0;
+        const int result=reapChildBounded(123,nullptr,8,
+            [&](pid_t child,int*,int options)->pid_t {
+                assert(child==123 && options==WNOHANG);++calls;
+                if(scenario==0)return calls==3?child:0;
+                if(scenario==1)return 0;
+                errno=scenario==2?EINTR:ECHILD;return -1;
+            },[&](){++pauses;});
+        assert(result==(scenario==0?1:scenario==3?-1:0));
+        assert(calls==(scenario==0?3U:scenario==3?1U:8U));
+        assert(pauses==(scenario==0?2U:scenario==3?0U:8U));
+    }
     for(const char* command:{"drain\n","wrong\n","drain\n!","Drain\n","drain!"}) {
         int channel[2]{};assert(!pipe(channel));
         assert(!fcntl(channel[0],F_SETFL,O_NONBLOCK));
@@ -553,6 +659,15 @@ void selfTest() {
 }
 int main(int argc,char** argv) {
     if(argc==2 && !strcmp(argv[1],"--self-test")){selfTest();return 0;}
+    if(argc==2 && !strcmp(argv[1],"--run-media-capture")){
+        if(geteuid()==0 || !installStopHandlers())return 2;
+        char executable[]="/Users/Shared/ngreen-media-observe",argument[]="--media-low-latency";
+        char* args[]={executable,argument,nullptr};
+        const auto child=runBoundedChild(executable,args,30000);
+        fprintf(stderr,"NGREEN_CAPTURE_CHILD spawned=%u reaped=%u deadline=%u status=%d descendants_quiescent=NOT_PROVEN gpu_completion=NOT_EVALUATED\n",
+                child.spawned?1U:0U,child.reaped?1U:0U,child.deadline?1U:0U,child.code);
+        return child.code;
+    }
     if(argc==3 && !strcmp(argv[1],"--owned-fixture"))return ownedFixture(argv[2]);
     if(argc==2 && !strcmp(argv[1],"--probe")) {
         if(geteuid()!=0 || !nativeVersion())return 2;
@@ -568,5 +683,5 @@ int main(int argc,char** argv) {
         if(result || argc<7)return result;
         return holdAfterStop(3)?0:8;
     }
-    fprintf(stderr,"usage: kdebug-recorder --probe | --self-test | --capture EXCLUSIVE_FILE SECONDS [--unified-log [--ready-fd3 [--hold-after-stop [--control-fd4]]]]\n");return 2;
+    fprintf(stderr,"usage: kdebug-recorder --probe | --self-test | --run-media-capture (non-root, fixed owned child, no hardware PASS) | --capture EXCLUSIVE_FILE SECONDS [--unified-log [--ready-fd3 [--hold-after-stop [--control-fd4]]]]\n");return 2;
 }
