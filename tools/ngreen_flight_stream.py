@@ -497,12 +497,12 @@ def finalize_cpu_scope(archive,action_log,controller_log,observation,host_manife
               'diagnostic_arm_marker':'V382: bounded CPU batch and resource observers bound=1'}
     version=observation_values.get('target_version','')
     if (any(observation_values.get(key)!=value for key,value in required.items()) or
-            not re.fullmatch(r'V[0-9]+',version) or int(version[1:])<385):
+            not re.fullmatch(r'V[0-9]+',version) or int(version[1:])<386):
         raise ValueError('finalize requires the explicit capture-only observation manifest')
     expected={'channel':observation_values['flight_run_id'],'run_id':observation_values['flight_run_id'],
               'boot_uuid':guest_boot,'collector_sha256':observation_values['flight_collector_sha256'],
               'target_uuid':observation_values['executable_uuid'],'macos_build':observation_values['macos_build']}
-    drain_lines=[];triggers=[];shutdowns=[];children=[];refusals=[]
+    drain_lines=[];triggers=[];shutdowns=[];children=[];refusals=[];outer_errors=[]
     with evidence_reader(action_log,8*1024*1024,output/'action.log') as action:
         index=0
         while True:
@@ -516,8 +516,9 @@ def finalize_cpu_scope(archive,action_log,controller_log,observation,host_manife
             if line.startswith('NGREEN_CAPTURE_CHILD '):children.append((index,line))
             if line.startswith('NGREEN_CAPTURE_ONLY_TRIGGER_RECORDED '):triggers.append((index,line))
             if line=='NGREEN_CAPTURE_ONLY_SHUTDOWN_REQUESTED normal_shutdown=NOT_YET_PROVEN host_controller=UNTOUCHED':shutdowns.append(index)
-            if re.search(r'V385: capture-only video refused prequeue type=[34] channel=[0-9]+ seq=[0-9]+ queued=0$',line):refusals.append(index)
-    if not (len(drain_lines)==len(triggers)==len(shutdowns)==len(children)==1) or not refusals:
+            if line.endswith('V386: capture-only publication cancelled before native end queued=0 native-called=0 stamp-advanced=0 completion=NOT_EVALUATED'):refusals.append(index)
+            if re.search(r'V386: capture-only outer error native=[0-9a-f]+ returned=e00002c2 completion=NOT_EVALUATED$',line):outer_errors.append(index)
+    if not (len(drain_lines)==len(triggers)==len(shutdowns)==len(children)==1) or not refusals or not outer_errors:
         raise ValueError('action capture/drain/shutdown witnesses missing or ambiguous')
     drain_identity=parse_drain_receipt(drain_lines[0][1])
     if any(drain_identity[key]!=expected[key] for key in ('run_id','boot_uuid','collector_sha256','target_uuid')):
@@ -526,7 +527,7 @@ def finalize_cpu_scope(archive,action_log,controller_log,observation,host_manife
     if not trigger or trigger[1]=='125' or int(trigger[1])>255:
         raise ValueError('invalid capture-only child result')
     if (not re.fullmatch(r'NGREEN_CAPTURE_CHILD spawned=1 reaped=1 deadline=[01] status='+trigger[1]+r' descendants_quiescent=NOT_PROVEN gpu_completion=NOT_EVALUATED',children[0][1]) or
-            not children[0][0]<min(refusals)<=max(refusals)<drain_lines[0][0]<triggers[0][0]<shutdowns[0]):
+            not children[0][0]<min(refusals)<=max(refusals)<min(outer_errors)<=max(outer_errors)<drain_lines[0][0]<triggers[0][0]<shutdowns[0]):
         raise ValueError('action witnesses out of order or child not reaped')
     with evidence_reader(controller_log,65536,output/'control.log') as controller:
         controller_result=controller_capture_admission(controller,host_values['boot_id'],host_values['domain'],int(host_values['cooldown_seconds']))

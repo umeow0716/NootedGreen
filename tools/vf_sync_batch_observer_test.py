@@ -41,9 +41,19 @@ def resource_scope_contract(text):
         submit = text[text.index('bool Gen11::vfSubmitWorkItem('):]
         assert submit.index('IORecursiveLockLock(gVfPageTableUpdateLock)') < submit.index('vfObserveBatchLeafMapping(') < \
                submit.index('IORecursiveLockUnlock(gVfPageTableUpdateLock)') < submit.index('VfContextQueueGuard queue(that)')
-        assert text.count('vfObserveMediaResourceBases(') == 2
+        assert text.count('vfObserveMediaResourceBases(') == 3
         assert text.count('vfObserveNativeBatchProvenance(') == 2
         assert text.count('vfObserveBatchLeafMapping(') == 2
+        signature='static void vfObservePreEndCpuState('
+        assert text.count(signature)==2
+        pre_end=text[text.rindex(signature):text.index('static void vfObserveBatchLeafMapping(')]
+        assert pre_end.index('IORecursiveLockLock(gVfPageTableUpdateLock)') < pre_end.index('if(stable())vfObserveMediaResourceBases(') < \
+               pre_end.index('IORecursiveLockUnlock(gVfPageTableUpdateLock)')
+        for field in ('resource','mapped','map','descriptor','commands','gpuMap','gpuBase','backingBytes',
+                      'availableWords','reservedWords','offset','used','bytes'):
+            assert f'after.{field}==span.{field}' in pre_end
+        assert 'after.count==words' in pre_end and 'native-descriptor=NOT_PREPARED' in pre_end
+        assert all(forbidden not in pre_end for forbidden in ('readReg','writeReg','IOMalloc','IOFree'))
         native = text[text.index('static void vfObserveNativeBatchProvenance('):text.index('static void vfObserveBatchLeafMapping(')]
         assert native.index('const bool stable=') < native.index('vfObserveMediaResourceBases(')
         resource = text[text.index('static void vfObserveMediaResourceBases('):text.index('static void vfObserveNativeBatchProvenance(')]

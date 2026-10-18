@@ -16,6 +16,28 @@ int main()
 				captureOnlyRefusals += expected;
 			}
 	assert(captureOnlyRefusals == 2); // VCS0/VCS2 only; no default or PF behavior change.
+	for(unsigned flags=0;flags<4;++flags)
+		assert(NGVfSubmission::captureOnlyStopBeforeNativeEnd(flags&1,flags&2)==(flags==3));
+	{
+		volatile uint32_t offset=256,words=16,sideband=7;
+		assert(NGVfSubmission::cancelCaptureStream(offset,words,sideband,256,16,7,512,true));
+		assert(offset==320 && words==0 && sideband==0);
+		for(unsigned test=0;test<11;++test) {
+			offset=256;words=16;sideband=7;
+			uint32_t start=256,count=16,expectedSideband=7,limit=512;
+			bool live=true;
+			switch(test) {
+				case 0:live=false;break;case 1:start=260;break;case 2:count=15;break;
+				case 3:expectedSideband=8;break;case 4:limit=300;break;
+				case 5:start=UINT32_MAX;break;case 6:count=UINT32_MAX;break;
+				case 7:limit=65537;break;case 8:count=0;break;case 9:limit=0;break;
+				case 10:count=1537;break;
+			}
+			assert(!NGVfSubmission::cancelCaptureStream(offset,words,sideband,start,count,expectedSideband,limit,live));
+			assert(offset==256 && words==16 && sideband==7);
+		}
+		assert(!NGVfSubmission::cancelCaptureStream(offset,offset,sideband,256,256,7,2048,true));
+	}
 	unsigned admitted = 0;
 	unsigned consumers = 0;
 	unsigned pollingConsumers = 0;

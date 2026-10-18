@@ -213,6 +213,7 @@ bool gVfMediaPublicationAbiVerified = false;
 // installed native end-command hook may publish this in a future integration.
 static bool gVfMediaPublicationRouteReady = false;
 mach_vm_address_t gVfMediaEndCaller = 0;
+bool gVfCaptureStreamResetBound = false;
 mach_vm_address_t gVfMediaKernelMappedMemoryVtable = 0;
 mach_vm_address_t gVfMediaKernelMappedMemoryLength = 0;
 mach_vm_address_t gVfMediaMapAddress = 0;
@@ -1215,6 +1216,7 @@ struct VfMediaSubmission {
 	NgreenAvcGen12::PublishScratch *scratch;
 	bool translating;
 	bool failed;
+	bool captureCancelled;
 	uint32_t flightGroup;
 };
 static VfMediaSubmission gVfMediaSubmissions[32] {};
@@ -1259,7 +1261,7 @@ public:
 				if (!OSCompareAndSwapPtr(nullptr,owner,&entry.thread)) continue;
 				entry.context=context;entry.accelerator=accelerator;entry.task=nullptr;
 				entry.shared=nullptr;entry.gpuTask=nullptr;
-				entry.scratch=nullptr;entry.translating=false;entry.failed=false;slot=&entry;
+				entry.scratch=nullptr;entry.translating=false;entry.failed=false;entry.captureCancelled=false;slot=&entry;
 				entry.flightGroup=static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightGroupSerial));
 				break;
 			}
@@ -1363,6 +1365,8 @@ struct VfMediaMappedSpan {
 	uint64_t mapLength;
 	uint32_t classes,recordFlags,type,mapFlags,resourceBytes,count;
 };
+static void vfObservePreEndCpuState(const VfMediaSubmission &entry,
+    const VfMediaMappedSpan &span,uint32_t words);
 
 // Called only AFTER bindLocked authenticates the sole processDataBuffers
 // native caller. The current CPU read interval is inside its native IOLock;
@@ -2921,6 +2925,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		    checkKernelArgument("-ngreenavcgen12")) {
 			gVfMediaPublicationAbiVerified = false;
 			gVfMediaEndCaller = 0;
+			gVfCaptureStreamResetBound = false;
 			gVfMediaKernelMappedMemoryVtable = 0;
 			gVfMediaKernelMappedMemoryLength = 0;
 			gVfMediaMapOffsetLayoutVerified = false;
@@ -3472,6 +3477,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// Lilu copies prologues assuming PIC: its trampoline cannot relocate
 				// the thunk's RIP-relative LEA. Preserve its semantics without copying it.
 				this->oVfMediaEnd=videoEnd;
+				// Capture-only must exit BEFORE native incrementStamp (+0xdb),
+				// not merely before the FIFO call (+0x22e). Dispose the unsubmitted
+				// stream using only the separately pinned native CPU epilogue.
+				static constexpr uint8_t streamReset[]={0x41,0x8b,0x46,0x34,0xc1,0xe0,0x02,
+					0x41,0x01,0x46,0x30,0x31,0xc0,0x41,0x89,0x46,0x34,0x41,0x89,0x46,0x38};
+				gVfCaptureStreamResetBound=contains(videoEnd,0x337,sizeof(streamReset)) &&
+					matches(videoEnd+0x337,streamReset,sizeof(streamReset));
 				KernelPatcher::RouteRequest mediaRoute[]={
 					{"__ZN24IGAccelVideoContextMedia16endCommandStreamER24IOAccelCommandStreamInfo",vfMediaEnd}
 				};
@@ -3585,6 +3597,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 						gVfMediaMapOffsetLayoutVerified && gVfMediaSysMemoryVtable && gVfCpuKernelPmapSlot && gVfCpuSystemMapperSlot &&
 						gVfMapSnapshotLayoutBound && gVfNativeObjectLayoutBound;
 					SYSLOG("ngreen","V385: capture-only CPU observers and video refusal armed=%u",captureOnlyArmed?1U:0U);
+					SYSLOG("ngreen","V386: capture-only CPU observers and pre-end cancellation armed=%u",
+						captureOnlyArmed && gVfCaptureStreamResetBound && this->oVfMediaEnd &&
+						gVfMediaPublicationRouteReady && gVfMediaEndCaller && gVfPageTableUpdateLock?1U:0U);
 				}
 			}
 			// Tahoe's telemetry manager and per-stamp usage objects are created
@@ -6538,6 +6553,9 @@ IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
 	}
 	const IOReturn result=FunctionCast(vfContextSubmit, callback->oVfContextSubmit)(
 		that, input, output, options, stamp);
+	if(mediaScope.failed() && checkKernelArgument("-ngreencaptureonly"))
+		SYSLOG("ngreen","V386: capture-only outer error native=%x returned=%x completion=NOT_EVALUATED",
+			result,kIOReturnBadArgument);
 	return mediaScope.failed()?kIOReturnBadArgument:result;
 }
 
@@ -6770,8 +6788,9 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 	auto *entry=VfMediaSubmissionScope::find(that);
 	PANIC_COND(!entry,"ngreen","Unscoped owned AVC Media end refused");
 	// Native BindDataBuffer may end/begin again within this submission.
-	// A previous refusal must remain terminal even if native stream state resets.
-	if (entry->failed) return;
+	// A previous refusal stays terminal. A diagnostic cancellation may only
+	// dispose subsequent CPU streams; it can never resume hardware submission.
+	if (entry->failed && !entry->captureCancelled) return;
 	const auto caller=reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0));
 	VfMediaMappedSpan span{};
 	if (!VfMediaSubmissionScope::bindLocked(*entry,stream,caller) ||
@@ -6885,6 +6904,21 @@ void Gen11::vfMediaEnd(void *that,void *stream)
 			}
 		}
 		SYSLOG("ngreen","V372 AVC_CPU_END source=%u published=%u",sourceWords,publishedWords);
+	}
+	if(NGVfSubmission::captureOnlyStopBeforeNativeEnd(
+	    checkKernelArgument("-ngreencaptureonly"),gVfIdentity==VfIdentity::Virtual)) {
+		const uint32_t count=static_cast<uint32_t>(publication.preparation.words);
+		auto &used=getMember<volatile uint32_t>(stream,0x30);
+		auto &sideband=getMember<volatile uint32_t>(stream,0x38);
+		const uint32_t savedSideband=sideband;
+		vfObservePreEndCpuState(*entry,span,count);
+		PANIC_COND(!NGVfSubmission::cancelCaptureStream(used,words,sideband,
+			span.offset,count,savedSideband,span.used,gVfCaptureStreamResetBound && live(count)),
+			"ngreen","Lost capture-only unsubmitted CPU stream ownership");
+		entry->failed=true;
+		entry->captureCancelled=true;
+		SYSLOG("ngreen","V386: capture-only publication cancelled before native end queued=0 native-called=0 stamp-advanced=0 completion=NOT_EVALUATED");
+		return;
 	}
 	// Diagnostic formatting/logging occurs after count publication. Do not
 	// carry its earlier identity check across that interval into native submit.
@@ -10533,6 +10567,31 @@ static void vfObserveNativeBatchProvenance(void *task,const NGVfTimeoutObservati
 			getMember<void *>(span.resource,0x40)==map && getMember<uint64_t>(map,0x98)==gpuBase &&
 			getMember<void *>(map,0x90)==mapTask && getMember<void *>(map,0x18)==mapMemory;
 	});
+}
+
+namespace {
+static void vfObservePreEndCpuState(const VfMediaSubmission &entry,
+    const VfMediaMappedSpan &span,uint32_t words)
+{
+	if(!gVfPageTableUpdateLock || !entry.gpuTask || !entry.scratch || !vfFlightEnabled())return;
+	// Same native accelerator IOLock and retained outer context, before any
+	// Video-end stamp increment. These are actual CPU resource/PTE views, not
+	// a native prepared descriptor, ring image, GPU fetch, or completion proof.
+	const auto stable=[&]() {
+		VfMediaMappedSpan after{};
+		return vfCaptureMediaMappedSpan(entry,static_cast<uint8_t *>(entry.context)+0x650,after) &&
+			after.resource==span.resource && after.mapped==span.mapped && after.map==span.map &&
+			after.descriptor==span.descriptor && after.commands==span.commands && after.count==words &&
+			after.gpuMap==span.gpuMap && after.gpuBase==span.gpuBase && after.backingBytes==span.backingBytes &&
+			after.availableWords==span.availableWords && after.reservedWords==span.reservedWords &&
+			after.offset==span.offset && after.used==span.used && after.bytes==span.bytes;
+	};
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+	if(stable())vfObserveMediaResourceBases(entry.gpuTask,entry.gpuTask,entry.flightGroup,
+		span.gpuBase+span.offset,span.commands,words,stable);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+	SYSLOG("ngreen","V386: pre-end CPU resource observation native-descriptor=NOT_PREPARED atomic=0 gpu-proof=0");
+}
 }
 
 static void vfObserveBatchLeafMapping(void *task, void *pageTable,

@@ -14,6 +14,28 @@ constexpr bool captureOnlyRejectVideo(bool requested, bool virtualDevice,
 	return requested && virtualDevice && (hwCsType == 3U || hwCsType == 4U);
 }
 
+constexpr bool captureOnlyStopBeforeNativeEnd(bool requested,bool virtualDevice)
+{
+	return requested && virtualDevice;
+}
+
+// Dispose only the current, unsubmitted CPU stream under its native IOLock.
+// The exact native end epilogue consumes used bytes and clears count/+38.
+// Do not call native end: it increments a hardware event stamp before FIFO.
+// This is cancellation plus an outer error, NEVER a completion/publication ACK.
+inline bool cancelCaptureStream(volatile uint32_t &used,volatile uint32_t &words,
+    volatile uint32_t &sideband,uint32_t expectedUsed,uint32_t expectedWords,
+    uint32_t expectedSideband,uint32_t allocationBytes,bool ownerLive)
+{
+	if(!ownerLive || &used==&words || &used==&sideband || &words==&sideband ||
+	   !expectedWords || expectedWords>1536 || allocationBytes>65536 ||
+	   expectedUsed>allocationBytes || expectedWords>(allocationBytes-expectedUsed)/4 ||
+	   used!=expectedUsed || words!=expectedWords || sideband!=expectedSideband)return false;
+	const uint32_t end=expectedUsed+expectedWords*4;
+	used=end;words=0;sideband=0;
+	return used==end && words==0 && sideband==0;
+}
+
 struct State {
 	bool virtualDevice;
 	bool ggttReady;

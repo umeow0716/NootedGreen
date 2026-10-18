@@ -608,10 +608,17 @@ def contract(source, path="<source>"):
     assert media_end.index('bindLocked(')<media_end.index('NgreenAvcGen12::publish(')<\
         media_end.index('OSSynchronizeIO();')<media_end.rindex('FunctionCast(vfMediaEnd,'), \
         f"{path}: AVC publication/native submission ordering changed"
-    assert 'if (entry->failed) return;' in media_end, f'{path}: lost sticky submission failure'
+    sticky='if (entry->failed && !entry->captureCancelled) return;'
+    assert sticky in media_end, f'{path}: lost sticky submission failure'
     assert media_end.index('VfMediaSubmissionScope::find(that)') < \
-        media_end.index('if (entry->failed) return;') < media_end.index('bindLocked('), \
-        f'{path}: failed submission can reach publication'
+        media_end.index(sticky) < media_end.index('bindLocked('), \
+        f'{path}: ordinary failed submission can reach publication'
+    cancellation=function_body(media_end,'if(NGVfSubmission::captureOnlyStopBeforeNativeEnd(')
+    assert 'checkKernelArgument("-ngreencaptureonly")' in cancellation and 'gVfIdentity==VfIdentity::Virtual' in cancellation
+    assert 'entry->failed=true;' in cancellation and 'entry->captureCancelled=true;' in cancellation
+    assert 'return;' in cancellation and 'FunctionCast' not in cancellation
+    assert source.count('captureCancelled=true')==1 and 'entry.captureCancelled=false' in source
+    assert media_end.index(cancellation)<media_end.index(FINAL_MEDIA_GUARD)
     rejected=media_end[media_end.index('if (!publication.published)'):media_end.index('OSSynchronizeIO();')]
     assert 'entry->failed=true;' in rejected and 'return;' in rejected and 'FunctionCast' not in rejected
     assert media_end.count('FunctionCast(vfMediaEnd,')==2
@@ -672,8 +679,8 @@ def mutation_contract(source, path):
         ('getMember<mach_vm_address_t>(backing,0)!=gVfMediaSysMemoryVtable', 'false', 1),
         ('matches(sysPhysical,sysPhysicalBody,sizeof(sysPhysicalBody))', 'true', 1),
         ('0x170U<=size-(sysTable-address)', 'true', 1),
-        ('if (entry->failed) return;', '', 1),
-        ('if (entry->failed) return;', 'if (entry->failed) {}', 1),
+        ('if (entry->failed && !entry->captureCancelled) return;', '', 1),
+        ('if (entry->failed && !entry->captureCancelled) return;', 'if (entry->failed) {}', 1),
         ('"Lost owned AVC mapping before native submission"',
          '"missing final submit guard"', 1),
         (FINAL_MEDIA_GUARD, '', 1),

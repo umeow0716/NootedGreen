@@ -4,6 +4,8 @@
 import hashlib
 import struct
 import sys
+import subprocess
+import tempfile
 from pathlib import Path
 
 from route_symbol_contract_test import macho_symbols, single_symbol
@@ -66,6 +68,18 @@ def source_contract(source: str, path: Path) -> None:
         assert token in guard, f"{path}: incomplete prequeue capture refusal"
     assert 'return true;' not in guard
     assert work.index('captureOnlyRejectVideo(') < work.index('VfContextQueueGuard queue(that);')
+    media = function_body(source,'void Gen11::vfMediaEnd(')
+    cancel = function_body(media,'if(NGVfSubmission::captureOnlyStopBeforeNativeEnd(')
+    for token in ('checkKernelArgument("-ngreencaptureonly")','gVfIdentity==VfIdentity::Virtual',
+                  'vfObservePreEndCpuState(*entry,span,count);','NGVfSubmission::cancelCaptureStream(',
+                  'span.offset,count,savedSideband,span.used,gVfCaptureStreamResetBound && live(count)',
+                  'entry->failed=true;','entry->captureCancelled=true;','stamp-advanced=0','return;'):
+        assert token in cancel, f'{path}: incomplete pre-stamp cancellation'
+    assert 'FunctionCast' not in cancel
+    assert media.index(cancel)<media.rindex('FunctionCast(vfMediaEnd,callback->oVfMediaEnd)')
+    assert 'if (entry->failed && !entry->captureCancelled) return;' in media
+    outer = function_body(source,'IOReturn Gen11::vfContextSubmit(')
+    assert 'return mediaScope.failed()?kIOReturnBadArgument:result;' in outer
     route_tokens = (
         f'{{"{SUBMIT_BLIT}",submitBlit,this->osubmitBlit}}',
         f'{{"{SUBMIT_CCS}",vfSubmitCCSResolve,this->oVfSubmitCCSResolve}}',
@@ -133,7 +147,14 @@ def source_mutations(path: Path) -> None:
     source = path.read_text(encoding="utf-8")
     source_contract(source, path)
     mutations = (
-        ('checkKernelArgument("-ngreencaptureonly"),', 'true,'),
+        ('if (NGVfSubmission::captureOnlyRejectVideo(\n\t        checkKernelArgument("-ngreencaptureonly"),',
+         'if (NGVfSubmission::captureOnlyRejectVideo(\n\t        true,'),
+        ('if(NGVfSubmission::captureOnlyStopBeforeNativeEnd(\n\t    checkKernelArgument("-ngreencaptureonly"),',
+         'if(NGVfSubmission::captureOnlyStopBeforeNativeEnd(\n\t    true,'),
+        ('span.offset,count,savedSideband,span.used,gVfCaptureStreamResetBound && live(count)',
+         'span.used,count,savedSideband,span.bytes,true'),
+        ('entry->failed=true;\n\t\tentry->captureCancelled=true;',
+         'entry->failed=false;\n\t\tentry->captureCancelled=true;'),
         ('gVfIdentity == VfIdentity::Virtual, static_cast<uint32_t>(hwCsType)',
          'true, static_cast<uint32_t>(hwCsType)'),
         ('\t\treturn false;\n\t}\n\tVfContextQueueGuard queue(that);',
@@ -191,6 +212,14 @@ def direct_references(path: Path, target: int) -> tuple[tuple[int, ...], tuple[i
 def payload_contract(path: Path) -> None:
     data = path.read_bytes()
     symbols = macho_symbols(path)
+    video=single_symbol(symbols,'__ZN19IGAccelVideoContext16endCommandStreamER24IOAccelCommandStreamInfo',path)
+    assert data[video+0xdb:video+0xe1]==bytes.fromhex('ff9048010000'), f'{path}: native early incrementStamp edge changed'
+    assert data[video+0x337:video+0x34c]==bytes.fromhex('418b4634c1e0024101463031c04189463441894638'), \
+        f'{path}: native CPU stream disposal epilogue changed'
+    ring=single_symbol(symbols,'__ZN20IGHardwareRingBuffer12submitToRingEv',path)
+    cold=single_symbol(symbols,'__ZN20IGHardwareRingBuffer12submitToRingEv.cold.1',path)
+    assert data[ring+0x196:ring+0x1a0]==bytes.fromhex('ff904801000084c07414')
+    assert data[ring+0x1b4]==0xe8 and ring+0x1b9+struct.unpack_from('<i',data,ring+0x1b5)[0]==cold
     ordered = sorted(
         value for values in symbols.values() for value in values if value
     )
@@ -223,6 +252,73 @@ def object_contract(path: Path) -> None:
     )
 
 
+def capture_pre_end_owned_test(source: str,path: Path) -> None:
+    media=function_body(source,'void Gen11::vfMediaEnd(')
+    guard=function_body(media,'if(NGVfSubmission::captureOnlyStopBeforeNativeEnd(')
+    fixture=r'''
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include "kern_vf_submission_gate.hpp"
+enum class VfIdentity {Unknown,PF,Virtual};
+VfIdentity gVfIdentity=VfIdentity::Virtual;
+bool enabled=true,gVfCaptureStreamResetBound=true,ownerLive=true;
+unsigned observed=0,nativeCalls=0;
+struct Entry{bool failed=false,captureCancelled=false;} owner,*entry=&owner;
+struct Span{uint32_t offset=256,used=512;} span;
+struct Publication{struct {uint32_t words=16;} preparation;} publication;
+alignas(uint32_t) uint8_t storage[64]{};
+void *stream=storage;
+template<class T>T& getMember(void *p,size_t o){return *reinterpret_cast<T *>(static_cast<uint8_t *>(p)+o);}
+volatile uint32_t &words=getMember<volatile uint32_t>(stream,0x34);
+bool checkKernelArgument(const char *s){assert(!strcmp(s,"-ngreencaptureonly"));return enabled;}
+bool live(uint32_t count){return ownerLive && words==count;}
+void vfObservePreEndCpuState(const Entry &,const Span &,uint32_t count){assert(count==publication.preparation.words);++observed;}
+struct Refused{};
+#define PANIC_COND(condition,...) do{if(condition)throw Refused{};}while(0)
+#define SYSLOG(...) ((void)0)
+void reset(){
+ memset(storage,0xa5,sizeof(storage));owner={};span={};publication={};observed=nativeCalls=0;
+ enabled=ownerLive=gVfCaptureStreamResetBound=true;gVfIdentity=VfIdentity::Virtual;
+ getMember<volatile uint32_t>(stream,0x30)=256;words=16;
+ getMember<volatile uint32_t>(stream,0x38)=7;
+}
+void production(){
+'''
+    fixture+=guard+r'''
+ ++nativeCalls;
+}
+int main(){
+ reset();uint8_t before[64];memcpy(before,storage,sizeof(storage));production();
+ assert(!nativeCalls && observed==1 && owner.failed && owner.captureCancelled);
+ assert(getMember<volatile uint32_t>(stream,0x30)==320 && !words && !getMember<volatile uint32_t>(stream,0x38));
+ for(unsigned i=0;i<64;++i)if(i<0x30 || i>=0x3c)assert(before[i]==storage[i]);
+ // A later CPU stream in the same failed scope is disposed, never submitted.
+ span.offset=320;getMember<volatile uint32_t>(stream,0x30)=320;words=16;production();
+ assert(!nativeCalls && observed==2 && owner.failed && owner.captureCancelled);
+ assert(getMember<volatile uint32_t>(stream,0x30)==384 && !words);
+ for(unsigned test=0;test<3;++test){
+  reset();if(test==0)enabled=false;else gVfIdentity=test==1?VfIdentity::PF:VfIdentity::Unknown;
+  production();assert(nativeCalls==1 && !observed && !owner.failed && !owner.captureCancelled && words==16);
+ }
+ for(unsigned test=0;test<4;++test){
+  reset();if(test==0)ownerLive=false;if(test==1)gVfCaptureStreamResetBound=false;
+  if(test==2)span.offset=260;if(test==3)span.used=300;
+  bool refused=false;try{production();}catch(const Refused&){refused=true;}
+  assert(refused && !nativeCalls && !owner.failed && !owner.captureCancelled && words==16);
+  assert(getMember<volatile uint32_t>(stream,0x30)==256);
+ }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix='ngreen-pre-end-cancel-') as directory:
+        cpp=Path(directory)/'test.cpp';binary=Path(directory)/'test'
+        cpp.write_text(fixture)
+        subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+                        '-I'+str(path.parent),str(cpp),'-o',str(binary)],check=True)
+        subprocess.run([str(binary)],check=True)
+    print('PASS actual pre-end cancellation: error latch, repeated CPU stream disposal, native pass-through, untouched neighbouring fields; no VM/GPU')
+
+
 def main() -> None:
     if len(sys.argv) != 5:
         raise SystemExit(
@@ -230,6 +326,7 @@ def main() -> None:
             "source compiled-object payload payload"
         )
     source_mutations(Path(sys.argv[1]))
+    capture_pre_end_owned_test(Path(sys.argv[1]).read_text(),Path(sys.argv[1]))
     object_contract(Path(sys.argv[2]))
     for argument in sys.argv[3:]:
         payload_contract(Path(argument))
