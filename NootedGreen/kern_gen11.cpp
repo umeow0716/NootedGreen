@@ -3463,7 +3463,27 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					0x89,0xd8,0x83,0xe0,0xfc,0x49,0x03,0x46,0x08,0x49,0x8b,0x8d,0x18,0x06,0,0,0x48,0x89,0x41,0x20};
 				static constexpr uint8_t countMinusEnd[]={0x41,0x8b,0x46,0x34,0x83,0xc0,0xfe,0x89,0x41,0x30};
 				static constexpr uint8_t nativeSubmit[]={0xff,0x90,0x30,0x01,0,0};
-				const bool qualified=gVfMediaPublicationAbiVerified && mediaEnd && videoEnd && videoTable &&
+				// Resolve the unique TGL initializer, never ambiguous duplicate local data symbols.
+				// Only read LEAs beyond routed prologues; never execute cache/MMIO initialization.
+				const auto globalInit=patcher.solveSymbol(index,
+					"__ZN21IntelTGLMemoryManager20initMOCSTableEntriesEv",address,size);
+				const auto l3Init=patcher.solveSymbol(index,"__ZN15IGMemoryManager9initCacheEv",address,size);
+				const auto tableFromLea=[&](mach_vm_address_t function,size_t offset,size_t bytes) {
+					static constexpr uint8_t lea[]={0x48,0x8d,0x15};
+					if(!contains(function,offset,7) || !matches(function+offset,lea,3))return mach_vm_address_t(0);
+					const auto next=function+offset+7;
+					const auto displacement=static_cast<int32_t>(getMember<uint32_t>(reinterpret_cast<void *>(function),offset+3));
+					const auto magnitude=displacement<0?uint64_t(-int64_t(displacement)):uint64_t(displacement);
+					if(displacement<0?next<magnitude:next>UINT64_MAX-magnitude)return mach_vm_address_t(0);
+					const auto target=displacement<0?next-magnitude:next+magnitude;
+					return contains(target,0,bytes)?mach_vm_address_t(target):mach_vm_address_t(0);
+				};
+				const auto globalTable=tableFromLea(globalInit,0x11,256);
+				const auto l3Table=tableFromLea(l3Init,0xfe,128);
+				const bool cacheProfileQualified=NgreenAvcGen12::nativeCacheTablesMatch(
+					reinterpret_cast<const volatile uint8_t *>(globalTable),256,
+					reinterpret_cast<const volatile uint8_t *>(l3Table),128);
+				const bool qualified=cacheProfileQualified && gVfMediaPublicationAbiVerified && mediaEnd && videoEnd && videoTable &&
 					contains(mediaEnd,0,sizeof(mediaThunk)) && matches(mediaEnd,mediaThunk,sizeof(mediaThunk)) &&
 					contains(videoEnd,0,sizeof(videoEntry)) && matches(videoEnd,videoEntry,sizeof(videoEntry)) &&
 					contains(videoEnd,0x124,sizeof(descriptor)) && matches(videoEnd+0x124,descriptor,sizeof(descriptor)) &&

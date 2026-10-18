@@ -9,6 +9,20 @@
 // This profile preserves the observed AVC/NV12 noncompressed feature flags;
 // it is not a general HEVC/AV1/compressed-reference translator.
 namespace NgreenAvcGen12 {
+// Exact loaded TGL constants, not a readback of PF registers.
+inline bool nativeCacheTablesMatch(const volatile uint8_t *global,size_t globalBytes,
+                                  const volatile uint8_t *l3,size_t l3Bytes) noexcept {
+    if(!global || !l3 || globalBytes!=256 || l3Bytes!=128)return false;
+    static constexpr uint8_t values[]={81,80,87,23,119,55,91,27,123,59,83,19,112,48,95,31,
+        127,63,47,43,32,16,111,96,80,80,80,80,80,80,80,80,
+        81,16,87,23,119,55,91,27,123,59,83,19,112,48,95,31,
+        127,63,111,43,32,80,47,96,80,80,80,80,80,80,80,80};
+    for(size_t i=0;i<64;++i) {
+        if(global[i*4]!=values[i] || global[i*4+1] || global[i*4+2] || global[i*4+3])return false;
+        if(l3[i*2]!=(i>=32 && i<56?48:16) || l3[i*2+1])return false;
+    }
+    return true;
+}
 struct Result { bool ok=false; size_t words=0; const char* reason="input"; };
 // Profile 2 targets the established Linux i915 Gen12 PF cache-table ABI.
 // NEVER install the Apple global tables on a VF. These masks come from the

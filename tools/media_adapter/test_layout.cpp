@@ -19683,6 +19683,22 @@ void testLinuxGen12CacheProfile() {
         0x7f,0x3f,0x2f,0x2b,0x20,0x10,0x6f,0x60,0x50,0x50,0x50,0x50,0x50,0x50,0x50,0x50,
         0x51,0x10,0x57,0x17,0x77,0x37,0x5b,0x1b,0x7b,0x3b,0x53,0x13,0x70,0x30,0x5f,0x1f,
         0x7f,0x3f,0x6f,0x2b,0x20,0x50,0x2f,0x60,0x50,0x50,0x50,0x50,0x50,0x50,0x50,0x50};
+    uint8_t globalBytes[256]={},l3Bytes[128]={};
+    for(unsigned i=0;i<64;++i) { globalBytes[i*4]=nativeGlobal[i];l3Bytes[i*2]=i>=32 && i<56?48:16; }
+    assert(NgreenAvcGen12::nativeCacheTablesMatch(globalBytes,256,l3Bytes,128));
+    for(unsigned i=0;i<256;++i) {
+        globalBytes[i]^=1;
+        assert(!NgreenAvcGen12::nativeCacheTablesMatch(globalBytes,256,l3Bytes,128));
+        globalBytes[i]^=1;
+    }
+    for(unsigned i=0;i<128;++i) {
+        l3Bytes[i]^=1;
+        assert(!NgreenAvcGen12::nativeCacheTablesMatch(globalBytes,256,l3Bytes,128));
+        l3Bytes[i]^=1;
+    }
+    assert(!NgreenAvcGen12::nativeCacheTablesMatch(nullptr,256,l3Bytes,128));
+    assert(!NgreenAvcGen12::nativeCacheTablesMatch(globalBytes,255,l3Bytes,128));
+    assert(!NgreenAvcGen12::nativeCacheTablesMatch(globalBytes,256,l3Bytes,127));
     static constexpr uint32_t pfGlobal[]={0,0,0x37,0x5,0x5,0x37};
     static constexpr uint32_t pfL3[]={0,0,0x30,0x10,0x30,0x10};
     for(unsigned index=0;index<64;++index) {
