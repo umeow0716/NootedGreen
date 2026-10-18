@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import struct
 import sys
@@ -120,6 +121,7 @@ def inspect(source, consume=None):
     seq = total = 0
     terminal = None
     metadata = None
+    payload_digest = hashlib.sha256()
     previous_time = 0
     while True:
         first = source.read(1)
@@ -142,6 +144,7 @@ def inspect(source, consume=None):
                     type(metadata.get('durable_live', False)) is not bool):
                 raise ValueError('invalid metadata')
         elif kind == 2 and length:
+            payload_digest.update(data)
             total += length
             if total > metadata['max_bytes']:
                 raise ValueError('declared input budget exceeded')
@@ -156,6 +159,7 @@ def inspect(source, consume=None):
     if metadata is None or terminal is None:
         raise ValueError('missing terminal record')
     return {'channel': metadata['channel'], 'bytes': total,
+            'payload_sha256': payload_digest.hexdigest(),
             'durable_live_policy': metadata.get('durable_live', False),
             'transport_complete': terminal == 'EOF', 'upstream_complete': False,
             'gpu_execution_proof': False, 'terminal': terminal}
@@ -283,8 +287,167 @@ def seal_transport(archive, receipt, expected_channel):
     return result
 
 
+def parse_drain_receipt(line):
+    if not isinstance(line,str) or not line.isascii() or len(line)>1024 or '\n' in line.strip('\r\n'):
+        raise ValueError('invalid drain receipt extent')
+    fields=line.split()
+    if not fields or fields.pop(0)!='NGREEN_FLIGHT_DRAINED':
+        raise ValueError('missing drain receipt marker')
+    result={}
+    for field in fields:
+        pair=field.split('=')
+        if len(pair)!=2 or pair[0] in result or not pair[1]:
+            raise ValueError('ambiguous drain receipt')
+        result[pair[0]]=pair[1]
+    literals={'drain_accepted':'1','terminal':'complete','holding':'1','native_archive':'committed',
+              'host_ack':'NOT_EVALUATED','gpu_completion':'NOT_EVALUATED'}
+    if (set(result)!=set(literals)|{'run_id','boot_uuid','collector_pid','collector_sha256','target_uuid'} or
+            any(result.get(key)!=value for key,value in literals.items()) or
+            not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',result['run_id']) or
+            not re.fullmatch(r'[0-9a-f]{64}',result['collector_sha256']) or
+            not re.fullmatch(r'[1-9][0-9]{0,9}',result['collector_pid']) or int(result['collector_pid'])<=1):
+        raise ValueError('unqualified drain receipt')
+    for key in ('boot_uuid','target_uuid'):
+        if not re.fullmatch(r'[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}',result[key]):
+            raise ValueError('invalid drain source identity')
+    return result
+
+
+def cpu_scope_receipt_admission(transport,decoded,drain_line,expected):
+    """Gate caller-verified outputs, not authentication of arbitrary JSON.
+
+    The caller must obtain drain through its authenticated action channel and
+    use fresh successful seal/decoder results. This function never grants GPU
+    release or whole-frame completion and does not itself emit a capture ACK.
+    """
+    drain=parse_drain_receipt(drain_line)
+    if expected.get('macos_build')!='25G229':
+        raise ValueError('unsupported native build identity')
+    if (transport.get('receipt_scope')!='HOST_TRANSPORT_FILE_AT_BARRIER' or
+            transport.get('host_file_barrier') is not True or
+            transport.get('transport_complete') is not True or
+            transport.get('durable_live_policy') is not True or
+            transport.get('channel')!=expected['channel']):
+        raise ValueError('host transport not committed for expected channel')
+    if (decoded.get('report_schema')!=2 or decoded.get('source_file_complete') is not True or
+            not re.fullmatch(r'[0-9a-f]{64}',str(decoded.get('source_sha256',''))) or
+            decoded['source_sha256']!=transport.get('payload_sha256') or
+            type(decoded.get('source_bytes')) is not int or decoded['source_bytes']<=0 or
+            type(transport.get('bytes')) is not int or
+            decoded['source_bytes']!=transport.get('bytes')):
+        raise ValueError('decoder bytes are not the committed transport payload')
+    for key in ('run_id','boot_uuid','collector_sha256','target_uuid'):
+        if drain.get(key)!=expected[key]:
+            raise ValueError('action receipt from another run/build/source')
+    if (decoded.get('producer_declared_origin')!='NATIVE_ROOT_TRACE' or
+            decoded.get('terminal')!='collector_complete' or
+            decoded.get('capture_transport_complete') is not True or
+            decoded.get('abi_calibration_event_seen') is not True or
+            decoded.get('native_loss_observed') is not False or
+            decoded.get('pending_records')!=[] or 'error' in decoded):
+        raise ValueError('native source incomplete/uncalibrated/lost')
+    platform=decoded.get('platform') or {}
+    if platform.get('boot_uuid')!=expected['boot_uuid'] or platform.get('build')!=expected['macos_build']:
+        raise ValueError('native platform does not match authenticated action')
+    native=decoded.get('native_state') or {}
+    if type(native.get('owner')) is not int or str(native['owner'])!=drain.get('collector_pid'):
+        raise ValueError('native collector owner does not match action')
+    clock=decoded.get('clock_anchor') or {}
+    if any(type(clock.get(key)) is not int or clock[key]<=0 for key in
+           ('wall_ns','absolute_ticks','continuous_ticks','numer','denom')):
+        raise ValueError('native clock anchor incomplete')
+    coverage=decoded.get('media_submission_scopes') or {}
+    groups=coverage.get('groups',[])
+    if (not isinstance(groups,list) or len(groups)>64 or
+            any(not isinstance(group,dict) or type(group.get('group')) is not int or
+                not 1<=group['group']<=0xffffffff for group in groups) or
+            len({group['group'] for group in groups})!=len(groups)):
+        raise ValueError('invalid/duplicate coverage group identities')
+    candidates=[group for group in groups if group.get('publication_candidate') is True]
+    if (coverage.get('scope')!='MEDIA_SUBMISSION_NOT_H264_FRAME' or
+            coverage.get('group_budget_exceeded') is not False or not candidates or
+            type(coverage.get('complete_cpu_publication_groups')) is not int or
+            any(group.get('complete_cpu_publication_scope') is not True or
+                group.get('missing')!=[] or group.get('ambiguous')!=[] or group.get('problems')!=[] for group in candidates) or
+            coverage.get('complete_cpu_publication_groups')!=len(candidates)):
+        raise ValueError('CPU publication scope coverage missing or ambiguous')
+    return {'eligible_for_cpu_scope_receipt':True,'scope':'avc_publication_v1',
+            'requires_authenticated_action_channel':True,'capture_ack':False,
+            'full_codec_frame_proven':False,'gpu_execution_proof':False}
+
+
+def receipt_admission_self_test():
+    import copy
+    expected={'channel':'owned-model','run_id':'owned-model',
+              'boot_uuid':'01234567-89AB-CDEF-0123-456789ABCDEF',
+              'target_uuid':'11234567-89AB-CDEF-0123-456789ABCDEF',
+              'collector_sha256':'a'*64,'macos_build':'25G229'}
+    line=('NGREEN_FLIGHT_DRAINED run_id={run_id} boot_uuid={boot_uuid} collector_pid=42 '
+          'collector_sha256={collector_sha256} target_uuid={target_uuid} drain_accepted=1 '
+          'terminal=complete holding=1 native_archive=committed host_ack=NOT_EVALUATED '
+          'gpu_completion=NOT_EVALUATED').format(**expected)
+    transport={'channel':'owned-model','bytes':100,'payload_sha256':'b'*64,
+               'receipt_scope':'HOST_TRANSPORT_FILE_AT_BARRIER','host_file_barrier':True,
+               'transport_complete':True,'durable_live_policy':True}
+    decoded={'report_schema':2,'source_file_complete':True,'source_sha256':'b'*64,'source_bytes':100,
+             'producer_declared_origin':'NATIVE_ROOT_TRACE','terminal':'collector_complete',
+             'capture_transport_complete':True,'abi_calibration_event_seen':True,
+             'native_loss_observed':False,'pending_records':[],
+             'platform':{'build':'25G229','boot_uuid':expected['boot_uuid']},
+             'native_state':{'owner':42},'clock_anchor':dict.fromkeys(
+                 ('wall_ns','absolute_ticks','continuous_ticks','numer','denom'),1),
+             'media_submission_scopes':{'scope':'MEDIA_SUBMISSION_NOT_H264_FRAME',
+                 'group_budget_exceeded':False,'complete_cpu_publication_groups':1,
+                 'groups':[{'group':1,'publication_candidate':True,
+                            'complete_cpu_publication_scope':True,'missing':[],'ambiguous':[],'problems':[]}]}}
+    admitted=cpu_scope_receipt_admission(transport,decoded,line,expected)
+    assert admitted['eligible_for_cpu_scope_receipt'] and not admitted['capture_ack']
+    assert not admitted['gpu_execution_proof'] and admitted['requires_authenticated_action_channel']
+    mutations=[('decoded',key,value) for key,value in
+        (('source_sha256','c'*64),('source_file_complete',False),('source_bytes',99),
+         ('producer_declared_origin','OWNED_CPU_FIXTURE'),('terminal','MISSING'),
+         ('abi_calibration_event_seen',False),('native_loss_observed',True),
+         ('pending_records',[1]),('error',''))]
+    mutations += [('transport',key,value) for key,value in
+        (('channel','other'),('payload_sha256','c'*64),('host_file_barrier',False),
+         ('transport_complete',False),('durable_live_policy',False),('bytes',99))]
+    for target,key,value in mutations:
+        bad_transport,bad_decoded=copy.deepcopy((transport,decoded))
+        (bad_decoded if target=='decoded' else bad_transport)[key]=value
+        try:
+            cpu_scope_receipt_admission(bad_transport,bad_decoded,line,expected)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('incomplete/mixed source admitted')
+    for bad in (line+' terminal=complete',line.replace('drain_accepted=1','drain_accepted=0'),
+                line.replace('collector_pid=42','collector_pid=43'),
+                line.replace('run_id=owned-model','run_id=other'),
+                line.replace(expected['boot_uuid'],'21234567-89AB-CDEF-0123-456789ABCDEF')):
+        try:
+            cpu_scope_receipt_admission(transport,decoded,bad,expected)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('ambiguous/wrong action receipt admitted')
+    for mutation in ('lost-scope','duplicate-group','wrong-clock','wrong-owner','wrong-build'):
+        bad=copy.deepcopy(decoded)
+        if mutation=='lost-scope':bad['media_submission_scopes']['groups'][0]['problems']=['missing']
+        elif mutation=='duplicate-group':bad['media_submission_scopes']['groups']*=2
+        elif mutation=='wrong-clock':bad['clock_anchor']['denom']=0
+        elif mutation=='wrong-owner':bad['native_state']['owner']=43
+        else:bad['platform']['build']='other'
+        try:
+            cpu_scope_receipt_admission(transport,bad,line,expected)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('unqualified native scope admitted')
+
+
 def self_test():
     global FREE_FLOOR
+    receipt_admission_self_test()
     import io
     import tempfile
     import stat
@@ -396,6 +559,7 @@ def self_test():
         saved = path.read_bytes()
         result = inspect(io.BytesIO(saved))
         assert result['transport_complete'] and result['bytes'] == len(payload)
+        assert result['payload_sha256'] == hashlib.sha256(payload).hexdigest()
         for bad in (saved[:-1], saved[:-HEADER.size], saved[:20],
                     saved[:60]+bytes([saved[60]^1])+saved[61:],
                     saved+saved[-HEADER.size:]):

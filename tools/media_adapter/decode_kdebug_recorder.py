@@ -2,12 +2,14 @@
 """Stream the owned kdebug archive; never interpret integrity as GPU success."""
 import argparse
 import base64
+import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import struct
 import tempfile
 import zlib
@@ -265,6 +267,25 @@ def validate_leaf(kind, words):
         raise ValueError('invalid leaf qualification flags')
 
 
+class SourceDigest:
+    """Hash exactly the bounded bytes consumed by binary OR PTY-text parsing."""
+    def __init__(self, source):
+        self.source=source
+        self.digest=hashlib.sha256()
+        self.bytes=0
+
+    def _count(self, data):
+        self.digest.update(data)
+        self.bytes+=len(data)
+        return data
+
+    def read(self, size):
+        return self._count(self.source.read(size))
+
+    def readline(self, size):
+        return self._count(self.source.readline(size))
+
+
 def exact(source, size):
     data = bytearray()
     while len(data) < size:
@@ -456,7 +477,7 @@ class Decoder:
         self.sequence += 1
 
     def report(self):
-        return {'complete_records': self.complete_records, 'pending_records': sorted(self.active),
+        return {'report_schema':2,'complete_records': self.complete_records, 'pending_records': sorted(self.active),
                 'kind_counts': self.kind_counts,
                 'producer_declared_origin': self.origin, 'source_authenticity': 'NOT_VERIFIED_BY_DECODER',
                 'clock_anchor': self.clock, 'native_state': self.info,
@@ -779,6 +800,12 @@ class DiskSink:
 
 
 def self_test():
+    for text in (False,True):
+        data=b'owned bytes\nsecond line\n'
+        hashed=SourceDigest(io.BytesIO(data))
+        while (hashed.readline(7) if text else hashed.read(7)):
+            pass
+        assert hashed.bytes==len(data) and hashed.digest.hexdigest()==hashlib.sha256(data).hexdigest()
     # Exercise the production SQL correlation, not a synthetic histogram.
     # Packet framing/leaf admission are tested separately below.
     with tempfile.TemporaryDirectory(prefix='ngreen-scope-owned-') as directory:
@@ -1210,11 +1237,21 @@ if __name__ == '__main__':
         sink = DiskSink(args.output_dir)
         decoder = Decoder(sink, sink.sideband)
         error = None
+        hashed_source=None
+        source_complete=False
         try:
             with args.input.open('rb') as source:
-                packets = binary_packets(source) if args.format == 'binary' else text_packets(source)
+                before=os.fstat(source.fileno())
+                hashed_source=SourceDigest(source)
+                packets = binary_packets(hashed_source) if args.format == 'binary' else text_packets(hashed_source)
                 for header, data in packets:
                     decoder.packet(header, data)
+                after=os.fstat(source.fileno())
+                identity=lambda value:(value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+                if (not stat.S_ISREG(after.st_mode) or identity(before)!=identity(after) or
+                        hashed_source.bytes!=after.st_size):
+                    raise ValueError('decoder source changed or was not completely consumed')
+                source_complete=True
         except (ValueError, OSError, struct.error, sqlite3.Error) as exc:
             error = str(exc)
         ring_report = sink.ring_report()
@@ -1231,6 +1268,9 @@ if __name__ == '__main__':
         except (OSError, sqlite3.Error) as exc:
             error = str(exc)
         report = decoder.report()
+        report['source_bytes']=hashed_source.bytes if hashed_source else 0
+        report['source_file_complete']=source_complete
+        report['source_sha256']=hashed_source.digest.hexdigest() if source_complete else None
         report['rings'] = ring_report
         report['backings'] = backing_report
         report['cpu_alias_backings'] = cpu_alias_report
@@ -1240,7 +1280,7 @@ if __name__ == '__main__':
         report['resource_bases'] = resource_report
         report['cpu_map_lists'] = map_list_report
         report['media_submission_scopes'] = scope_report
-        if error:
+        if error is not None:
             report['error'] = error
             report['capture_transport_complete'] = False
         with (args.output_dir/'report.json').open('x') as output:
