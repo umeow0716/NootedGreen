@@ -393,12 +393,12 @@ int capture(const char* path,unsigned seconds,bool unified=false,bool readyFile=
     if(ok){fprintf(stderr,"NGREEN_KTRACE_LIVE buffer_bytes=%zu upstream_complete=0\n",size_t(armed.events)*sizeof(Event));fflush(stderr);}
     if(ok && unified){fprintf(stderr,"NGREEN_MEDIA_ROOT_LOGGER_LIVE\n");fflush(stderr);}
     const auto began=std::chrono::steady_clock::now();auto syncAt=began;
-    DrainRequest drain;
+    DrainRequest drain;bool drainAccepted=false;
     while(ok && !interrupted && std::chrono::steady_clock::now()-began<std::chrono::seconds(seconds)) {
         if(controlFile){
             bool requested=false;
             if(!drain.poll(4,requested)){ok=false;break;}
-            if(requested)break;
+            if(requested){drainAccepted=true;break;}
         }
         BufferInfo state{};
         if(!info(state) || !qualifiedLive(state,getpid(),2*bufferEvents)){ok=false;break;}
@@ -439,7 +439,9 @@ int capture(const char* path,unsigned seconds,bool unified=false,bool readyFile=
     if(!owner.close())ok=false;
     if(!sink.packet(ok?3U:4U,&last,sizeof(last)))ok=false;
     ok=commitTerminalStatus(ok,[&](){return fsync(fd)==0;},[&](){return close(fd)==0;},[&](bool complete){
-        return !readyFile || (dprintf(3,"terminal=%s\n",complete?"complete":"failed")>0 && fsync(3)==0);
+        if(!readyFile)return true;
+        if(controlFile && dprintf(3,"drain_accepted=%u\n",drainAccepted?1U:0U)<=0)return false;
+        return dprintf(3,"terminal=%s\n",complete?"complete":"failed")>0 && fsync(3)==0;
     });
     return ok?0:8;
 }
