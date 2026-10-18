@@ -3597,9 +3597,20 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 						gVfMediaMapOffsetLayoutVerified && gVfMediaSysMemoryVtable && gVfCpuKernelPmapSlot && gVfCpuSystemMapperSlot &&
 						gVfMapSnapshotLayoutBound && gVfNativeObjectLayoutBound;
 					SYSLOG("ngreen","V385: capture-only CPU observers and video refusal armed=%u",captureOnlyArmed?1U:0U);
+					// This binding callback precedes the first page-table factory.
+					// A raw pointer test here rejects the normally lazy lock before
+					// its first owner can create it. Use the same native-context,
+					// allocation and single-publication gate as every PT transaction;
+					// failure remains closed and no hardware work is authorized here.
+					const bool captureOnlyLockReady=captureOnlyArmed && gVfCaptureStreamResetBound &&
+						this->oVfMediaEnd && gVfMediaPublicationRouteReady && gVfMediaEndCaller &&
+						vfEnsurePageTableUpdateLock();
+					SYSLOG("ngreen","V387: pre-end admission observers=%u reset=%u native=%u route=%u caller=%u lock=%u",
+						captureOnlyArmed?1U:0U,gVfCaptureStreamResetBound?1U:0U,this->oVfMediaEnd?1U:0U,
+						gVfMediaPublicationRouteReady?1U:0U,gVfMediaEndCaller?1U:0U,captureOnlyLockReady?1U:0U);
 					SYSLOG("ngreen","V386: capture-only CPU observers and pre-end cancellation armed=%u",
 						captureOnlyArmed && gVfCaptureStreamResetBound && this->oVfMediaEnd &&
-						gVfMediaPublicationRouteReady && gVfMediaEndCaller && gVfPageTableUpdateLock?1U:0U);
+						gVfMediaPublicationRouteReady && gVfMediaEndCaller && captureOnlyLockReady && gVfPageTableUpdateLock?1U:0U);
 				}
 			}
 			// Tahoe's telemetry manager and per-stamp usage objects are created

@@ -60,6 +60,8 @@ def function_body(source: str, signature: str) -> str:
 
 def source_contract(source: str, path: Path) -> None:
     compact = "".join(source.split())
+    assert 'constboolcaptureOnlyLockReady=captureOnlyArmed&&gVfCaptureStreamResetBound&&this->oVfMediaEnd&&gVfMediaPublicationRouteReady&&gVfMediaEndCaller&&vfEnsurePageTableUpdateLock();' in compact
+    assert 'captureOnlyLockReady&&gVfPageTableUpdateLock?1U:0U' in compact
     work = function_body(source, "bool Gen11::vfSubmitWorkItem(")
     guard = work[work.index("if (NGVfSubmission::captureOnlyRejectVideo("):]
     guard = guard[:guard.index("VfContextQueueGuard queue(that);")]
@@ -147,6 +149,10 @@ def source_mutations(path: Path) -> None:
     source = path.read_text(encoding="utf-8")
     source_contract(source, path)
     mutations = (
+        ('gVfMediaEndCaller &&\n\t\t\t\t\t\tvfEnsurePageTableUpdateLock();',
+         'gVfMediaEndCaller &&\n\t\t\t\t\t\tgVfPageTableUpdateLock;'),
+        ('captureOnlyLockReady && gVfPageTableUpdateLock?1U:0U',
+         'true?1U:0U'),
         ('if (NGVfSubmission::captureOnlyRejectVideo(\n\t        checkKernelArgument("-ngreencaptureonly"),',
          'if (NGVfSubmission::captureOnlyRejectVideo(\n\t        true,'),
         ('if(NGVfSubmission::captureOnlyStopBeforeNativeEnd(\n\t    checkKernelArgument("-ngreencaptureonly"),',
@@ -252,6 +258,50 @@ def object_contract(path: Path) -> None:
     )
 
 
+def capture_readiness_owned_test(source: str,path: Path) -> None:
+    start=source.index('const bool captureOnlyLockReady=')
+    expression=source[start:source.index(';',start)+1]
+    fixture=r'''
+#include <cassert>
+bool captureOnlyArmed=true,gVfCaptureStreamResetBound=true;
+bool gVfMediaPublicationRouteReady=true,gVfMediaEndCaller=true;
+bool gVfPageTableUpdateLock=false,sleepable=true,allocation=true;
+unsigned attempts=0,allocations=0;
+bool vfEnsurePageTableUpdateLock(){
+ ++attempts;if(!sleepable)return false;
+ if(gVfPageTableUpdateLock)return true;
+ if(!allocation)return false;
+ ++allocations;gVfPageTableUpdateLock=true;return true;
+}
+struct Binding { bool oVfMediaEnd=true;
+ bool ready(){EXPRESSION
+ return captureOnlyLockReady && gVfPageTableUpdateLock;}
+};
+int main(){
+ Binding b;
+ assert(!gVfPageTableUpdateLock && b.ready() && allocations==1);
+ assert(b.ready() && allocations==1);
+ sleepable=false;assert(!b.ready());sleepable=true;
+ gVfPageTableUpdateLock=false;allocation=false;assert(!b.ready());
+ allocation=true;
+ for(unsigned i=0;i<5;++i){
+  captureOnlyArmed=gVfCaptureStreamResetBound=gVfMediaPublicationRouteReady=gVfMediaEndCaller=b.oVfMediaEnd=true;
+  if(i==0)captureOnlyArmed=false;if(i==1)gVfCaptureStreamResetBound=false;
+  if(i==2)gVfMediaPublicationRouteReady=false;if(i==3)gVfMediaEndCaller=false;
+  if(i==4)b.oVfMediaEnd=false;
+  unsigned before=attempts;assert(!b.ready() && attempts==before);
+ }
+}
+'''.replace('EXPRESSION',expression)
+    with tempfile.TemporaryDirectory(prefix='ngreen-capture-readiness-') as directory:
+        cpp=Path(directory)/'test.cpp';binary=Path(directory)/'test'
+        cpp.write_text(fixture)
+        subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror',
+                        '-fsanitize=address,undefined',str(cpp),'-o',str(binary)],check=True)
+        subprocess.run([str(binary)],check=True)
+    print('PASS actual capture readiness expression: lazy lock, existing lock, denied context/allocation and five closed gates; CPU model only')
+
+
 def capture_pre_end_owned_test(source: str,path: Path) -> None:
     media=function_body(source,'void Gen11::vfMediaEnd(')
     guard=function_body(media,'if(NGVfSubmission::captureOnlyStopBeforeNativeEnd(')
@@ -326,6 +376,7 @@ def main() -> None:
             "source compiled-object payload payload"
         )
     source_mutations(Path(sys.argv[1]))
+    capture_readiness_owned_test(Path(sys.argv[1]).read_text(),Path(sys.argv[1]))
     capture_pre_end_owned_test(Path(sys.argv[1]).read_text(),Path(sys.argv[1]))
     object_contract(Path(sys.argv[2]))
     for argument in sys.argv[3:]:
