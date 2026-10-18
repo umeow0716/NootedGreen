@@ -79,6 +79,25 @@ domain_state() {
 	virsh -c "$libvirt_uri" domstate "$domain_name" 2>/dev/null || true
 }
 
+log_domain_stop_reason() {
+	local evidence_dir=$1
+	local reason classification
+	if ! reason=$(LC_ALL=C timeout -k 1s 3s virsh -c "$libvirt_uri" domstate \
+		"$domain_name" --reason 2>/dev/null | head -c 256); then
+		reason=NOT_CAPTURED
+	fi
+	reason=${reason//$'\n'/ }
+	reason=${reason//$'\r'/ }
+	case "$reason" in
+		'shut off (shutdown)') classification=shutdown ;;
+		'shut off ('*) classification=other ;;
+		*) classification=unknown ;;
+	esac
+	# Observation only: never turn a stopped VM into proof of PF/GPU safety,
+	# and do not alter deadline, containment or cooldown decisions here.
+	log_line "$evidence_dir" "DOMAIN_STOP classification=${classification} raw=${reason} observation_only=1"
+}
+
 driver_name() {
 	local bdf=$1
 	local path
@@ -377,6 +396,7 @@ internal_run_mode() {
 	while true; do
 		state=$(domain_state)
 		if [[ $state == "shut off" ]]; then
+			log_domain_stop_reason "$evidence_dir"
 			break
 		fi
 		if [[ -z $state ]]; then
@@ -439,7 +459,7 @@ arm_mode() {
 		exit 64
 	}
 	for command_name in systemd-run systemctl systemd-inhibit virsh journalctl \
-		timeout flock lspci python3 readlink dirname tee date grep mkfifo sleep \
+		timeout flock lspci python3 readlink dirname tee date grep head mkfifo sleep \
 		sha256sum git install mktemp rm pgrep basename cat mkdir rmdir kill; do
 		command -v "$command_name" >/dev/null 2>&1 || {
 			printf 'FAIL: missing command %s\n' "$command_name" >&2
