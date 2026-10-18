@@ -706,6 +706,66 @@ class DiskSink:
                 'unknown_or_partial_backing_nodes': unknown, 'native_object_lease_proven': False,
                 'allocation_extents_proven': False, 'gpu_execution_proof': False}
 
+    def scope_coverage_report(self):
+        """Correlate actual CPU publication records; group != codec frame.
+
+        A global histogram cannot establish that source, published and native
+        copies belong together. Bound the diagnostic itself and reject ambiguous
+        scopes rather than joining records across groups or threads.
+        """
+        order = (1, 9, 2, 3, 12, 4, 11)
+        groups = self.db.execute('SELECT DISTINCT group_id FROM records WHERE group_id>0 ORDER BY group_id LIMIT 65').fetchall()
+        output = []
+        for (group,) in groups[:64]:
+            rows = self.db.execute('SELECT id,kind,metadata,payload FROM records WHERE group_id=? AND kind IN (1,9,2,3,12,4,11) ORDER BY id LIMIT 129', (group,)).fetchall()
+            by_kind = {kind: [] for kind in order}
+            for row in rows:
+                by_kind[row[1]].append(row)
+            missing = [KINDS[kind] for kind in order if not by_kind[kind]]
+            ambiguous = [KINDS[kind] for kind in order if len(by_kind[kind])>1]
+            problems = []
+            if missing:
+                problems.append('missing-required-kind')
+            if ambiguous or len(rows)>128:
+                problems.append('ambiguous-or-over-budget')
+            if not problems:
+                selected = [by_kind[kind][0] for kind in order]
+                metadata = [json.loads(row[2]) for row in selected]
+                if [row[0] for row in selected] != sorted(row[0] for row in selected):
+                    problems.append('native-publication-order')
+                threads = {item['thread'] for item in metadata}
+                if len(threads)!=1 or not next(iter(threads)):
+                    problems.append('thread-mismatch')
+                identities = {item['identity'] for item in metadata[1:-1]}
+                if len(identities)!=1 or int(next(iter(identities)),16)==0:
+                    problems.append('publication-identity-mismatch')
+                if (metadata[0]['identity']!='0000000000000000' or selected[0][3] or
+                        metadata[-1]['identity']!='0000000000000000' or
+                        selected[-1][3] not in (struct.pack('<I',0),struct.pack('<I',1))):
+                    problems.append('scope-boundary-shape')
+                if any(left['end_ticks']>right['begin_ticks'] for left,right in zip(metadata,metadata[1:])):
+                    problems.append('scope-clock-order')
+                payloads = {row[1]:row[3] for row in selected}
+                if (len(payloads[9])!=48 or len(payloads[12])!=32 or
+                        any(not payloads[kind] or len(payloads[kind])%4 for kind in (2,3,4))):
+                    problems.append('publication-extent-shape')
+                else:
+                    publication = struct.unpack('<12I',payloads[9])
+                    native = struct.unpack('<8I',payloads[12])
+                    address = publication[10] | publication[11]<<32
+                    if (publication[0]*4!=len(payloads[2]) or publication[1]*4!=len(payloads[3]) or
+                            native[0]*4!=len(payloads[4]) or native[7]!=1 or
+                            address!=int(metadata[1]['identity'],16)):
+                        problems.append('publication-extent-identity')
+            output.append({'group':group,'publication_candidate':any(by_kind[kind] for kind in (9,2,3,12,4)),
+                           'complete_cpu_publication_scope':not problems,
+                           'missing':missing,'ambiguous':ambiguous,'problems':problems})
+        return {'scope':'MEDIA_SUBMISSION_NOT_H264_FRAME','groups':output,
+                'group_budget_exceeded':len(groups)>64,
+                'complete_cpu_publication_groups':sum(item['complete_cpu_publication_scope'] for item in output),
+                'full_codec_frame_proven':False,'source_writer_closed_proven':False,
+                'capture_ack':False,'atomic_snapshot':False,'gpu_execution_proof':False}
+
     def close(self):
         if self.sideband_file is not None:
             self.sideband_file.flush()
@@ -719,6 +779,52 @@ class DiskSink:
 
 
 def self_test():
+    # Exercise the production SQL correlation, not a synthetic histogram.
+    # Packet framing/leaf admission are tested separately below.
+    with tempfile.TemporaryDirectory(prefix='ngreen-scope-owned-') as directory:
+        sink = DiskSink(Path(directory)/'decoded')
+        kinds = (1,9,2,3,12,4,11)
+        payloads = {1:b'',9:struct.pack('<12I',1,1,0,0,0,0,0,0,0,0,0x40010000,0),
+                    2:bytes(4),3:bytes(4),12:struct.pack('<8I',1,0,0,1,1,1,0,1),
+                    4:bytes(4),11:bytes(4)}
+        def populate():
+            sink.db.execute('DELETE FROM records')
+            for index,kind in enumerate(kinds,1):
+                metadata = {'identity':'0000000000000000' if kind in (1,11) else '0000000040010000',
+                            'thread':7,'begin_ticks':index*10,'end_ticks':index*10+1}
+                sink.db.execute('INSERT INTO records VALUES (?,?,?,?,?)',
+                                (index,1,kind,json.dumps(metadata),payloads[kind]))
+        populate()
+        valid = sink.scope_coverage_report()
+        assert valid['complete_cpu_publication_groups']==1 and not valid['capture_ack']
+        assert not valid['full_codec_frame_proven'] and not valid['gpu_execution_proof']
+        for missing in kinds:
+            populate()
+            sink.db.execute('DELETE FROM records WHERE kind=?',(missing,))
+            assert sink.scope_coverage_report()['complete_cpu_publication_groups']==0
+        for field,value in (('thread',8),('identity','0000000040020000'),('begin_ticks',1)):
+            populate()
+            row = sink.db.execute('SELECT metadata FROM records WHERE kind=4').fetchone()
+            metadata = json.loads(row[0]);metadata[field]=value
+            sink.db.execute('UPDATE records SET metadata=? WHERE kind=4',(json.dumps(metadata),))
+            assert sink.scope_coverage_report()['complete_cpu_publication_groups']==0
+        populate()
+        sink.db.execute('UPDATE records SET group_id=2 WHERE kind=4')
+        assert sink.scope_coverage_report()['complete_cpu_publication_groups']==0
+        populate()
+        sink.db.execute('INSERT INTO records SELECT 20,group_id,kind,metadata,payload FROM records WHERE kind=3')
+        assert sink.scope_coverage_report()['complete_cpu_publication_groups']==0
+        for kind,payload in ((2,b''),(9,bytes(48)),(12,bytes(32)),(11,bytes(8))):
+            populate()
+            sink.db.execute('UPDATE records SET payload=? WHERE kind=?',(payload,kind))
+            assert sink.scope_coverage_report()['complete_cpu_publication_groups']==0
+        populate()
+        for group in range(2,66):
+            sink.db.execute('INSERT INTO records SELECT ?,?,kind,metadata,payload FROM records WHERE id=1',
+                            (100+group,group))
+        assert sink.scope_coverage_report()['group_budget_exceeded']
+        assert len(sink.scope_coverage_report()['groups'])==64
+        sink.close()
     backing = [1, 0, 16, 15, 0x40010000, 0, 0, 0, 0x12300000, 3,
                65536, 0, 0, 0, 65536, 4096, 0, 0, 0x888, 0]
     validate_leaf(17, backing)
@@ -1119,6 +1225,7 @@ if __name__ == '__main__':
         rect_input_report = sink.rect_input_report()
         resource_report = sink.resource_report()
         map_list_report = sink.map_list_report()
+        scope_report = sink.scope_coverage_report()
         try:
             sink.close()
         except (OSError, sqlite3.Error) as exc:
@@ -1132,6 +1239,7 @@ if __name__ == '__main__':
         report['rect_inputs'] = rect_input_report
         report['resource_bases'] = resource_report
         report['cpu_map_lists'] = map_list_report
+        report['media_submission_scopes'] = scope_report
         if error:
             report['error'] = error
             report['capture_transport_complete'] = False
