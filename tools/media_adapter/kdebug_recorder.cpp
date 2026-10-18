@@ -52,6 +52,15 @@ static_assert(sizeof(Clock)==32,"clock anchor ABI");
 constexpr size_t eventCapacity=1024,bufferEvents=262144; // 64KiB reads, 16MiB native storage
 volatile sig_atomic_t interrupted=0;
 void stop(int) {interrupted=1;}
+// Status is not a durability ACK until the archive barrier has completed.
+// Always report failure after an unsuccessful barrier; never short-circuit
+// the status writer merely because the earlier native acquisition failed.
+template<class Sync,class Close,class Status> bool commitTerminalStatus(bool ok,Sync sync,Close close,Status status) {
+    const bool durable=sync();
+    const bool closed=close();
+    const bool reported=status(ok && durable && closed);
+    return ok && durable && closed && reported;
+}
 int control(int op,int value,void* data,size_t* bytes) {
 #if defined(__APPLE__)
     int mib[]{1,24,op,value};
@@ -379,11 +388,20 @@ int capture(const char* path,unsigned seconds,bool unified=false,bool readyFile=
     BufferInfo last{};if(!info(last) || last.owner!=getpid() || last.flags&wrapped)ok=false;
     if(!owner.close())ok=false;
     if(!sink.packet(ok?3U:4U,&last,sizeof(last)))ok=false;
-    if(readyFile){(void)dprintf(3,"terminal=%s\n",ok?"complete":"failed");if(fsync(3))ok=false;}
-    if(fsync(fd))ok=false;
-    close(fd);return ok?0:8;
+    ok=commitTerminalStatus(ok,[&](){return fsync(fd)==0;},[&](){return close(fd)==0;},[&](bool complete){
+        return !readyFile || (dprintf(3,"terminal=%s\n",complete?"complete":"failed")>0 && fsync(3)==0);
+    });
+    return ok?0:8;
 }
 void selfTest() {
+    for(unsigned state=0;state<16;++state) {
+        const bool ok=state&1,syncOk=state&2,closeOk=state&4,statusOk=state&8;
+        unsigned order=0;bool value=true;
+        const bool result=commitTerminalStatus(ok,[&](){assert(order++==0);return syncOk;},[&](){assert(order++==1);return closeOk;},[&](bool complete){
+            assert(order++==2);value=complete;return statusOk;
+        });
+        assert(order==3 && value==(ok && syncOk && closeOk) && result==(ok && syncOk && closeOk && statusOk));
+    }
     {
         UnifiedLog child;
         char executable[]="/usr/bin/printf",message[]="OWNED_PIPE_FIXTURE";

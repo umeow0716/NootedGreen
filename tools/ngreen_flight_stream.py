@@ -37,8 +37,9 @@ def frame(fd, seq, kind, data):
     write_all(fd, data)
 
 
-def record(source, path, channel, maximum, mirror=False):
-    if not 1 <= maximum <= LIMIT or not channel or len(channel.encode()) > 128:
+def record(source, path, channel, maximum, mirror=False, durable_live=False):
+    if (not 1 <= maximum <= LIMIT or not channel or len(channel.encode()) > 128 or
+            type(durable_live) is not bool):
         raise ValueError('invalid channel/capacity')
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     seq = total = 0
@@ -46,7 +47,8 @@ def record(source, path, channel, maximum, mirror=False):
     try:
         write_all(fd, MAGIC)
         metadata = json.dumps({'channel': channel, 'wall_ns': time.time_ns(),
-                               'upstream_complete': False, 'max_bytes': maximum},
+                               'upstream_complete': False, 'max_bytes': maximum,
+                               'durable_live': durable_live},
                               separators=(',', ':')).encode()
         frame(fd, seq, 1, metadata)
         seq += 1
@@ -80,9 +82,15 @@ def record(source, path, channel, maximum, mirror=False):
             frame(fd, seq, 2, data)
             seq += 1
             total += len(data)
+            # Explicit live-capture policy: a received frame is synced BEFORE
+            # it is mirrored or an idle upstream can block the next read.
+            # This is not an upstream-completeness or GPU-release ACK.
+            if durable_live:
+                os.fsync(fd)
+                last_sync = time.monotonic()
             if mirror:
                 write_all(sys.stdout.fileno(), data)
-            if time.monotonic() - last_sync >= 1:
+            if not durable_live and time.monotonic() - last_sync >= 1:
                 os.fsync(fd)
                 last_sync = time.monotonic()
         # Do not read beyond the declared input budget to guess whether EOF
@@ -128,7 +136,8 @@ def inspect(source, consume=None):
             metadata = json.loads(data)
             if (metadata.get('upstream_complete') is not False or
                     type(metadata.get('max_bytes')) is not int or
-                    not 1 <= metadata['max_bytes'] <= LIMIT):
+                    not 1 <= metadata['max_bytes'] <= LIMIT or
+                    type(metadata.get('durable_live', False)) is not bool):
                 raise ValueError('invalid metadata')
         elif kind == 2 and length:
             total += length
@@ -145,8 +154,77 @@ def inspect(source, consume=None):
     if metadata is None or terminal is None:
         raise ValueError('missing terminal record')
     return {'channel': metadata['channel'], 'bytes': total,
+            'durable_live_policy': metadata.get('durable_live', False),
             'transport_complete': terminal == 'EOF', 'upstream_complete': False,
             'gpu_execution_proof': False, 'terminal': terminal}
+
+
+def durable_live_self_test(directory):
+    import io
+    import stat
+    import threading
+    from pathlib import Path
+    global write_all
+    native_sync, native_write = os.fsync, write_all
+    entered, mirrored = threading.Event(), threading.Event()
+    counts, results, errors, mirrored_bytes = [0], [], [], bytearray()
+    read_fd, write_fd = os.pipe()
+    class OwnedRaw(io.FileIO):
+        def read(self, length=-1):
+            entered.set()
+            return super().read(length)
+    source = OwnedRaw(read_fd, 'rb', closefd=True)
+    def checked_sync(fd):
+        native_sync(fd)
+        if stat.S_ISREG(os.fstat(fd).st_mode): counts[0] += 1
+    def checked_write(fd, data):
+        if fd == sys.stdout.fileno():
+            assert counts[0] >= 2, 'mirror preceded data durability barrier'
+            mirrored_bytes.extend(data); mirrored.set()
+        else:
+            native_write(fd, data)
+    path = Path(directory)/'durable-live.bin'
+    def capture():
+        try: results.append(record(source, path, 'owned-live', 64, True, True))
+        except BaseException as error: errors.append(error)
+    thread = threading.Thread(target=capture, daemon=True)
+    try:
+        os.fsync, write_all = checked_sync, checked_write
+        thread.start()
+        assert entered.wait(5), 'raw reader did not start'
+        os.write(write_fd, b'probe')
+        assert mirrored.wait(5), 'live data not persisted/mirrored while source stayed open'
+        assert thread.is_alive() and not results and not errors
+        assert mirrored_bytes == b'probe'
+    finally:
+        os.close(write_fd)
+        thread.join(5)
+        os.fsync, write_all = native_sync, native_write
+        source.close()
+    assert not thread.is_alive() and not errors and results == [5]
+    with path.open('rb') as saved:
+        report = inspect(saved)
+    assert report['durable_live_policy'] and report['transport_complete'] and not report['upstream_complete']
+    # A data fsync failure must propagate BEFORE mirror, leaving no EOF ACK.
+    counts[0] = 0; mirrored_bytes.clear()
+    def failed_data_sync(fd):
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            counts[0] += 1
+            if counts[0] == 2: raise OSError('owned injected data sync failure')
+        native_sync(fd)
+    failed = Path(directory)/'failed-live.bin'
+    try:
+        os.fsync, write_all = failed_data_sync, checked_write
+        try: record(io.BytesIO(b'x'), failed, 'failed-live', 2, True, True)
+        except OSError: pass
+        else: raise AssertionError('data fsync failure ignored')
+        assert not mirrored_bytes
+    finally:
+        os.fsync, write_all = native_sync, native_write
+    with failed.open('rb') as saved:
+        try: inspect(saved)
+        except ValueError: pass
+        else: raise AssertionError('failed data barrier became complete archive')
 
 
 def self_test():
@@ -156,6 +234,7 @@ def self_test():
     import stat
     from pathlib import Path
     with tempfile.TemporaryDirectory(prefix='ngreen-flight-') as directory:
+        durable_live_self_test(directory)
         # Verify ordering and failure before the first upstream read. Keep a
         # failed archive as incomplete evidence; never remove/replace it.
         native_sync = os.fsync
@@ -256,13 +335,15 @@ if __name__ == '__main__':
     capture.add_argument('--channel', required=True)
     capture.add_argument('--max-bytes', type=int, default=LIMIT)
     capture.add_argument('--mirror', action='store_true')
+    capture.add_argument('--durable-live', action='store_true',
+                         help='sync every received frame before mirror; does not certify upstream completeness')
     check = sub.add_parser('inspect')
     check.add_argument('archive')
     check.add_argument('--extract', help='exclusive output; retained prefix is incomplete on validation error')
     sub.add_parser('self-test')
     args = parser.parse_args()
     if args.command == 'record':
-        record(sys.stdin.buffer.raw, args.output, args.channel, args.max_bytes, args.mirror)
+        record(sys.stdin.buffer.raw, args.output, args.channel, args.max_bytes, args.mirror, args.durable_live)
     elif args.command == 'inspect':
         fd = -1
         try:
