@@ -498,7 +498,12 @@ def contract(source, path="<source>"):
                         "// Tahoe's telemetry manager")
     for token in ('checkKernelArgument("-ngreenmediaadapter") && checkKernelArgument("-ngreenavcgen12")',
                   'gVfMediaPublicationRouteReady=false;',
-                  'const bool qualified=gVfMediaPublicationAbiVerified && mediaEnd && videoEnd && videoTable',
+                  'const bool qualified=cacheProfileQualified && gVfMediaPublicationAbiVerified && mediaEnd && videoEnd && videoTable',
+                  'const auto globalTable=tableFromLea(globalInit,0x11,256);',
+                  'const auto l3Table=tableFromLea(l3Init,0xfe,128);',
+                  'cacheProfileQualified=NgreenAvcGen12::nativeCacheTablesMatch(',
+                  'contains(function,offset,7)', 'matches(function+offset,lea,3)',
+                  'contains(target,0,bytes)',
                   'matches(mediaEnd,mediaThunk,sizeof(mediaThunk))',
                   'matches(videoEnd+0x124,descriptor,sizeof(descriptor))',
                   'matches(videoEnd+0x15f,countMinusEnd,sizeof(countMinusEnd))',
