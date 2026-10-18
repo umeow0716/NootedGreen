@@ -11,10 +11,13 @@ import json
 import os
 import re
 import stat
+import subprocess
 import struct
 import sys
 import time
 import zlib
+from pathlib import Path
+from contextlib import contextmanager
 
 MAGIC = b'NGFL\x01\0\0\0'
 HEADER = struct.Struct('<QQIII')  # sequence, monotonic_ns, kind, bytes, CRC32
@@ -233,7 +236,7 @@ def durable_live_self_test(directory):
         else: raise AssertionError('failed data barrier became complete archive')
 
 
-def seal_transport(archive, receipt, expected_channel):
+def seal_transport(archive, receipt, expected_channel, consume=None):
     """Commit a file-integrity receipt, never an upstream/GPU-release ACK.
 
     Consumers must also require successful command exit: directory fsync can
@@ -255,7 +258,7 @@ def seal_transport(archive, receipt, expected_channel):
         if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or
                 before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) not in (0o400, 0o600)):
             raise ValueError('archive must be a private owned regular file')
-        report = inspect(HashedReader(source))
+        report = inspect(HashedReader(source),consume)
         if (report['channel'] != expected_channel or not report['transport_complete'] or
                 not report['durable_live_policy']):
             raise ValueError('archive channel/EOF/durable-live policy mismatch')
@@ -427,6 +430,150 @@ def controller_capture_admission(source, expected_boot, expected_domain, expecte
     return {'eligible_controller_close':True,'normal_shutdown_observed':True,
             'cooldown_postflight_status0':True,'requires_authenticated_controller_channel':True,
             'capture_ack':False,'pf_safety_proven':False,'gpu_execution_proof':False}
+
+
+@contextmanager
+def evidence_reader(path, maximum, copy_path=None):
+    copy_fd=-1
+    class Reader:
+        def __init__(self, source):
+            self.source=source;self.digest=hashlib.sha256();self.bytes=0
+        def counted(self,data):
+            self.bytes+=len(data)
+            if self.bytes>maximum:
+                raise ValueError('evidence exceeds declared bound')
+            self.digest.update(data)
+            if copy_fd>=0:write_all(copy_fd,data)
+            return data
+        def read(self,size):
+            return self.counted(self.source.read(size))
+        def readline(self,size):
+            return self.counted(self.source.readline(size))
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    with os.fdopen(fd,'rb') as source:
+        before=os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink!=1 or before.st_size>maximum:
+            raise ValueError('evidence must be a bounded regular non-hardlinked file')
+        reader=Reader(source)
+        try:
+            if copy_path is not None:
+                copy_fd=os.open(copy_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+            yield reader
+            os.fsync(source.fileno())
+            after=os.fstat(source.fileno())
+            identity=lambda value:(value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns,value.st_nlink)
+            if identity(before)!=identity(after) or reader.bytes!=after.st_size:
+                raise ValueError('evidence changed or was only partially consumed')
+            if copy_fd>=0:os.fsync(copy_fd)
+        finally:
+            if copy_fd>=0:os.close(copy_fd)
+
+
+def finalize_cpu_scope(archive,action_log,controller_log,observation,host_manifest,guest_boot,output):
+    """Fresh file verification, not attestation of a caller's SSH session.
+
+    Inputs must come from the caller's existing authenticated SSH/root sessions.
+    Failed output directories are retained, never overwritten or acknowledged.
+    """
+    output=Path(output);output.mkdir(mode=0o700)
+    def mapping(path,separator,maximum,snapshot,hash_lines=False):
+        with evidence_reader(path,maximum,output/snapshot) as source:
+            raw=source.read(maximum+1)
+        values={}
+        for line in raw.decode('ascii').splitlines():
+            if hash_lines and re.fullmatch(r'[0-9a-f]{64}  /[^\r\n]+',line):
+                continue
+            fields=line.split(separator)
+            if len(fields)!=2 or not re.fullmatch(r'[a-z0-9_]+',fields[0]) or not fields[1] or fields[0] in values:
+                raise ValueError('noncanonical/duplicate context field')
+            values[fields[0]]=fields[1]
+        return values,source.digest.hexdigest()
+    observation_values,observation_sha=mapping(observation,'\t',8192,'observation.tsv')
+    host_values,host_sha=mapping(host_manifest,'=',4096,'host-manifest.txt',True)
+    required={'schema':'2','media_mode':'owned_adapter_capture_only_low_latency',
+              'flight_capture_only':'1','flight_stop_protocol':'private_fifo_v1',
+              'flight_required_scope':'avc_publication_v1','flight_shutdown_after_drain':'1',
+              'native_vdenc_preference':'1',
+              'diagnostic_arm_marker':'V382: bounded CPU batch and resource observers bound=1'}
+    version=observation_values.get('target_version','')
+    if (any(observation_values.get(key)!=value for key,value in required.items()) or
+            not re.fullmatch(r'V[0-9]+',version) or int(version[1:])<385):
+        raise ValueError('finalize requires the explicit capture-only observation manifest')
+    expected={'channel':observation_values['flight_run_id'],'run_id':observation_values['flight_run_id'],
+              'boot_uuid':guest_boot,'collector_sha256':observation_values['flight_collector_sha256'],
+              'target_uuid':observation_values['executable_uuid'],'macos_build':observation_values['macos_build']}
+    drain_lines=[];triggers=[];shutdowns=[];children=[];refusals=[]
+    with evidence_reader(action_log,8*1024*1024,output/'action.log') as action:
+        index=0
+        while True:
+            raw=action.readline(16385)
+            if not raw:break
+            index+=1
+            if len(raw)>16384 or not raw.endswith(b'\n'):
+                raise ValueError('action line exceeds bound or is truncated')
+            line=raw.rstrip(b'\r\n').decode('utf-8')
+            if line.startswith('NGREEN_FLIGHT_DRAINED '):drain_lines.append((index,line))
+            if line.startswith('NGREEN_CAPTURE_CHILD '):children.append((index,line))
+            if line.startswith('NGREEN_CAPTURE_ONLY_TRIGGER_RECORDED '):triggers.append((index,line))
+            if line=='NGREEN_CAPTURE_ONLY_SHUTDOWN_REQUESTED normal_shutdown=NOT_YET_PROVEN host_controller=UNTOUCHED':shutdowns.append(index)
+            if re.search(r'V385: capture-only video refused prequeue type=[34] channel=[0-9]+ seq=[0-9]+ queued=0$',line):refusals.append(index)
+    if not (len(drain_lines)==len(triggers)==len(shutdowns)==len(children)==1) or not refusals:
+        raise ValueError('action capture/drain/shutdown witnesses missing or ambiguous')
+    drain_identity=parse_drain_receipt(drain_lines[0][1])
+    if any(drain_identity[key]!=expected[key] for key in ('run_id','boot_uuid','collector_sha256','target_uuid')):
+        raise ValueError('action receipt does not match observation/session identity')
+    trigger=re.fullmatch(r'NGREEN_CAPTURE_ONLY_TRIGGER_RECORDED media_rc=([1-9][0-9]{0,2}) h264_result=NOT_EVALUATED capture_ack=NOT_EVALUATED descendants_quiescent=NOT_PROVEN',triggers[0][1])
+    if not trigger or trigger[1]=='125' or int(trigger[1])>255:
+        raise ValueError('invalid capture-only child result')
+    if (not re.fullmatch(r'NGREEN_CAPTURE_CHILD spawned=1 reaped=1 deadline=[01] status='+trigger[1]+r' descendants_quiescent=NOT_PROVEN gpu_completion=NOT_EVALUATED',children[0][1]) or
+            not children[0][0]<min(refusals)<=max(refusals)<drain_lines[0][0]<triggers[0][0]<shutdowns[0]):
+        raise ValueError('action witnesses out of order or child not reaped')
+    with evidence_reader(controller_log,65536,output/'control.log') as controller:
+        controller_result=controller_capture_admission(controller,host_values['boot_id'],host_values['domain'],int(host_values['cooldown_seconds']))
+    extracted=output/'native-input.txt'
+    fd=os.open(extracted,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    try:
+        transport=seal_transport(archive,output/'transport.json',expected['channel'],lambda data:write_all(fd,data))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    decoder=Path(__file__).parent/'media_adapter/decode_kdebug_recorder.py'
+    fd=os.open(output/'decoder.log',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'wb') as log:
+        result=subprocess.run([sys.executable,'-B',str(decoder),'--format','text','--input',str(extracted),
+                               '--output-dir',str(output/'decoded')],stdout=log,stderr=subprocess.STDOUT,timeout=600)
+        log.flush();os.fsync(log.fileno())
+    if result.returncode:
+        raise ValueError('fresh native decode failed; retained decoder.log is diagnostic only')
+    with evidence_reader(output/'decoded/report.json',1024*1024) as source:
+        decoded=json.loads(source.read(1024*1024+1))
+    admitted=cpu_scope_receipt_admission(transport,decoded,drain_lines[0][1],expected)
+    for name in ('report.json','records.sqlite3','unified.log'):
+        path=output/'decoded'/name
+        if name=='unified.log' and not path.exists():continue
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+        try:os.fsync(fd)
+        finally:os.close(fd)
+    fd=os.open(output/'decoded',os.O_RDONLY|os.O_DIRECTORY)
+    try:os.fsync(fd)
+    finally:os.close(fd)
+    receipt=dict(admitted,controller=controller_result,run_id=expected['run_id'],
+                 transport_archive_sha256=transport['archive_sha256'],payload_sha256=transport['payload_sha256'],
+                 observation_sha256=observation_sha,host_manifest_sha256=host_sha,
+                 action_sha256=action.digest.hexdigest(),controller_sha256=controller.digest.hexdigest(),
+                 decoder_report_sha256=source.digest.hexdigest(),requires_successful_command_exit=True)
+    fd=os.open(output/'cpu-scope-receipt.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    try:
+        write_all(fd,(json.dumps(receipt,separators=(',',':'))+'\n').encode());os.fsync(fd)
+    finally:
+        os.close(fd)
+    directory=os.open(output,os.O_RDONLY|os.O_DIRECTORY)
+    try:os.fsync(directory)
+    finally:os.close(directory)
+    directory=os.open(output.resolve().parent,os.O_RDONLY|os.O_DIRECTORY)
+    try:os.fsync(directory)
+    finally:os.close(directory)
+    return receipt
 
 
 def receipt_admission_self_test():
@@ -701,12 +848,23 @@ if __name__ == '__main__':
     seal.add_argument('archive')
     seal.add_argument('--receipt', required=True)
     seal.add_argument('--channel', required=True)
+    finalize=sub.add_parser('finalize-cpu-scope',help='fresh artifact/closure validation; caller-authenticated sessions required, no GPU ACK')
+    for option in ('archive','action-log','controller-log','observation-manifest','host-manifest','guest-boot','output-dir'):
+        finalize.add_argument('--'+option,required=True)
     sub.add_parser('self-test')
     args = parser.parse_args()
     if args.command == 'record':
         record(sys.stdin.buffer.raw, args.output, args.channel, args.max_bytes, args.mirror, args.durable_live)
     elif args.command == 'seal-transport':
         print(json.dumps(seal_transport(args.archive, args.receipt, args.channel), separators=(',', ':')))
+    elif args.command == 'finalize-cpu-scope':
+        try:
+            result=finalize_cpu_scope(args.archive,args.action_log,args.controller_log,
+                                     args.observation_manifest,args.host_manifest,args.guest_boot,args.output_dir)
+        except (ValueError,OSError,KeyError,subprocess.TimeoutExpired) as exc:
+            print(f'FAIL finalize-cpu-scope: {exc}; retained={args.output_dir}',file=sys.stderr)
+            raise SystemExit(1)
+        print(json.dumps(result,separators=(',',':')))
     elif args.command == 'inspect':
         fd = -1
         try:

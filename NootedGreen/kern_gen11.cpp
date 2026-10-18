@@ -3577,6 +3577,15 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					gVfNativeBatchLayoutBound && gVfNativeBatchMapVtable && gVfNativeBatchMapGetter &&
 					gVfMediaMapOffsetLayoutVerified && gVfMediaSysMemoryVtable && gVfCpuKernelPmapSlot && gVfCpuSystemMapperSlot &&
 					gVfMapSnapshotLayoutBound?1U:0U);
+				if(checkKernelArgument("-ngreencaptureonly")) {
+					const bool captureOnlyArmed=gVfIdentity==VfIdentity::Virtual &&
+						this->oVfObservePoolSubmit && this->oVfObserveSurfaceState && this->oVfObserveRectList &&
+						this->oVfObserveRingBatch && gVfLeafObservationReader && gVfRootObservationVtable && gVfRootObservationGetter &&
+						gVfNativeBatchLayoutBound && gVfNativeBatchMapVtable && gVfNativeBatchMapGetter &&
+						gVfMediaMapOffsetLayoutVerified && gVfMediaSysMemoryVtable && gVfCpuKernelPmapSlot && gVfCpuSystemMapperSlot &&
+						gVfMapSnapshotLayoutBound && gVfNativeObjectLayoutBound;
+					SYSLOG("ngreen","V385: capture-only CPU observers and video refusal armed=%u",captureOnlyArmed?1U:0U);
+				}
 			}
 			// Tahoe's telemetry manager and per-stamp usage objects are created
 			// before startGraphicsEngine(). TelemetryDisable only gates the trace
