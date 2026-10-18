@@ -51,7 +51,42 @@ static_assert(sizeof(Event)==64 && sizeof(BufferInfo)==20 && sizeof(Register)==2
 static_assert(sizeof(Clock)==32,"clock anchor ABI");
 constexpr size_t eventCapacity=1024,bufferEvents=262144; // 64KiB reads, 16MiB native storage
 volatile sig_atomic_t interrupted=0;
-void stop(int) {interrupted=1;}
+void stop(int) {if(interrupted<2)interrupted=interrupted+1;}
+bool installStopHandlers() {
+    struct sigaction action{};
+    action.sa_handler=stop;action.sa_flags=SA_RESTART;
+    sigemptyset(&action.sa_mask);
+    sigaddset(&action.sa_mask,SIGINT);sigaddset(&action.sa_mask,SIGTERM);
+    return !sigaction(SIGINT,&action,nullptr) && !sigaction(SIGTERM,&action,nullptr);
+}
+// Called only after capture has drained, released ownership and committed its
+// archive. Holding this PID is a lifecycle promise, not a GPU completion ACK.
+bool holdAfterStop(int statusFd) {
+    const sig_atomic_t baseline=interrupted;
+    if(baseline>=2)return true;
+    if(dprintf(statusFd,"holding=1\n")<=0 || fsync(statusFd))return false;
+    const sig_atomic_t target=baseline+1;
+    while(interrupted<target)usleep(10000);
+    return true;
+}
+struct DrainRequest {
+    char bytes[7]{};
+    size_t used=0;
+    // Only a complete exact request closes the capture. Partial writes are
+    // retained; malformed/extra bytes fail the archive instead of authorizing it.
+    bool poll(int fd,bool& requested) {
+        requested=false;
+        const ssize_t count=read(fd,bytes+used,sizeof(bytes)-used);
+        if(count<0)return errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR;
+        if(count==0)return false;
+        used+=size_t(count);
+        constexpr char command[]="drain\n";
+        if(used>sizeof(command)-1)return false;
+        for(size_t i=0;i<used;++i)if(bytes[i]!=command[i])return false;
+        requested=used==sizeof(command)-1;
+        return true;
+    }
+};
 // Status is not a durability ACK until the archive barrier has completed.
 // Always report failure after an unsuccessful barrier; never short-circuit
 // the status writer merely because the earlier native acquisition failed.
@@ -298,12 +333,19 @@ bool platform(Platform& out) {
     (void)out;return false;
 #endif
 }
-int capture(const char* path,unsigned seconds,bool unified=false,bool readyFile=false) {
+int capture(const char* path,unsigned seconds,bool unified=false,bool readyFile=false,bool controlFile=false) {
     if(geteuid()!=0 || !nativeVersion() || !seconds || seconds>600)return 2;
     if(readyFile){
         struct stat status{};
         if(fstat(3,&status) || !S_ISREG(status.st_mode) || status.st_uid ||
            status.st_nlink!=1 || (status.st_mode&0777)!=0600)return 2;
+    }
+    if(controlFile){
+        struct stat controlStatus{};
+        const int flags=fcntl(4,F_GETFL);
+        if(!readyFile || fstat(4,&controlStatus) || !S_ISFIFO(controlStatus.st_mode) ||
+           controlStatus.st_uid || controlStatus.st_nlink!=1 || (controlStatus.st_mode&0777)!=0600 ||
+           flags<0 || (flags&O_ACCMODE)!=O_RDWR || fcntl(4,F_SETFL,flags|O_NONBLOCK))return 2;
     }
     Platform source{};if(!platform(source))return 2;
     BufferInfo before{};
@@ -322,7 +364,8 @@ int capture(const char* path,unsigned seconds,bool unified=false,bool readyFile=
     bool configured=owner.stillOurs() && !control(setup,0,nullptr,&zero) &&
         !control(setRegister,0,&range,&bytes) && !control(enable,1,nullptr,&zero);
     if(!configured){(void)owner.close();close(fd);perror("ktrace configure");return 7;}
-    signal(SIGINT,stop);signal(SIGTERM,stop);signal(SIGPIPE,SIG_IGN);
+    if(!installStopHandlers()){(void)owner.close();close(fd);return 7;}
+    signal(SIGPIPE,SIG_IGN);
     std::array<Event,eventCapacity> events{};
     BufferInfo armed{};bool ok=info(armed) && qualifiedLive(armed,getpid(),2*bufferEvents) &&
         sink.packet(1,&armed,sizeof(armed));
@@ -346,10 +389,17 @@ int capture(const char* path,unsigned seconds,bool unified=false,bool readyFile=
     // Do not admit a workload until provenance and calibration are durable.
     ok=ok && !fsync(fd);
     if(ok && readyFile)ok=dprintf(3,"boot_uuid=%s\npid=%ld\ncalibrated=1\n",source.bootUUID,long(getpid()))>0 && !fsync(3);
+    if(ok && controlFile)ok=dprintf(3,"control=private-fifo-v1\n")>0 && !fsync(3);
     if(ok){fprintf(stderr,"NGREEN_KTRACE_LIVE buffer_bytes=%zu upstream_complete=0\n",size_t(armed.events)*sizeof(Event));fflush(stderr);}
     if(ok && unified){fprintf(stderr,"NGREEN_MEDIA_ROOT_LOGGER_LIVE\n");fflush(stderr);}
     const auto began=std::chrono::steady_clock::now();auto syncAt=began;
+    DrainRequest drain;
     while(ok && !interrupted && std::chrono::steady_clock::now()-began<std::chrono::seconds(seconds)) {
+        if(controlFile){
+            bool requested=false;
+            if(!drain.poll(4,requested)){ok=false;break;}
+            if(requested)break;
+        }
         BufferInfo state{};
         if(!info(state) || !qualifiedLive(state,getpid(),2*bufferEvents)){ok=false;break;}
         bytes=sizeof(events);
@@ -394,6 +444,58 @@ int capture(const char* path,unsigned seconds,bool unified=false,bool readyFile=
     return ok?0:8;
 }
 void selfTest() {
+    for(const char* command:{"drain\n","wrong\n","drain\n!","Drain\n","drain!"}) {
+        int channel[2]{};assert(!pipe(channel));
+        assert(!fcntl(channel[0],F_SETFL,O_NONBLOCK));
+        DrainRequest request;bool requested=true;
+        assert(request.poll(channel[0],requested) && !requested);
+        const size_t length=strlen(command);
+        assert(write(channel[1],command,length)==ssize_t(length));
+        const bool expected=!strcmp(command,"drain\n");
+        assert(request.poll(channel[0],requested)==expected);
+        assert(requested==expected);
+        close(channel[0]);close(channel[1]);
+    }
+    {
+        int channel[2]{};assert(!pipe(channel));
+        assert(!fcntl(channel[0],F_SETFL,O_NONBLOCK));
+        DrainRequest request;bool requested=false;
+        for(const char byte:std::array<char,6>{'d','r','a','i','n','\n'}) {
+            assert(write(channel[1],&byte,1)==1);
+            assert(request.poll(channel[0],requested));
+            assert(requested==(byte=='\n'));
+        }
+        close(channel[0]);close(channel[1]);
+    }
+    for(sig_atomic_t baseline:{0,1}) {
+        char path[]="/tmp/ngreen-hold-owned-XXXXXX";
+        const int fd=mkstemp(path);assert(fd>=0);assert(!unlink(path));
+        const pid_t child=fork();assert(child>=0);
+        if(!child){
+            alarm(5);interrupted=baseline;
+            if(!installStopHandlers())_exit(2);
+            _exit(holdAfterStop(fd)?0:3);
+        }
+        bool ready=false;int status=0;
+        for(unsigned i=0;i<100 && !ready;++i){
+            char text[16]{};
+            ready=pread(fd,text,sizeof(text),0)==10 && !memcmp(text,"holding=1\n",10);
+            if(!ready)usleep(10000);
+        }
+        const bool live=waitpid(child,&status,WNOHANG)==0;
+        bool signalled=false,reaped=!live;
+        if(ready && live)signalled=kill(child,SIGTERM)==0;
+        for(unsigned i=0;i<100 && !reaped;++i){
+            const pid_t got=waitpid(child,&status,WNOHANG);
+            reaped=got==child;
+            if(!reaped)usleep(10000);
+        }
+        if(!reaped){(void)kill(child,SIGKILL);(void)waitpid(child,&status,0);}
+        close(fd);
+        assert(ready && live && signalled && reaped && WIFEXITED(status) && WEXITSTATUS(status)==0);
+    }
+    interrupted=2;assert(holdAfterStop(-1));
+    interrupted=1;assert(!holdAfterStop(-1));interrupted=0;
     for(unsigned state=0;state<16;++state) {
         const bool ok=state&1,syncOk=state&2,closeOk=state&4,statusOk=state&8;
         unsigned order=0;bool value=true;
@@ -456,11 +558,13 @@ int main(int argc,char** argv) {
         printf("KDEBUG_READONLY_PROBE owner=%d disabled=%d flags=%x event_bytes=%zu\n",b.owner,b.disabled,b.flags,sizeof(Event));
         return b.owner==-1 && b.disabled && compatibleFilters(b.flags)?0:4;
     }
-    if((argc==4 || ((argc==5 || (argc==6 && !strcmp(argv[5],"--ready-fd3"))) &&
+    if((argc==4 || ((argc==5 || ((argc==6 || ((argc==7 || (argc==8 && !strcmp(argv[7],"--control-fd4"))) && !strcmp(argv[6],"--hold-after-stop"))) && !strcmp(argv[5],"--ready-fd3"))) &&
         !strcmp(argv[4],"--unified-log"))) && !strcmp(argv[1],"--capture")) {
         char* end=nullptr;errno=0;unsigned long seconds=strtoul(argv[3],&end,10);
         if(errno || !end || *end || seconds==0 || seconds>600)return 2;
-        return capture(argv[2],unsigned(seconds),argc>=5,argc==6);
+        const int result=capture(argv[2],unsigned(seconds),argc>=5,argc>=6,argc==8);
+        if(result || argc<7)return result;
+        return holdAfterStop(3)?0:8;
     }
-    fprintf(stderr,"usage: kdebug-recorder --probe | --self-test | --capture EXCLUSIVE_FILE SECONDS [--unified-log]\n");return 2;
+    fprintf(stderr,"usage: kdebug-recorder --probe | --self-test | --capture EXCLUSIVE_FILE SECONDS [--unified-log [--ready-fd3 [--hold-after-stop [--control-fd4]]]]\n");return 2;
 }
