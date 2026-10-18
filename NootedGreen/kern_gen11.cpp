@@ -3492,7 +3492,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					"ngreen","Cannot install owned AVC post-relocation publication route");
 				OSSynchronizeIO();
 				gVfMediaPublicationRouteReady=true;
-				SYSLOG("ngreen","Gen12 AVC post-relocation publication route ready=1 profile=1");
+				SYSLOG("ngreen","Gen12 AVC post-relocation publication route ready=1 profile=%u",NGVfAvcPublication::profile);
 				const auto batchSubmit=patcher.solveSymbol(index,
 					"__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb",address,size);
 				const auto fifoSubmit=patcher.solveSymbol(index,

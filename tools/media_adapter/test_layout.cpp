@@ -19676,7 +19676,37 @@ static void testActualNv12LayoutSnapshot() {
     uint32_t uvRow=0;std::memcpy(&uvRow,descriptor.data()+0x24,4);
     assert(uvRow==32);
 }
+void testLinuxGen12CacheProfile() {
+    // Independently captured exact native constant DWORDs, not the production masks.
+    static constexpr uint32_t nativeGlobal[64]={
+        0x51,0x50,0x57,0x17,0x77,0x37,0x5b,0x1b,0x7b,0x3b,0x53,0x13,0x70,0x30,0x5f,0x1f,
+        0x7f,0x3f,0x2f,0x2b,0x20,0x10,0x6f,0x60,0x50,0x50,0x50,0x50,0x50,0x50,0x50,0x50,
+        0x51,0x10,0x57,0x17,0x77,0x37,0x5b,0x1b,0x7b,0x3b,0x53,0x13,0x70,0x30,0x5f,0x1f,
+        0x7f,0x3f,0x6f,0x2b,0x20,0x50,0x2f,0x60,0x50,0x50,0x50,0x50,0x50,0x50,0x50,0x50};
+    static constexpr uint32_t pfGlobal[]={0,0,0x37,0x5,0x5,0x37};
+    static constexpr uint32_t pfL3[]={0,0,0x30,0x10,0x30,0x10};
+    for(unsigned index=0;index<64;++index) {
+        for(uint32_t attributes:{0U,0x100U,0x1000U,0xffff8000U}) {
+            uint32_t translated=0xdeadbeefU;
+            assert(NgreenAvcGen12::linuxGen12CacheControl((index<<1)|attributes,translated));
+            const unsigned pfIndex=(translated&0x7fU)>>1;
+            assert(pfIndex>=2 && pfIndex<=5);
+            assert((translated&~0x7fU)==attributes);
+            assert(((nativeGlobal[index]&3U)==3U)==((pfGlobal[pfIndex]&3U)==3U));
+            assert((index>=32 && index<56)==(pfL3[pfIndex]==0x30));
+        }
+        uint32_t refused=0xdeadbeefU;
+        assert(!NgreenAvcGen12::linuxGen12CacheControl((index<<1)|1U,refused));
+        assert(refused==0xdeadbeefU);
+    }
+    uint32_t translated=0;
+    assert(NgreenAvcGen12::linuxGen12CacheControl(0x2a,translated) && translated==6);
+    assert(NgreenAvcGen12::linuxGen12CacheControl(0x0e,translated) && translated==10);
+    assert(NGVfAvcPublication::profile==2);
+}
+
 int main() {
+    testLinuxGen12CacheProfile();
     testAvcFrameOutputs();
     testAvcFrameLeasePromotion();
     testOwnedAvcHookFailStop();
@@ -20994,7 +21024,7 @@ int main() {
             };
             NGVfAvcPublication::Reply cap{};
             cap.abiVersion=1;cap.bytes=sizeof(cap);cap.registryId=19;cap.flags=1;
-            cap.commandProfile=1;cap.inputLimit=1024;cap.outputLimit=1536;
+            cap.commandProfile=NGVfAvcPublication::profile;cap.inputLimit=1024;cap.outputLimit=1536;
             for(unsigned i=0;i<16;++i)cap.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
             const uintptr_t work=reinterpret_cast<uintptr_t>(scratch.get());
             for(unsigned alias=0;alias<3;++alias) {

@@ -80,10 +80,11 @@ template<class Call> bool query(uint64_t expectedRegistryId,Call call,Reply& out
 // Capability negotiation only, never a completion/ownership certificate.
 // A new adapter MUST NOT reserve producer bytes on an old/unsupported kernel.
 namespace NGVfAvcPublication {
-constexpr uint32_t selector=0x4E470003U,version=1,profile=1;
+constexpr uint32_t selector=0x4E470003U,version=1,profile=2;
 constexpr uint32_t routeReady=1,maxInputWords=1024,maxOutputWords=1536;
-// Profile 1 is the existing 1080p NV12 publication contract, not a promise
-// of arbitrary geometry. Coded allocation height includes macroblock padding.
+// Profile 2 adds Linux i915 Gen12 PF MOCS cacheability normalization to the
+// 1080p NV12 contract. A profile-1 kernel/client must not silently negotiate it.
+// It is not arbitrary geometry or proof of device coherency/completion.
 constexpr uint32_t visibleWidth=1920,visibleHeight=1080;
 constexpr uint32_t codedWidth=(visibleWidth+15U)&~15U,codedHeight=(visibleHeight+15U)&~15U;
 inline bool matchesCodedGeometry(uint32_t width,uint32_t height) noexcept {

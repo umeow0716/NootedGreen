@@ -10,6 +10,42 @@
 // it is not a general HEVC/AV1/compressed-reference translator.
 namespace NgreenAvcGen12 {
 struct Result { bool ok=false; size_t words=0; const char* reason="input"; };
+// Profile 2 targets the established Linux i915 Gen12 PF cache-table ABI.
+// NEVER install the Apple global tables on a VF. These masks come from the
+// exact TGL CPU constants at becd8 (64 global entries) / a00d0 (64 L3 entries).
+// Only UC/WB cacheability is normalized; age/skip heuristics are not retained.
+// Linux GEN11_MOCS_ENTRIES provides 2=WB/WB, 3=UC/UC, 4=UC/WB, 5=WB/UC.
+// PAT selection, addresses, compression, arbitration and tiling are untouched.
+inline bool linuxGen12CacheControl(uint32_t native,uint32_t &output) noexcept {
+    const uint32_t encoded=native&0x7fU;
+    if(encoded&1U)return false; // Protected/reserved encoding is not this profile.
+    const uint32_t index=encoded>>1;
+    const bool globalWb=(UINT64_C(0x004fcffc004fcffc)>>index)&1U;
+    const bool l3Wb=(UINT64_C(0x00ffffff00000000)>>index)&1U;
+    const uint32_t pfIndex=globalWb?(l3Wb?2U:5U):(l3Wb?4U:3U);
+    output=(native&~0x7fU)|(pfIndex<<1);
+    return true;
+}
+template<class Visit>
+inline bool visitCacheControls(uint32_t op,bool expanded,Visit visit) noexcept {
+    if(op==0x70840000U) {
+        if(!expanded) {
+            for(uint32_t i=3;i<=36;i+=3)if(!visit(i))return false;
+        } else {
+            static constexpr uint8_t controls[]={3,6,12,15,18,21,24,27,30,33,36,
+                39,42,45,48,51,54,57,60,64,67,70};
+            for(uint8_t i:controls)if(!visit(i))return false;
+        }
+    } else if(op==0x70020000U) {
+        static constexpr uint8_t controls[]={3,6,9,12,15,18,51,54,57,60,64,67};
+        for(uint8_t i:controls)if(!visit(i))return false;
+    } else if(op==0x70030000U) {
+        for(uint32_t i=3;i<=23;i+=5)if(!visit(i))return false;
+    } else if(op==0x70040000U) {
+        for(uint32_t i=3;i<=9;i+=3)if(!visit(i))return false;
+    }
+    return true;
+}
 // Arithmetic only: callers must prove the native builder lock, current buffer
 // identity, writable tail and kernel feature handshake before applying this.
 // Advancing the producer cursor reserves bytes through native SetUsedBytes;
@@ -180,6 +216,10 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
     for(size_t at=0;at<count;) {
         const uint32_t op=opcode(input[at]);const size_t n=packetWords(input[at]);
         if(!n || n>count-at){r.reason="packet";return r;}
+        if(!visitCacheControls(op,false,[&](uint32_t index) {
+            uint32_t translated=0;
+            return index<n && linuxGen12CacheControl(input[at+index],translated);
+        })){r.reason="native-mocs-profile";return r;}
         // In this reviewed AVC profile, the four status stores form the
         // terminal phase. Only remaining status stores, MI flush and padding
         // may follow the first status store;
@@ -322,6 +362,14 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
             output[start+16]=0x003f3f3fU;}
         if(op==0x12000000U){output[start]|=1U<<19;output[start+1]=relativeMfc(input[at+1]);}
         if(op==0x70000000U)output[out++]=0x68000100U;
+        // The first pass authenticated every native control before any write.
+        // Newly expanded control triplets are zero-initialized owned storage.
+        if(!visitCacheControls(op,true,[&](uint32_t index) {
+            if(index>=emitted)return false;
+            uint32_t translated=0;
+            if(!linuxGen12CacheControl(output[start+index],translated))return false;
+            output[start+index]=translated;return true;
+        })){r.reason="produced-mocs-profile";return r;}
         at+=n;
     }
     r.ok=true;r.words=out;r.reason="cpu-produced-not-admitted";return r;
