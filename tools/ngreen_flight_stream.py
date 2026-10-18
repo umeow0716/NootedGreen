@@ -376,6 +376,59 @@ def cpu_scope_receipt_admission(transport,decoded,drain_line,expected):
             'full_codec_frame_proven':False,'gpu_execution_proof':False}
 
 
+def controller_capture_admission(source, expected_boot, expected_domain, expected_cooldown):
+    """Bounded ordered control-log validation; requires caller-authenticated IO.
+
+    No inference from merely seeing `shut off` or status 0. The original PF
+    watcher, trace analyzer and postflight must all finish their normal path.
+    This is diagnostic receipt eligibility, not a general PF safety guarantee.
+    """
+    if (not re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}',expected_boot) or
+            not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}',expected_domain) or
+            type(expected_cooldown) is not int or not 1<=expected_cooldown<=3600):
+        raise ValueError('invalid expected Host context')
+    phases=[
+        'BEGIN one-shot contained VF run',
+        f'HOST_SOURCE boot_id={expected_boot}',
+        f'STARTED {expected_domain} exactly once',
+        'DOMAIN_STOP classification=shutdown raw=shut off (shutdown) observation_only=1',
+        f'COOLDOWN {expected_cooldown}s with kernel watcher still active',
+        'COOLDOWN_END observer_failed=0',
+        'PASS host ftrace capture stopped and private instance removed',
+        'PASS host ftrace analysis completed without a crossed vblank',
+        'PASS contained VF postflight completed',
+        'END contained VF run status=0']
+    position=0;total=0;lines=0
+    while True:
+        raw=source.readline(4097)
+        if not raw:
+            break
+        total+=len(raw);lines+=1
+        if len(raw)>4096 or total>65536 or lines>512 or not raw.endswith(b'\n'):
+            raise ValueError('controller log exceeds bound or ends with partial line')
+        match=re.fullmatch(rb'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z ([\x20-\x7e]*)\n',raw)
+        if not match:
+            raise ValueError('malformed controller log record')
+        message=match.group(1).decode('ascii')
+        if ('FAIL' in message or message.startswith('CONTAIN ') or
+                message=='NOTE run ended by the fixed deadline'):
+            raise ValueError('controller containment/deadline/failure cannot acknowledge capture')
+        if message in phases:
+            if position>=len(phases) or message!=phases[position]:
+                raise ValueError('duplicate/out-of-order controller phase')
+            position+=1
+        elif message.startswith(('BEGIN ','HOST_SOURCE ','STARTED ','DOMAIN_STOP ',
+                                 'COOLDOWN ','COOLDOWN_END ','END ')):
+            raise ValueError('controller source/shutdown/phase mismatch')
+        elif position==len(phases):
+            raise ValueError('controller activity after terminal')
+    if position!=len(phases):
+        raise ValueError('controller normal close/cooldown/postflight incomplete')
+    return {'eligible_controller_close':True,'normal_shutdown_observed':True,
+            'cooldown_postflight_status0':True,'requires_authenticated_controller_channel':True,
+            'capture_ack':False,'pf_safety_proven':False,'gpu_execution_proof':False}
+
+
 def receipt_admission_self_test():
     import copy
     expected={'channel':'owned-model','run_id':'owned-model',
@@ -452,6 +505,35 @@ def self_test():
     import tempfile
     import stat
     from pathlib import Path
+    boot='01234567-89AB-CDEF-0123-456789ABCDEF'
+    phases=['BEGIN one-shot contained VF run',f'HOST_SOURCE boot_id={boot}',
+            'STARTED owned exactly once',
+            'DOMAIN_STOP classification=shutdown raw=shut off (shutdown) observation_only=1',
+            'COOLDOWN 30s with kernel watcher still active','COOLDOWN_END observer_failed=0',
+            'PASS host ftrace capture stopped and private instance removed',
+            'PASS host ftrace analysis completed without a crossed vblank',
+            'PASS contained VF postflight completed','END contained VF run status=0']
+    def control_bytes(messages):
+        return ''.join('2026-10-18T00:00:00Z '+line+'\n' for line in messages).encode()
+    result=controller_capture_admission(io.BytesIO(control_bytes(phases)),boot,'owned',30)
+    assert result['eligible_controller_close'] and not result['capture_ack'] and not result['pf_safety_proven']
+    bad_logs=[control_bytes(phases[:index]+phases[index+1:]) for index in range(len(phases))]
+    bad_logs += [control_bytes(phases+['END contained VF run status=0']),
+                 control_bytes(phases+['FAIL late cooldown']),
+                 control_bytes(phases+['CONTAIN reason=late']),
+                 control_bytes(phases[:-1]+['NOTE run ended by the fixed deadline']+phases[-1:]),
+                 control_bytes(phases).replace(b'classification=shutdown',b'classification=other'),
+                 control_bytes(phases).replace(b'observer_failed=0',b'observer_failed=1'),
+                 control_bytes(phases).replace(b'run status=0',b'run status=1'),
+                 control_bytes(phases).replace(boot.encode(),b'other-boot'),
+                 control_bytes(phases)[:-1],b'x'*4097]
+    for bad in bad_logs:
+        try:
+            controller_capture_admission(io.BytesIO(bad),boot,'owned',30)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('failed/stale/truncated controller admitted')
     with tempfile.TemporaryDirectory(prefix='ngreen-flight-') as directory:
         durable_live_self_test(directory)
         archive = Path(directory)/'receipt-source.bin'

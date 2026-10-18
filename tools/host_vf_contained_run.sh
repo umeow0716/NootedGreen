@@ -373,6 +373,9 @@ internal_run_mode() {
 	trap "$cleanup_trap" EXIT INT TERM
 
 	log_line "$evidence_dir" "BEGIN one-shot contained VF run"
+	local observed_boot=NOT_CAPTURED
+	IFS= read -r observed_boot < /proc/sys/kernel/random/boot_id || true
+	log_line "$evidence_dir" "HOST_SOURCE boot_id=${observed_boot}"
 	"$preflight_path" >> "${evidence_dir}/preflight.log" 2>&1
 	virsh -c "$libvirt_uri" dumpxml --inactive "$domain_name" \
 		> "${evidence_dir}/domain-recheck.xml"
@@ -427,6 +430,7 @@ internal_run_mode() {
 			run_failed=1
 		fi
 	done
+	log_line "$evidence_dir" "COOLDOWN_END observer_failed=${cooldown_observer_failed}"
 	if ! stop_trace_capture "$evidence_dir"; then
 		run_failed=1
 	fi
@@ -440,6 +444,8 @@ internal_run_mode() {
 	fi
 	if ! postflight "$evidence_dir"; then
 		run_failed=1
+	else
+		log_line "$evidence_dir" "PASS contained VF postflight completed"
 	fi
 	if [[ -e ${evidence_dir}/deadline.trigger ]]; then
 		log_line "$evidence_dir" "NOTE run ended by the fixed deadline"
