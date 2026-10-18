@@ -6,8 +6,10 @@ must still supply request identities and their own loss counters. A valid EOF
 here proves only transport-file integrity, never upstream completeness.
 """
 import argparse
+import hashlib
 import json
 import os
+import stat
 import struct
 import sys
 import time
@@ -227,6 +229,60 @@ def durable_live_self_test(directory):
         else: raise AssertionError('failed data barrier became complete archive')
 
 
+def seal_transport(archive, receipt, expected_channel):
+    """Commit a file-integrity receipt, never an upstream/GPU-release ACK.
+
+    Consumers must also require successful command exit: directory fsync can
+    fail after the exclusive receipt was created. Retain failures as evidence.
+    """
+    if not isinstance(expected_channel, str) or not expected_channel:
+        raise ValueError('expected channel required')
+    digest = hashlib.sha256()
+    class HashedReader:
+        def __init__(self, source):
+            self.source = source
+        def read(self, length):
+            data = self.source.read(length)
+            digest.update(data)
+            return data
+    fd = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, 'rb', buffering=0) as source:
+        before = os.fstat(source.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or
+                before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) not in (0o400, 0o600)):
+            raise ValueError('archive must be a private owned regular file')
+        report = inspect(HashedReader(source))
+        if (report['channel'] != expected_channel or not report['transport_complete'] or
+                not report['durable_live_policy']):
+            raise ValueError('archive channel/EOF/durable-live policy mismatch')
+        os.fsync(source.fileno())
+        after = os.fstat(source.fileno())
+        identity = lambda value: (value.st_dev, value.st_ino, value.st_size,
+                                  value.st_mtime_ns, value.st_ctime_ns, value.st_nlink)
+        if identity(before) != identity(after):
+            raise ValueError('archive changed during verification')
+    def sync_parent(path):
+        directory = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    sync_parent(archive)
+    result = dict(report, archive_sha256=digest.hexdigest(), archive_bytes=after.st_size,
+                  receipt_scope='HOST_TRANSPORT_FILE_AT_BARRIER', host_file_barrier=True,
+                  requires_successful_command_exit=True, source_writer_closed_proven=False,
+                  archive_immutable=False, capture_ack=False)
+    payload = (json.dumps(result, separators=(',', ':'))+'\n').encode()
+    fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        write_all(fd, payload)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    sync_parent(receipt)
+    return result
+
+
 def self_test():
     global FREE_FLOOR
     import io
@@ -235,6 +291,61 @@ def self_test():
     from pathlib import Path
     with tempfile.TemporaryDirectory(prefix='ngreen-flight-') as directory:
         durable_live_self_test(directory)
+        archive = Path(directory)/'receipt-source.bin'
+        receipt = Path(directory)/'transport-receipt.json'
+        record(io.BytesIO(b'owned transport'), archive, 'owned-receipt', 128, durable_live=True)
+        sealed = seal_transport(archive, receipt, 'owned-receipt')
+        assert sealed['archive_sha256'] == hashlib.sha256(archive.read_bytes()).hexdigest()
+        assert sealed['host_file_barrier'] and not sealed['capture_ack']
+        assert not sealed['source_writer_closed_proven'] and not sealed['gpu_execution_proof']
+        assert json.loads(receipt.read_text()) == sealed
+        for name, channel in (('wrong-channel.json', 'other'), ('transport-receipt.json', 'owned-receipt')):
+            try:
+                seal_transport(archive, Path(directory)/name, channel)
+            except (ValueError, FileExistsError):
+                pass
+            else:
+                raise AssertionError('invalid/duplicate receipt accepted')
+        assert json.loads(receipt.read_text()) == sealed
+        archive.chmod(0o644)
+        try:
+            seal_transport(archive, Path(directory)/'public.json', 'owned-receipt')
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('public archive accepted')
+        archive.chmod(0o600)
+        alias = Path(directory)/'source-link'
+        alias.symlink_to(archive)
+        try:
+            seal_transport(alias, Path(directory)/'link.json', 'owned-receipt')
+        except OSError:
+            pass
+        else:
+            raise AssertionError('symlink archive accepted')
+        saved_sync = os.fsync
+        try:
+            def denied_receipt_sync(fd):
+                raise OSError('owned archive barrier refusal')
+            os.fsync = denied_receipt_sync
+            try:
+                seal_transport(archive, Path(directory)/'unsynced-receipt.json', 'owned-receipt')
+            except OSError:
+                pass
+            else:
+                raise AssertionError('failed archive barrier acknowledged')
+            assert not (Path(directory)/'unsynced-receipt.json').exists()
+        finally:
+            os.fsync = saved_sync
+        with archive.open('ab') as corrupt:
+            corrupt.write(b'not-a-frame')
+        try:
+            seal_transport(archive, Path(directory)/'corrupt.json', 'owned-receipt')
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('corrupt archive acknowledged')
+        assert not (Path(directory)/'corrupt.json').exists()
         # Verify ordering and failure before the first upstream read. Keep a
         # failed archive as incomplete evidence; never remove/replace it.
         native_sync = os.fsync
@@ -340,10 +451,16 @@ if __name__ == '__main__':
     check = sub.add_parser('inspect')
     check.add_argument('archive')
     check.add_argument('--extract', help='exclusive output; retained prefix is incomplete on validation error')
+    seal = sub.add_parser('seal-transport', help='private archive integrity receipt, NOT capture/GPU ACK')
+    seal.add_argument('archive')
+    seal.add_argument('--receipt', required=True)
+    seal.add_argument('--channel', required=True)
     sub.add_parser('self-test')
     args = parser.parse_args()
     if args.command == 'record':
         record(sys.stdin.buffer.raw, args.output, args.channel, args.max_bytes, args.mirror, args.durable_live)
+    elif args.command == 'seal-transport':
+        print(json.dumps(seal_transport(args.archive, args.receipt, args.channel), separators=(',', ':')))
     elif args.command == 'inspect':
         fd = -1
         try:
