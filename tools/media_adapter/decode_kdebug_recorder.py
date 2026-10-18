@@ -33,7 +33,8 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          21: 'resource_base_metadata', 22: 'resource_base_leaf',
          23: 'cpu_map_header_pair', 24: 'cpu_map_list_boundary',
          25: 'native_render_surface_output', 26: 'native_pool_allocation_metadata',
-         27: 'native_pool_allocation_chunk'}
+         27: 'native_pool_allocation_chunk',28: 'native_rect_input_metadata',
+         29: 'native_rect_input_chunk'}
 RESOURCE_SLOTS = {
     1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
     2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
@@ -41,6 +42,33 @@ RESOURCE_SLOTS = {
 
 
 def validate_leaf(kind, words):
+    if kind == 28:
+        if (len(words)!=160 or words[0]!=1 or words[1]>272 or words[2]>272 or
+                words[3]>24 or words[4]>24 or words[6]&~31 or words[7]!=4096 or words[8]!=32 or
+                words[9] not in (0,1) or words[10] or words[11]):
+            raise ValueError('invalid native rect metadata extent/profile')
+        for raw,count in ((words[12:80],words[1]),(words[80:148],words[2]),
+                          (words[148:154],words[3]),(words[154:160],words[4])):
+            if any(struct.pack(f'<{len(raw)}I',*raw)[count:]):
+                raise ValueError('native rect short-copy padding')
+        count=words[148]|words[149]<<32;capacity=words[150]|words[151]<<32
+        data=words[152]|words[153]<<32
+        admitted=words[1]==272 and words[3]==24 and count<=capacity and count<=4096 and (
+            not count or data>>47==0x1ffff and data<=MASK64-count*32 and (data+count*32-1)>>47==0x1ffff)
+        if bool(words[9])!=admitted or (not admitted and words[5]) or admitted and words[5]>count*32:
+            raise ValueError('native rect data admission mismatch')
+        expected=(1 if words[1]==272 else 0)|(2 if words[3]==24 else 0)|(
+            4 if admitted and words[5]==count*32 else 0)|(
+            8 if words[1]==words[2]==272 and words[12:80]==words[80:148] else 0)|(
+            16 if words[3]==words[4]==24 and words[148:154]==words[154:160] else 0)
+        if words[6]!=expected: raise ValueError('native rect stability/copy flags mismatch')
+        return
+    if kind == 29:
+        if (len(words)<7 or words[0]!=1 or not 0<words[2]<=32768 or words[2]%8 or
+                words[3]>words[2]*4 or not 0<words[4]<=512 or words[1]+words[4]>words[3]//4 or
+                len(words)!=6+words[4] or words[5]&~31):
+            raise ValueError('invalid native rect input chunk')
+        return
     if kind == 26:
         if (len(words)!=12 or words[0]!=1 or not 0<words[1]<=65536 or words[1]&3 or
                 words[2]>words[1] or not (0<=words[3]<=words[4]<=((words[1]-words[2])&~3)) or
@@ -463,6 +491,7 @@ class DiskSink:
         self.db.execute('CREATE TABLE cpu_backings (identity TEXT, group_id INTEGER, pages INTEGER, captured INTEGER, valid INTEGER, bytes INTEGER, map_offset TEXT, options INTEGER, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.execute('CREATE TABLE synchronous_batches (identity TEXT PRIMARY KEY, group_id INTEGER, gpu TEXT, words INTEGER, copied INTEGER, flags INTEGER, captured INTEGER) WITHOUT ROWID')
         self.db.execute('CREATE TABLE pool_allocations (identity TEXT PRIMARY KEY, group_id INTEGER, bytes INTEGER, copied INTEGER, flags INTEGER, captured INTEGER) WITHOUT ROWID')
+        self.db.execute('CREATE TABLE rect_inputs (identity TEXT PRIMARY KEY, group_id INTEGER, words INTEGER, copied INTEGER, flags INTEGER, admitted INTEGER, captured INTEGER) WITHOUT ROWID')
         self.db.execute('CREATE TABLE resource_batches (identity TEXT, group_id INTEGER, fields INTEGER, words INTEGER, admitted INTEGER, captured INTEGER, stable INTEGER, last_field TEXT, PRIMARY KEY(identity,group_id)) WITHOUT ROWID')
         self.db.execute('CREATE TABLE map_lists (identity TEXT, group_id INTEGER, role INTEGER, list INTEGER, attempts INTEGER, good INTEGER, known INTEGER, ended INTEGER, status INTEGER, walked INTEGER, declared INTEGER, PRIMARY KEY(identity,group_id,role,list)) WITHOUT ROWID')
         self.db.commit()
@@ -504,6 +533,19 @@ class DiskSink:
             raise ValueError('duplicate completed flight record ID')
         if record['kind'] == 25 and (not record['group'] or int(record['identity'], 16)):
             raise ValueError('surface output requires owning flight group and no pointer identity')
+        if record['kind'] == 28:
+            if not record['group'] or not 1<=int(record['identity'],16)<=4:
+                raise ValueError('missing native rect parent')
+            count=words[148]|words[149]<<32
+            self.db.execute('INSERT INTO rect_inputs VALUES (?,?,?,?,?,?,0)',
+                            (record['identity'],record['group'],count*8 if words[9] else 0,words[5],words[6],words[9]))
+        if record['kind'] == 29:
+            row=self.db.execute('SELECT group_id,words,copied,flags,admitted,captured FROM rect_inputs WHERE identity=?',
+                                (record['identity'],)).fetchone()
+            if row!=(record['group'],words[2],words[3],words[5],1,words[1]*4):
+                raise ValueError('missing/refused/out-of-order native rect chunk')
+            self.db.execute('UPDATE rect_inputs SET captured=captured+? WHERE identity=?',
+                            (words[4]*4,record['identity']))
         if record['kind'] == 26:
             if not record['group'] or not 1<=int(record['identity'],16)<=4:
                 raise ValueError('missing native pool allocation parent')
@@ -643,6 +685,13 @@ class DiskSink:
                 'capture_phase':'BEFORE_NATIVE_POOL_SUBMIT',
                 'stability_scope':'POOL_CONTROL_FIELDS_NOT_CONTENT_ATOMICITY',
                 'native_object_lease_proven':False,'gpu_execution_proof':False}
+
+    def rect_input_report(self):
+        total,complete=self.db.execute('SELECT COUNT(*),COALESCE(SUM(admitted=1 AND flags=31 AND copied=words*4 AND captured=copied),0) FROM rect_inputs').fetchone()
+        return {'captures':total,'complete_control_stable_cpu_copies':complete,'incomplete':total-complete,
+                'maximum_captures':4,'maximum_rectangles_per_capture':4096,'parameter_prefix_bytes':272,
+                'full_parameter_extent_proven':False,'all_submissions_captured':False,'atomic_snapshot':False,
+                'native_object_lease_proven':False,'gpu_execution_proof':False,'capture_phase':'BEFORE_NATIVE_RECT_CALL'}
 
     def resource_report(self):
         total, complete, stable = self.db.execute('SELECT COUNT(*),COALESCE(SUM(admitted=1 AND captured=fields*2),0),COALESCE(SUM(admitted=1 AND captured=fields*2 AND stable=captured),0) FROM resource_batches').fetchone()
@@ -1067,6 +1116,7 @@ if __name__ == '__main__':
         cpu_alias_report = sink.backing_report(cpu_alias=True)
         synchronous_batch_report = sink.synchronous_batch_report()
         pool_allocation_report = sink.pool_allocation_report()
+        rect_input_report = sink.rect_input_report()
         resource_report = sink.resource_report()
         map_list_report = sink.map_list_report()
         try:
@@ -1079,6 +1129,7 @@ if __name__ == '__main__':
         report['cpu_alias_backings'] = cpu_alias_report
         report['synchronous_batches'] = synchronous_batch_report
         report['pool_allocations'] = pool_allocation_report
+        report['rect_inputs'] = rect_input_report
         report['resource_bases'] = resource_report
         report['cpu_map_lists'] = map_list_report
         if error:

@@ -194,6 +194,8 @@ static volatile UInt32 gVfSurfaceTickets = 0;
 static mach_vm_address_t gVfPoolSubmitCaller = 0;
 static uint32_t gVfPoolCpuCopies[4][16384] {};
 static volatile UInt32 gVfPoolCpuTickets = 0;
+static uint32_t gVfRectCpuCopies[4][32768] {};
+static volatile UInt32 gVfRectCpuTickets = 0;
 static bool gVfMapSnapshotLayoutBound = false;
 static bool gVfNativeObjectLayoutBound = false;
 // Boot-owned copies, not retained native pointers. Unique tickets avoid any
@@ -3550,6 +3552,25 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 							"ngreen","Cannot route exact capture-only surface producer");
 					}
 					SYSLOG("ngreen","V385: native surface output observer bound=%u",this->oVfObserveSurfaceState?1U:0U);
+					static constexpr uint8_t rectEntry[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+						0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xc8,0x01,0,0};
+					static constexpr uint8_t paramsExtent[]={0x49,0x8b,0x87,0x08,0x01,0,0};
+					static constexpr uint8_t vectorGrow[]={0x48,0x39,0x77,0x08,0x73,0x7c,0x49,0x89,0xf6,
+						0x49,0x89,0xff,0x48,0x89,0xf7,0x48,0xc1,0xe7,0x05};
+					static constexpr uint8_t vectorPublish[]={0x49,0x89,0x5f,0x10,0x4d,0x89,0x77,0x08};
+					if(exact && gVfBatchCpuCopy && contains(rect,0,sizeof(rectEntry)) && matches(rect,rectEntry,sizeof(rectEntry)) &&
+					   contains(rect,0x140,sizeof(paramsExtent)) && matches(rect+0x140,paramsExtent,sizeof(paramsExtent)) &&
+					   contains(rect,0x2dc0,sizeof(vectorGrow)) && matches(rect+0x2dc0,vectorGrow,sizeof(vectorGrow)) &&
+					   contains(rect,0x2e36,sizeof(vectorPublish)) && matches(rect+0x2e36,vectorPublish,sizeof(vectorPublish))) {
+						KernelPatcher::RouteRequest rectRoute[]={
+							{"__ZL22blit3d_submit_rectlistP23IGHardwareBlit3DContextP15blit3d_params_tPK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyE",
+							 vfObserveRectList,this->oVfObserveRectList}
+						};
+						patcher.clearError();
+						PANIC_COND(!patcher.routeMultiple(index,rectRoute,address,size) || !this->oVfObserveRectList,
+							"ngreen","Cannot route exact capture-only rect input observer");
+					}
+					SYSLOG("ngreen","V385: native rect input observer bound=%u",this->oVfObserveRectList?1U:0U);
 				}
 				SYSLOG("ngreen","V382: bounded CPU batch and resource observers bound=%u",
 					this->oVfObserveRingBatch && gVfLeafObservationReader && gVfRootObservationVtable && gVfRootObservationGetter &&
@@ -6509,6 +6530,58 @@ IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
 	const IOReturn result=FunctionCast(vfContextSubmit, callback->oVfContextSubmit)(
 		that, input, output, options, stamp);
 	return mediaScope.failed()?kIOReturnBadArgument:result;
+}
+
+uintptr_t Gen11::vfObserveRectList(void *context,void *parameters,const void *rectangles)
+{
+	PANIC_COND(!callback || !callback->oVfObserveRectList,"ngreen","Missing native rect continuation");
+	using Native=uintptr_t (*)(void *,void *,const void *);
+	const auto native=reinterpret_cast<Native>(callback->oVfObserveRectList);
+	if(!checkKernelArgument("-ngreencaptureonly") || gVfIdentity!=VfIdentity::Virtual ||
+	   !gVfBatchCpuCopy || !vfFlightEnabled())return native(context,parameters,rectangles);
+	VfContextOperationGuard operation;
+	const uint32_t group=operation?vfFlightCurrentGroup():0;
+	if(group && NGVfCpuRange::kernelRange(reinterpret_cast<uintptr_t>(parameters),272) &&
+	   NGVfCpuRange::kernelRange(reinterpret_cast<uintptr_t>(rectangles),24)) {
+		const uint32_t ticket=gVfRectCpuTickets;
+		if(ticket<4 && OSCompareAndSwap(ticket,ticket+1,&gVfRectCpuTickets)) {
+			using Copy=uint64_t (*)(uint64_t,uint64_t,uint64_t);
+			const auto copy=reinterpret_cast<Copy>(gVfBatchCpuCopy);
+			uint32_t raw[148]{};
+			const uint64_t first=copy(reinterpret_cast<uintptr_t>(parameters),reinterpret_cast<uintptr_t>(raw),272);
+			const uint64_t head=copy(reinterpret_cast<uintptr_t>(rectangles),reinterpret_cast<uintptr_t>(raw+136),24);
+			const auto value=[](const uint32_t *p){return uint64_t(p[0])|(uint64_t(p[1])<<32);};
+			const uint64_t count=value(raw+136),capacity=value(raw+138),data=value(raw+140);
+			const bool admitted=first==272 && head==24 && count<=capacity && count<=4096 &&
+				(!count || NGVfCpuRange::kernelRange(data,count*32));
+			uint64_t copied=0;
+			if(admitted && count)copied=copy(data,reinterpret_cast<uintptr_t>(gVfRectCpuCopies[ticket]),count*32);
+			const uint64_t last=copy(reinterpret_cast<uintptr_t>(parameters),reinterpret_cast<uintptr_t>(raw+68),272);
+			const uint64_t headLast=copy(reinterpret_cast<uintptr_t>(rectangles),reinterpret_cast<uintptr_t>(raw+142),24);
+			bool paramsStable=first==272 && last==272,headStable=head==24 && headLast==24;
+			for(uint32_t i=0;i<68;++i)paramsStable=paramsStable && raw[i]==raw[68+i];
+			for(uint32_t i=0;i<6;++i)headStable=headStable && raw[136+i]==raw[142+i];
+			const uint32_t flags=(first==272?1U:0U)|(head==24?2U:0U)|
+				(admitted && copied==count*32?4U:0U)|(paramsStable?8U:0U)|(headStable?16U:0U);
+			const uint32_t prefix[]={1,uint32_t(first<=272?first:0),uint32_t(last<=272?last:0),
+				uint32_t(head<=24?head:0),uint32_t(headLast<=24?headLast:0),
+				uint32_t(admitted && copied<=count*32?copied:0),flags,4096,32,admitted?1U:0U,0,0};
+			NGFlightTrace::emitCpuWordsPrefixed(gVfFlightTrace,[]() {
+				return static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+			},28,group,ticket+1,prefix,arrsize(prefix),raw,arrsize(raw));
+			if(admitted && copied<=count*32)for(uint32_t offset=0;offset<copied/4U;) {
+				const uint32_t valid=copied/4U-offset<512U?uint32_t(copied/4U)-offset:512U;
+				const uint32_t chunk[]={1,offset,uint32_t(count*8),uint32_t(copied),valid,flags};
+				NGFlightTrace::emitCpuWordsPrefixed(gVfFlightTrace,[]() {
+					return static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+				},29,group,ticket+1,chunk,arrsize(chunk),gVfRectCpuCopies[ticket]+offset,valid);
+				offset+=valid;
+			}
+		}
+	}
+	// All reads and emissions are complete before original code can mutate its
+	// inputs or enqueue work. This borrowed snapshot is not atomic or a lease.
+	return native(context,parameters,rectangles);
 }
 
 uintptr_t Gen11::vfObservePoolSubmit(void *pool)
