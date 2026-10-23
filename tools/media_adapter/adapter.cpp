@@ -5763,7 +5763,8 @@ struct NativeOtherFrameBackend {
         if(!lineage.matchesFence(fence,read,NativeDataAdmission{}))return observed("fence-lineage",false);
         uintptr_t device=0;uint32_t channels=0;
         if(!read(lineage.wrapper,&device,8) || !device || device>UINTPTR_MAX-0x34 ||
-           !read(device+0x30,&channels,4) || !channels || channels>8)return observed("device-channels",false);
+           !read(device+0x30,&channels,4) || !channels ||
+           channels>TglNativeFreshStampObservation::maxDeviceChannels)return observed("device-channels",false);
         const uint64_t stampBytes=uint64_t(channels)*64;
         auto stampAdmit=[&](const auto& expected,const auto& stamps,uint64_t bytes) noexcept {
             uintptr_t currentDevice=0;

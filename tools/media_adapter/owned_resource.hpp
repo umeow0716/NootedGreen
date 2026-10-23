@@ -25668,6 +25668,10 @@ struct TglNativeOtherContextEventLineage {
 class TglNativeFreshStampObservation {
     uintptr_t callback_=0;
 public:
+    // Native device+30 is the allocated stamp-table extent, not the eight
+    // entries consumed by TestEvent. Exact Tahoe runtime exposes ten entries;
+    // the completion wire protocol still admits only channel IDs below eight.
+    static constexpr uint32_t maxDeviceChannels=10;
     bool sameBinding(const TglNativeFreshStampObservation& other) const noexcept {
         return callback_ && callback_==other.callback_;
     }
@@ -25717,13 +25721,13 @@ public:
                 value.mapping<=UINTPTR_MAX-mappingBytes &&
                 read(device+0x28,&value.table,8) && value.table &&
                 read(device+0x30,&value.channels,4) && value.channels &&
-                value.channels<=8 && value.table<=UINTPTR_MAX-size_t(value.channels)*8;
+                value.channels<=maxDeviceChannels && value.table<=UINTPTR_MAX-size_t(value.channels)*8;
         };
         if(!metadata(candidate) || !admit(fence,candidate,mappingBytes))return false;
         for(size_t i=0;i<8;++i) {
             const uint32_t channel=uint32_t(fence.expected[i]);
             if(channel==UINT32_MAX)continue;
-            if(channel>=candidate.channels || size_t(channel)*64>mappingBytes ||
+            if(channel>=NGVfTaskCompletion::channels || channel>=candidate.channels || size_t(channel)*64>mappingBytes ||
                 mappingBytes-size_t(channel)*64<4)return false;
             const uintptr_t stamp=candidate.mapping+size_t(channel)*64;
             uintptr_t pointer=0,afterPointer=0;
@@ -25843,7 +25847,8 @@ public:
            fence.index!=lineage.index || fence.count!=lineage.count || !fence.count || fence.index>=fence.count ||
            !fence.frameworkContext || !fence.mapping || !fence.bytes || (fence.bytes&63) || fence.bytes/64!=fence.count ||
            !fresh.valid || !fresh.device ||
-           !fresh.mapping || !fresh.table || !fresh.channels || fresh.channels>8)return false;
+           !fresh.mapping || !fresh.table || !fresh.channels ||
+           fresh.channels>TglNativeFreshStampObservation::maxDeviceChannels)return false;
         NGVfTaskCompletion::Request request{NGVfTaskCompletion::version,sizeof(NGVfTaskCompletion::Request),{}};
         for(size_t i=0;i<8;++i) {
             request.expected[i]=fence.expected[i];const auto channel=uint32_t(fence.expected[i]);

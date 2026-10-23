@@ -301,7 +301,7 @@ template<class T,class Released> void testNativeOtherInputRetirement(std::unique
     fence.expected.fill(UINT32_MAX);fence.expected[0]=uint64_t{7}<<32;
     TglNativeFreshStampObservation::Snapshot fresh;
     fresh.valid=true;fresh.device=0x5000;fresh.mapping=0x6000;fresh.table=0x7000;
-    fresh.channels=1;fresh.active[0]=true;fresh.observed[0]=6;
+    fresh.channels=10;fresh.active[0]=true;fresh.observed[0]=6;
     assert(pending.bind(ticket,lineage,fence,fresh) && !released());
     NGVfTaskCompletion::Reply reply{};
     reply.abiVersion=NGVfTaskCompletion::version;reply.bytes=sizeof(reply);reply.registryId=99;reply.recordCount=1;
@@ -21255,6 +21255,15 @@ int main() {
         wrapperDevice=0x1008;assert(!fresh.capture(0x1000,128,fence,read,admit,result));wrapperDevice=0x1000;
         assert(fresh.capture(0x1000,128,fence,read,admit,result));
         assert(result.valid && result.active[0] && !result.active[1] && result.observed[0]==16);
+        channels=10;
+        assert(fresh.capture(0x1000,640,fence,read,admit,result));
+        assert(result.channels==10 && result.active[0] && result.observed[0]==16);
+        channels=11;assert(!fresh.capture(0x1000,704,fence,read,admit,result));
+        channels=0;assert(!fresh.capture(0x1000,640,fence,read,admit,result));
+        channels=10;fence.expected[0]=(uint64_t(17)<<32)|8;
+        assert(!fresh.capture(0x1000,640,fence,read,admit,result));
+        fence.expected[0]=(uint64_t(17)<<32)|1;
+        channels=2;
         auto preserved=result;pointer=0x2044;
         assert(!fresh.capture(0x1000,128,fence,read,admit,result));pointer=0x2040;
         assert(result.observed==preserved.observed);
