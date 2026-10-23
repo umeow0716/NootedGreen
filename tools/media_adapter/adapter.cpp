@@ -5700,40 +5700,86 @@ struct NativeOtherFrameBackend {
     static bool capture(NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,uint64_t generation,
         const TglNativeFrameOutputReceipt& receipt,TglNativeOtherContextEventLineage& lineage,
         TglNativeFenceBackingObservation::Snapshot& fence,TglNativeFreshStampObservation::Snapshot& fresh) noexcept {
+        // Passive accounting of the EXISTING reads only. No extra memory reads,
+        // pointer logging, native calls, permission changes or retirement authority.
+        static std::atomic<unsigned> observations{0};
+        auto ticket=observations.load(std::memory_order_relaxed);
+        while(ticket<8 && !observations.compare_exchange_weak(ticket,ticket+1,std::memory_order_relaxed)) {}
+        uint32_t reads=0,failed=0,present=0,eventMatches=0,eventIndex=0,channelsSeen=0,countSeen=0;
+        uint64_t bytesSeen=0;uintptr_t wrapperSeen=0,deviceSeen=0;
+        auto read=[&](uintptr_t address,void* output,size_t bytes) noexcept {
+            unsigned tag=31;
+            if(address==receipt.context+8)tag=0;
+            else if(address==receipt.context+0x10)tag=1;
+            else if(address==physical+0x50)tag=2;
+            else if(address==physical+0x58)tag=3;
+            else if(address==physical+0x60)tag=4;
+            else if(address==receipt.event+4)tag=5;
+            else if(wrapperSeen && address==wrapperSeen+0x10)tag=6;
+            else if(wrapperSeen && address==wrapperSeen+0x20)tag=7;
+            else if(wrapperSeen && address==wrapperSeen+0x28)tag=8;
+            else if(wrapperSeen && address==wrapperSeen+0x38)tag=9;
+            else if(wrapperSeen && address==wrapperSeen+0x40)tag=10;
+            else if(wrapperSeen && address==wrapperSeen)tag=11;
+            else if(deviceSeen && address==deviceSeen+0x30)tag=12;
+            const bool ok=readMemory(address,output,bytes);
+            reads|=uint32_t(1)<<tag;
+            if(!ok){failed|=uint32_t(1)<<tag;return false;}
+            uint64_t value=0;
+            if(bytes==4 || bytes==8)std::memcpy(&value,output,bytes);
+            if(value)present|=uint32_t(1)<<tag;
+            if(tag==1 && bytes==8)wrapperSeen=static_cast<uintptr_t>(value);
+            if(tag==11 && bytes==8)deviceSeen=static_cast<uintptr_t>(value);
+            if(tag==5 && bytes==4)eventIndex=static_cast<uint32_t>(value);
+            if(tag==9 && bytes==8)bytesSeen=value;
+            if(tag==10 && bytes==4)countSeen=static_cast<uint32_t>(value);
+            if(tag==12 && bytes==4)channelsSeen=static_cast<uint32_t>(value);
+            if(bytes==8 && address>=receipt.context+0x20 && address<receipt.context+0x120 &&
+               !((address-receipt.context-0x20)&7) && value==receipt.event)
+                eventMatches|=uint32_t(1)<<((address-receipt.context-0x20)/8);
+            return true;
+        };
+        auto observed=[&](const char* stage,bool result) noexcept {
+            if(ticket<8)os_log_error(OS_LOG_DEFAULT,
+                "NGRN_FRAME_FENCE_CAPTURE stage=%{public}s result=%{public}d receipt=%{public}d index=%{public}u reads=%{public}x failed=%{public}x present=%{public}x event-matches=%{public}x event-index=%{public}u count=%{public}u bytes=%{public}llu channels=%{public}u",
+                stage,int(result),int(receipt.valid),receipt.index,reads,failed,present,eventMatches,eventIndex,countSeen,
+                static_cast<unsigned long long>(bytesSeen),channelsSeen);
+            return result;
+        };
         const auto* source=NativeFactorySource::process().get();
-        if(!source || source->physical.image!=image || !scope.matches(image,physical,generation) ||
-           !lineage.capture(physical,receipt,&readMemory,NativeDataAdmission{}))return false;
+        if(!source || source->physical.image!=image || !scope.matches(image,physical,generation))return observed("source-scope",false);
+        if(!lineage.capture(physical,receipt,read,NativeDataAdmission{}))return observed("event-lineage",false);
         TglNativeFenceBackingObservation binding;
-        if(!binding.resolve(image,&readMemory,NativeTglImageAdmission{image},&executableMemory))return false;
+        if(!binding.resolve(image,read,NativeTglImageAdmission{image},&executableMemory))return observed("fence-reader-binding",false);
         auto fenceAdmit=[&](uintptr_t codec,uintptr_t wrapper,uintptr_t framework,uintptr_t mapping,uint64_t bytes,uint32_t index) noexcept {
             TglNativeOtherContextEventLineage current;
             return scope.matches(image,physical,generation) && codec==receipt.context && wrapper==lineage.wrapper &&
-                index==receipt.index && current.capture(physical,receipt,&readMemory,NativeDataAdmission{}) &&
+                index==receipt.index && current.capture(physical,receipt,read,NativeDataAdmission{}) &&
                 current.wrapper==wrapper && current.count==lineage.count && bytes<=SIZE_MAX &&
                 leafMemoryPermissions(framework,0x20,VM_PROT_READ,VM_PROT_EXECUTE) &&
                 leafMemoryPermissions(mapping,size_t(bytes),VM_PROT_READ,VM_PROT_EXECUTE);
         };
-        if(!binding.capture(receipt,lineage.wrapper,&readMemory,fenceAdmit,fence) ||
-           !lineage.matchesFence(fence,&readMemory,NativeDataAdmission{}))return false;
+        if(!binding.capture(receipt,lineage.wrapper,read,fenceAdmit,fence))return observed("expected-fence",false);
+        if(!lineage.matchesFence(fence,read,NativeDataAdmission{}))return observed("fence-lineage",false);
         uintptr_t device=0;uint32_t channels=0;
-        if(!readMemory(lineage.wrapper,&device,8) || !device || device>UINTPTR_MAX-0x34 ||
-           !readMemory(device+0x30,&channels,4) || !channels || channels>8)return false;
+        if(!read(lineage.wrapper,&device,8) || !device || device>UINTPTR_MAX-0x34 ||
+           !read(device+0x30,&channels,4) || !channels || channels>8)return observed("device-channels",false);
         const uint64_t stampBytes=uint64_t(channels)*64;
         auto stampAdmit=[&](const auto& expected,const auto& stamps,uint64_t bytes) noexcept {
             uintptr_t currentDevice=0;
             return scope.matches(image,physical,generation) && bytes==stampBytes && stamps.device==device && stamps.channels==channels &&
-                readMemory(expected.wrapper,&currentDevice,8) && currentDevice==device &&
-                lineage.matchesFence(expected,&readMemory,NativeDataAdmission{}) &&
+                read(expected.wrapper,&currentDevice,8) && currentDevice==device &&
+                lineage.matchesFence(expected,read,NativeDataAdmission{}) &&
                 leafMemoryPermissions(stamps.device,0x34,VM_PROT_READ,VM_PROT_EXECUTE) &&
                 leafMemoryPermissions(stamps.mapping,size_t(bytes),VM_PROT_READ,VM_PROT_EXECUTE) &&
                 leafMemoryPermissions(stamps.table,size_t(channels)*8,VM_PROT_READ,VM_PROT_EXECUTE);
         };
-        if(!source->freshStamps.capture(device,stampBytes,fence,&readMemory,stampAdmit,fresh))return false;
+        if(!source->freshStamps.capture(device,stampBytes,fence,read,stampAdmit,fresh))return observed("fresh-stamps",false);
         TglNativeFenceBackingObservation::Snapshot after;
-        return binding.capture(receipt,lineage.wrapper,&readMemory,fenceAdmit,after) &&
+        return observed("final-stability",binding.capture(receipt,lineage.wrapper,read,fenceAdmit,after) &&
             after.expected==fence.expected && after.mapping==fence.mapping && after.bytes==fence.bytes &&
             after.frameworkContext==fence.frameworkContext && after.count==fence.count &&
-            scope.matches(image,physical,generation);
+            scope.matches(image,physical,generation));
     }
     static int poll(NativePhysicalFrameScope& scope,uintptr_t image,uintptr_t physical,uint64_t generation,
         TglNativeOtherPendingFrames::RetiredInputs& retired) noexcept {
@@ -5958,12 +6004,20 @@ struct NativeOtherFrameBackend {
             },receipt);
         // Any invoked-native failure or missing evidence leaves Reserved/Bound
         // retention in the owner. No synthetic cancellation or implicit free.
+        static std::atomic<unsigned> receiptObservations{0};
+        auto receiptTicket=receiptObservations.load(std::memory_order_relaxed);
+        while(receiptTicket<8 && !receiptObservations.compare_exchange_weak(receiptTicket,receiptTicket+1,std::memory_order_relaxed)) {}
+        if(receiptTicket<8)os_log_error(OS_LOG_DEFAULT,
+            "NGRN_NATIVE_FRAME_RECEIPT result=%{public}d valid=%{public}d context-match=%{public}d event-present=%{public}d index=%{public}u",
+            result,int(receipt.valid),int(receipt.context==owner->context()),int(receipt.event!=0),receipt.index);
         if(result)return result;
         TglNativeOtherContextEventLineage lineage;
         TglNativeFenceBackingObservation::Snapshot fence;
         TglNativeFreshStampObservation::Snapshot fresh;
-        if(!capture(scope,image,physical,generation,receipt,lineage,fence,fresh) ||
-           !owner->bindNativeOtherFrame(lease,scope,reservation,lineage,fence,fresh))return 5;
+        if(!capture(scope,image,physical,generation,receipt,lineage,fence,fresh))return 5;
+        const bool bound=owner->bindNativeOtherFrame(lease,scope,reservation,lineage,fence,fresh);
+        if(receiptTicket<8)os_log_error(OS_LOG_DEFAULT,"NGRN_NATIVE_FRAME_RECEIPT_BIND bound=%{public}d",int(bound));
+        if(!bound)return 5;
         return result;
     }
 };
