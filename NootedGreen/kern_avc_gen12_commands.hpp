@@ -9,6 +9,10 @@
 // This profile preserves the observed AVC/NV12 noncompressed feature flags;
 // it is not a general HEVC/AV1/compressed-reference translator.
 namespace NgreenAvcGen12 {
+// Pinned Intel Gen12 AVC SendPrologWithFrameTracking / AddMiForceWakeupCmd:
+// unmask only HEVC/MFX power-well controls, select MFX for this AVC batch.
+// These are GPU commands, never CPU/PF MMIO writes or completion evidence.
+constexpr uint32_t avcWakeupHeader=0x0e800000U,avcWakeupControl=0x03000200U;
 // Exact loaded TGL constants, not a readback of PF registers.
 inline bool nativeCacheTablesMatch(const volatile uint8_t *global,size_t globalBytes,
                                   const volatile uint8_t *l3,size_t l3Bytes) noexcept {
@@ -149,7 +153,8 @@ inline bool collectPublishedResourceBases(const volatile uint32_t *words,uint32_
         out.stoppedWord=at;
         const uint32_t h=words[at],op=opcode(h);
         uint32_t n=0,legacy=0,expanded=0;
-        if(!h || h==0x68000100U)n=1;
+        if(at==0 && h==avcWakeupHeader && count>=2 && words[1]==avcWakeupControl)n=2;
+        else if(!h || h==0x68000100U)n=1;
         else if(h==0x05000000U) {
             if(at+2!=count || words[at+1])return false;
             n=1;
@@ -223,7 +228,7 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
        (!MeasureOnly && ((dst&3U) || dst>UINTPTR_MAX-capacity*4 ||
        (src<dst+capacity*4 && dst<src+count*4)))){r.reason="alias";return r;}
     if(input[count-1] || input[count-2]){r.reason="native-end-reserve";return r;}
-    size_t needed=0;unsigned mfx=0,mfxPipe=0,mfxImage=0,image=0,mode=0;
+    size_t needed=2;unsigned mfx=0,mfxPipe=0,mfxImage=0,image=0,mode=0;
     unsigned srcSurface=0,refSurface=0,ds=0,pipe=0,walkers=0,srm=0;
     uint32_t nextRow=0,registerMask=0;
     // Entire validation pass precedes the first output write.
@@ -352,7 +357,8 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
     if(MeasureOnly) {
         r.ok=true;r.words=needed;r.reason="reservation-size-only";return r;
     }
-    size_t out=0;
+    size_t out=2;
+    output[0]=avcWakeupHeader;output[1]=avcWakeupControl;
     for(size_t at=0;at<count;) {
         const uint32_t op=opcode(input[at]);const size_t n=packetWords(input[at]);
         if(op==0x70000000U)output[out++]=0x68000100U;

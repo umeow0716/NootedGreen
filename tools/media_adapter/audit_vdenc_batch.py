@@ -78,7 +78,10 @@ def mode_template_fields(words):
     while at < len(words):
         header = words[at]
         op = header & (0xff800000 if header < 0x60000000 else 0xffff0000)
-        if header in (0, 0x68000100):
+        if at == 0 and header == 0x0e800000 and len(words)>=2 and words[1]==0x03000200:
+            count = 2
+            result['avc_wakeup_prolog'] = 'INTEL_GEN12_MFX_ON_HEVC_OFF_CPU_ONLY'
+        elif header in (0, 0x68000100):
             count = 1
         elif header == 0x05000000 and at+2 == len(words) and words[at+1] == 0:
             count = 1  # Exact native final END/NOOP pair, never scan beyond END.
@@ -532,6 +535,10 @@ def timeout_ring(text):
 
 
 def selftest():
+    assert mode_template_fields([0x0e800000,0x03000200,0,0])['complete_packet_walk']
+    for bit in range(32):
+        assert not mode_template_fields([0x0e800000,0x03000200^(1<<bit),0,0])['complete_packet_walk']
+    assert not mode_template_fields([0,0x0e800000,0x03000200,0,0])['complete_packet_walk']
     packets = timeout_ring_packets([0x0e009002, 2, 0x40001000, 0,
                                    0x18800101, 0x40010000, 0,
                                    0x13004103, 0x400010c0, 0, 1, 0, 0x03800000])

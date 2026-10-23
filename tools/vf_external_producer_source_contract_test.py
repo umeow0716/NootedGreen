@@ -141,7 +141,11 @@ def avc_phase_contract(header, reservation):
     assert "inspectOrProduce<true>(input,count,width,height,nullptr,1536)" in size
     assert "legacyNv12Surface(input+at,surfaceWidth,surfaceHeight,!MeasureOnly)" in inspection
     branch = inspection.index("if(MeasureOnly) {")
-    assert inspection.index('r.reason="reservation-size-only";return r;', branch) < inspection.index("size_t out=0;")
+    assert inspection.index('r.reason="reservation-size-only";return r;', branch) < inspection.index("size_t out=2;")
+    assert 'size_t needed=2;' in inspection
+    assert 'avcWakeupHeader=0x0e800000U,avcWakeupControl=0x03000200U;' in header
+    assert 'output[0]=avcWakeupHeader;output[1]=avcWakeupControl;' in inspection
+    assert inspection.index('output[0]=avcWakeupHeader;') > inspection.index('if(needed>capacity)')
     assert "NgreenAvcGen12::sizeBeforeRelocation" in commit
     assert "NgreenAvcGen12::produce(" not in commit
     assert "if(!measured.bounded)" in commit and "plan(before,measured.outputWords)" in commit
@@ -154,6 +158,10 @@ def avc_phase_mutations(header, reservation):
         (header.replace("inspectOrProduce<true>(input,count,width,height,nullptr,1536)", "inspectOrProduce<false>(input,count,width,height,nullptr,1536)", 1), reservation),
         (header.replace("surfaceHeight,!MeasureOnly)", "surfaceHeight,false)", 1), reservation),
         (header.replace("if(MeasureOnly) {", "if(false) {", 1), reservation),
+        (header.replace("size_t needed=2;", "size_t needed=0;", 1), reservation),
+        (header.replace("size_t out=2;", "size_t out=0;", 1), reservation),
+        (header.replace("avcWakeupControl=0x03000200U", "avcWakeupControl=0x03000100U", 1), reservation),
+        (header.replace("output[1]=avcWakeupControl;", "output[1]=0;", 1), reservation),
         (header, reservation.replace("NgreenAvcGen12::sizeBeforeRelocation", "NgreenAvcGen12::produce", 1)),
         *((header, reservation.replace(helper + "(request,read,payload)", "true", 1))
           for helper in ("referenceIndices", "quantizerIndex", "activeReferenceCounts")),
