@@ -15,6 +15,7 @@
 #include "kern_vf_context_shutdown.hpp"
 #include "kern_vf_submission_gate.hpp"
 #include "kern_avc_gen12_commands.hpp"
+#include "kern_checksum_gen12_commands.hpp"
 #include "kern_vf_runtime.hpp"
 #include "kern_vf_device_observation.hpp"
 #include "kern_vf_runtime_patch.hpp"

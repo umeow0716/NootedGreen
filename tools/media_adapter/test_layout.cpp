@@ -19930,6 +19930,15 @@ int main() {
         for(size_t i=26;i<input.size();++i)
             assert(output[i+6]==(i==29?input[i]|0x40U:i==42?0x40U:input[i]));
         const auto before=output;
+        assert(!NgreenChecksumGen12::build1080Batch(nullptr,72,heap,output.data(),78).ok && output==before);
+        assert(!NgreenChecksumGen12::build1080Batch(input.data(),71,heap,output.data(),78).ok && output==before);
+        assert(!NgreenChecksumGen12::build1080Batch(input.data(),72,heap,output.data(),77).ok && output==before);
+        std::array<uint32_t,78> alias{};
+        std::copy(input.begin(),input.end(),alias.begin());const auto aliasBefore=alias;
+        assert(!NgreenChecksumGen12::build1080Batch(alias.data(),72,heap,alias.data(),78).ok && alias==aliasBefore);
+        std::array<uint32_t,80> guarded;guarded.fill(0xdeadbeef);
+        assert(NgreenChecksumGen12::build1080Batch(input.data(),72,heap,guarded.data(),guarded.size()).ok);
+        assert(guarded[78]==0xdeadbeef && guarded[79]==0xdeadbeef);
         for(unsigned i=0;i<72;++i)for(unsigned bit=0;bit<32;++bit) {
             auto bad=input;bad[i]^=1U<<bit;
             assert(!build1080Batch(bad,heap,output).ok && output==before);
