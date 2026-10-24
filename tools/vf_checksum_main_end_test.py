@@ -3,7 +3,7 @@
 
 No VM, MMIO, native resource invocation or GPU execution. Fixed native image
 reads are limited to the thunk, vtable slot and FIFO END-mode byte windows.
-The hook's production readiness stays false; mocks exercise its future branch.
+Readiness derives from qualified installed endpoints; CPU mocks grant no GPU proof.
 """
 from pathlib import Path
 import os
@@ -74,6 +74,69 @@ def test_qualification(root):
     p=root/'main_end_qualification_actual.cpp';p.write_text(prefix+body+suffix)
     subprocess.run([*CXX,'-std=c++14','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(p),'-o',str(root/'main_end_qualification_actual')],check=True)
     subprocess.run([str(root/'main_end_qualification_actual')],check=True)
+
+def test_readiness(root):
+    source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
+    start=source.index('gVfChecksumPublicationRouteReady=checksumEndQualified')
+    install=source[start:source.index(';',start)+1].replace('this->','owner.')
+    start=source.index('static IOReturn vfReadOwnedChecksumPublication(')
+    start=source.index('\tif (gVfIdentity==VfIdentity::Virtual',start)
+    token='reply.flags=NGVfChecksumPublication::routeReady;'
+    query=source[start:source.index(token,start)+len(token)]
+    prefix=r'''#include <array>
+#include <cassert>
+#include <cstring>
+#include <cstdio>
+#include "NootedGreen/kern_vf_device_observation.hpp"
+using UInt32=uint32_t;
+enum class VfIdentity {Virtual,Physical};
+bool checksumEndQualified=true,gVfChecksumPublicationRouteReady=true,gVfChecksumNativeBindingsQualified=true;
+bool gVfMediaPublicationRouteReady=true,gVfMediaPublicationAbiVerified=true,gVfCaptureStreamResetBound=true;
+bool gVfDeviceStopping=false,gVfSubmissionStopped=false,gVfProtocolFault=false,mediaOpt=true,genOpt=true;
+uintptr_t mainTable=0x10000000,videoEnd=0x20000000,gVfChecksumMainVtable=mainTable+16;
+struct Owner {uintptr_t oVfChecksumEnd=videoEnd;}owner;
+VfIdentity gVfIdentity=VfIdentity::Virtual;
+alignas(16) std::array<uint8_t,0xdd0> native{},foreign{};
+void*gVfAccelerator=native.data();
+template<class T>T&getMember(void*p,size_t offset){return *reinterpret_cast<T*>(static_cast<uint8_t*>(p)+offset);}
+bool checkKernelArgument(const char*text){return !strcmp(text,"-ngreenmediaadapter")?mediaOpt:!strcmp(text,"-ngreenavcgen12")?genOpt:false;}
+bool installed(){
+'''
+    middle='\nreturn gVfChecksumPublicationRouteReady;\n}\nbool advertised(void*accelerator){NGVfChecksumPublication::Reply reply{};\n'
+    suffix=r'''
+return reply.flags==NGVfChecksumPublication::routeReady;
+}
+int main(){
+ for(unsigned mode=0;mode<8;++mode){
+  checksumEndQualified=gVfChecksumNativeBindingsQualified=true;gVfChecksumMainVtable=mainTable+16;owner.oVfChecksumEnd=videoEnd;
+  if(mode==1)checksumEndQualified=false;if(mode==2)gVfChecksumNativeBindingsQualified=false;
+  if(mode==3)gVfChecksumMainVtable=0;if(mode==4)gVfChecksumMainVtable=mainTable+8;
+  if(mode==5)owner.oVfChecksumEnd=0;if(mode==6)owner.oVfChecksumEnd=videoEnd+8;
+  if(mode==7)gVfChecksumMainVtable=mainTable;
+  gVfChecksumPublicationRouteReady=true;assert(installed()==(mode==0));
+ }
+ for(unsigned mode=0;mode<15;++mode){
+  gVfChecksumPublicationRouteReady=gVfChecksumNativeBindingsQualified=gVfMediaPublicationRouteReady=true;
+  gVfMediaPublicationAbiVerified=gVfCaptureStreamResetBound=mediaOpt=genOpt=true;
+  gVfChecksumMainVtable=mainTable+16;gVfIdentity=VfIdentity::Virtual;
+  gVfDeviceStopping=gVfSubmissionStopped=gVfProtocolFault=false;
+  getMember<UInt32>(native.data(),0xdc8)=0;void*accelerator=native.data();
+  if(mode==1)gVfChecksumPublicationRouteReady=false;if(mode==2)gVfChecksumNativeBindingsQualified=false;
+  if(mode==3)gVfChecksumMainVtable=0;if(mode==4)gVfMediaPublicationRouteReady=false;
+  if(mode==5)gVfMediaPublicationAbiVerified=false;if(mode==6)gVfCaptureStreamResetBound=false;
+  if(mode==7)gVfIdentity=VfIdentity::Physical;if(mode==8)accelerator=foreign.data();
+  if(mode==9)mediaOpt=false;if(mode==10)genOpt=false;if(mode==11)gVfDeviceStopping=true;
+  if(mode==12)gVfSubmissionStopped=true;if(mode==13)gVfProtocolFault=true;
+  if(mode==14)getMember<UInt32>(native.data(),0xdc8)=1;
+  assert(advertised(accelerator)==(mode==0));
+ }
+ puts("Actual checksum installed/runtime capability gates PASS; CPU-only");
+}
+'''
+    path=root/'checksum_readiness_actual.cpp';path.write_text(prefix+install+middle+query+suffix)
+    binary=root/'checksum_readiness_actual'
+    subprocess.run([*CXX,'-std=c++17','-fsanitize=address,undefined','-I'+str(ROOT),str(path),'-o',str(binary)],check=True)
+    subprocess.run([str(binary)],check=True)
 
 def test_end(root):
     source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
@@ -266,5 +329,6 @@ if __name__=="__main__":
     with tempfile.TemporaryDirectory(prefix="ngreen-checksum-main-end-") as directory:
         destination=Path(directory)
         test_qualification(destination)
+        test_readiness(destination)
         test_end(destination)
         test_user_adoption(destination)

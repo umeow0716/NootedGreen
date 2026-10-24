@@ -3672,9 +3672,15 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                     gVfChecksumMainVtable=mainTable+16;
                     OSSynchronizeIO();
                 }
-                // Installation alone is not capability readiness: the owned
-                // program/size/builder/input leases must also be wired first.
-                SYSLOG("ngreen","Checksum Main end route bound=%u ready=0",checksumEndQualified?1U:0U);
+                // Capability advertises the qualified KERNEL half only. The
+                // independent selector4 client still prepares its owned program,
+                // paired callbacks and retained input before dispatch. Every
+                // submitted stream is requalified by vfChecksumEnd below.
+                gVfChecksumPublicationRouteReady=checksumEndQualified && gVfChecksumNativeBindingsQualified &&
+                    gVfChecksumMainVtable==mainTable+16 && this->oVfChecksumEnd==videoEnd;
+                OSSynchronizeIO();
+                SYSLOG("ngreen","Checksum Main end route bound=%u ready=%u",checksumEndQualified?1U:0U,
+                    gVfChecksumPublicationRouteReady?1U:0U);
 
 
 				const auto batchSubmit=patcher.solveSymbol(index,
@@ -7002,8 +7008,8 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
 {
     PANIC_COND(!callback || !callback->oVfChecksumEnd,"ngreen","Missing verified checksum Main end target");
     void *accelerator=that?getMember<void*>(that,0x5A8):nullptr;
-    // Remains disabled until owned program/size/builder/input leases are all
-    // connected. A hook installation must not advertise that capability.
+    // Route capability is not input/program/submission authority. Exact native
+    // caller, task, heaps, mapped span, marker and bytes are rechecked below.
     if(!gVfChecksumPublicationRouteReady || gVfIdentity!=VfIdentity::Virtual ||
         accelerator!=gVfAccelerator || !checkKernelArgument("-ngreenmediaadapter") ||
         !checkKernelArgument("-ngreenavcgen12")) {
@@ -7353,8 +7359,10 @@ static IOReturn vfReadOwnedChecksumPublication(void *accelerator,void *arguments
 	reply.registryId=static_cast<IORegistryEntry *>(accelerator)->getRegistryEntryID();
 	if (!reply.registryId)return kIOReturnOffline;
 	OSSynchronizeIO();
-	if (gVfChecksumPublicationRouteReady && gVfMediaPublicationRouteReady && gVfMediaPublicationAbiVerified &&
-	    checkKernelArgument("-ngreenavcgen12") && !gVfDeviceStopping &&
+	if (gVfIdentity==VfIdentity::Virtual && accelerator==gVfAccelerator &&
+	    gVfChecksumPublicationRouteReady && gVfChecksumNativeBindingsQualified && gVfChecksumMainVtable &&
+	    gVfMediaPublicationRouteReady && gVfMediaPublicationAbiVerified && gVfCaptureStreamResetBound &&
+	    checkKernelArgument("-ngreenmediaadapter") && checkKernelArgument("-ngreenavcgen12") && !gVfDeviceStopping &&
 	    !gVfSubmissionStopped && !gVfProtocolFault &&
 	    getMember<volatile UInt32>(accelerator,0xDC8)==0)
 		reply.flags=NGVfChecksumPublication::routeReady;
