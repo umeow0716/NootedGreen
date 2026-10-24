@@ -7979,6 +7979,11 @@ struct TglDarwinDeviceObservationApi {
            !output || !bytes || *bytes!=sizeof(NGVfAvcPublication::Reply))return 5;
         return structMethod(port,selector,nullptr,0,output,bytes);
     }
+    int readChecksumPublication(uint32_t port,uint32_t selector,void* output,size_t* bytes) const noexcept {
+        if(!valid() || !port || selector!=NGVfChecksumPublication::selector ||
+           !output || !bytes || *bytes!=sizeof(NGVfChecksumPublication::Reply))return 5;
+        return structMethod(port,selector,nullptr,0,output,bytes);
+    }
     int readCompletion(uint32_t port,uint32_t selector,const NGVfTaskCompletion::Request& request,
         void* output,size_t* bytes) const noexcept {
         if(!valid() || !port || selector!=NGVfTaskCompletion::selector ||

@@ -122,6 +122,44 @@ template<class Call> bool query(uint64_t registryId,Call call,Reply& output) noe
     output=candidate;return true;
 }
 }
+namespace NGVfChecksumPublication {
+constexpr uint32_t selector=0x4E470004U,version=1,profile=1;
+constexpr uint32_t routeReady=1,maxInputWords=72,maxOutputWords=78;
+// Separate checksum ABI: exact native72 -> Gen12 78 DWORDs with appended
+// kernel slot1, a 64-byte descriptor stride and the pinned Gen12 shader.
+// AVC profile3 alone never authorizes this auxiliary renderer path. A kernel
+// only advertises readiness after the post-relocation producer is installed.
+struct Reply {
+    uint32_t abiVersion,bytes;
+    uint64_t registryId;
+    uint32_t flags,commandProfile,inputLimit,outputLimit;
+    uint8_t familyUuid[16];
+};
+static_assert(sizeof(Reply)==48,"fixed checksum publication negotiation layout");
+template<class Args> bool inlineShape(const Args* args,uint32_t currentVersion,
+    const void* dispatch,const void* target,const void* reference) noexcept {
+    return args && !dispatch && !target && !reference && args->version==currentVersion &&
+        args->selector==selector && !args->asyncWakePort && !args->asyncReference && !args->asyncReferenceCount &&
+        !args->scalarInputCount && !args->scalarOutputCount &&
+        !args->structureInputSize && !args->structureInputDescriptor &&
+        !args->structureOutputDescriptor && !args->structureOutputDescriptorSize &&
+        !args->structureVariableOutputData && args->structureOutput && args->structureOutputSize==sizeof(Reply);
+}
+inline bool ready(const Reply& r,uint64_t registryId) noexcept {
+    if(!registryId || r.registryId!=registryId || r.abiVersion!=version || r.bytes!=sizeof(Reply) ||
+       r.flags!=routeReady || r.commandProfile!=profile ||
+       r.inputLimit!=maxInputWords || r.outputLimit!=maxOutputWords)return false;
+    for(unsigned i=0;i<16;++i)
+        if(r.familyUuid[i]!=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i])return false;
+    return true;
+}
+template<class Call> bool query(uint64_t registryId,Call call,Reply& output) noexcept {
+    Reply candidate{};size_t bytes=sizeof(candidate);
+    if(!registryId || call(selector,&candidate,&bytes)!=0 || bytes!=sizeof(candidate) ||
+       !ready(candidate,registryId))return false;
+    output=candidate;return true;
+}
+}
 // Separate task-bound request. A response is meaningful only when produced
 // under native SharedUserClient detach admission AND pinned context coverage;
 // these wire types alone do not authorize retirement.

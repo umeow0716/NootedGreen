@@ -212,6 +212,9 @@ bool gVfMediaPublicationAbiVerified = false;
 // ABI anchors alone do not make a submission route ready. Only a completely
 // installed native end-command hook may publish this in a future integration.
 static bool gVfMediaPublicationRouteReady = false;
+// Set only by the completed checksum post-relocation/end integration. The
+// AVC route alone must not advertise this independent auxiliary capability.
+static bool gVfChecksumPublicationRouteReady = false;
 mach_vm_address_t gVfMediaEndCaller = 0;
 bool gVfCaptureStreamResetBound = false;
 mach_vm_address_t gVfMediaKernelMappedMemoryVtable = 0;
@@ -7060,6 +7063,33 @@ static IOReturn vfReadOwnedAvcPublication(void *accelerator,void *arguments,
 	return kIOReturnSuccess;
 }
 
+static IOReturn vfReadOwnedChecksumPublication(void *accelerator,void *arguments,
+    void *dispatch,void *target,void *reference)
+{
+	if (!gVfDeviceObservationAbiVerified)return kIOReturnUnsupported;
+	auto *args=static_cast<IOExternalMethodArguments *>(arguments);
+	if (!NGVfChecksumPublication::inlineShape(args,kIOExternalMethodArgumentsCurrentVersion,
+	    dispatch,target,reference))return kIOReturnBadArgument;
+	NGVfChecksumPublication::Reply reply{};
+	reply.abiVersion=NGVfChecksumPublication::version;reply.bytes=sizeof(reply);
+	reply.registryId=static_cast<IORegistryEntry *>(accelerator)->getRegistryEntryID();
+	if (!reply.registryId)return kIOReturnOffline;
+	OSSynchronizeIO();
+	if (gVfChecksumPublicationRouteReady && gVfMediaPublicationRouteReady && gVfMediaPublicationAbiVerified &&
+	    checkKernelArgument("-ngreenavcgen12") && !gVfDeviceStopping &&
+	    !gVfSubmissionStopped && !gVfProtocolFault &&
+	    getMember<volatile UInt32>(accelerator,0xDC8)==0)
+		reply.flags=NGVfChecksumPublication::routeReady;
+	reply.commandProfile=NGVfChecksumPublication::profile;
+	reply.inputLimit=NGVfChecksumPublication::maxInputWords;
+	reply.outputLimit=NGVfChecksumPublication::maxOutputWords;
+	for (unsigned i=0;i<16;++i)reply.familyUuid[i]=NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid[i];
+	const auto *wire=reinterpret_cast<const uint8_t *>(&reply);
+	auto *output=static_cast<volatile uint8_t *>(args->structureOutput);
+	for (size_t i=0;i<sizeof(reply);++i)output[i]=wire[i];
+	return kIOReturnSuccess;
+}
+
 IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	                                  void *arguments, void *dispatch,
 	                                  void *target, void *reference)
@@ -7091,6 +7121,9 @@ IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	if (selector == NGVfAvcPublication::selector && gVfIdentity == VfIdentity::Virtual &&
 	    accelerator && accelerator == gVfAccelerator && checkKernelArgument("-ngreenmediaadapter"))
 		return vfReadOwnedAvcPublication(accelerator,arguments,dispatch,target,reference);
+	if (selector == NGVfChecksumPublication::selector && gVfIdentity == VfIdentity::Virtual &&
+	    accelerator && accelerator == gVfAccelerator && checkKernelArgument("-ngreenmediaadapter"))
+		return vfReadOwnedChecksumPublication(accelerator,arguments,dispatch,target,reference);
 	// Observe the resource-create boundary without reading user arguments or
 	// changing native dispatch. Saturation bounds logging across all clients.
 	static volatile UInt32 observedCreates = 0;

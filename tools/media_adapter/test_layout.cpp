@@ -19837,7 +19837,76 @@ static void testChecksumProgramAppend() {
     }
 }
 
+static void testChecksumCapability() {
+    namespace Checksum=NGVfChecksumPublication;
+    static_assert(Checksum::selector!=NGVfAvcPublication::selector &&
+        Checksum::selector!=NGVfTaskCompletion::selector && Checksum::selector!=NGVfDeviceObservation::selector);
+    Checksum::Reply ready{};
+    ready.abiVersion=Checksum::version;ready.bytes=sizeof(ready);ready.registryId=19;
+    ready.flags=Checksum::routeReady;ready.commandProfile=Checksum::profile;
+    ready.inputLimit=72;ready.outputLimit=78;
+    std::memcpy(ready.familyUuid,NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid,16);
+    assert(Checksum::ready(ready,19) && !Checksum::ready(ready,20));
+    for(size_t byte=0;byte<sizeof(ready);++byte)for(unsigned bit=0;bit<8;++bit) {
+        auto changed=ready;reinterpret_cast<uint8_t*>(&changed)[byte]^=uint8_t(1U<<bit);
+        assert(!Checksum::ready(changed,19));
+    }
+    auto unavailable=ready;unavailable.flags=0;assert(!Checksum::ready(unavailable,19));
+    unavailable=ready;unavailable.commandProfile=NGVfAvcPublication::profile;
+    assert(!Checksum::ready(unavailable,19)); // AVC readiness is not checksum readiness.
+    struct Args {
+        uint64_t version=7,selector=Checksum::selector,asyncWakePort=0,asyncReference=0,asyncReferenceCount=0;
+        uint64_t scalarInputCount=0,scalarOutputCount=0,structureInputSize=0,structureInputDescriptor=0;
+        uint64_t structureOutputDescriptor=0,structureOutputDescriptorSize=0,structureVariableOutputData=0;
+        void* structureOutput=nullptr;uint64_t structureOutputSize=sizeof(Checksum::Reply);
+    } args;
+    args.structureOutput=&ready;
+    const auto shape=[&](const Args& candidate) noexcept {
+        return Checksum::inlineShape(&candidate,7,nullptr,nullptr,nullptr);
+    };
+    assert(shape(args));
+    for(unsigned field=0;field<14;++field) {
+        auto changed=args;
+        switch(field) {
+            case 0:++changed.version;break;case 1:changed.selector=NGVfAvcPublication::selector;break;
+            case 2:changed.asyncWakePort=1;break;case 3:changed.asyncReference=1;break;
+            case 4:changed.asyncReferenceCount=1;break;case 5:changed.scalarInputCount=1;break;
+            case 6:changed.scalarOutputCount=1;break;case 7:changed.structureInputSize=1;break;
+            case 8:changed.structureInputDescriptor=1;break;case 9:changed.structureOutputDescriptor=1;break;
+            case 10:changed.structureOutputDescriptorSize=1;break;case 11:changed.structureVariableOutputData=1;break;
+            case 12:changed.structureOutput=nullptr;break;case 13:--changed.structureOutputSize;break;
+        }
+        assert(!shape(changed));
+    }
+    assert(!Checksum::inlineShape(&args,7,&args,nullptr,nullptr));
+    assert(!Checksum::inlineShape(&args,7,nullptr,&args,nullptr));
+    assert(!Checksum::inlineShape(&args,7,nullptr,nullptr,&args));
+    TglDarwinDeviceObservationApi api{
+        [](uint32_t,uint32_t*) {return 5;},[](uint32_t,uint64_t*) {return 5;},[](uint32_t) {return 5;},
+        [](uint32_t port,uint32_t selector,const void* input,size_t inputSize,void* output,size_t* bytes) {
+            assert(port==42 && selector==Checksum::selector && !input && !inputSize &&
+                output && bytes && *bytes==sizeof(Checksum::Reply));
+            auto& reply=*static_cast<Checksum::Reply*>(output);reply={};
+            reply.abiVersion=Checksum::version;reply.bytes=sizeof(reply);reply.registryId=19;
+            reply.flags=Checksum::routeReady;reply.commandProfile=Checksum::profile;
+            reply.inputLimit=72;reply.outputLimit=78;
+            std::memcpy(reply.familyUuid,NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid,16);return 0;
+        }};
+    Checksum::Reply output{};
+    auto call=[&](uint32_t selector,void* out,size_t* bytes) noexcept {
+        return api.readChecksumPublication(42,selector,out,bytes);
+    };
+    assert(Checksum::query(19,call,output) && output.registryId==19);
+    output={};assert(!Checksum::query(20,call,output) && !output.registryId);
+    auto unsupported=[](uint32_t,void*,size_t*) noexcept {return 5;};
+    assert(!Checksum::query(19,unsupported,output) && !output.registryId);
+    size_t bytes=sizeof(output);
+    assert(api.readChecksumPublication(42,NGVfAvcPublication::selector,&output,&bytes)==5);
+    assert(api.readAvcPublication(42,Checksum::selector,&output,&bytes)==5);
+}
+
 int main() {
+    testChecksumCapability();
     testChecksumProgramAppend();
     {
         // Captured group4 CPU bytes, independently decoded from the V391
