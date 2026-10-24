@@ -299,6 +299,9 @@ private:
 	mach_vm_address_t oVfContextSubmit {};
 	static void vfMediaEnd(void *that,void *stream);
 	mach_vm_address_t oVfMediaEnd {};
+	static bool vfChecksumBindResource(void *that,void *stream,uint32_t identifier,
+	    void **resource,uint64_t *gpuAddress,uint32_t *pitch,bool write);
+	mach_vm_address_t oVfChecksumBindResource {};
 	static bool vfObserveRingBatch(void *that,uint64_t gpu,uint32_t stamp,
 		uint32_t *cpu,uint32_t count,bool flagA,bool flagB);
 	mach_vm_address_t oVfObserveRingBatch {};

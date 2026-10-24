@@ -13,6 +13,45 @@ struct HeapAddresses {
     uint64_t surface=0,dynamic=0,instruction=0;
     uint32_t kernelSlot=0;
 };
+// Opaque scalars copied from the THREE original bind_resource returns.
+// This is not a resource retain, lock, epoch proof or permission to dereference
+// resource/task/shared. The authenticated native end caller supplies those
+// independent lifetime/lock guarantees before consuming this observation.
+struct NativeHeapBindings {
+    volatile uintptr_t resources[3];
+    volatile uint64_t gpu[3];
+    volatile uint32_t pitch[3];
+    uintptr_t task,shared;
+    uint32_t seen;
+    bool failed;
+    void reset() noexcept {
+        for(unsigned i=0;i<3;++i){resources[i]=0;gpu[i]=0;pitch[i]=0;}
+        task=shared=0;seen=0;failed=false;
+    }
+    bool record(unsigned slot,bool nativeReturned,uintptr_t resource,uint64_t address,
+        uint32_t rowPitch,bool write,uintptr_t sourceTask,uintptr_t sourceShared) noexcept {
+        if(failed)return false;
+        if(slot>=3 || seen!=((1U<<slot)-1U) || !nativeReturned || write ||
+            !resource || (resource&7U) || !address || (address&4095U) ||
+            address>UINT64_C(0x0000fffffffff000) || !rowPitch || !sourceTask || !sourceShared ||
+            (seen && (task!=sourceTask || shared!=sourceShared))) {failed=true;return false;}
+        for(unsigned i=0;i<slot;++i)if(resources[i]==resource || gpu[i]==address){failed=true;return false;}
+        resources[slot]=resource;gpu[slot]=address;pitch[slot]=rowPitch;
+        task=sourceTask;shared=sourceShared;seen|=1U<<slot;return true;
+    }
+    bool copyObservedHeaps(uintptr_t currentTask,uintptr_t currentShared,HeapAddresses& output) const noexcept {
+        if(failed || seen!=7 || !task || task!=currentTask || !shared || shared!=currentShared)return false;
+        for(unsigned i=0;i<3;++i) {
+            if(!resources[i] || (resources[i]&7U) || !gpu[i] || (gpu[i]&4095U) ||
+                gpu[i]>UINT64_C(0x0000fffffffff000) || !pitch[i])return false;
+            for(unsigned j=0;j<i;++j)if(resources[j]==resources[i] || gpu[j]==gpu[i])return false;
+        }
+        // Native token order is DYNAMIC, INSTRUCTION, SURFACE. It is not the
+        // order of their DWORD pairs in STATE_BASE_ADDRESS.
+        const HeapAddresses candidate{gpu[2],gpu[0],gpu[1],1};
+        output=candidate;return true;
+    }
+};
 struct Result {bool ok=false;const char* reason="shape";};
 inline Result build1080Batch(const uint32_t* source,size_t words,const HeapAddresses& heap,
     volatile uint32_t* output,size_t capacity) noexcept {

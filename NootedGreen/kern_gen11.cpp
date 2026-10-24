@@ -216,6 +216,8 @@ static bool gVfMediaPublicationRouteReady = false;
 // Set only by the completed checksum post-relocation/end integration. The
 // AVC route alone must not advertise this independent auxiliary capability.
 static bool gVfChecksumPublicationRouteReady = false;
+static bool gVfChecksumNativeBindingsQualified = false;
+static mach_vm_address_t gVfChecksumBindCallers[3] {};
 mach_vm_address_t gVfMediaEndCaller = 0;
 bool gVfCaptureStreamResetBound = false;
 mach_vm_address_t gVfMediaKernelMappedMemoryVtable = 0;
@@ -1218,6 +1220,7 @@ struct VfMediaSubmission {
 	void *shared;
 	void *gpuTask;
 	NgreenAvcGen12::PublishScratch *scratch;
+	NgreenChecksumGen12::NativeHeapBindings checksumHeaps;
 	bool translating;
 	bool failed;
 	bool captureCancelled;
@@ -1265,7 +1268,7 @@ public:
 				if (!OSCompareAndSwapPtr(nullptr,owner,&entry.thread)) continue;
 				entry.context=context;entry.accelerator=accelerator;entry.task=nullptr;
 				entry.shared=nullptr;entry.gpuTask=nullptr;
-				entry.scratch=nullptr;entry.translating=false;entry.failed=false;entry.captureCancelled=false;slot=&entry;
+				entry.scratch=nullptr;entry.checksumHeaps.reset();entry.translating=false;entry.failed=false;entry.captureCancelled=false;slot=&entry;
 				entry.flightGroup=static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightGroupSerial));
 				break;
 			}
@@ -1346,6 +1349,7 @@ private:
 		state=IOSimpleLockLockDisableInterrupt(gVfContextLock);
 		slot->context=nullptr;slot->accelerator=nullptr;slot->task=nullptr;
 		slot->shared=nullptr;slot->gpuTask=nullptr;
+		slot->checksumHeaps.reset();
 		PANIC_COND(!OSCompareAndSwapPtr(owner,nullptr,&slot->thread),"ngreen",
 		           "Lost owned AVC submission thread slot");
 		IOSimpleLockUnlockEnableInterrupt(gVfContextLock,state);
@@ -3445,6 +3449,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				"Cannot resolve the exported Tahoe PCI MSI configurator");
 			if (checkKernelArgument("-ngreenmediaadapter") && checkKernelArgument("-ngreenavcgen12")) {
 				gVfMediaPublicationRouteReady=false;
+				gVfChecksumNativeBindingsQualified=false;
+				for(unsigned i=0;i<3;++i)gVfChecksumBindCallers[i]=0;
 				const auto mediaEnd=patcher.solveSymbol(index,
 					"__ZN24IGAccelVideoContextMedia16endCommandStreamER24IOAccelCommandStreamInfo",address,size);
 				const auto videoEnd=patcher.solveSymbol(index,
@@ -3517,6 +3523,69 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				OSSynchronizeIO();
 				gVfMediaPublicationRouteReady=true;
 				SYSLOG("ngreen","Gen12 AVC post-relocation publication route ready=1 profile=%u",NGVfAvcPublication::profile);
+                // Capture only ORIGINAL native bind returns. This installs no
+                // checksum command producer and cannot advertise CRC readiness.
+                const auto bindResource=patcher.solveSymbol(index,
+                    "__ZN19IGAccelVideoContext13bind_resourceER24IOAccelCommandStreamInfojPP15IGAccelResourcePyPjb",address,size);
+                const auto mediaKernel=patcher.solveSymbol(index,
+                    "__ZN23IGAccelVideoContextMain25process_token_MediaKernelER24IOAccelCommandStreamInfo",address,size);
+                const auto mainTable=patcher.solveSymbol(index,"__ZTV23IGAccelVideoContextMain",address,size);
+                const auto texData=patcher.solveSymbol(index,"__ZN15IGAccelResource12get_tex_dataEPyPj",address,size);
+                static constexpr uint8_t bindEntry[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+                    0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18};
+                static constexpr uint8_t firstOutputs[]={0x48,0x8d,0x4d,0xc8,0x4c,0x8d,0x45,0xb0,0x4c,0x8d,0x4d,0xd4};
+                static constexpr uint8_t secondOutputs[]={0x48,0x8d,0x4d,0xc8,0x4c,0x8d,0x45,0xa0,0x4c,0x8d,0x4d,0xd4};
+                static constexpr uint8_t thirdOutputs[]={0x48,0x8d,0x4d,0xc8,0x4c,0x8d,0x45,0x98,0x4c,0x8d,0x4d,0xd4};
+                static constexpr uint8_t bindCall[]={0xff,0x90,0x78,0x0b,0,0};
+                static constexpr uint8_t readOnlyBind[]={0xc7,0x04,0x24,0,0,0,0};
+                static constexpr uint8_t outputUse[]={0x49,0x8b,0x3e,0x48,0x8b,0x07,0xff,0x50,0x20,
+                    0x49,0x8b,0x3e,0x4c,0x89,0xe6,0x4c,0x89,0xfa};
+                static constexpr uint8_t outputResult[]={0x41,0xb4,0x01,0x41,0x83,0x3f,0,0x75,0x07,
+                    0xc6,0x43,0x3c,0,0x45,0x31,0xe4};
+                const auto bindAnchor=[&](mach_vm_address_t entry,size_t offset,const uint8_t* bytes,size_t count) {
+                    return contains(entry,offset,count) && matches(entry+offset,bytes,count);
+                };
+                const auto callTarget=[&](mach_vm_address_t entry,size_t offset) {
+                    if(!contains(entry,offset,5) || getMember<uint8_t>(reinterpret_cast<void*>(entry),offset)!=0xe8)
+                        return mach_vm_address_t(0);
+                    const auto next=entry+offset+5;
+                    const auto delta=static_cast<int32_t>(getMember<uint32_t>(reinterpret_cast<void*>(entry),offset+1));
+                    const uint64_t magnitude=delta<0?uint64_t(-int64_t(delta)):uint64_t(delta);
+                    if(delta<0?next<magnitude:next>UINT64_MAX-magnitude)return mach_vm_address_t(0);
+                    return delta<0?next-magnitude:next+magnitude;
+                };
+                const bool bindQualified=bindResource && mediaKernel && mainTable && texData &&
+                    contains(mainTable,0xb88,8) && getMember<mach_vm_address_t>(reinterpret_cast<void*>(mainTable),0xb88)==bindResource &&
+                    bindAnchor(bindResource,0,bindEntry,sizeof(bindEntry)) &&
+                    bindAnchor(bindResource,0x99,outputUse,sizeof(outputUse)) &&
+                    bindAnchor(bindResource,0xb0,outputResult,sizeof(outputResult)) && callTarget(bindResource,0xab)==texData &&
+                    bindAnchor(mediaKernel,0x63,firstOutputs,sizeof(firstOutputs)) &&
+                    bindAnchor(mediaKernel,0xc5,secondOutputs,sizeof(secondOutputs)) &&
+                    bindAnchor(mediaKernel,0xfc,thirdOutputs,sizeof(thirdOutputs)) &&
+                    bindAnchor(mediaKernel,0x94,readOnlyBind,sizeof(readOnlyBind)) &&
+                    bindAnchor(mediaKernel,0xb8,readOnlyBind,sizeof(readOnlyBind)) &&
+                    bindAnchor(mediaKernel,0xef,readOnlyBind,sizeof(readOnlyBind)) &&
+                    bindAnchor(mediaKernel,0xa1,bindCall,sizeof(bindCall)) &&
+                    bindAnchor(mediaKernel,0xd1,bindCall,sizeof(bindCall)) &&
+                    bindAnchor(mediaKernel,0x108,bindCall,sizeof(bindCall));
+                if(bindQualified) {
+                    gVfChecksumBindCallers[0]=mediaKernel+0xa7;
+                    gVfChecksumBindCallers[1]=mediaKernel+0xd7;
+                    gVfChecksumBindCallers[2]=mediaKernel+0x10e;
+                    // Lilu rounds its copy to whole instructions. The first
+                    // 17 bytes contain no PC-relative operation; unlike the
+                    // Main LEA thunk they are safe to use in its trampoline.
+                    KernelPatcher::RouteRequest bindRoute[]={
+                        {"__ZN19IGAccelVideoContext13bind_resourceER24IOAccelCommandStreamInfojPP15IGAccelResourcePyPjb",
+                         vfChecksumBindResource,this->oVfChecksumBindResource}
+                    };
+                    patcher.clearError();
+                    PANIC_COND(!patcher.routeMultiple(index,bindRoute,address,size) || !this->oVfChecksumBindResource,
+                        "ngreen","Cannot install original checksum heap binding receipt route");
+                    OSSynchronizeIO();gVfChecksumNativeBindingsQualified=true;
+                }
+                SYSLOG("ngreen","Checksum native heap binding receipt bound=%u ready=0",gVfChecksumNativeBindingsQualified?1U:0U);
+
 				const auto batchSubmit=patcher.solveSymbol(index,
 					"__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb",address,size);
 				const auto fifoSubmit=patcher.solveSymbol(index,
@@ -6810,6 +6879,32 @@ bool Gen11::vfObserveRingBatch(void *that,uint64_t gpu,uint32_t stamp,
 		}
 	}
 	return FunctionCast(vfObserveRingBatch,callback->oVfObserveRingBatch)(that,gpu,stamp,cpu,count,flagA,flagB);
+}
+
+bool Gen11::vfChecksumBindResource(void *that,void *stream,uint32_t identifier,
+    void **resource,uint64_t *gpuAddress,uint32_t *pitch,bool write)
+{
+    PANIC_COND(!callback || !callback->oVfChecksumBindResource,"ngreen","Missing original resource binding continuation");
+    const auto caller=reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0));
+    const bool result=FunctionCast(vfChecksumBindResource,callback->oVfChecksumBindResource)(
+        that,stream,identifier,resource,gpuAddress,pitch,write);
+    // Returning, failing or observing this receipt never changes native AL.
+    if(!gVfChecksumNativeBindingsQualified || gVfIdentity!=VfIdentity::Virtual)return result;
+    unsigned slot=3;
+    for(unsigned i=0;i<3;++i)if(caller==gVfChecksumBindCallers[i])slot=i;
+    if(slot==3)return result;
+    auto* entry=VfMediaSubmissionScope::find(that);
+    if(!entry)return result;
+    const bool rooted=stream==static_cast<uint8_t*>(that)+0x650 && !entry->translating &&
+        entry->accelerator==gVfAccelerator && getMember<void*>(that,0x5a8)==entry->accelerator;
+    const bool copied=result && rooted && resource && gpuAddress && pitch;
+    // Only the native caller's output scalars and retained root fields are
+    // copied here. Do not follow a resource/task/shared pointer in this hook.
+    entry->checksumHeaps.record(slot,copied,copied?reinterpret_cast<uintptr_t>(*resource):0,
+        copied?*gpuAddress:0,copied?*pitch:0,write,
+        rooted?reinterpret_cast<uintptr_t>(getMember<void*>(that,0x578)):0,
+        rooted?reinterpret_cast<uintptr_t>(getMember<void*>(that,0x5a0)):0);
+    return result;
 }
 
 void Gen11::vfMediaEnd(void *that,void *stream)

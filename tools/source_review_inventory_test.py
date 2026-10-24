@@ -455,7 +455,7 @@ def verify_product_ownership():
     method_names = set(re.findall(
         r"\bGen11::([A-Za-z_][A-Za-z0-9_]*)\s*\(", gen11_cpp
     ))
-    assert len(method_names) == 175, (
+    assert len(method_names) == 176, (
         f"Gen11 definition inventory changed: {len(method_names)}"
     )
     for name in method_names:
@@ -468,7 +468,7 @@ def verify_product_ownership():
     route_fields = re.findall(
         r"\bmach_vm_address_t\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{", gen11_header
     )
-    assert len(route_fields) == 109, (
+    assert len(route_fields) == 110, (
         f"Gen11 route/original field inventory changed: {len(route_fields)}"
     )
     for name in route_fields:

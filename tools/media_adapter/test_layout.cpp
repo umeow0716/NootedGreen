@@ -19905,7 +19905,42 @@ static void testChecksumCapability() {
     assert(api.readAvcPublication(42,Checksum::selector,&output,&bytes)==5);
 }
 
+static void testChecksumNativeHeapBindings() {
+    using namespace NgreenChecksumGen12;
+    for(unsigned test=0;test<17;++test) {
+        NativeHeapBindings observed{};
+        for(unsigned slot=0;slot<3;++slot) {
+            unsigned index=slot;bool returned=true,write=false;
+            uintptr_t resource=0x1000+slot*0x1000,task=0x11000,shared=0x22000;
+            uint64_t gpu=0x40a6c000+slot*4096;uint32_t pitch=4096;
+            if(slot==1) switch(test) {
+                case 1:index=2;break;case 2:index=0;break;case 3:returned=false;break;
+                case 4:write=true;break;case 5:resource=0x1000;break;case 6:gpu=0x40a6c000;break;
+                case 7:gpu+=4;break;case 8:++resource;break;case 9:++task;break;case 10:++shared;break;
+                case 11:pitch=0;break;case 12:gpu=UINT64_C(0x1000000000000);break;
+                case 13:resource=0;break;case 14:task=0;break;case 15:shared=0;break;
+                case 16:index=UINT32_MAX;break;
+            }
+            const bool recorded=observed.record(index,returned,resource,gpu,pitch,write,task,shared);
+            assert(recorded==(!test || slot==0));
+        }
+        HeapAddresses output{1,2,3,4};
+        assert(observed.copyObservedHeaps(0x11000,0x22000,output)==!test);
+        if(!test) {
+            assert(output.surface==0x40a6e000 && output.dynamic==0x40a6c000 &&
+                output.instruction==0x40a6d000 && output.kernelSlot==1);
+            const auto saved=output;
+            assert(!observed.copyObservedHeaps(0x11001,0x22000,output) && output.surface==saved.surface);
+            assert(!observed.copyObservedHeaps(0x11000,0x22001,output) && output.dynamic==saved.dynamic);
+        } else assert(output.surface==1 && output.dynamic==2 && output.instruction==3 && output.kernelSlot==4);
+        observed.reset();assert(!observed.seen && !observed.failed && !observed.task && !observed.shared);
+        assert(!observed.copyObservedHeaps(0x11000,0x22000,output));
+        for(unsigned i=0;i<3;++i)assert(!observed.resources[i] && !observed.gpu[i] && !observed.pitch[i]);
+    }
+}
+
 int main() {
+    testChecksumNativeHeapBindings();
     testChecksumCapability();
     testChecksumProgramAppend();
     {
