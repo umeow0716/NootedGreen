@@ -27535,6 +27535,7 @@ template<class PhysicalLease,class Read,class Write,class Admit,class Qualify,cl
          class ParentBinding=TglNativeVeboxParentView,class FrameBinding=TglNativeContextFrameBinding>
 class TglOwnedNativeCodecContextOwner {
     using FrameTable=TglOwnedContextFrameVtableFor<FrameBinding>;
+    enum class ChecksumProgram {Unprepared,Preparing,Prepared,Rejected,Ambiguous};
     struct State {
         PhysicalLease physicalPin;
         uintptr_t image,physical,context,os,wrapper;uint64_t generation;
@@ -27542,6 +27543,7 @@ class TglOwnedNativeCodecContextOwner {
         Read read;Write write;Admit admit;Qualify qualify;Executable executable;
         FrameTable table;
         TglNativeOtherPendingFrames nativeOtherPending;
+        ChecksumProgram checksumProgram=ChecksumProgram::Unprepared;
         std::atomic<bool> busy{false};bool removed=false;
         State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t c,uintptr_t o,uintptr_t wptr,ParentBinding proof,
             Read r,Write w,Admit a,Qualify q,Executable e) noexcept
@@ -27840,11 +27842,58 @@ public:
                 return result;
             });
     }
+    // The registry's exclusive lease blocks native deletion and all other
+    // frame pins while the original context owns its nested VM allocations.
+    // No separate CF retain can replace this scope: native98b3 also frees VM.
+    template<class ExclusiveLease,class ScopeAdmit,class Prepare>
+    bool prepareChecksumProgram(const ExclusiveLease& lease,ScopeAdmit scope,Prepare prepare) noexcept {
+        if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;
+        Unlock unlock{state_->busy};
+        if(state_->checksumProgram!=ChecksumProgram::Unprepared || state_->removed ||
+            family()!=TglNativeContextFamily::NativeOther || !state_->retainedIdentity() ||
+            state_->nativeOtherPending.pending() || state_->table.addressPoint() ||
+            state_->table.publication()!=FrameTable::Publication::Unpublished ||
+            !scope(state_->image,state_->physical,state_->generation,state_->context) ||
+            !state_->nativeParentMatches())return false;
+        FrameBinding original;
+        if(!original.resolve(state_->image,state_->context,state_->read,state_->qualify,state_->executable) ||
+            state_->image>UINTPTR_MAX-0x754408 || original.vtable!=state_->image+0x754408)return false;
+        state_->checksumProgram=ChecksumProgram::Preparing;
+        const auto authority=[&](uintptr_t image,uintptr_t context) noexcept {
+            uintptr_t table=0;
+            return state_->checksumProgram==ChecksumProgram::Preparing && !state_->removed &&
+                lease.get()==this && lease.exclusive() && image==state_->image && context==state_->context &&
+                state_->retainedIdentity() && !state_->nativeOtherPending.pending() &&
+                scope(image,state_->physical,state_->generation,context) && state_->nativeParentMatches() &&
+                state_->read(context,&table,8) && table==original.vtable;
+        };
+        const auto result=prepare(state_->image,state_->context,authority,state_->read,state_->admit,state_->executable);
+        if(result.ok && result.mutated && authority(state_->image,state_->context)) {
+            state_->checksumProgram=ChecksumProgram::Prepared;return true;
+        }
+        state_->checksumProgram=result.mutated?ChecksumProgram::Ambiguous:ChecksumProgram::Rejected;
+        return false;
+    }
+    template<class ExclusiveLease,class ScopeAdmit,class OwnedExecutable>
+    bool publishChecksumInputCallbacks(const ExclusiveLease& lease,uintptr_t frameHook,
+        uintptr_t sizeHook,uintptr_t builderHook,ScopeAdmit scope,OwnedExecutable ownedExecutable) noexcept {
+        if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;
+        Unlock unlock{state_->busy};
+        if(state_->checksumProgram!=ChecksumProgram::Prepared || state_->removed ||
+            !state_->retainedIdentity() || state_->nativeOtherPending.pending() ||
+            state_->table.publication()!=FrameTable::Publication::Unpublished ||
+            !scope(state_->image,state_->physical,state_->generation,state_->context) ||
+            !state_->nativeParentMatches())return false;
+        return state_->table.buildChecksumInputCallbacks(state_->image,state_->context,frameHook,sizeHook,builderHook,
+            state_->read,state_->qualify,state_->executable,ownedExecutable) &&
+            state_->table.publish(state_->read,state_->write,state_->admit);
+    }
     template<class ExclusiveLease,class ScopeAdmit,class OwnedExecutable>
     bool publishFrame(const ExclusiveLease& lease,uintptr_t hook,ScopeAdmit scope,OwnedExecutable ownedExecutable) noexcept {
         if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;
         Unlock unlock{state_->busy};
-        if(state_->removed || state_->table.publication()==TglOwnedContextFrameVtable::Publication::RemovalPrepared || !state_->retainedIdentity() ||
+        if(state_->checksumProgram!=ChecksumProgram::Unprepared || state_->removed ||
+            state_->table.publication()==TglOwnedContextFrameVtable::Publication::RemovalPrepared || !state_->retainedIdentity() ||
             !scope(state_->image,state_->physical,state_->generation,state_->context) || !state_->nativeParentMatches())return false;
         return state_->table.build(state_->image,state_->context,hook,state_->read,state_->qualify,state_->executable,ownedExecutable) &&
             state_->table.publish(state_->read,state_->write,state_->admit);

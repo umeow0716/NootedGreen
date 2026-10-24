@@ -17103,6 +17103,17 @@ static void testRetainedVeboxFrames() {
                     return i==image && p==0x9000 && g==1 && c==0x8000;
                 };
                 parentPhysical+=8;assert(!retained->publishFrame(lease,hook,same,executableFamily));parentPhysical-=8;
+                unsigned checksumPreparations=0;
+                auto prepareChecksum=[&](uintptr_t i,uintptr_t c,auto authority,auto,auto,auto) noexcept {
+                    ++checksumPreparations;
+                    assert(i==image && c==0x8000 && authority(i,c) && !authority(i,c+8));
+                    assert(!retained->prepareChecksumProgram(lease,same,
+                        [](uintptr_t,uintptr_t,auto,auto,auto,auto) noexcept {
+                            assert(false);return NgreenFrameChecksumGen12::AppendResult{};
+                        }));
+                    return NgreenFrameChecksumGen12::AppendResult{true,true,"test-prepared"};
+                };
+                if(!checksumFamily)assert(!retained->prepareChecksumProgram(lease,same,prepareChecksum) && !checksumPreparations);
                 if(avc) {
                     FamilyLease foreign{nullptr};
                     assert(!retained->publishAvcInputCallbacks(foreign,hook,sizeHook,builderHook,same,ownedAvcEntry));
@@ -17117,6 +17128,22 @@ static void testRetainedVeboxFrames() {
                     assert(retained->frameTable().nativeSize()==image+0x2732c &&
                         retained->frameTable().nativeBuilder()==image+0x2737e);
                     assert(!retained->publishFrame(lease,hook,same,ownedAvcEntry));
+                } else if(checksumFamily) {
+                    FamilyLease foreign{nullptr},shared{retained,false};
+                    assert(!retained->publishChecksumInputCallbacks(lease,hook,sizeHook,builderHook,same,ownedAvcEntry));
+                    assert(!retained->prepareChecksumProgram(foreign,same,prepareChecksum));
+                    assert(!retained->prepareChecksumProgram(shared,same,prepareChecksum));
+                    assert(!retained->prepareChecksumProgram(lease,
+                        [](uintptr_t,uintptr_t,uint64_t,uintptr_t) noexcept {return false;},prepareChecksum));
+                    parentPhysical+=8;assert(!retained->prepareChecksumProgram(lease,same,prepareChecksum));parentPhysical-=8;
+                    rx=false;assert(!retained->prepareChecksumProgram(lease,same,prepareChecksum));rx=true;
+                    assert(!checksumPreparations && retained->prepareChecksumProgram(lease,same,prepareChecksum));
+                    assert(checksumPreparations==1 && !retained->prepareChecksumProgram(lease,same,prepareChecksum));
+                    assert(!retained->publishFrame(lease,hook,same,ownedAvcEntry));
+                    assert(!retained->publishChecksumInputCallbacks(shared,hook,sizeHook,builderHook,same,ownedAvcEntry));
+                    assert(retained->publishChecksumInputCallbacks(lease,hook,sizeHook,builderHook,same,ownedAvcEntry));
+                    assert(retained->frameTable().nativeSize()==image+0x2c66a &&
+                        retained->frameTable().nativeBuilder()==image+0x2c6f6 && checksumPreparations==1);
                 } else assert(retained->publishFrame(lease,hook,same,executableFamily));
                 assert(retained->frameTable().callbackCount()==schema.count);
                 assert(!retained->excludesPublishedContextWritableSpan(lease,0xa000,4));
