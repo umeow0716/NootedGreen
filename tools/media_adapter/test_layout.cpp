@@ -20086,14 +20086,47 @@ struct ChecksumInputFixture {
             shape.requestWidth==1920 && shape.requestHeight==1080;
     }
 };
+// Exact nativeae2e751B CPU replay with owned API stubs; no GPU execution.
+// Source SHA256:8613e5406465e5b40409a3d157f229b4899f0954bc5e284c0432db79d0803348.
+static std::array<uint32_t,64> nativeChecksumSshFixture(uint32_t height=1080) {
+    std::array<uint32_t,64> value{{0x40U,0x80U,0xc0U,0x100U,0x140U,0x180U,0x1c0U,0x200U,0x0U,0x0U,0x0U,0x0U,0x0U,0x0U,0x0U,0x0U,0x25017000U,0x4e000000U,0x43701dfU,0x77fU,0x0U,0x0U,0x0U,0x9770000U,0x12340000U,0x0U,0x0U,0x0U,0x0U,0x0U,0x0U,0x0U,0x24297000U,0x4e000000U,0x21b01dfU,0x77fU,0x0U,0x0U,0x0U,0x9770000U,0x12350000U,0x0U,0x0U,0x0U,0x0U,0x0U,0x0U,0x0U,0x835d4000U,0x2a000000U,0x7007fU,0x3U,0x0U,0x0U,0x0U,0x9770000U,0x12360000U,0x0U,0x0U,0x0U,0x0U,0x0U,0x0U,0x0U}};
+    value[18]=(value[18]&0x3fffU)|((height-1)<<16);
+    value[34]=(value[34]&0x3fffU)|((height/2-1)<<16);
+    return value;
+}
+static void testChecksumSurfaceLayout() {
+    using NgreenChecksumGen12::checksumSurfaceLayoutCompatible;
+    auto value=nativeChecksumSshFixture();assert(checksumSurfaceLayoutCompatible(value.data(),64));
+    auto padded=nativeChecksumSshFixture(1088);assert(checksumSurfaceLayoutCompatible(padded.data(),64));
+    for(unsigned word=0;word<16;++word)for(unsigned bit=0;bit<32;++bit) {
+        auto bad=value;bad[word]^=1U<<bit;assert(!checksumSurfaceLayoutCompatible(bad.data(),64));
+    }
+    for(unsigned state=0;state<3;++state)for(unsigned word:{0U,1U,4U,5U,6U,7U,9U,10U,11U,12U,13U,14U,15U})
+        for(unsigned bit=0;bit<32;++bit) {
+            auto bad=value;bad[16+state*16+word]^=1U<<bit;assert(!checksumSurfaceLayoutCompatible(bad.data(),64));
+        }
+    for(unsigned state=0;state<2;++state) {
+        for(unsigned bit:{14U,15U,30U,31U}) {
+            auto bad=value;bad[18+state*16]^=1U<<bit;assert(!checksumSurfaceLayoutCompatible(bad.data(),64));
+        }
+        for(unsigned bit=18;bit<32;++bit) {
+            auto bad=value;bad[19+state*16]^=1U<<bit;assert(!checksumSurfaceLayoutCompatible(bad.data(),64));
+        }
+    }
+    for(unsigned bit=0;bit<32;++bit) {
+        auto opaque=value;opaque[24]^=1U<<bit;assert(checksumSurfaceLayoutCompatible(opaque.data(),64));
+    }
+    auto bad=value;bad[34]^=1;assert(!checksumSurfaceLayoutCompatible(bad.data(),64));
+    bad=value;bad[35]=3;assert(!checksumSurfaceLayoutCompatible(bad.data(),64));
+    assert(!checksumSurfaceLayoutCompatible(nullptr,64) && !checksumSurfaceLayoutCompatible(value.data(),63));
+}
 static void testChecksumSurfaceCacheTransaction() {
     using namespace NgreenNativeChecksumReservation;
     for(unsigned mode=0;mode<17;++mode) {
         constexpr uintptr_t context=0x100000,cpu=0x200000;
         SurfaceHeapObservation record{0,1,4096,1,cpu,0x300000,0x400000,0x500000};
-        auto expected=record;std::array<uint32_t,64> words{};
-        for(unsigned i=0;i<64;++i)words[i]=i;
-        words[17]=0x4e001234;words[33]=0x4e005678;words[49]=0x2a009abc;
+        auto expected=record;auto words=nativeChecksumSshFixture();
+        words[17]=0x4e000000;words[33]=0x4e000000;words[49]=0x2a000000;
         if(mode==4)words[33]^=0x02000000;
         if(mode==12)record.ready=0;
         if(mode==13)expected.resource+=8;
@@ -20121,7 +20154,7 @@ static void testChecksumSurfaceCacheTransaction() {
         assert(result.ok==(mode==0) && result.mutated==bool(writes));
         if(mode==0) {
             assert(writes==3);
-            for(unsigned i=0;i<64;++i)assert(words[i]==(i==17?0x04001234U:i==33?0x04005678U:i==49?0x06009abcU:original[i]));
+            for(unsigned i=0;i<64;++i)assert(words[i]==(i==17?0x04000000U:i==33?0x04000000U:i==49?0x06000000U:original[i]));
         } else {
             assert(writes==(mode>=5 && mode<=7?mode-4:(mode>=8 && mode<=11) || mode==16?1U:0U));
             if(!writes)assert(words==original);
@@ -20366,6 +20399,8 @@ struct ChecksumCallbackFixture {
     }
     explicit ChecksumCallbackFixture(int value):mode(value) {
         active=this;commands.fill(0xcccccccc);side.fill(0xdddddddd);
+        const auto states=nativeChecksumSshFixture(value==44?1088:1080);
+        std::copy(states.begin(),states.end(),ssh.begin());
         const auto c=ptr(context.data()),p=ptr(producer.data()),r=ptr(originalRequest.data());
         put(c+0x10,p);put(c+0x124,uint8_t(1));put(c+0x12c,uint8_t(0));
         const NgreenNativeChecksumReservation::SurfaceHeapObservation heap{0,1,4096,1,ptr(ssh.data()),0x300000,0x400000,0x500000};
@@ -20403,7 +20438,7 @@ struct ChecksumCallbackFixture {
     uint64_t nativeBuilder(uintptr_t entry,uintptr_t c,uintptr_t r,uintptr_t token) noexcept {
         assert(entry==0x1000000+0x2c6f6 && c==ptr(context.data()) && r==input->callbackRequest().callbackRequest() && token==ptr(producer.data())+0x48);++builderCalls;
         put(input->callbackPayload()+16,uintptr_t(mode==48?0x99001000:0x99000000));
-        ssh[17]=0x4e001234;ssh[33]=0x4e005678;ssh[49]=0x2a009abc;
+        ssh[17]=0x4e000000;ssh[33]=0x4e000000;ssh[49]=0x2a000000;
         for(unsigned i=0;i<72;++i)commands[i]=0xf0000000U+i;
         for(unsigned i=0;i<36;++i)side[i]=0xa0000000U+i;
         put(token+0x78,ptr(side.data())+(mode==25?35:36)*4);put(c+0x41d8,token);
@@ -20505,7 +20540,7 @@ void testOwnedChecksumCallbacks() {
             assert(result==0 && phase.callbacksComplete() && f->sizeCalls==1 && f->builderCalls==1 && f->commits==1);
             assert(!phase.nativeReturnRequiresStop(0) && phase.nativeReturnRequiresStop(7));
             assert(NgreenChecksumGen12::reservationMatches(f->commands.data(),80));
-            assert(f->ssh[17]==0x04001234 && f->ssh[33]==0x04005678 && f->ssh[49]==0x06009abc);
+            assert(f->ssh[17]==0x04000000 && f->ssh[33]==0x04000000 && f->ssh[49]==0x06000000);
             for(unsigned i=0;i<72;++i)assert(f->commands[i]==0xf0000000U+i);
             if(mode==32)assert(checksumBuilderCpuResult(context,request,token,builder)==5 && f->builderCalls==1);
         } else assert(result!=0 && !phase.callbacksComplete());
@@ -20536,6 +20571,7 @@ void testOwnedChecksumCallbacks() {
 }
 
 int main() {
+    testChecksumSurfaceLayout();
     testChecksumSurfaceCacheTransaction();
     testChecksumSurfaceHeapObservation();
     testChecksumSurfaceCacheWords();

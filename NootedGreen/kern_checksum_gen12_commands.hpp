@@ -34,6 +34,30 @@ inline bool checksumSurfaceCacheWords(const uint32_t* ssh,size_t words,uint32_t*
     for(unsigned i=0;i<3;++i)replacement[i]=candidate[i];
     return true;
 }
+// Exact uncompressed three-state nativeae2e family. New Gen12 feature,
+// auxiliary/clear/compression fields must remain zero; addresses/tokens in
+// DW8 are opaque and continue through ORIGINAL native relocation/binding.
+inline bool checksumSurfaceLayoutCompatible(const uint32_t* ssh,size_t words) noexcept {
+    if(!ssh || words!=64)return false;
+    for(unsigned i=0;i<16;++i)if(ssh[i]!=(i<8?64U+i*64U:0U))return false;
+    for(unsigned i=0;i<3;++i) {
+        const uint32_t* state=ssh+16+i*16;
+        if(state[0]!=(i==0?0x25017000U:i==1?0x24297000U:0x835d4000U) ||
+            state[1]!=(i<2?0x4e000000U:0x2a000000U) ||
+            state[4] || state[5] || state[6] || state[7]!=0x09770000U)return false;
+        for(unsigned j=9;j<16;++j)if(state[j])return false;
+        if(i<2) {
+            if((state[2]&0xc000c000U) || (state[3]&0xfffc0000U))return false;
+            const uint32_t width=(state[2]&0x3fffU)+1;
+            if((state[3]&0x3ffffU)+1<width*4)return false;
+        } else if((state[2]&~0x3fff007fU) || (state[3]&~0x0fe00003U) ||
+            (state[3]&3U)!=3U)return false;
+    }
+    const uint32_t* y=ssh+16;const uint32_t* uv=ssh+32;
+    const uint32_t height=((y[2]>>16)&0x3fffU)+1;
+    return !(height&1U) && height>=2 && (y[2]&0x3fffU)==(uv[2]&0x3fffU) &&
+        (((uv[2]>>16)&0x3fffU)+1)==height/2;
+}
 // Body sizes above exclude the native END/NOOP pair. Native Video end
 // subtracts two before passing count to FIFO/ring; those are separate words.
 // The CPU reservation marker is consumed before native submission, never an

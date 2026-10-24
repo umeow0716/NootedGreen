@@ -148,6 +148,7 @@ inline SurfaceCacheResult normalizeSurfaceCache(uintptr_t context,const SurfaceH
     std::array<uint32_t,3> replacement{};
     if(!read(expected.cpu,original.data(),sizeof(original)) || !same() ||
         !read(expected.cpu,again.data(),sizeof(again)) || original!=again || !same())return failed("ssh-snapshot");
+    if(!NgreenChecksumGen12::checksumSurfaceLayoutCompatible(original.data(),64))return failed("ssh-layout");
     if(!NgreenChecksumGen12::checksumSurfaceCacheWords(original.data(),64,replacement.data(),3))return failed("ssh-profile");
     wanted=original;
     for(unsigned i=0;i<3;++i) {
