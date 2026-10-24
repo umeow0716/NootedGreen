@@ -20086,6 +20086,26 @@ struct ChecksumInputFixture {
             shape.requestWidth==1920 && shape.requestHeight==1080;
     }
 };
+static void testChecksumSurfaceCacheWords() {
+    std::array<uint32_t,64> ssh{};
+    for(unsigned i=0;i<64;++i)ssh[i]=0x89000000U+i;
+    for(unsigned i=0;i<3;++i)ssh[17+i*16]=0xce001234U+i;
+    ssh[49]=0xaa001236U;
+    const auto original=ssh;std::array<uint32_t,3> output{};
+    assert(NgreenChecksumGen12::checksumSurfaceCacheWords(ssh.data(),ssh.size(),output.data(),output.size()));
+    assert(ssh==original);
+    for(unsigned i=0;i<2;++i)assert(output[i]==(0x84001234U+i));
+    assert(output[2]==0x86001236U);
+    for(unsigned slot=0;slot<3;++slot)for(unsigned bit=0;bit<7;++bit) {
+        auto bad=original;bad[17+slot*16]^=1U<<(24+bit);output.fill(0xdeadbeef);
+        assert(!NgreenChecksumGen12::checksumSurfaceCacheWords(bad.data(),64,output.data(),3));
+        for(auto value:output)assert(value==0xdeadbeef);
+    }
+    assert(!NgreenChecksumGen12::checksumSurfaceCacheWords(nullptr,64,output.data(),3));
+    assert(!NgreenChecksumGen12::checksumSurfaceCacheWords(ssh.data(),63,output.data(),3));
+    assert(!NgreenChecksumGen12::checksumSurfaceCacheWords(ssh.data(),64,nullptr,3));
+    assert(!NgreenChecksumGen12::checksumSurfaceCacheWords(ssh.data(),64,output.data(),2));
+}
 static void testChecksumSurfaceShape() {
     using namespace NgreenNativeChecksumReservation;
     const InputGeometry geometry{1920,1088,1920,1080};
@@ -20430,6 +20450,7 @@ void testOwnedChecksumCallbacks() {
 }
 
 int main() {
+    testChecksumSurfaceCacheWords();
     testChecksumSurfaceShape();
     testChecksumSurfaceShapeTransaction();
     testOwnedChecksumInput();

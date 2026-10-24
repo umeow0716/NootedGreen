@@ -13,6 +13,27 @@ constexpr uint32_t profile=1,nativeBodyWords=72,producedBodyWords=78,nativeEndRe
 constexpr uint32_t legacyStreamWords=nativeBodyWords+nativeEndReserveWords;
 constexpr uint32_t reservedStreamWords=producedBodyWords+nativeEndReserveWords;
 constexpr uint32_t shaderBytes=1576,reservationWords=6;
+// Nativeae2e's three64-byte surface states begin at SSH+40/+80/+c0.
+// Gen9 and Gen12 SURFACE_STATE DW1 retain MOCS bits24..30. Native writes
+// Apple input encoded4e(index39=WB/WB) and output2a(index21=UC/UC);
+// the installed Linux PF profile uses encoded4 and6 respectively.
+// Produce ONLY the three replacement DW1 values, not an SSH mapping/write
+// authority. Caller must independently prove exact native state/lifetime and
+// normalize after native setup but before any GPU submission.
+inline bool checksumSurfaceCacheWords(const uint32_t* ssh,size_t words,uint32_t* replacement,size_t count) noexcept {
+    if(!ssh || words!=64 || !replacement || count!=3)return false;
+    uint32_t candidate[3]{};
+    for(unsigned i=0;i<3;++i) {
+        const uint32_t source=ssh[17+i*16];
+        const uint32_t native=i<2?0x4eU:0x2aU;
+        if(((source>>24)&0x7fU)!=native)return false;
+        uint32_t normalized=0;
+        if(!NgreenAvcGen12::linuxGen12CacheControl(native,normalized) || normalized!=(i<2?4U:6U))return false;
+        candidate[i]=(source&~UINT32_C(0x7f000000))|(normalized<<24);
+    }
+    for(unsigned i=0;i<3;++i)replacement[i]=candidate[i];
+    return true;
+}
 // Body sizes above exclude the native END/NOOP pair. Native Video end
 // subtracts two before passing count to FIFO/ring; those are separate words.
 // The CPU reservation marker is consumed before native submission, never an
