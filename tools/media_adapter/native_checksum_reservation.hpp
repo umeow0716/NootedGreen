@@ -51,6 +51,51 @@ struct InputSurfaceShape {
         return end[0]<=offset[1] || end[1]<=offset[0];
     }
 };
+struct InputSurfaceShapeResult {bool valid=false,mustStop=false;};
+#if defined(__APPLE__)
+// Caller keeps the typed CF reference and exclusive context authority alive.
+// Only metadata/CPU address differences are observed, never contents or GPU
+// addresses. AvoidSync refuses a required GPU readback; native work starts
+// only AFTER the symmetric read-only unlock has returned successfully.
+template<class Admit>
+inline InputSurfaceShapeResult darwinInputSurfaceShape(uintptr_t handle,const InputGeometry& geometry,Admit admit) noexcept {
+    if(!handle || !admit())return {};
+    const auto surface=reinterpret_cast<IOSurfaceRef>(handle);
+    constexpr IOSurfaceLockOptions options=kIOSurfaceLockReadOnly|kIOSurfaceLockAvoidSync;
+    if(IOSurfaceLock(surface,options,nullptr)!=KERN_SUCCESS)return {};
+    struct Locked {
+        IOSurfaceRef surface;bool active=true;
+        ~Locked(){if(active)(void)IOSurfaceUnlock(surface,options,nullptr);}
+        bool finish() noexcept {active=false;return IOSurfaceUnlock(surface,options,nullptr)==KERN_SUCCESS;}
+    } lock{surface};
+    const auto capture=[&](InputSurfaceShape& shape) noexcept {
+        if(!admit())return false;
+        shape.id=IOSurfaceGetID(surface);shape.format=IOSurfaceGetPixelFormat(surface);
+        shape.planes=IOSurfaceGetPlaneCount(surface);
+        if(!admit() || shape.planes!=2 ||
+            (shape.format!=0x34323076 && shape.format!=0x34323066))return false;
+        shape.width=IOSurfaceGetWidth(surface);shape.height=IOSurfaceGetHeight(surface);
+        shape.bytes=IOSurfaceGetAllocSize(surface);
+        const auto base=reinterpret_cast<uintptr_t>(IOSurfaceGetBaseAddress(surface));
+        if(!base || shape.bytes>UINTPTR_MAX-base)return false;
+        for(size_t i=0;i<2;++i) {
+            if(!admit())return false;
+            const auto plane=reinterpret_cast<uintptr_t>(IOSurfaceGetBaseAddressOfPlane(surface,i));
+            if(plane<base || plane-base>shape.bytes)return false;
+            shape.offset[i]=plane-base;
+            shape.planeWidth[i]=IOSurfaceGetWidthOfPlane(surface,i);
+            shape.planeHeight[i]=IOSurfaceGetHeightOfPlane(surface,i);
+            shape.pitch[i]=IOSurfaceGetBytesPerRowOfPlane(surface,i);
+        }
+        return admit() && shape.covers(geometry);
+    };
+    InputSurfaceShape before,after;
+    const bool valid=capture(before) && capture(after) && before==after && admit();
+    const bool unlocked=lock.finish();
+    // Failed unlock is ambiguous ownership, never an ordinary admission miss.
+    return {valid && unlocked && admit(),!unlocked};
+}
+#endif
 template<class Api> class OwnedCallbackInput {
     using Pin=TglOwnedTypedCfReference<Api>;
     using Request=NgreenNativeAvcReservation::OwnedAvcCallbackRequest;
