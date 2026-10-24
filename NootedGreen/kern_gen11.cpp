@@ -1325,6 +1325,47 @@ public:
 		entry.task=task;entry.shared=shared;entry.gpuTask=gpuTask;
 		return true;
 	}
+	// Refusal-only disposal. This authenticates the retained root and embedded
+	// CPU counters without following a failed/unpublished GPU mapping. It is
+	// deliberately separate from the stronger successful-publication proof.
+	static bool cancelChecksumLocked(VfMediaSubmission &entry,void *stream,
+	    mach_vm_address_t caller) {
+		if (!gVfCaptureStreamResetBound || !bindLocked(entry,stream,caller))return false;
+		void *context=entry.context;
+		const uint32_t bytes=getMember<volatile uint32_t>(context,0x660);
+		const uint32_t accepted=getMember<volatile uint32_t>(context,0x6F4);
+		auto &used=getMember<volatile uint32_t>(stream,0x30);
+		auto &words=getMember<volatile uint32_t>(stream,0x34);
+		auto &sideband=getMember<volatile uint32_t>(stream,0x38);
+		auto &valid=getMember<volatile uint8_t>(stream,0x3C);
+		const uint32_t offset=used,count=words,savedSideband=sideband;
+		const uint8_t savedValid=valid;
+		if (!bytes || bytes>65536 || ((bytes|accepted|offset)&3) ||
+		    offset>accepted || accepted>bytes || count>1536 ||
+		    count>(accepted-offset)/4 || savedValid>1)return false;
+		// Opaque equality only: cancellation does not acquire a resource lease.
+		void *resource=getMember<void *>(context,0xFE0);
+		if (count && (getMember<volatile uint32_t>(context,0x6DC)!=1 ||
+		    !resource || resource!=getMember<void *>(context,0x708)))return false;
+		if (!bindLocked(entry,stream,caller) ||
+		    getMember<volatile uint32_t>(context,0x660)!=bytes ||
+		    getMember<volatile uint32_t>(context,0x6F4)!=accepted ||
+		    used!=offset || words!=count || sideband!=savedSideband || valid!=savedValid ||
+		    (count && (getMember<volatile uint32_t>(context,0x6DC)!=1 ||
+		     getMember<void *>(context,0xFE0)!=resource ||
+		     getMember<void *>(context,0x708)!=resource)))return false;
+		if (count) {
+			if (!NGVfSubmission::cancelCaptureStream(used,words,sideband,
+			    offset,count,savedSideband,accepted,true))return false;
+		} else {
+			sideband=0;
+		}
+		valid=0;
+		entry.failed=true;
+		// Never set captureCancelled: this is a genuine outer submission error,
+		// not permission for the diagnostic AVC cancellation continuation.
+		return used==offset+count*4 && words==0 && sideband==0 && valid==0;
+	}
 	static VfMediaSubmission *find(void *context) {
 		void *owner=reinterpret_cast<void *>(current_thread());
 		VfMediaSubmission *found=nullptr;
