@@ -128,6 +128,39 @@ struct SurfaceHeapObservation {
         output=before;return true;
     }
 };
+// Runs only after original builder setup, under its existing producer lock
+// and the prepared exclusive owner. A failure after entry MUST fail-stop;
+// do not roll back or flush an ambiguous native stream.
+struct SurfaceCacheResult {bool ok=false,mutated=false;const char* reason="ssh";};
+template<class Read,class Writable,class Write,class Admit,class Exclude>
+inline SurfaceCacheResult normalizeSurfaceCache(uintptr_t context,const SurfaceHeapObservation& expected,
+    Read read,Writable writable,Write write,Admit admit,Exclude exclude) noexcept {
+    bool mutated=false;
+    const auto failed=[&](const char* reason) noexcept {return SurfaceCacheResult{false,mutated,reason};};
+    const auto same=[&]() noexcept {
+        SurfaceHeapObservation current;
+        return admit() && SurfaceHeapObservation::capture(context,read,admit,current) &&
+            !std::memcmp(&current,&expected,sizeof(current)) && admit();
+    };
+    if(!same())return failed("ssh-provenance");
+    if(!exclude(expected.cpu,256) || !writable(expected.cpu,256) || !same())return failed("ssh-span");
+    std::array<uint32_t,64> original{},again{},wanted{};
+    std::array<uint32_t,3> replacement{};
+    if(!read(expected.cpu,original.data(),sizeof(original)) || !same() ||
+        !read(expected.cpu,again.data(),sizeof(again)) || original!=again || !same())return failed("ssh-snapshot");
+    if(!NgreenChecksumGen12::checksumSurfaceCacheWords(original.data(),64,replacement.data(),3))return failed("ssh-profile");
+    wanted=original;
+    for(unsigned i=0;i<3;++i) {
+        const size_t word=17+i*16;const uintptr_t at=expected.cpu+word*4;
+        if(!same() || !exclude(expected.cpu,256) || !writable(at,4) ||
+            !read(expected.cpu,again.data(),sizeof(again)) || again!=wanted || !same())return failed("ssh-write-authority");
+        mutated=true; // Even failed write is ambiguous; never infer old contents.
+        if(!write(at,replacement[i]))return failed("ssh-write");
+        wanted[word]=replacement[i];
+        if(!same() || !read(expected.cpu,again.data(),sizeof(again)) || again!=wanted || !same())return failed("ssh-readback");
+    }
+    return {true,mutated,"ssh-normalized"};
+}
 template<class Api> class OwnedCallbackInput {
     using Pin=TglOwnedTypedCfReference<Api>;
     using Request=NgreenNativeAvcReservation::OwnedAvcCallbackRequest;
@@ -418,6 +451,9 @@ public:
         if(!enter(Stage::Sized,Stage::BuilderRunning,context,request) || !geometry())return failed(false,"builder-admission");
         Buffer before;
         if(!capture(token,before,false))return failed(false,"builder-buffer");
+        SurfaceHeapObservation surface;
+        if(!SurfaceHeapObservation::capture(identity_.context,read_,[&]() noexcept {return live();},surface))
+            return failed(false,"ssh-before-builder");
         const auto status=invoke(identity_.image+0x2c6f6,context,request_.callbackRequest(),token);
         Buffer after;uintptr_t recorded=0;
         if(status || !live() || !geometry() || !capture(token,after,true) ||
@@ -425,6 +461,19 @@ public:
             after.base!=before.base || after.end!=before.end || after.cursor!=before.cursor ||
             after.sideCursor!=before.sideCursor || after.sideEnd!=before.sideEnd || after.body!=before.body ||
             after.side!=before.side+36*4)return failed(true,"native-builder",status);
+        const auto cache=normalizeSurfaceCache(identity_.context,surface,read_,writable_,
+            [&](uintptr_t at,uint32_t value) noexcept {
+                if(!live() || !writable_(at,4))return false;
+                *reinterpret_cast<volatile uint32_t*>(at)=value;
+                return live();
+            },[&]() noexcept {return live();},[&](uintptr_t at,size_t bytes) noexcept {
+                uintptr_t producer=0;
+                return live() && outsideInputs(at,bytes) && readContext(0x10,producer) &&
+                    disjoint(at,bytes,producer,0x130) &&
+                    disjoint(at,bytes,after.base,size_t(after.end-after.base)) &&
+                    disjoint(at,bytes,before.side,39*4);
+            });
+        if(!cache.ok)return failed(true,cache.reason);
         if(!live() || !writable_(after.body,NgreenChecksumGen12::producedBodyWords*4) ||
             !NgreenChecksumGen12::writeReservationTrailer(reinterpret_cast<volatile uint32_t*>(after.body),
                 NgreenChecksumGen12::producedBodyWords) ||

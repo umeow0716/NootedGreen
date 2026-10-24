@@ -20086,6 +20086,48 @@ struct ChecksumInputFixture {
             shape.requestWidth==1920 && shape.requestHeight==1080;
     }
 };
+static void testChecksumSurfaceCacheTransaction() {
+    using namespace NgreenNativeChecksumReservation;
+    for(unsigned mode=0;mode<17;++mode) {
+        constexpr uintptr_t context=0x100000,cpu=0x200000;
+        SurfaceHeapObservation record{0,1,4096,1,cpu,0x300000,0x400000,0x500000};
+        auto expected=record;std::array<uint32_t,64> words{};
+        for(unsigned i=0;i<64;++i)words[i]=i;
+        words[17]=0x4e001234;words[33]=0x4e005678;words[49]=0x2a009abc;
+        if(mode==4)words[33]^=0x02000000;
+        if(mode==12)record.ready=0;
+        if(mode==13)expected.resource+=8;
+        const auto original=words;unsigned writes=0,reads=0;bool live=true;
+        auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+            if(at==context+0x174 && bytes==4){uint32_t count=1;std::memcpy(out,&count,4);return true;}
+            if(at==context+0x178 && bytes==4){uint32_t index=0;std::memcpy(out,&index,4);return true;}
+            if(at==context+0x21a8 && bytes==sizeof(record)){std::memcpy(out,&record,bytes);return true;}
+            if(at!=cpu || bytes!=sizeof(words) || mode==14 || (mode==16 && writes))return false;
+            ++reads;auto value=words;if(mode==3 && reads==2)++value[0];
+            std::memcpy(out,value.data(),bytes);return true;
+        };
+        const auto result=normalizeSurfaceCache(context,expected,read,
+            [&](uintptr_t,size_t) noexcept {return mode!=2;},
+            [&](uintptr_t at,uint32_t value) noexcept {
+                ++writes;assert(writes<=3 && at==cpu+(17+(writes-1)*16)*4);
+                if(mode>=5 && mode<=7 && writes==mode-4)return false;
+                if(mode!=8)words[(at-cpu)/4]=value;
+                if(mode==9)live=false;
+                if(mode==10)record.resource+=8;
+                if(mode==11)++words[0];
+                return true;
+            },[&]() noexcept {return live && mode!=15;},
+            [&](uintptr_t at,size_t bytes) noexcept {assert(at==cpu && bytes==256);return mode!=1;});
+        assert(result.ok==(mode==0) && result.mutated==bool(writes));
+        if(mode==0) {
+            assert(writes==3);
+            for(unsigned i=0;i<64;++i)assert(words[i]==(i==17?0x04001234U:i==33?0x04005678U:i==49?0x06009abcU:original[i]));
+        } else {
+            assert(writes==(mode>=5 && mode<=7?mode-4:(mode>=8 && mode<=11) || mode==16?1U:0U));
+            if(!writes)assert(words==original);
+        }
+    }
+}
 static void testChecksumSurfaceHeapObservation() {
     using Heap=NgreenNativeChecksumReservation::SurfaceHeapObservation;
     for(unsigned mode=0;mode<18;++mode) {
@@ -20274,6 +20316,7 @@ struct ChecksumCallbackFixture {
     alignas(16) std::array<uint8_t,24> originalPayload{};
     alignas(16) std::array<uint32_t,128> commands{};
     alignas(16) std::array<uint32_t,64> side{};
+    alignas(4096) std::array<uint32_t,1024> ssh{};
     ChecksumInputCfState cf;
     std::unique_ptr<NgreenNativeChecksumReservation::OwnedCallbackInput<ChecksumInputCfApi>> input;
     uint32_t used=0,capacity=0;
@@ -20292,6 +20335,7 @@ struct ChecksumCallbackFixture {
             (input && (contains(a,n,input->callbackPayload(),24) ||
              contains(a,n,input->callbackRequest().callbackRequest(),0x28))) ||
             contains(a,n,ptr(commands.data()),sizeof(commands)) || contains(a,n,ptr(side.data()),sizeof(side)) ||
+            contains(a,n,ptr(ssh.data()),sizeof(ssh)) ||
             contains(a,n,ptr(&used),4) || contains(a,n,ptr(&capacity),4);
     }
     static bool read(uintptr_t a,void* out,size_t n) noexcept {
@@ -20300,6 +20344,7 @@ struct ChecksumCallbackFixture {
     }
     static bool writeable(uintptr_t a,size_t n) noexcept {
         return active && active->writable && active->readable(a,n) &&
+            !(active->mode==59 && contains(a,n,ptr(active->ssh.data()),sizeof(active->ssh))) &&
             (active->outputWritable || a!=ptr(active->originalPayload.data())+16);
     }
     static bool live(void* cookie,const Phase::Identity& id) noexcept {
@@ -20323,6 +20368,8 @@ struct ChecksumCallbackFixture {
         active=this;commands.fill(0xcccccccc);side.fill(0xdddddddd);
         const auto c=ptr(context.data()),p=ptr(producer.data()),r=ptr(originalRequest.data());
         put(c+0x10,p);put(c+0x124,uint8_t(1));put(c+0x12c,uint8_t(0));
+        const NgreenNativeChecksumReservation::SurfaceHeapObservation heap{0,1,4096,1,ptr(ssh.data()),0x300000,0x400000,0x500000};
+        std::memcpy(reinterpret_cast<void*>(c+0x21a8),&heap,sizeof(heap));
         put(c+0x174,uint32_t(1));put(c+0x178,uint32_t(0));put(c+0x138,uint32_t(1920));put(c+0x13c,uint32_t(value==44?1088:1080));
         put(r+0x18,c);put(r+0x20,ptr(originalPayload.data()));
         put(ptr(originalPayload.data()),uintptr_t(0x7000));put(ptr(originalPayload.data())+8,uint32_t(1920));
@@ -20356,6 +20403,7 @@ struct ChecksumCallbackFixture {
     uint64_t nativeBuilder(uintptr_t entry,uintptr_t c,uintptr_t r,uintptr_t token) noexcept {
         assert(entry==0x1000000+0x2c6f6 && c==ptr(context.data()) && r==input->callbackRequest().callbackRequest() && token==ptr(producer.data())+0x48);++builderCalls;
         put(input->callbackPayload()+16,uintptr_t(mode==48?0x99001000:0x99000000));
+        ssh[17]=0x4e001234;ssh[33]=0x4e005678;ssh[49]=0x2a009abc;
         for(unsigned i=0;i<72;++i)commands[i]=0xf0000000U+i;
         for(unsigned i=0;i<36;++i)side[i]=0xa0000000U+i;
         put(token+0x78,ptr(side.data())+(mode==25?35:36)*4);put(c+0x41d8,token);
@@ -20368,6 +20416,8 @@ struct ChecksumCallbackFixture {
             assert(!result.invoked && result.status==5);
         }
         if(mode==43)readAllowed=false;
+        if(mode==54)ssh[17]^=0x02000000;
+        if(mode==55)put(c+0x21c0,uintptr_t(0x300008));
         return mode==24?31:0;
     }
 };
@@ -20384,10 +20434,11 @@ void testOwnedChecksumCallbacks() {
         [](uintptr_t,uintptr_t,uintptr_t,uint32_t*,uint32_t*) noexcept -> uint64_t {assert(false);return 0;})==5);
     assert(checksumBuilderCpuResult(1,2,3,
         [](uintptr_t,uintptr_t,uintptr_t,uintptr_t) noexcept -> uint64_t {assert(false);return 0;})==5);
-    for(int mode=0;mode<54;++mode) {
+    for(int mode=0;mode<60;++mode) {
         auto f=std::unique_ptr<Fixture>(new Fixture(mode));auto identity=f->identity();
         if(mode==52)identity.output=Fixture::ptr(f->commands.data());
         if(mode==53)identity.output=Fixture::ptr(f->side.data());
+        if(mode==58)identity.output=Fixture::ptr(f->ssh.data())+17*4;
         const auto context=identity.context,request=identity.request,token=Fixture::ptr(f->producer.data())+0x48;
         uint32_t* used=&f->used;uint32_t* capacity=&f->capacity;uintptr_t actualContext=context,actualRequest=request,actualToken=token;
         switch(mode) {
@@ -20413,6 +20464,8 @@ void testOwnedChecksumCallbacks() {
             case 46:Fixture::put(Fixture::ptr(f->originalPayload.data()),uintptr_t(0x7010));break;
             case 47:Fixture::put(Fixture::ptr(f->originalRequest.data())+0x18,uintptr_t(1));break;
             case 49:f->outputWritable=false;break;
+            case 56:Fixture::put(context+0x21b8,Fixture::ptr(f->commands.data()));break;
+            case 57:Fixture::put(context+0x21b8,context);break;
         }
         Phase phase(identity,*f->input,f.get(),&Fixture::live,&Fixture::read,&Fixture::writeable,&Fixture::writeOutput);
         const auto size=[&](uintptr_t e,uintptr_t c,uintptr_t r,uint32_t* u,uint32_t* b) noexcept {return f->nativeSize(e,c,r,u,b);};
@@ -20444,7 +20497,7 @@ void testOwnedChecksumCallbacks() {
         if(mode==35)assert(NgreenNativeChecksumReservation::sizeOrRefuse(context,request,used,capacity,size)==5);
         const auto result=checksumBuilderCpuResult(context,request,actualToken,builder);
         assert(phase.builderStarted());
-        const bool rejectedBeforeBuilder=(mode>=19 && mode<=23) || mode==29 || mode==35 || mode==36 || mode==37 || mode==50 || mode==52 || mode==53;
+        const bool rejectedBeforeBuilder=(mode>=19 && mode<=23) || mode==29 || mode==35 || mode==36 || mode==37 || mode==50 || mode==52 || mode==53 || mode==56;
         assert(f->builderCalls==unsigned(!rejectedBeforeBuilder));
         if(mode==24)assert(result==31);
         assert(phase.nativeReturnRequiresStop(int(result))==(result!=0));
@@ -20452,6 +20505,7 @@ void testOwnedChecksumCallbacks() {
             assert(result==0 && phase.callbacksComplete() && f->sizeCalls==1 && f->builderCalls==1 && f->commits==1);
             assert(!phase.nativeReturnRequiresStop(0) && phase.nativeReturnRequiresStop(7));
             assert(NgreenChecksumGen12::reservationMatches(f->commands.data(),80));
+            assert(f->ssh[17]==0x04001234 && f->ssh[33]==0x04005678 && f->ssh[49]==0x06009abc);
             for(unsigned i=0;i<72;++i)assert(f->commands[i]==0xf0000000U+i);
             if(mode==32)assert(checksumBuilderCpuResult(context,request,token,builder)==5 && f->builderCalls==1);
         } else assert(result!=0 && !phase.callbacksComplete());
@@ -20478,10 +20532,11 @@ void testOwnedChecksumCallbacks() {
         else if(mode==3)assert(WIFSIGNALED(status) && WTERMSIG(status)==SIGABRT);
         else assert(WIFEXITED(status) && WEXITSTATUS(status)==77);
     }
-    puts("CHECKSUM_CALLBACK_PHASE_CPU_OK modes=54 native_once/body78/side36/no_END_write/refusal_and_reentry=PASS GPU_NOT_EXECUTED");
+    puts("CHECKSUM_CALLBACK_PHASE_CPU_OK modes=60 native_once/body78/side36/no_END_write/refusal_and_reentry=PASS GPU_NOT_EXECUTED");
 }
 
 int main() {
+    testChecksumSurfaceCacheTransaction();
     testChecksumSurfaceHeapObservation();
     testChecksumSurfaceCacheWords();
     testChecksumSurfaceShape();
