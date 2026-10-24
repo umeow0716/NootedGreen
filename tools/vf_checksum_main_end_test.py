@@ -210,8 +210,61 @@ def test_end(root):
     subprocess.run([*CXX,'-std=c++14','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(ROOT),str(p),'-o',str(root/'checksum_end_actual')],check=True)
     subprocess.run([str(root/'checksum_end_actual')],check=True)
 
+def test_user_adoption(root):
+    source=(ROOT/'tools/media_adapter/adapter.cpp').read_text()
+    start=source.index('            bool published=false;')
+    finish=source.index('            if(!published)return 5;',start)+len('            if(!published)return 5;')
+    body=source[start:finish]
+    prefix=r'''
+#include "tools/media_adapter/frame_checksum_gen12.hpp"
+#include "NootedGreen/kern_vf_device_observation.hpp"
+#include <vector>
+#include <cassert>
+#include <cstdio>
+std::vector<unsigned> calls;bool ready=true,prepared=true,published=true;
+bool writableDataMemory(uintptr_t,size_t){return true;}
+bool ownedExecutableMemory(uintptr_t,size_t){return true;}
+uint64_t dispatchOwnedChecksumSize(void*,const void*,uint32_t*,uint32_t*){return 0;}
+uint64_t dispatchOwnedChecksumBuilder(void*,const void*,void*){return 0;}
+uint64_t dispatchOwnedAvcSize(void*,const void*,uint32_t*,uint32_t*){return 0;}
+uint64_t dispatchOwnedAvcBuilder(void*,const void*,void*){return 0;}
+struct Owner {
+ template<class L,class S,class P>bool prepareChecksumProgram(L&,S,P){calls.push_back(2);return prepared;}
+ template<class L,class S,class X>bool publishChecksumInputCallbacks(L&,uintptr_t,uintptr_t,uintptr_t,S,X){calls.push_back(3);return published;}
+ template<class L,class S,class X>bool publishAvcInputCallbacks(L&,uintptr_t,uintptr_t,uintptr_t,S,X){calls.push_back(4);return published;}
+ template<class L,class S,class X>bool publishFrame(L&,uintptr_t,S,X){calls.push_back(5);return published;}
+} owner;
+struct Lease{Owner*get(){return &owner;}} lease;
+struct Scope{uintptr_t image(){return 0x1000000;}} scope;
+struct Binding{uintptr_t vtable,frame;} binding;
+bool queryChecksumPublication(Lease&,Scope&,uintptr_t,NGVfChecksumPublication::Reply&){calls.push_back(1);return ready;}
+int adopt(){uintptr_t hook=1,physical=2;auto sameOwner=[](uintptr_t,uintptr_t,uint64_t,uintptr_t){return true;};
+'''
+    suffix=r'''
+return 0;}
+int main(){
+ for(unsigned mode=0;mode<6;++mode){
+  calls.clear();ready=prepared=published=true;
+  binding={scope.image()+0x754408,scope.image()+0x2190a};
+  if(mode==1)ready=false;if(mode==2)prepared=false;if(mode==3)published=false;
+  if(mode==4)binding.vtable=scope.image()+0x754350; // Shared frame entry is NOT the checksum class.
+  if(mode==5)binding={scope.image()+0x755000,scope.image()+0x27724};
+  const auto result=adopt();
+  assert(result==((mode>=1 && mode<=3)?5:0));
+  const std::vector<unsigned> expected=mode==1?std::vector<unsigned>{1}:mode==2?std::vector<unsigned>{1,2}:
+   mode==4?std::vector<unsigned>{5}:mode==5?std::vector<unsigned>{4}:std::vector<unsigned>{1,2,3};
+  assert(calls==expected);
+ }
+ puts("Actual checksum adoption branch: independent capability before program before publication, 6 cases PASS; native invocation stubbed");
+}
+'''
+    path=root/'checksum_adoption_actual.cpp';path.write_text(prefix+body+suffix)
+    subprocess.run([*CXX,'-std=c++17','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(ROOT),str(path),'-o',str(root/'checksum_adoption_actual')],check=True)
+    subprocess.run([str(root/'checksum_adoption_actual')],check=True)
+
 if __name__=="__main__":
     with tempfile.TemporaryDirectory(prefix="ngreen-checksum-main-end-") as directory:
         destination=Path(directory)
         test_qualification(destination)
         test_end(destination)
+        test_user_adoption(destination)

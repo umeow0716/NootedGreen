@@ -9,6 +9,7 @@
 #include "owned_resource.hpp"
 #include "../../NootedGreen/kern_avc_gen12_commands.hpp"
 #include "native_avc_reservation.hpp"
+#include "native_checksum_reservation.hpp"
 #include "frame_checksum_gen12.hpp"
 #include <memory>
 #include <csignal>
@@ -19949,7 +19950,166 @@ static void testChecksumNativeHeapBindings() {
     }
 }
 
+// Owned CPU fixtures for the actual paired checksum size/builder phase. No
+// native Apple entry, IOSurface API or GPU is invoked by these tests.
+struct ChecksumCallbackFixture {
+    using Phase=NgreenNativeChecksumReservation::OwnedCallbackPhase;
+    inline static thread_local ChecksumCallbackFixture* active=nullptr;
+    alignas(16) std::array<uint8_t,0x4748> context{};
+    alignas(16) std::array<uint8_t,0x130> producer{};
+    alignas(16) std::array<uint8_t,0x28> originalRequest{};
+    alignas(16) std::array<uint8_t,24> originalPayload{},ownedPayload{};
+    alignas(16) std::array<uint32_t,128> commands{};
+    alignas(16) std::array<uint32_t,64> side{};
+    NgreenNativeAvcReservation::OwnedAvcCallbackRequest request;
+    uint32_t used=0,capacity=0;
+    bool authority=true,quiescent=true,inputHeld=true,prepared=true,writable=true,commitAllowed=true,readAllowed=true;
+    unsigned sizeCalls=0,builderCalls=0,commits=0;
+    int mode=0;
+    static uintptr_t ptr(const void* p) noexcept {return reinterpret_cast<uintptr_t>(p);}
+    template<class T> static void put(uintptr_t at,T value) noexcept {std::memcpy(reinterpret_cast<void*>(at),&value,sizeof(value));}
+    static bool contains(uintptr_t a,size_t n,uintptr_t base,size_t bytes) noexcept {
+        return n && a>=base && a-base<=bytes && n<=bytes-(a-base);
+    }
+    bool readable(uintptr_t a,size_t n) const noexcept {
+        return contains(a,n,ptr(context.data()),context.size()) || contains(a,n,ptr(producer.data()),producer.size()) ||
+            contains(a,n,ptr(originalRequest.data()),originalRequest.size()) || contains(a,n,ptr(originalPayload.data()),originalPayload.size()) ||
+            contains(a,n,ptr(ownedPayload.data()),ownedPayload.size()) || contains(a,n,ptr(&request),sizeof(request)) ||
+            contains(a,n,ptr(commands.data()),sizeof(commands)) || contains(a,n,ptr(side.data()),sizeof(side)) ||
+            contains(a,n,ptr(&used),4) || contains(a,n,ptr(&capacity),4);
+    }
+    static bool read(uintptr_t a,void* out,size_t n) noexcept {
+        if(!active || !active->readAllowed || !out || !active->readable(a,n))return false;
+        std::memcpy(out,reinterpret_cast<void*>(a),n);return true;
+    }
+    static bool writeable(uintptr_t a,size_t n) noexcept {return active && active->writable && active->readable(a,n);}
+    static bool live(void* cookie,const Phase::Identity& id) noexcept {
+        auto*f=static_cast<ChecksumCallbackFixture*>(cookie);
+        return active==f && f->authority && f->quiescent && f->inputHeld && f->prepared &&
+            id.image==0x1000000 && id.physical==0x2000000 && id.generation==7 &&
+            id.context==ptr(f->context.data()) && id.request==ptr(f->originalRequest.data());
+    }
+    static bool commit(void* cookie,const Phase::Identity& id) noexcept {
+        auto*f=static_cast<ChecksumCallbackFixture*>(cookie);assert(live(cookie,id));++f->commits;
+        if(f->mode==39) {
+            auto* phase=Phase::current(id.context);assert(phase);
+            auto result=phase->builder(id.context,id.request,ptr(f->producer.data())+0x48,
+                [](uintptr_t,uintptr_t,uintptr_t,uintptr_t) noexcept -> uint64_t {assert(false);return 0;});
+            assert(result.status==5 && !result.invoked);
+        }
+        return f->commitAllowed;
+    }
+    explicit ChecksumCallbackFixture(int value):mode(value) {
+        active=this;commands.fill(0xcccccccc);side.fill(0xdddddddd);
+        const auto c=ptr(context.data()),p=ptr(producer.data()),r=ptr(originalRequest.data());
+        put(c+0x10,p);put(c+0x124,uint8_t(1));put(c+0x12c,uint8_t(0));
+        put(c+0x174,uint32_t(1));put(c+0x178,uint32_t(0));put(c+0x138,uint32_t(1920));put(c+0x13c,uint32_t(1080));
+        put(r+0x18,c);put(r+0x20,ptr(originalPayload.data()));
+        assert(request.capture(r,ptr(originalPayload.data()),ptr(ownedPayload.data()),&read,
+            [](uintptr_t,uintptr_t,uintptr_t) noexcept {return true;}));
+        const auto t=p+0x48,b=ptr(commands.data()),s=ptr(side.data());
+        put(t+0x08,uintptr_t(19));put(t+0x10,b);put(t+0x18,b+sizeof(commands));put(t+0x20,b+78*4);
+        put(t+0x60,s+39*4);put(t+0x68,s+sizeof(side));put(t+0x70,b);put(t+0x78,s);
+    }
+    ~ChecksumCallbackFixture(){active=nullptr;}
+    Phase::Identity identity() const noexcept {return {0x1000000,0x2000000,ptr(context.data()),ptr(originalRequest.data()),7};}
+    uint64_t nativeSize(uintptr_t entry,uintptr_t c,uintptr_t r,uint32_t* body,uint32_t* sideWords) noexcept {
+        assert(entry==0x1000000+0x2c66a && c==ptr(context.data()) && r==request.callbackRequest());++sizeCalls;
+        *body=mode==12?73:72;*sideWords=mode==13?35:36;
+        put(c+0x130,uint32_t(69));put(c+0x134,uint32_t(36));
+        if(mode==30) {
+            auto* phase=Phase::current(c);assert(phase);
+            auto result=phase->size(c,ptr(originalRequest.data()),body,sideWords,
+                [](uintptr_t,uintptr_t,uintptr_t,uint32_t*,uint32_t*) noexcept -> uint64_t {assert(false);return 0;});
+            assert(!result.invoked && result.status==5);
+        }
+        if(mode==42)readAllowed=false;
+        return mode==10?31:(mode==11?UINT64_C(1)<<32:0);
+    }
+    uint64_t nativeBuilder(uintptr_t entry,uintptr_t c,uintptr_t r,uintptr_t token) noexcept {
+        assert(entry==0x1000000+0x2c6f6 && c==ptr(context.data()) && r==request.callbackRequest() && token==ptr(producer.data())+0x48);++builderCalls;
+        for(unsigned i=0;i<72;++i)commands[i]=0xf0000000U+i;
+        for(unsigned i=0;i<36;++i)side[i]=0xa0000000U+i;
+        put(token+0x78,ptr(side.data())+(mode==25?35:36)*4);put(c+0x41d8,token);
+        if(mode==27)authority=false;
+        if(mode==28)put(token+0x08,uintptr_t(20));
+        if(mode==34) {
+            auto* phase=Phase::current(c);assert(phase);
+            auto result=phase->builder(c,ptr(originalRequest.data()),token,
+                [](uintptr_t,uintptr_t,uintptr_t,uintptr_t) noexcept -> uint64_t {assert(false);return 0;});
+            assert(!result.invoked && result.status==5);
+        }
+        if(mode==43)readAllowed=false;
+        return mode==24?31:0;
+    }
+};
+void testOwnedChecksumCallbacks() {
+    using Fixture=ChecksumCallbackFixture;using Phase=Fixture::Phase;
+    assert(NgreenNativeChecksumReservation::sizeOrRefuse(1,2,nullptr,nullptr,
+        [](uintptr_t,uintptr_t,uintptr_t,uint32_t*,uint32_t*) noexcept -> uint64_t {assert(false);return 0;})==5);
+    assert(NgreenNativeChecksumReservation::builderOrRefuse(1,2,3,
+        [](uintptr_t,uintptr_t,uintptr_t,uintptr_t) noexcept -> uint64_t {assert(false);return 0;})==5);
+    for(int mode=0;mode<44;++mode) {
+        auto f=std::unique_ptr<Fixture>(new Fixture(mode));const auto identity=f->identity();
+        const auto context=identity.context,request=identity.request,token=Fixture::ptr(f->producer.data())+0x48;
+        uint32_t* used=&f->used;uint32_t* capacity=&f->capacity;uintptr_t actualContext=context,actualRequest=request,actualToken=token;
+        switch(mode) {
+            case 1:f->authority=false;break;case 2:f->quiescent=false;break;case 3:f->inputHeld=false;break;
+            case 4:actualRequest++;break;case 5:actualContext+=8;break;case 6:capacity=used;break;
+            case 7:used=reinterpret_cast<uint32_t*>(context+0x200);break;
+            case 8:used=reinterpret_cast<uint32_t*>(f->request.callbackRequest());break;
+            case 9:f->writable=false;break;
+            case 14:Fixture::put(context+0x124,uint8_t(0));break;case 15:Fixture::put(context+0x12c,uint8_t(1));break;
+            case 16:Fixture::put(context+0x174,uint32_t(2));break;case 17:Fixture::put(context+0x178,uint32_t(1));break;
+            case 18:Fixture::put(context+0x138,uint32_t(1919));break;
+            case 19:actualToken+=8;break;case 20:Fixture::put(token+0x20,Fixture::ptr(f->commands.data())+77*4);break;
+            case 21:Fixture::put(token+0x18,Fixture::ptr(f->commands.data())+78*4);break;
+            case 22:Fixture::put(token+0x60,Fixture::ptr(f->side.data())+38*4);break;
+            case 23:Fixture::put(token+0x78,Fixture::ptr(f->commands.data()));break;
+            case 26:f->commitAllowed=false;break;
+            case 36:Fixture::put(token+0x78,token);Fixture::put(token+0x60,token+39*4);break;
+            case 37:Fixture::put(token+0x70,token);Fixture::put(token+0x20,token+78*4);Fixture::put(token+0x10,token);break;
+            case 38:f->prepared=false;break;
+            case 40:Fixture::put(context+0x13c,uint32_t(1088));break;
+            case 41:f->readAllowed=false;break;
+        }
+        Phase phase(identity,f->request,f.get(),&Fixture::live,&Fixture::read,&Fixture::writeable,&Fixture::commit);
+        const auto size=[&](uintptr_t e,uintptr_t c,uintptr_t r,uint32_t* u,uint32_t* b) noexcept {return f->nativeSize(e,c,r,u,b);};
+        const auto builder=[&](uintptr_t e,uintptr_t c,uintptr_t r,uintptr_t t) noexcept {return f->nativeBuilder(e,c,r,t);};
+        if(mode==31) {
+            Phase nested(identity,f->request,f.get(),&Fixture::live,&Fixture::read,&Fixture::writeable,&Fixture::commit);
+            assert(!nested.bound() && phase.bound());
+        }
+        if(mode==33) {assert(NgreenNativeChecksumReservation::builderOrRefuse(context,request,token,builder)==5);assert(f->builderCalls==0);continue;}
+        const auto sized=NgreenNativeChecksumReservation::sizeOrRefuse(actualContext,actualRequest,used,capacity,size);
+        assert(f->sizeCalls==unsigned(!((mode>=1 && mode<=9) || mode==38 || mode==41)));
+        if(mode==10)assert(sized==31);if(mode==11)assert(sized==5);
+        if(sized) {
+            assert(!phase.complete() && f->builderCalls==0 && f->commits==0);
+            assert(f->commands[72]==0xcccccccc && f->commands[78]==0xcccccccc);continue;
+        }
+        assert(f->used==78 && f->capacity==36);
+        uint32_t inner=0;assert(Fixture::read(context+0x130,&inner,4) && inner==69);
+        if(mode==29)f->quiescent=false;
+        if(mode==35)assert(NgreenNativeChecksumReservation::sizeOrRefuse(context,request,used,capacity,size)==5);
+        const auto result=NgreenNativeChecksumReservation::builderOrRefuse(context,request,actualToken,builder);
+        const bool rejectedBeforeBuilder=(mode>=19 && mode<=23) || mode==29 || mode==35 || mode==36 || mode==37;
+        assert(f->builderCalls==unsigned(!rejectedBeforeBuilder));
+        if(mode==24)assert(result==31);
+        if(mode==0 || mode==31 || mode==32) {
+            assert(result==0 && phase.complete() && f->sizeCalls==1 && f->builderCalls==1 && f->commits==1);
+            assert(NgreenChecksumGen12::reservationMatches(f->commands.data(),80));
+            for(unsigned i=0;i<72;++i)assert(f->commands[i]==0xf0000000U+i);
+            if(mode==32)assert(NgreenNativeChecksumReservation::builderOrRefuse(context,request,token,builder)==5 && f->builderCalls==1);
+        } else assert(result!=0 && !phase.complete());
+        assert(f->sizeCalls==1 && f->builderCalls<=1);
+        assert(f->commands[78]==0xcccccccc && f->commands[79]==0xcccccccc); // Native END reserve untouched.
+    }
+    puts("CHECKSUM_CALLBACK_PHASE_CPU_OK modes=44 native_once/body78/side36/no_END_write/refusal_and_reentry=PASS GPU_NOT_EXECUTED");
+}
+
 int main() {
+    testOwnedChecksumCallbacks();
     testChecksumNativeHeapBindings();
     testChecksumCapability();
     testChecksumProgramAppend();

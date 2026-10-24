@@ -2,6 +2,8 @@
 #include "tgl_capability_adapter.hpp"
 #include "native_return_observer.hpp"
 #include "native_avc_reservation.hpp"
+#include "native_checksum_reservation.hpp"
+#include "frame_checksum_gen12.hpp"
 #include "owned_resource.hpp"
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
@@ -56,6 +58,8 @@ uintptr_t qualifiedAppleGvaFramework(uintptr_t address) noexcept;
 int dispatchOwnedContextFrame(void*,const void*,void**) noexcept;
 uint64_t dispatchOwnedAvcSize(void*,const void*,uint32_t*,uint32_t*) noexcept;
 uint64_t dispatchOwnedAvcBuilder(void*,const void*,void*) noexcept;
+uint64_t dispatchOwnedChecksumSize(void*,const void*,uint32_t*,uint32_t*) noexcept;
+uint64_t dispatchOwnedChecksumBuilder(void*,const void*,void*) noexcept;
 struct NativeDataPointerWriter {
     bool operator()(uintptr_t address,uintptr_t value) const noexcept {
         // Caller holds exact owner/physical exclusive admission. A failed write
@@ -139,6 +143,41 @@ struct NativeCodecBackend {
         static Registry registry;
         return registry;
     }
+    template<class Lease,class Scope>
+    static bool queryChecksumPublication(Lease& lease,Scope& scope,uintptr_t physical,
+        NGVfChecksumPublication::Reply& output) noexcept {
+        auto* owner=lease.get();auto api=TglDarwinDeviceObservationApi::resolve();
+        const auto framework=qualifiedIoAcceleratorFramework(library.resourceCreate);
+        const auto image=scope.image();const auto generation=scope.generation();
+        if(!owner || !lease.exclusive() || !api.valid() || !framework ||
+            image>UINTPTR_MAX-0x754408 || !scope.matches(image,physical,generation) ||
+            !owner->nativeOtherWorkQuiescent())return false;
+        const auto qualify=[framework](uintptr_t address) noexcept {
+            return qualifiedIoAcceleratorFramework(address)==framework;
+        };
+        const auto admit=[&](uintptr_t root,uintptr_t device,uint32_t) noexcept {
+            uintptr_t current=0;
+            return lease.get()==owner && lease.exclusive() && scope.matches(image,physical,generation) &&
+                owner->frameTable().publication()==TglContextFramePublication::Unpublished &&
+                readMemory(owner->context(),&current,8) && current==image+0x754408 &&
+                leafMemoryPermissions(root,0x50,VM_PROT_READ,VM_PROT_EXECUTE) &&
+                leafMemoryPermissions(device,0x1c,VM_PROT_READ,VM_PROT_EXECUTE);
+        };
+        NGVfChecksumPublication::Reply candidate{};
+        const auto connection=tglWithNativePhysicalSharedConnectionSnapshot(physical,library.resourceCreate,
+            &readMemory,qualify,admit,[&](uint32_t port) noexcept -> int {
+                uint64_t before=0,after=0;
+                if(api.identity(port,before))return 5;
+                const bool ready=NGVfChecksumPublication::query(before,
+                    [&](uint32_t selector,void* out,size_t* bytes) noexcept {
+                        return api.readChecksumPublication(port,selector,out,bytes);
+                    },candidate);
+                return ready && !api.identity(port,after) && before==after?0:5;
+            });
+        if(!connection.called || !connection.stable || connection.nativeStatus ||
+            !scope.matches(image,physical,generation))return false;
+        output=candidate;return true;
+    }
     template<class Scope>
     static int adopt(Scope& scope,uintptr_t physical,const Batch& batch) noexcept {
         const auto hook=reinterpret_cast<uintptr_t>(&dispatchOwnedContextFrame);
@@ -179,11 +218,29 @@ struct NativeCodecBackend {
             auto sameOwner=[&](uintptr_t image,uintptr_t parent,uint64_t generation,uintptr_t object) noexcept {
                 return object==context && scope.matches(image,parent,generation) && image==scope.image() && parent==physical;
             };
-            const bool published=binding.frame==scope.image()+0x27724?
-                lease.get()->publishAvcInputCallbacks(lease,hook,
+            bool published=false;
+            if(binding.vtable==scope.image()+0x754408) {
+                // Independent selector4 handshake BEFORE any native heap
+                // mutation. AVC profile3 cannot authorize this auxiliary path.
+                NGVfChecksumPublication::Reply capability{};
+                if(!queryChecksumPublication(lease,scope,physical,capability))return 5;
+                if(!lease.get()->prepareChecksumProgram(lease,sameOwner,
+                    [](uintptr_t image,uintptr_t object,auto authority,auto read,auto,auto executable) noexcept {
+                        return NgreenFrameChecksumGen12::appendProgram(image,object,authority,read,
+                            &writableDataMemory,executable,
+                            [](uintptr_t entry,uintptr_t context,const uint32_t* program,uint32_t bytes) noexcept -> uint64_t {
+                                using Native=uint64_t(*)(uintptr_t,const void*,uint32_t);
+                                return reinterpret_cast<Native>(entry)(context,program,bytes);
+                            });
+                    }))return 5;
+                published=lease.get()->publishChecksumInputCallbacks(lease,hook,
+                    reinterpret_cast<uintptr_t>(&dispatchOwnedChecksumSize),
+                    reinterpret_cast<uintptr_t>(&dispatchOwnedChecksumBuilder),sameOwner,&ownedExecutableMemory);
+            } else if(binding.frame==scope.image()+0x27724) {
+                published=lease.get()->publishAvcInputCallbacks(lease,hook,
                     reinterpret_cast<uintptr_t>(&dispatchOwnedAvcSize),
-                    reinterpret_cast<uintptr_t>(&dispatchOwnedAvcBuilder),sameOwner,&ownedExecutableMemory):
-                lease.get()->publishFrame(lease,hook,sameOwner,&ownedExecutableMemory);
+                    reinterpret_cast<uintptr_t>(&dispatchOwnedAvcBuilder),sameOwner,&ownedExecutableMemory);
+            } else published=lease.get()->publishFrame(lease,hook,sameOwner,&ownedExecutableMemory);
             if(!published)return 5;
         }
         selected->framesPublished=true;return 0;
@@ -5611,6 +5668,24 @@ uint64_t dispatchOwnedAvcBuilder(void* context,const void* input,void* token) no
             using Native=uint64_t(*)(uintptr_t,uintptr_t,uintptr_t);
             return reinterpret_cast<Native>(entry)(object,request,nativeToken);
         },[]() noexcept {_exit(70);});
+}
+// Exact checksum2190a checks both callback EAX values before submit. A
+// missing/refused owned phase returns5; do not use AVC's ignored-EAX stop API.
+uint64_t dispatchOwnedChecksumSize(void* context,const void* input,uint32_t* used,uint32_t* capacity) noexcept {
+    return NgreenNativeChecksumReservation::sizeOrRefuse(reinterpret_cast<uintptr_t>(context),
+        reinterpret_cast<uintptr_t>(input),used,capacity,
+        [](uintptr_t entry,uintptr_t object,uintptr_t request,uint32_t* body,uint32_t* side) noexcept {
+            using Native=uint64_t(*)(uintptr_t,uintptr_t,uint32_t*,uint32_t*);
+            return reinterpret_cast<Native>(entry)(object,request,body,side);
+        });
+}
+uint64_t dispatchOwnedChecksumBuilder(void* context,const void* input,void* token) noexcept {
+    return NgreenNativeChecksumReservation::builderOrRefuse(reinterpret_cast<uintptr_t>(context),
+        reinterpret_cast<uintptr_t>(input),reinterpret_cast<uintptr_t>(token),
+        [](uintptr_t entry,uintptr_t object,uintptr_t request,uintptr_t buffer) noexcept {
+            using Native=uint64_t(*)(uintptr_t,uintptr_t,uintptr_t);
+            return reinterpret_cast<Native>(entry)(object,request,buffer);
+        });
 }
 struct NativeOtherFrameBackend {
     using Lease=NativeFactoryFrameBatch::Lease;
