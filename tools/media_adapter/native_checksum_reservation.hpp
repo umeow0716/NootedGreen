@@ -52,31 +52,25 @@ struct InputSurfaceShape {
     }
 };
 enum class InputSurfaceShapeStage : uint32_t {
-    Ready, Handle, AdmissionBeforeLock, Lock, AdmissionBeforeCapture,
-    CaptureBefore, GeometryBefore, AdmissionBetweenCaptures, CaptureAfter,
-    GeometryAfter, Stability, AdmissionBeforeUnlock, Unlock, AdmissionAfterUnlock
+    Ready, Handle, AdmissionBeforeCapture, CaptureBefore, GeometryBefore,
+    AdmissionBetweenCaptures, CaptureAfter, GeometryAfter, Stability, AdmissionAfterCapture
 };
 struct InputSurfaceShapeResult {
-    bool valid=false,mustStop=false;
+    bool valid=false;
     InputSurfaceShapeStage stage=InputSurfaceShapeStage::Ready;
     InputSurfaceShape observed{};
     uint32_t nativeStage=0;
-    int32_t lockStatus=0,unlockStatus=0;
 };
-// The native wrapper and CPU fault tests share this exact lock transaction.
-// Every successful lock has exactly one unlock attempt, including refusal.
-template<class Admit,class Lock,class Unlock,class Capture>
-inline InputSurfaceShapeResult captureInputSurfaceShape(uintptr_t handle,const InputGeometry& geometry,
-    Admit admit,Lock lock,Unlock unlock,Capture capture) noexcept {
-    static_assert(noexcept(admit()) && noexcept(lock()) && noexcept(unlock()) &&
-        noexcept(capture(std::declval<InputSurfaceShape&>())));
+// Metadata observation only: no pixel access, CPU lock, paging or readback.
+// The typed reference and exclusive owner are held by the caller. Both
+// snapshots must independently cover the request and remain identical.
+template<class Admit,class Capture>
+inline InputSurfaceShapeResult captureInputSurfaceMetadata(uintptr_t handle,const InputGeometry& geometry,
+    Admit admit,Capture capture) noexcept {
+    static_assert(noexcept(admit()) && noexcept(capture(std::declval<InputSurfaceShape&>())));
     InputSurfaceShapeResult result;
-    const auto denied=[&](InputSurfaceShapeStage stage) noexcept {result.stage=stage;return result;};
-    if(!handle)return denied(InputSurfaceShapeStage::Handle);
-    if(!admit())return denied(InputSurfaceShapeStage::AdmissionBeforeLock);
-    if(!lock())return denied(InputSurfaceShapeStage::Lock);
+    if(!handle){result.stage=InputSurfaceShapeStage::Handle;return result;}
     InputSurfaceShape before,after;
-    bool valid=false;
     if(!admit())result.stage=InputSurfaceShapeStage::AdmissionBeforeCapture;
     else if(!capture(before))result.stage=InputSurfaceShapeStage::CaptureBefore;
     else if(!before.covers(geometry))result.stage=InputSurfaceShapeStage::GeometryBefore;
@@ -84,26 +78,23 @@ inline InputSurfaceShapeResult captureInputSurfaceShape(uintptr_t handle,const I
     else if(!capture(after))result.stage=InputSurfaceShapeStage::CaptureAfter;
     else if(!after.covers(geometry))result.stage=InputSurfaceShapeStage::GeometryAfter;
     else if(!(before==after))result.stage=InputSurfaceShapeStage::Stability;
-    else if(!admit())result.stage=InputSurfaceShapeStage::AdmissionBeforeUnlock;
-    else valid=true;
+    else if(!admit())result.stage=InputSurfaceShapeStage::AdmissionAfterCapture;
+    else result.valid=true;
     result.observed=before;
-    const bool unlocked=unlock();
-    result.mustStop=!unlocked;
-    if(!unlocked)result.stage=InputSurfaceShapeStage::Unlock;
-    else if(valid && !admit()){valid=false;result.stage=InputSurfaceShapeStage::AdmissionAfterUnlock;}
-    result.valid=valid && unlocked;
     return result;
 }
 #if defined(__APPLE__)
-// Caller keeps the typed CF reference and exclusive context authority alive.
-// Only metadata/CPU address differences are observed, never contents or GPU
-// addresses. AvoidSync refuses a required GPU readback; native work starts
-// only AFTER the symmetric read-only unlock has returned successfully.
+// Exact Tahoe IOSurface UUID1de68bb891df31aa91c9549a357e4516:
+// GetBaseAddress client704f and GetBaseAddressOfPlane client79ae only read
+// metadata and add the client base; neither invokes lock/map/readback or
+// dereferences the returned pixel address. Unsupported planes return NULL.
+// Pointer differences below validate allocation bounds, never read pixels.
+// IOSurfaceLock is a raw CPU-data operation; AvoidSync correctly refuses a
+// GPU-resident buffer requiring readback and is not needed for this metadata.
 template<class Admit>
 inline InputSurfaceShapeResult darwinInputSurfaceShape(uintptr_t handle,const InputGeometry& geometry,Admit admit) noexcept {
     const auto surface=reinterpret_cast<IOSurfaceRef>(handle);
-    constexpr IOSurfaceLockOptions options=kIOSurfaceLockReadOnly|kIOSurfaceLockAvoidSync;
-    uint32_t nativeStage=0;int32_t lockStatus=0,unlockStatus=0;
+    uint32_t nativeStage=0;
     const auto capture=[&](InputSurfaceShape& shape) noexcept {
         nativeStage=1;
         if(!admit())return false;
@@ -132,10 +123,8 @@ inline InputSurfaceShapeResult darwinInputSurfaceShape(uintptr_t handle,const In
         nativeStage=9;
         return admit() && shape.covers(geometry);
     };
-    auto result=captureInputSurfaceShape(handle,geometry,admit,
-        [&]() noexcept {lockStatus=IOSurfaceLock(surface,options,nullptr);return lockStatus==KERN_SUCCESS;},
-        [&]() noexcept {unlockStatus=IOSurfaceUnlock(surface,options,nullptr);return unlockStatus==KERN_SUCCESS;},capture);
-    result.nativeStage=nativeStage;result.lockStatus=lockStatus;result.unlockStatus=unlockStatus;
+    auto result=captureInputSurfaceMetadata(handle,geometry,admit,capture);
+    result.nativeStage=nativeStage;
     return result;
 }
 #endif

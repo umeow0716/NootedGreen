@@ -20249,36 +20249,37 @@ static void testChecksumSurfaceShapeTransaction() {
     const InputGeometry geometry{1920,1088,1920,1080};
     const InputSurfaceShape shape{7,0x34323076,2,1920,1088,3133440,
         {1920,960},{1088,544},{1920,1920},{0,2088960}};
-    for(unsigned mode=0;mode<13;++mode) {
-        unsigned locks=0,unlocks=0,captures=0;bool held=false;
+    using Stage=InputSurfaceShapeStage;
+    constexpr Stage expected[]={Stage::Ready,Stage::Handle,Stage::AdmissionBeforeCapture,
+        Stage::CaptureBefore,Stage::CaptureAfter,Stage::Stability,Stage::GeometryBefore,
+        Stage::GeometryAfter,Stage::AdmissionBetweenCaptures,Stage::AdmissionAfterCapture};
+    for(unsigned mode=0;mode<10;++mode) {
+        unsigned captures=0,admissions=0;
         const auto admit=[&]() noexcept {
-            return mode!=2 && !(mode==11 && captures) && !(mode==12 && unlocks);
+            ++admissions;
+            return mode!=2 && !(mode==8 && captures==1) && !(mode==9 && captures==2);
         };
-        const auto result=captureInputSurfaceShape(mode==1?0:7,geometry,admit,
-            [&]() noexcept {assert(!held);++locks;held=mode!=3;return held;},
-            [&]() noexcept {assert(held);++unlocks;held=false;return mode!=9 && mode!=10;},
+        const auto result=captureInputSurfaceMetadata(mode==1?0:7,geometry,admit,
             [&](InputSurfaceShape& value) noexcept {
-                assert(held);++captures;value=shape;
-                if((mode==6 && captures==2))++value.id;
-                if((mode==7 && captures==1) || (mode==8 && captures==2))value.bytes=1;
-                return !(mode==4 || mode==10 || (mode==5 && captures==2));
+                ++captures;value=shape;
+                if(mode==5 && captures==2)++value.id;
+                if((mode==6 && captures==1) || (mode==7 && captures==2))value.bytes=1;
+                return !(mode==3 || (mode==4 && captures==2));
             });
-        assert(!held && result.valid==(mode==0) && result.mustStop==(mode==9 || mode==10));
-        using Stage=InputSurfaceShapeStage;
-        constexpr Stage expected[]={Stage::Ready,Stage::Handle,Stage::AdmissionBeforeLock,
-            Stage::Lock,Stage::CaptureBefore,Stage::CaptureAfter,Stage::Stability,
-            Stage::GeometryBefore,Stage::GeometryAfter,Stage::Unlock,Stage::Unlock,
-            Stage::AdmissionBetweenCaptures,Stage::AdmissionAfterUnlock};
-        assert(result.stage==expected[mode]);
-        if(mode<=3 && mode)assert(result.observed.width==0);
+        assert(result.valid==(mode==0) && result.stage==expected[mode]);
+        assert(result.nativeStage==0);
+        if(mode==1 || mode==2)assert(!captures && result.observed.width==0);
         else assert(result.observed.width==shape.width);
-        assert(result.nativeStage==0 && result.lockStatus==0 && result.unlockStatus==0);
-        assert(locks==(mode==1 || mode==2?0U:1U));
-        assert(unlocks==(mode==1 || mode==2 || mode==3?0U:1U));
-        if(mode<=3 && mode)assert(!captures);
-        if(mode==0 || mode==9 || mode==12)assert(captures==2);
+        if(mode==1)assert(admissions==0);
+        if(mode==0)assert(admissions==3 && captures==2);
+        if(mode==3 || mode==6 || mode==8)assert(captures==1);
+        if(mode==4 || mode==5 || mode==7 || mode==9)assert(captures==2);
     }
+    // Metadata admission is independent of raw pixel CPU accessibility.
+    // No Lock/Unlock callback exists in this transaction; a native NULL base
+    // or plane is still refused by the Darwin capture before acceptance.
 }
+
 void testOwnedChecksumInput() {
     using Fixture=ChecksumInputFixture;using Input=Fixture::Input;
     for(int mode=0;mode<37;++mode) {

@@ -5940,8 +5940,8 @@ struct NativeOtherFrameBackend {
                 if(ticket<8) {
                     const auto& shape=result.observed;
                     os_log_error(OS_LOG_DEFAULT,
-                        "NGRN_CHECKSUM_SURFACE_SHAPE ticket=%{public}u stage=%{public}u native-stage=%{public}u lock=%{public}d unlock=%{public}d format=%{public}llu planes=%{public}llu width=%{public}llu height=%{public}llu bytes=%{public}llu context=%{public}u:%{public}u request=%{public}u:%{public}u",
-                        ticket,static_cast<unsigned>(result.stage),result.nativeStage,result.lockStatus,result.unlockStatus,
+                        "NGRN_CHECKSUM_SURFACE_SHAPE ticket=%{public}u stage=%{public}u native-stage=%{public}u cpu-data-access=0 format=%{public}llu planes=%{public}llu width=%{public}llu height=%{public}llu bytes=%{public}llu context=%{public}u:%{public}u request=%{public}u:%{public}u",
+                        ticket,static_cast<unsigned>(result.stage),result.nativeStage,
                         static_cast<unsigned long long>(shape.format),static_cast<unsigned long long>(shape.planes),
                         static_cast<unsigned long long>(shape.width),static_cast<unsigned long long>(shape.height),
                         static_cast<unsigned long long>(shape.bytes),geometry.contextWidth,geometry.contextHeight,geometry.requestWidth,geometry.requestHeight);
@@ -5952,7 +5952,6 @@ struct NativeOtherFrameBackend {
                         static_cast<unsigned long long>(shape.pitch[0]),static_cast<unsigned long long>(shape.pitch[1]),
                         static_cast<unsigned long long>(shape.offset[0]),static_cast<unsigned long long>(shape.offset[1]));
                 }
-                if(result.mustStop){observed("surface-unlock-stop",5);_exit(70);}
                 return result.valid;
             },&writableDataMemory,admitted);
         if(!owned || !admitted() || !output || !writableDataMemory(output,8) ||
