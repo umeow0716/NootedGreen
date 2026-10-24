@@ -25829,6 +25829,20 @@ public:
         record->input.take(input);return true;
     }
     bool pending() const noexcept {for(const auto& record:records_)if(record.state!=State::Empty)return true;return false;}
+    // Reservation admission requires requireReserved=true BEFORE native
+    // callbacks write single backing. false only proves this same input is
+    // still held after native return/bind; it is NOT permission to reuse it.
+    bool onlyRetainedInput(Ticket ticket,uintptr_t image,uintptr_t physical,
+        uint64_t generation,uintptr_t context,bool requireReserved) const noexcept {
+        if(ticket.owner!=this || ticket.slot>=records_.size() || !ticket.serial)return false;
+        const auto& current=records_[ticket.slot];
+        if(current.serial!=ticket.serial || current.image!=image || current.physical!=physical ||
+            current.generation!=generation || current.context!=context || !current.input ||
+            (current.state!=State::Reserved && (requireReserved || current.state!=State::Bound)))return false;
+        for(const auto& other:records_)if(&other!=&current && other.state!=State::Empty)return false;
+        return true;
+    }
+
     Ticket reserve(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
         if(!image || !physical || !generation || !context || serial_==UINT64_MAX)return {};
         for(const auto& record:records_)if(record.state==State::Ambiguous || record.state==State::Reserved)return {};
@@ -27620,6 +27634,27 @@ public:
            state_->table.publication()!=TglContextFramePublication::Published)return false;
         return state_->nativeOtherPending.retainInput(ticket,state_->image,state_->physical,
             state_->generation,state_->context,input);
+    }
+    template<class ExclusiveLease,class Scope>
+    bool checksumFrameInputHeld(const ExclusiveLease& lease,Scope& scope,
+        TglNativeOtherPendingFrames::Ticket ticket,bool requireReserved) noexcept {
+        if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;
+        Unlock unlock{state_->busy};
+        uintptr_t current=0;uint32_t count=0,index=0;
+        return state_->checksumProgram==ChecksumProgram::Prepared && !state_->removed &&
+            state_->image && state_->image<=UINTPTR_MAX-0x2c6f6 &&
+            state_->context && state_->context<=UINTPTR_MAX-0x17c &&
+            state_->retainedIdentity() && state_->nativeParentMatches() &&
+            scope.matches(state_->image,state_->physical,state_->generation) &&
+            state_->table.publication()==FrameTable::Publication::Published &&
+            state_->table.callbackCount()==18 && state_->table.nativeFrame()==state_->image+0x2190a &&
+            state_->table.nativeSize()==state_->image+0x2c66a && state_->table.nativeBuilder()==state_->image+0x2c6f6 &&
+            state_->read(state_->context,&current,8) &&
+            current==reinterpret_cast<uintptr_t>(state_->table.addressPoint()) &&
+            state_->read(state_->context+0x174,&count,4) && count==1 &&
+            state_->read(state_->context+0x178,&index,4) && index==0 &&
+            state_->nativeOtherPending.onlyRetainedInput(ticket,state_->image,state_->physical,
+                state_->generation,state_->context,requireReserved);
     }
     template<class OwnerLease,class Scope>
     bool bindNativeOtherFrame(const OwnerLease& lease,Scope& scope,TglNativeOtherPendingFrames::Ticket ticket,

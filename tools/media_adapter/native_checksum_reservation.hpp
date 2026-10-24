@@ -5,6 +5,137 @@
 // Only exact FrameChecksum2190a: its size/builder EAX branches skip native
 // submit on failure. AVC27724 ignores those values and must not use this API.
 namespace NgreenNativeChecksumReservation {
+// Captured data and one typed CF pin, not a surface-content lock, native
+// context lease, backing coherency proof or permission to submit. RootAdmit
+// must independently exclude source destruction/writes throughout capture
+// and native callback execution. It must not recursively call this object.
+struct InputGeometry {
+    uint32_t contextWidth=0,contextHeight=0,requestWidth=0,requestHeight=0;
+    bool operator==(const InputGeometry& other) const noexcept {
+        return contextWidth==other.contextWidth && contextHeight==other.contextHeight &&
+            requestWidth==other.requestWidth && requestHeight==other.requestHeight;
+    }
+};
+template<class Api> class OwnedCallbackInput {
+    using Pin=TglOwnedTypedCfReference<Api>;
+    using Request=NgreenNativeAvcReservation::OwnedAvcCallbackRequest;
+    Pin surface_;
+    alignas(16) std::array<uint8_t,24> payload_{},expected_{};
+    Request request_;
+    InputGeometry geometry_;
+    uintptr_t context_=0,originalRequest_=0,originalPayload_=0,surfaceHandle_=0,commitTarget_=0;
+    bool ready_=false,commitAttempted_=false,committing_=false,committed_=false;
+    explicit OwnedCallbackInput(Api api) noexcept :surface_(std::move(api)) {}
+    template<class Read,class RootAdmit>
+    bool contextGeometry(Read read,RootAdmit admit,InputGeometry& output) const noexcept {
+        std::array<uint32_t,2> first{},second{};
+        if(!admit() || !read(context_+0x138,first.data(),sizeof(first)) || !admit() ||
+            !read(context_+0x138,second.data(),sizeof(second)) || first!=second || !admit())return false;
+        output=geometry_;output.contextWidth=first[0];output.contextHeight=first[1];return true;
+    }
+    bool ownedPrefixMatches() const noexcept {
+        return !std::memcmp(payload_.data(),expected_.data(),16) &&
+            (!committed_ || !std::memcmp(payload_.data()+16,expected_.data()+16,8));
+    }
+public:
+    OwnedCallbackInput(const OwnedCallbackInput&)=delete;
+    OwnedCallbackInput& operator=(const OwnedCallbackInput&)=delete;
+    OwnedCallbackInput(OwnedCallbackInput&&)=delete;
+    OwnedCallbackInput& operator=(OwnedCallbackInput&&)=delete;
+    // Shape runs only after the typed retain. It validates actual immutable
+    // IOSurface format/plane/backing metadata against BOTH captured geometries.
+    // Neither a coded/visible equality nor padded1088 is inferred here.
+    template<class Read,class Shape,class Writable,class RootAdmit>
+    static std::unique_ptr<OwnedCallbackInput> captureForContext(uintptr_t context,uintptr_t request,
+        Api api,Read read,Shape shape,Writable writable,RootAdmit admit) noexcept {
+        if(!context || (context&7U) || context>UINTPTR_MAX-0x4748 ||
+            !request || (request&7U) || request>UINTPTR_MAX-0x28 || !admit())return {};
+        std::array<uintptr_t,2> root{},afterRoot{};
+        if(!read(request+0x18,root.data(),sizeof(root)) || !admit() || root[0]!=context ||
+            !root[1] || (root[1]&7U) || root[1]>UINTPTR_MAX-24 ||
+            !writable(root[1]+16,8) || !admit())return {};
+        auto result=std::unique_ptr<OwnedCallbackInput>(new(std::nothrow) OwnedCallbackInput(api));
+        if(!result || !NgreenNativeAvcReservation::disjointOwnedObject(request,0x28,result.get()) ||
+            !NgreenNativeAvcReservation::disjointOwnedObject(root[1],24,result.get()) ||
+            !(request+0x28<=root[1] || root[1]+24<=request) ||
+            !(context+0x4748<=request || request+0x28<=context) ||
+            !(context+0x4748<=root[1] || root[1]+24<=context))return {};
+        result->context_=context;result->originalRequest_=request;result->originalPayload_=root[1];
+        std::array<uint8_t,24> payload{},again{};
+        if(!read(root[1],payload.data(),payload.size()) || !admit() ||
+            !read(root[1],again.data(),again.size()) || payload!=again || !admit())return {};
+        std::memcpy(&result->surfaceHandle_,payload.data(),8);
+        std::memcpy(&result->geometry_.requestWidth,payload.data()+8,4);
+        std::memcpy(&result->geometry_.requestHeight,payload.data()+12,4);
+        InputGeometry geometry;
+        if(!result->surfaceHandle_ || !result->contextGeometry(read,admit,geometry) ||
+            !geometry.contextWidth || !geometry.contextHeight || !geometry.requestWidth || !geometry.requestHeight ||
+            geometry.contextWidth>16384 || geometry.contextHeight>16384 ||
+            geometry.requestWidth>16384 || geometry.requestHeight>16384)return {};
+        result->geometry_=geometry;
+        const auto type=api.surfaceType();
+        if(!type || !admit() || !result->surface_.acquire(result->surfaceHandle_,type) || !admit() ||
+            !shape(result->surfaceHandle_,geometry) || !admit())return {};
+        result->payload_=payload;result->expected_=payload;
+        const auto owned=reinterpret_cast<uintptr_t>(result->payload_.data());
+        if(!result->request_.capture(request,root[1],owned,read,
+            [&](uintptr_t r,uintptr_t p,uintptr_t o) noexcept {
+                return r==request && p==root[1] && o==owned && admit();
+            }) || !read(request+0x18,afterRoot.data(),sizeof(afterRoot)) || root!=afterRoot || !admit())return {};
+        result->ready_=true;
+        if(!result->matchesContext(context,read,admit))return {};
+        return result;
+    }
+    const Request& callbackRequest() const noexcept {return request_;}
+    uintptr_t nativeContext() const noexcept {return ready_?context_:0;}
+    uintptr_t originalRequest() const noexcept {return ready_?originalRequest_:0;}
+    uintptr_t originalPayload() const noexcept {return ready_?originalPayload_:0;}
+    uintptr_t callbackPayload() const noexcept {return ready_?reinterpret_cast<uintptr_t>(payload_.data()):0;}
+    uintptr_t surface() const noexcept {return ready_ && surface_.owns(surfaceHandle_)?surfaceHandle_:0;}
+    const InputGeometry& geometry() const noexcept {return geometry_;}
+    bool excludesOwnedStorage(uintptr_t address,size_t bytes) const noexcept {
+        return NgreenNativeAvcReservation::disjointOwnedObject(address,bytes,this);
+    }
+    template<class Read,class RootAdmit>
+    bool matchesContext(uintptr_t context,Read read,RootAdmit admit) const noexcept {
+        if(!ready_ || context!=context_ || !surface_.owns(surfaceHandle_) || !ownedPrefixMatches() ||
+            !request_.matchesContextIdentity(context) || !admit() ||
+            !request_.matchesOriginal(originalRequest_,originalPayload_,read,admit))return false;
+        InputGeometry current;
+        std::array<uint8_t,24> first{},second{};
+        if(!contextGeometry(read,admit,current) || !(current==geometry_) ||
+            !read(originalPayload_,first.data(),first.size()) || !admit() ||
+            !read(originalPayload_,second.data(),second.size()) || first!=second || !admit() ||
+            std::memcmp(first.data(),expected_.data(),16))return false;
+        uintptr_t observed=0,expected=0;
+        std::memcpy(&observed,first.data()+16,8);std::memcpy(&expected,expected_.data()+16,8);
+        return observed==expected || (committing_ && observed==commitTarget_);
+    }
+    // Exact native ad00 writes payload+16 from context+4720. Commit only that
+    // pointer-sized field to the original caller's data; never dereference it,
+    // manufacture checksum contents, or treat this as GPU completion.
+    template<class Read,class Write,class Writable,class RootAdmit>
+    bool commitNativeOutput(Read read,Write write,Writable writable,RootAdmit admit) noexcept {
+        if(commitAttempted_)return false;
+        commitAttempted_=true;
+        if(!matchesContext(context_,read,admit))return false;
+        uintptr_t candidate=0,native=0;
+        std::memcpy(&candidate,payload_.data()+16,8);
+        if(!candidate || !admit() || !read(context_+0x4720,&native,8) || !admit() || candidate!=native ||
+            !writable(originalPayload_+16,8) || !matchesContext(context_,read,admit))return false;
+        commitTarget_=candidate;committing_=true;
+        const bool written=write(originalPayload_+16,candidate);
+        std::array<uint8_t,24> after{},expected=expected_;
+        std::memcpy(expected.data()+16,&candidate,8);
+        const bool verified=written && admit() && read(originalPayload_,after.data(),after.size()) &&
+            after==expected && admit() && read(context_+0x4720,&native,8) && native==candidate &&
+            matchesContext(context_,read,admit);
+        if(verified){expected_=expected;committed_=true;}
+        committing_=false;
+        return verified && matchesContext(context_,read,admit);
+    }
+};
+
 class OwnedCallbackPhase {
 public:
     struct Identity {uintptr_t image=0,physical=0,context=0,request=0;uint64_t generation=0;};

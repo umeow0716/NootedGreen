@@ -292,6 +292,9 @@ template<class T,class Released> void testNativeOtherInputRetirement(std::unique
     assert(!pending.retainInput(foreign,image,physical,1,context,input) && input.get()==original);
     assert(!pending.retainInput(ticket,image,physical,2,context,input) && input.get()==original);
     assert(pending.retainInput(ticket,image,physical,1,context,input) && !input && !released());
+    assert(pending.onlyRetainedInput(ticket,image,physical,1,context,true));
+    assert(!pending.onlyRetainedInput(foreign,image,physical,1,context,true));
+    assert(!pending.onlyRetainedInput(ticket,image,physical,2,context,true));
     if(whileRetained)whileRetained(retainedState);
     assert(!input && !released()); // Callback completion cannot release GPU-owned inputs.
     auto duplicate=std::make_unique<unsigned>(7);
@@ -305,6 +308,8 @@ template<class T,class Released> void testNativeOtherInputRetirement(std::unique
     fresh.valid=true;fresh.device=0x5000;fresh.mapping=0x6000;fresh.table=0x7000;
     fresh.channels=10;fresh.active[0]=true;fresh.observed[0]=6;
     assert(pending.bind(ticket,lineage,fence,fresh) && !released());
+    assert(!pending.onlyRetainedInput(ticket,image,physical,1,context,true));
+    assert(pending.onlyRetainedInput(ticket,image,physical,1,context,false));
     NGVfTaskCompletion::Reply reply{};
     reply.abiVersion=NGVfTaskCompletion::version;reply.bytes=sizeof(reply);reply.registryId=99;reply.recordCount=1;
     std::memcpy(reply.familyUuid,NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid,16);
@@ -321,6 +326,7 @@ template<class T,class Released> void testNativeOtherInputRetirement(std::unique
     assert(!retired && !released() && pending.pending());
     assert(pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh,&retired));
     assert(retired && !pending.pending() && !released()); // No deletion in completion gate.
+    assert(!pending.onlyRetainedInput(ticket,image,physical,1,context,false));
     assert(!pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh,&retired));
     auto moved=std::move(retired);assert(moved && !retired && !released());
     moved.reset();assert(released()); // Explicit CPU fixture retirement outside all gates.
@@ -16920,6 +16926,7 @@ static void testRetainedVeboxFrames() {
                 constexpr std::array<uintptr_t,6> linearFields{0xb50,0x4b90,0x1b60,0x2b70,0x3b80,0x5ba0};
                 std::array<std::array<uint8_t,0x1010>,6> linearPools{};
                 int linearCorrupt=-1;bool linearUnstable=false,linearReadDenied=false;unsigned linearReads=0;
+                uint32_t checksumBackingCount=1,checksumBackingIndex=0;
                 auto readFamily=[&](uintptr_t p,void* out,size_t n) noexcept {
                     if(p>=image+0x26b73 && p<image+0x26bbb && (p-image-0x26b73)%12==0 && n==12) {
                         const size_t i=(p-image-0x26b73)/12;
@@ -16955,6 +16962,10 @@ static void testRetainedVeboxFrames() {
                         auto bytes=rootAnchors[i];
                         if(int(i)==rootCorruptSite)bytes[size_t(rootCorruptByte)]^=1;
                         std::memcpy(out,bytes.data(),n);return true;
+                    }
+                    if(n==4 && (p==0x8174 || p==0x8178)) {
+                        const auto value=p==0x8174?checksumBackingCount:checksumBackingIndex;
+                        std::memcpy(out,&value,4);return true;
                     }
                     if(n!=8)return false;
                     uintptr_t value=0;
@@ -17207,18 +17218,31 @@ static void testRetainedVeboxFrames() {
                 } scope{image};
                 const auto pendingFrame=retained->reserveNativeOtherFrame(lease,scope);
                 assert(pendingFrame.serial && !retained->reserveNativeOtherFrame(lease,scope).serial);
+                if(checksumFamily)assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));
                 unsigned inputDrops=0;
                 struct InputOwner {
                     unsigned* drops;explicit InputOwner(unsigned& count) noexcept:drops(&count) {}
                     ~InputOwner() noexcept {++*drops;}
                 };
                 auto input=std::unique_ptr<InputOwner>(new InputOwner(inputDrops));
-                if(avc) {
+                if(avc || checksumFamily) {
                     scope.generation=2;
                     assert(!retained->retainNativeOtherFrameInput(lease,scope,pendingFrame,input) && input);
                     scope.generation=1;FamilyLease foreign{nullptr};
                     assert(!retained->retainNativeOtherFrameInput(foreign,scope,pendingFrame,input) && input);
                     assert(retained->retainNativeOtherFrameInput(lease,scope,pendingFrame,input) && !input && !inputDrops);
+                    if(checksumFamily) {
+                        assert(retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));
+                        FamilyLease nonExclusive{retained,false};
+                        assert(!retained->checksumFrameInputHeld(nonExclusive,scope,pendingFrame,true));
+                        assert(!retained->checksumFrameInputHeld(foreign,scope,pendingFrame,true));
+                        scope.generation=2;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));scope.generation=1;
+                        checksumBackingCount=2;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));checksumBackingCount=1;
+                        checksumBackingIndex=1;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));checksumBackingIndex=0;
+                        parentPhysical+=8;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));parentPhysical-=8;
+                        actualTable+=8;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));actualTable-=8;
+                        assert(retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));
+                    }
                 } else input.reset();
                 assert(!retained->nativeOtherWorkQuiescent());
                 assert(!retained->prepareRemoval(same));
@@ -17233,6 +17257,10 @@ static void testRetainedVeboxFrames() {
                 current.valid=true;current.device=0xe000;current.mapping=0xf000;current.table=0x10000;
                 current.channels=1;current.active[0]=true;current.observed[0]=1;
                 assert(retained->bindNativeOtherFrame(lease,scope,pendingFrame,outputLineage,expected,current));
+                if(checksumFamily) {
+                    assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));
+                    assert(retained->checksumFrameInputHeld(lease,scope,pendingFrame,false));
+                }
                 NGVfTaskCompletion::Reply completed{};
                 completed.abiVersion=NGVfTaskCompletion::version;completed.bytes=sizeof(completed);
                 completed.registryId=99;completed.recordCount=1;completed.records[0]={0,1,2,1,4};
@@ -17255,7 +17283,7 @@ static void testRetainedVeboxFrames() {
                 assert(!retained->prepareRemoval(same) && !retained->nativeOtherWorkQuiescent());
                 ready=true;
                 assert(retained->serviceNativeOtherFrames(lease,scope,observe)==0 && observations==2);
-                if(avc) {
+                if(avc || checksumFamily) {
                     assert(!retained->nativeOtherWorkQuiescent() && !inputDrops);
                     TglNativeOtherPendingFrames::RetiredInputs retired;
                     assert(retained->serviceNativeOtherFrames(lease,scope,observe,&retired)==0 && observations==3);
@@ -19952,6 +19980,133 @@ static void testChecksumNativeHeapBindings() {
 
 // Owned CPU fixtures for the actual paired checksum size/builder phase. No
 // native Apple entry, IOSurface API or GPU is invoked by these tests.
+struct ChecksumInputCfState {
+    unsigned retains=0,releases=0,holds=0,typeCalls=0,retainAttempts=0;
+    bool typeAllowed=true,retainAllowed=true;
+    uint32_t* mutateOnRetain=nullptr;
+};
+struct ChecksumInputCfApi {
+    ChecksumInputCfState* state;
+    uintptr_t surfaceType() const noexcept {return 42;}
+    uintptr_t type(uintptr_t handle) const noexcept {++state->typeCalls;return handle==0x7000 && state->typeAllowed?42:99;}
+    bool retain(uintptr_t handle) const noexcept {
+        assert(handle==0x7000);++state->retainAttempts;
+        if(!state->retainAllowed)return false;
+        ++state->retains;++state->holds;
+        if(state->mutateOnRetain)*state->mutateOnRetain^=1;
+        return true;
+    }
+    void release(uintptr_t handle) const noexcept {assert(handle==0x7000 && state->holds);--state->holds;++state->releases;}
+};
+struct ChecksumInputFixture {
+    using Input=NgreenNativeChecksumReservation::OwnedCallbackInput<ChecksumInputCfApi>;
+    alignas(16) std::array<uint8_t,0x4748> context{};
+    alignas(16) std::array<uint8_t,0x28> request{};
+    alignas(16) std::array<uint8_t,24> payload{};
+    ChecksumInputCfState cf;
+    unsigned payloadReads=0,geometryReads=0,writes=0,shapeCalls=0;
+    bool admitted=true,writable=true,readAllowed=true;
+    int mode;
+    static uintptr_t ptr(const void* p) noexcept {return reinterpret_cast<uintptr_t>(p);}
+    template<class T> static void put(uintptr_t p,T value) noexcept {std::memcpy(reinterpret_cast<void*>(p),&value,sizeof(value));}
+    static bool range(uintptr_t a,size_t n,uintptr_t base,size_t bytes) noexcept {
+        return a>=base && a-base<=bytes && n && n<=bytes-(a-base);
+    }
+    explicit ChecksumInputFixture(int value):mode(value) {
+        put(ptr(request.data())+0x18,ptr(context.data()));put(ptr(request.data())+0x20,ptr(payload.data()));
+        put(ptr(payload.data()),uintptr_t(0x7000));put(ptr(payload.data())+8,uint32_t(1920));
+        put(ptr(payload.data())+12,uint32_t(1080));put(ptr(payload.data())+16,uintptr_t(0x11110000));
+        put(ptr(context.data())+0x138,uint32_t(1920));put(ptr(context.data())+0x13c,uint32_t(1088));
+        put(ptr(context.data())+0x4720,uintptr_t(0x99000000));
+    }
+    bool read(uintptr_t a,void* out,size_t n) noexcept {
+        if(!out || !readAllowed || !(range(a,n,ptr(context.data()),context.size()) ||
+            range(a,n,ptr(request.data()),request.size()) || range(a,n,ptr(payload.data()),payload.size())))return false;
+        std::memcpy(out,reinterpret_cast<void*>(a),n);
+        if(a==ptr(payload.data()) && n==24 && ++payloadReads==2 && mode==7)static_cast<uint8_t*>(out)[8]^=1;
+        if(a==ptr(context.data())+0x138 && n==8 && ++geometryReads==2 && mode==8)static_cast<uint8_t*>(out)[0]^=1;
+        return true;
+    }
+    bool outputWritable(uintptr_t a,size_t n) noexcept {return writable && a==ptr(payload.data())+16 && n==8;}
+    bool shape(uintptr_t surface,const NgreenNativeChecksumReservation::InputGeometry& shape) noexcept {
+        ++shapeCalls;assert(surface==0x7000 && cf.holds==1);
+        if(mode==20)put(ptr(request.data())+0x18,uintptr_t(1));
+        if(mode==21)admitted=false;
+        // An OWNED fixture provider, not proof of native coded/visible layout.
+        return mode!=13 && shape.contextWidth==1920 && shape.contextHeight==1088 &&
+            shape.requestWidth==1920 && shape.requestHeight==1080;
+    }
+};
+void testOwnedChecksumInput() {
+    using Fixture=ChecksumInputFixture;using Input=Fixture::Input;
+    for(int mode=0;mode<37;++mode) {
+        auto f=std::unique_ptr<Fixture>(new Fixture(mode));
+        const auto context=Fixture::ptr(f->context.data()),request=Fixture::ptr(f->request.data()),payload=Fixture::ptr(f->payload.data());
+        switch(mode) {
+            case 1:f->admitted=false;break;case 2:Fixture::put(request+0x18,context+8);break;
+            case 3:Fixture::put(request+0x20,uintptr_t(0));break;case 4:Fixture::put(request+0x20,payload+1);break;
+            case 5:f->writable=false;break;case 6:f->readAllowed=false;break;
+            case 9:f->cf.mutateOnRetain=reinterpret_cast<uint32_t*>(payload+8);break;
+            case 10:Fixture::put(payload,uintptr_t(0));break;case 11:f->cf.typeAllowed=false;break;case 12:f->cf.retainAllowed=false;break;
+            case 14:Fixture::put(payload+8,uint32_t(0));break;case 15:Fixture::put(payload+12,uint32_t(16385));break;
+            case 16:Fixture::put(context+0x138,uint32_t(0));break;case 17:Fixture::put(context+0x13c,uint32_t(16385));break;
+            case 18:Fixture::put(request+0x20,request+16);break;case 19:Fixture::put(request+0x20,context+0x100);break;
+        }
+        const auto read=[&](uintptr_t a,void* out,size_t n) noexcept {return f->read(a,out,n);};
+        const auto admit=[&]() noexcept {return f->admitted;};
+        const auto writable=[&](uintptr_t a,size_t n) noexcept {return f->outputWritable(a,n);};
+        auto input=Input::captureForContext(context,request,ChecksumInputCfApi{&f->cf},read,
+            [&](uintptr_t surface,const auto& shape) noexcept {return f->shape(surface,shape);},writable,admit);
+        if(mode>=1 && mode<=21) {
+            assert(!input && f->writes==0 && f->cf.holds==0 && f->cf.retains==f->cf.releases);continue;
+        }
+        assert(input && input->surface()==0x7000 && input->nativeContext()==context && input->originalRequest()==request &&
+            input->originalPayload()==payload && input->callbackPayload()!=payload && f->cf.holds==1 && f->cf.retains==1 && !f->cf.releases);
+        assert(input->geometry().contextHeight==1088 && input->geometry().requestHeight==1080); // Kept independent.
+        assert(input->matchesContext(context,read,admit));
+        const auto ownedPayload=input->callbackPayload();
+        Fixture::put(ownedPayload+16,uintptr_t(0x99000000)); // Only the native ad00 output field is modelled.
+        if(mode==22)Fixture::put(payload+8,uint32_t(1919));
+        if(mode==23)Fixture::put(ownedPayload+8,uint32_t(1919));
+        if(mode==24)Fixture::put(ownedPayload+16,uintptr_t(0));
+        if(mode==25)Fixture::put(ownedPayload+16,uintptr_t(0x99001000));
+        if(mode==26)f->writable=false;
+        if(mode==34)Fixture::put(payload+16,uintptr_t(0x33330000));
+        auto* raw=input.get();
+        const auto write=[&](uintptr_t address,uintptr_t value) noexcept {
+            assert(address==payload+16 && value==0x99000000);++f->writes;
+            if(mode==27)return false;
+            Fixture::put(address,mode==36?value^8:value);
+            if(mode==29)f->admitted=false;
+            if(mode==30)f->readAllowed=false;
+            if(mode==31)Fixture::put(context+0x13c,uint32_t(1080));
+            if(mode==32)Fixture::put(context+0x4720,uintptr_t(0x99001000));
+            if(mode==33)assert(!raw->commitNativeOutput(read,
+                [](uintptr_t,uintptr_t) noexcept {assert(false);return false;},writable,admit));
+            return mode!=28;
+        };
+        const bool committed=input->commitNativeOutput(read,write,writable,admit);
+        const bool success=mode==0 || mode==33 || mode==35;
+        assert(committed==success);
+        assert(f->writes==unsigned(!(mode>=22 && mode<=26) && mode!=34));
+        assert(f->cf.holds==1 && !f->cf.releases);
+        const auto previous=f->writes;
+        assert(!input->commitNativeOutput(read,write,writable,admit) && f->writes==previous); // No ambiguous retry.
+        if(success) {
+            uintptr_t published=0;assert(read(payload+16,&published,8) && published==0x99000000);
+            assert(input->matchesContext(context,read,admit));
+        }
+        if(mode==0) {
+            testNativeOtherInputRetirement(input,[&]() noexcept {return f->cf.releases==1;});
+            assert(!input && f->cf.holds==0 && f->cf.retains==1 && f->cf.releases==1);
+        } else {
+            input.reset(); // CPU fixture has never queued any work.
+            assert(f->cf.holds==0 && f->cf.retains==f->cf.releases);
+        }
+    }
+    puts("CHECKSUM_INPUT_CPU_OK modes=37 typed_CF_pin/separate_geometries/output_once/pending_fence_retirement=PASS GPU_NOT_EXECUTED");
+}
+
 struct ChecksumCallbackFixture {
     using Phase=NgreenNativeChecksumReservation::OwnedCallbackPhase;
     inline static thread_local ChecksumCallbackFixture* active=nullptr;
@@ -20109,6 +20264,7 @@ void testOwnedChecksumCallbacks() {
 }
 
 int main() {
+    testOwnedChecksumInput();
     testOwnedChecksumCallbacks();
     testChecksumNativeHeapBindings();
     testChecksumCapability();
