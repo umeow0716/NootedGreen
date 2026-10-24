@@ -101,6 +101,33 @@ inline InputSurfaceShapeResult darwinInputSurfaceShape(uintptr_t handle,const In
         [&]() noexcept {return IOSurfaceUnlock(surface,options,nullptr)==KERN_SUCCESS;},capture);
 }
 #endif
+// Fixed native2c314/9710/9628 allocation record. These are CPU and CF/shared
+// pointers, NEVER GPU addresses. A stable observation supplies no lifetime
+// lease or write authority; the enclosing prepared owner/producer must do so.
+struct SurfaceHeapObservation {
+    uint32_t mode=0,count=0,bytes=0,ready=0;
+    uintptr_t cpu=0,resource=0,sharedRO=0,sharedRW=0;
+    template<class Read,class Admit>
+    static bool capture(uintptr_t context,Read read,Admit admit,SurfaceHeapObservation& output) noexcept {
+        static_assert(sizeof(SurfaceHeapObservation)==48);
+        if(!context || (context&7U) || context>UINTPTR_MAX-0x21d8 || !admit())return false;
+        uint32_t count=0,index=0;
+        SurfaceHeapObservation before,after;
+        if(!read(context+0x174,&count,4) || !read(context+0x178,&index,4) ||
+            count!=1 || index || !admit() ||
+            !read(context+0x21a8,&before,sizeof(before)) || !admit() ||
+            !read(context+0x21a8,&after,sizeof(after)) || !admit() ||
+            std::memcmp(&before,&after,sizeof(before)) || before.mode || before.count!=1 ||
+            before.ready!=1 || before.bytes<0x240 || before.bytes>65536 ||
+            !before.cpu || (before.cpu&4095U) || before.bytes>UINTPTR_MAX-before.cpu ||
+            !before.resource || !before.sharedRO || !before.sharedRW ||
+            ((before.resource|before.sharedRO|before.sharedRW)&7U))return false;
+        uint32_t finalCount=0,finalIndex=0;
+        if(!read(context+0x174,&finalCount,4) || !read(context+0x178,&finalIndex,4) ||
+            finalCount!=count || finalIndex!=index || !admit())return false;
+        output=before;return true;
+    }
+};
 template<class Api> class OwnedCallbackInput {
     using Pin=TglOwnedTypedCfReference<Api>;
     using Request=NgreenNativeAvcReservation::OwnedAvcCallbackRequest;

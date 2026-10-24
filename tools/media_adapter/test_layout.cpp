@@ -20086,6 +20086,38 @@ struct ChecksumInputFixture {
             shape.requestWidth==1920 && shape.requestHeight==1080;
     }
 };
+static void testChecksumSurfaceHeapObservation() {
+    using Heap=NgreenNativeChecksumReservation::SurfaceHeapObservation;
+    for(unsigned mode=0;mode<18;++mode) {
+        constexpr uintptr_t context=0x100000;
+        Heap record{0,1,4096,1,0x200000,0x300000,0x400000,0x500000};
+        uint32_t count=1,index=0;unsigned recordReads=0;
+        switch(mode) {
+            case 1:record.mode=1;break;case 2:record.count=2;break;
+            case 3:record.ready=0;break;case 4:record.bytes=0x23f;break;
+            case 5:record.bytes=65537;break;case 6:record.cpu=0;break;
+            case 7:++record.cpu;break;case 8:record.cpu=UINTPTR_MAX&~uintptr_t(4095);break;
+            case 9:record.resource=0;break;case 10:record.sharedRO=0;break;
+            case 11:record.sharedRW=1;break;case 12:count=2;break;case 13:index=1;break;
+        }
+        auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+            if(mode==14)return false;
+            if(at==context+0x174 && bytes==4){std::memcpy(out,&count,4);return true;}
+            if(at==context+0x178 && bytes==4){std::memcpy(out,&index,4);return true;}
+            if(at!=context+0x21a8 || bytes!=sizeof(record))return false;
+            ++recordReads;auto value=record;
+            if(mode==15 && recordReads==2)value.sharedRW+=8;
+            std::memcpy(out,&value,sizeof(value));
+            if(mode==16 && recordReads==2)index=1;
+            return true;
+        };
+        Heap output{};output.bytes=123;
+        assert(Heap::capture(context,read,[&]() noexcept {return mode!=17;},output)==(mode==0));
+        assert(output.bytes==(mode==0?4096U:123U));
+        if(mode==0)assert(output.cpu==record.cpu && output.resource==record.resource &&
+            output.sharedRO==record.sharedRO && output.sharedRW==record.sharedRW);
+    }
+}
 static void testChecksumSurfaceCacheWords() {
     std::array<uint32_t,64> ssh{};
     for(unsigned i=0;i<64;++i)ssh[i]=0x89000000U+i;
@@ -20450,6 +20482,7 @@ void testOwnedChecksumCallbacks() {
 }
 
 int main() {
+    testChecksumSurfaceHeapObservation();
     testChecksumSurfaceCacheWords();
     testChecksumSurfaceShape();
     testChecksumSurfaceShapeTransaction();
