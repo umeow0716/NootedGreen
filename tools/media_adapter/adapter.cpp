@@ -5701,6 +5701,7 @@ struct NativeOtherFrameBackend {
     using Lease=NativeFactoryFrameBatch::Lease;
     using ExclusiveLease=NativeCodecBackend::Registry::ExclusiveOwnerLease;
     using AvcInput=NgreenNativeAvcReservation::OwnedAvcCallbackInput<TglDarwinTypedCfReferenceApi>;
+    using ChecksumInput=NgreenNativeChecksumReservation::OwnedCallbackInput<TglDarwinTypedCfReferenceApi>;
     template<class FrameLease>
     static bool queryPublication(FrameLease& lease,NativePhysicalFrameScope& scope,uintptr_t image,
         uintptr_t physical,uint64_t generation,NGVfAvcPublication::Reply& output) noexcept {
@@ -5895,17 +5896,83 @@ struct NativeOtherFrameBackend {
         uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
         auto* owner=lease.get();
         if(!owner || !scope.matches(image,physical,generation))return 5;
-        if(owner->frameTable().nativeFrame()!=image+0x27724)
+        const bool checksum=owner->frameTable().isChecksumInputFamily(image);
+        if(!checksum && owner->frameTable().nativeFrame()!=image+0x27724)
             return dispatchPinned(lease,scope,image,physical,generation,input,output);
         auto& registry=NativeCodecBackend::owners();
         auto exclusive=registry.promoteExclusive(lease,image,physical,generation,owner->context());
         if(!exclusive.get())return 5;
-        const int result=dispatchAvc(exclusive,scope,image,physical,generation,input,output);
+        const int result=checksum?dispatchChecksum(exclusive,scope,image,physical,generation,input,output):
+            dispatchAvc(exclusive,scope,image,physical,generation,input,output);
         lease=registry.demoteExclusive(exclusive,image,physical,generation,owner->context());
         // Losing the transfer is not permission to continue a native batch
         // without its batch-long owner pin, even if the native call returned0.
         if(!lease.get())_exit(70);
         return result;
+    }
+    static int dispatchChecksum(ExclusiveLease& lease,NativePhysicalFrameScope& scope,uintptr_t image,
+        uintptr_t physical,uint64_t generation,uintptr_t input,uintptr_t output) noexcept {
+        auto* owner=lease.get();
+        if(!owner || !lease.exclusive() || !scope.matches(image,physical,generation) ||
+            !owner->frameTable().isChecksumInputFamily(image) || !owner->nativeOtherWorkQuiescent())return 5;
+        const uintptr_t context=owner->context();
+        const auto admitted=[&]() noexcept {
+            uintptr_t current=0;const auto* callbacks=owner->frameTable().addressPoint();
+            return lease.get()==owner && lease.exclusive() && scope.matches(image,physical,generation) &&
+                owner->context()==context && owner->frameTable().isChecksumInputFamily(image) &&
+                owner->frameTable().publication()==TglContextFramePublication::Published && callbacks &&
+                callbacks[0x30/8]==reinterpret_cast<uintptr_t>(&dispatchOwnedChecksumSize) &&
+                callbacks[0x60/8]==reinterpret_cast<uintptr_t>(&dispatchOwnedChecksumBuilder) &&
+                readMemory(context,&current,8) && current==reinterpret_cast<uintptr_t>(callbacks);
+        };
+        auto owned=ChecksumInput::captureForContext(context,input,TglDarwinTypedCfReferenceApi{},&readMemory,
+            [&](uintptr_t surface,const auto& geometry) noexcept {
+                const auto result=NgreenNativeChecksumReservation::darwinInputSurfaceShape(surface,geometry,admitted);
+                if(result.mustStop)_exit(70);
+                return result.valid;
+            },&writableDataMemory,admitted);
+        if(!owned || !admitted() || !output || !writableDataMemory(output,8) ||
+            !owned->excludesOwnedStorage(output,8))return 5;
+        const auto disjoint=[&](uintptr_t at,size_t bytes) noexcept {
+            return output<=UINTPTR_MAX-8 && at<=UINTPTR_MAX-bytes &&
+                (output+8<=at || at+bytes<=output);
+        };
+        if(!disjoint(context,0x4748) || !disjoint(input,0x28) ||
+            !disjoint(owned->originalPayload(),24))return 5;
+        auto* retained=owned.get();
+        const auto reservation=owner->reserveNativeOtherFrame(lease,scope);
+        if(!reservation.serial || !owner->retainNativeOtherFrameInput(lease,scope,reservation,owned))return 5;
+        TglNativeFrameOutputReceipt receipt;
+        return owner->dispatchChecksumFrameWithReceipt(lease,scope,reservation,retained,input,output,
+            [&](uintptr_t entry,uintptr_t nativeContext,uintptr_t request,uintptr_t slot,
+                NativePhysicalFrameScope& active,auto authority) noexcept -> int {
+                if(entry!=image+0x2190a || nativeContext!=context || request!=input || slot!=output || !authority())return 5;
+                using Borrow=decltype(authority);
+                struct Authority {
+                    Borrow& borrow;uintptr_t image,physical,context,request;uint64_t generation;
+                    static bool live(void* raw,const NgreenNativeChecksumReservation::OwnedCallbackPhase::Identity& id) noexcept {
+                        const auto& self=*static_cast<Authority*>(raw);
+                        return id.image==self.image && id.physical==self.physical && id.context==self.context &&
+                            id.request==self.request && id.generation==self.generation && self.borrow();
+                    }
+                } held{authority,image,physical,context,input,generation};
+                const auto write=[](uintptr_t at,uintptr_t value) noexcept {return NativeDataPointerWriter{}(at,value);};
+                NgreenNativeChecksumReservation::OwnedCallbackPhase phase(
+                    {image,physical,context,input,generation,output},*retained,&held,&Authority::live,
+                    &readMemory,&writableDataMemory,+write);
+                if(!phase.bound())return 5;
+                const int result=TglNativeContextFrameInvoker{}(entry,nativeContext,request,slot);
+                // ACTUAL native status, before receipt/bind; failed builder or
+                // post-builder event failure may leave22708's mutex held.
+                if(phase.nativeReturnRequiresStop(result))_exit(70);
+                return active.matches(image,physical,generation)?result:5;
+            },receipt,[&](NativePhysicalFrameScope& active,const auto& observed,auto bind) noexcept -> int {
+                TglNativeOtherContextEventLineage lineage;
+                TglNativeFenceBackingObservation::Snapshot fence;
+                TglNativeFreshStampObservation::Snapshot fresh;
+                return capture(active,image,physical,generation,observed,lineage,fence,fresh) &&
+                    bind(lineage,fence,fresh)?0:5;
+            });
     }
     static int dispatchAvc(ExclusiveLease& lease,NativePhysicalFrameScope& scope,uintptr_t image,
         uintptr_t physical,uint64_t generation,uintptr_t input,uintptr_t output) noexcept {

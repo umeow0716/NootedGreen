@@ -20332,8 +20332,10 @@ void testOwnedChecksumCallbacks() {
         [](uintptr_t,uintptr_t,uintptr_t,uint32_t*,uint32_t*) noexcept -> uint64_t {assert(false);return 0;})==5);
     assert(checksumBuilderCpuResult(1,2,3,
         [](uintptr_t,uintptr_t,uintptr_t,uintptr_t) noexcept -> uint64_t {assert(false);return 0;})==5);
-    for(int mode=0;mode<52;++mode) {
-        auto f=std::unique_ptr<Fixture>(new Fixture(mode));const auto identity=f->identity();
+    for(int mode=0;mode<54;++mode) {
+        auto f=std::unique_ptr<Fixture>(new Fixture(mode));auto identity=f->identity();
+        if(mode==52)identity.output=Fixture::ptr(f->commands.data());
+        if(mode==53)identity.output=Fixture::ptr(f->side.data());
         const auto context=identity.context,request=identity.request,token=Fixture::ptr(f->producer.data())+0x48;
         uint32_t* used=&f->used;uint32_t* capacity=&f->capacity;uintptr_t actualContext=context,actualRequest=request,actualToken=token;
         switch(mode) {
@@ -20383,13 +20385,14 @@ void testOwnedChecksumCallbacks() {
             assert(f->commands[72]==0xcccccccc && f->commands[78]==0xcccccccc);continue;
         }
         assert(f->used==78 && f->capacity==36);
+        assert(!phase.builderStarted() && phase.nativeReturnRequiresStop(7)); // Native begin can leak before builder.
         uint32_t inner=0;assert(Fixture::read(context+0x130,&inner,4) && inner==69);
         if(mode==29)f->quiescent=false;
         if(mode==50)f->inputHeld=false;
         if(mode==35)assert(NgreenNativeChecksumReservation::sizeOrRefuse(context,request,used,capacity,size)==5);
         const auto result=checksumBuilderCpuResult(context,request,actualToken,builder);
         assert(phase.builderStarted());
-        const bool rejectedBeforeBuilder=(mode>=19 && mode<=23) || mode==29 || mode==35 || mode==36 || mode==37 || mode==50;
+        const bool rejectedBeforeBuilder=(mode>=19 && mode<=23) || mode==29 || mode==35 || mode==36 || mode==37 || mode==50 || mode==52 || mode==53;
         assert(f->builderCalls==unsigned(!rejectedBeforeBuilder));
         if(mode==24)assert(result==31);
         assert(phase.nativeReturnRequiresStop(int(result))==(result!=0));
@@ -20423,7 +20426,7 @@ void testOwnedChecksumCallbacks() {
         else if(mode==3)assert(WIFSIGNALED(status) && WTERMSIG(status)==SIGABRT);
         else assert(WIFEXITED(status) && WEXITSTATUS(status)==77);
     }
-    puts("CHECKSUM_CALLBACK_PHASE_CPU_OK modes=52 native_once/body78/side36/no_END_write/refusal_and_reentry=PASS GPU_NOT_EXECUTED");
+    puts("CHECKSUM_CALLBACK_PHASE_CPU_OK modes=54 native_once/body78/side36/no_END_write/refusal_and_reentry=PASS GPU_NOT_EXECUTED");
 }
 
 int main() {

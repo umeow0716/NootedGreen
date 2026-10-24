@@ -223,7 +223,7 @@ public:
 
 class OwnedCallbackPhase {
 public:
-    struct Identity {uintptr_t image=0,physical=0,context=0,request=0;uint64_t generation=0;};
+    struct Identity {uintptr_t image=0,physical=0,context=0,request=0;uint64_t generation=0;uintptr_t output=0;};
     // The outer exclusive owner supplies program-prepared, no-earlier-pending
     // and retained input/IOSurface authority. Readability alone is insufficient.
     using Live=bool(*)(void*,const Identity&) noexcept;
@@ -245,7 +245,7 @@ private:
     bool(*inputMatches_)(const void*,const OwnedCallbackPhase&) noexcept=nullptr;
     bool(*inputCommit_)(void*,OwnedCallbackPhase&) noexcept=nullptr;
     InputGeometry inputGeometry_;
-    Stage stage_=Stage::Ready;bool builderEntered_=false;Scope scope_;
+    Stage stage_=Stage::Ready;bool builderEntered_=false,sizeSucceeded_=false;Scope scope_;
     struct Buffer {
         uintptr_t token=0,connection=0,base=0,end=0,cursor=0;
         uintptr_t sideCursor=0,sideEnd=0,body=0,side=0;
@@ -281,6 +281,7 @@ private:
             disjoint(address,bytes,reinterpret_cast<uintptr_t>(this),sizeof(*this)) &&
             disjoint(address,bytes,identity_.context,0x4748) &&
             disjoint(address,bytes,identity_.request,0x28) &&
+            (!identity_.output || disjoint(address,bytes,identity_.output,8)) &&
             disjoint(address,bytes,request,0x28) && disjoint(address,bytes,payload,24);
     }
     bool capture(uintptr_t token,Buffer& out,bool after) const noexcept {
@@ -356,10 +357,11 @@ public:
     bool builderStarted() const noexcept {return builderEntered_;}
     bool callbacksComplete() const noexcept {return stage_==Stage::Done && live();}
     // Call with ACTUAL native2190a status, before receipt/bind changes the
-    // reservation. A post-builder7 can bypass native mutex release. This is
+    // reservation. After size succeeds, begin/acquire may fail BEFORE the
+    // builder and leave its mutex held; post-builder7 also bypasses release. This is
     // not a GPU-completion test and must not consume an owned bind status.
     bool nativeReturnRequiresStop(int nativeStatus) const noexcept {
-        return (builderEntered_ && nativeStatus!=0) || (nativeStatus==0 && !callbacksComplete());
+        return ((sizeSucceeded_ || builderEntered_) && nativeStatus!=0) || (nativeStatus==0 && !callbacksComplete());
     }
     bool admitsOuter(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context,uintptr_t request) const noexcept {
         return identity_.image==image && identity_.physical==physical && identity_.generation==generation &&
@@ -382,7 +384,7 @@ public:
         *used=NgreenChecksumGen12::producedBodyWords;
         if(!live() || *used!=NgreenChecksumGen12::producedBodyWords || *capacity!=36 || !geometry())
             return failed(true,"size-readback");
-        stage_=Stage::Sized;return {true,0,"sized"};
+        sizeSucceeded_=true;stage_=Stage::Sized;return {true,0,"sized"};
     }
     template<class Invoke> Result builder(uintptr_t context,uintptr_t request,uintptr_t token,Invoke invoke) noexcept {
         builderEntered_=true; // Native2190a has passed22708 before this callback.
