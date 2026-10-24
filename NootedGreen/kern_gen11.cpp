@@ -18,6 +18,10 @@
 #include "kern_checksum_gen12_commands.hpp"
 #include "kern_vf_runtime.hpp"
 #include "kern_vf_device_observation.hpp"
+static_assert(NGVfChecksumPublication::profile==NgreenChecksumGen12::profile &&
+    NGVfChecksumPublication::maxInputWords==NgreenChecksumGen12::nativeBodyWords &&
+    NGVfChecksumPublication::maxOutputWords==NgreenChecksumGen12::producedBodyWords,
+    "checksum wire/body profile coupling");
 #include "kern_vf_runtime_patch.hpp"
 #include "kern_vf_mmio_response.hpp"
 #include "kern_vf_legacy_ctb.hpp"

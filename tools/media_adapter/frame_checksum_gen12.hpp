@@ -61,6 +61,7 @@ alignas(64) inline constexpr std::array<uint32_t,394> isa{{
     0x70207f0cU,0x00000000U,
 }};
 static_assert(sizeof(isa)==byteSize,"complete Gen12 checksum kernel");
+static_assert(byteSize==NgreenChecksumGen12::shaderBytes,"checksum program/capability coupling");
 
 // Pure CPU producer, NOT a writable-span/owner/relocation authorization.
 // The runtime must separately hold the native checksum builder/heap leases,

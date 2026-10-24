@@ -19916,7 +19916,7 @@ static void testChecksumNativeHeapBindings() {
             if(slot==1) switch(test) {
                 case 1:index=2;break;case 2:index=0;break;case 3:returned=false;break;
                 case 4:write=true;break;case 5:resource=0x1000;break;case 6:gpu=0x40a6c000;break;
-                case 7:gpu+=4;break;case 8:++resource;break;case 9:++task;break;case 10:++shared;break;
+                case 7:gpu=4;break;case 8:++resource;break;case 9:++task;break;case 10:++shared;break;
                 case 11:pitch=0;break;case 12:gpu=UINT64_C(0x1000000000000);break;
                 case 13:resource=0;break;case 14:task=0;break;case 15:shared=0;break;
                 case 16:index=UINT32_MAX;break;
@@ -19933,6 +19933,16 @@ static void testChecksumNativeHeapBindings() {
             assert(!observed.copyObservedHeaps(0x11001,0x22000,output) && output.surface==saved.surface);
             assert(!observed.copyObservedHeaps(0x11000,0x22001,output) && output.dynamic==saved.dynamic);
         } else assert(output.surface==1 && output.dynamic==2 && output.instruction==3 && output.kernelSlot==4);
+        if(!test) {
+            observed.reset();
+            for(unsigned i=0;i<3;++i)assert(observed.record(i,true,0x1000+i*4096,
+                0x40a6c000+i*4096+0x123+i,4096,false,0x11000,0x22000));
+            assert(observed.copyObservedHeaps(0x11000,0x22000,output) &&
+                output.surface==0x40a6e000 && output.dynamic==0x40a6c000 && output.instruction==0x40a6d000);
+            observed.reset();
+            assert(observed.record(0,true,0x1000,0x40a6c001,4096,false,0x11000,0x22000));
+            assert(!observed.record(1,true,0x2000,0x40a6c002,4096,false,0x11000,0x22000));
+        }
         observed.reset();assert(!observed.seen && !observed.failed && !observed.task && !observed.shared);
         assert(!observed.copyObservedHeaps(0x11000,0x22000,output));
         for(unsigned i=0;i<3;++i)assert(!observed.resources[i] && !observed.gpu[i] && !observed.pitch[i]);
@@ -19977,6 +19987,55 @@ int main() {
         for(unsigned i=0;i<72;++i)for(unsigned bit=0;bit<32;++bit) {
             auto bad=input;bad[i]^=1U<<bit;
             assert(!build1080Batch(bad,heap,output).ok && output==before);
+        }
+        static_assert(NgreenChecksumGen12::legacyStreamWords==74 &&
+            NgreenChecksumGen12::reservedStreamWords==80,"body excludes native END pair");
+        for(unsigned mode=0;mode<17;++mode) {
+            std::array<uint32_t,84> commands;commands.fill(0xabadf00d);
+            std::copy(input.begin(),input.end(),commands.begin());
+            if(!mode) {
+                const auto beforeTrailer=commands;
+                assert(!NgreenChecksumGen12::writeReservationTrailer(commands.data(),80) && commands==beforeTrailer);
+                assert(!NgreenChecksumGen12::writeReservationTrailer(nullptr,78));
+            }
+            assert(NgreenChecksumGen12::writeReservationTrailer(commands.data(),78));
+            assert(commands[78]==0xabadf00d && commands[79]==0xabadf00d);
+            NgreenAvcGen12::PublishScratch scratch{};uint32_t count=mode==12?74:80;
+            if(mode==11)commands[75]^=1;
+            if(mode==13)commands[79]=80;
+            const auto saved=commands;
+            if(mode==14)std::copy(commands.begin(),commands.begin()+80,scratch.source);
+            auto observedHeap=heap;if(mode==10)observedHeap.instruction+=4096;
+            bool fault=false;unsigned newHeaderChecks=0;
+            auto same=[&]() noexcept {
+                if(mode==1)return false;
+                if(mode==4 && commands[10]==0x61010014)return false;
+                if(mode==15 && commands[10]==0x61010014 && ++newHeaderChecks>=3)return false;
+                if((mode==5 || mode==16) && !fault && commands[10]==0x61010014){commands[20]^=1;fault=true;}
+                if(mode==16 && fault && commands[10]==0x6101000e)commands[30]^=1;
+                if(mode==7 && !fault && commands[10]==0x6101000e && scratch.source[10]==0x6101000e)
+                    {commands[0]^=1;fault=true;}
+                return true;
+            };
+            auto live=[&](uint32_t expected) noexcept {
+                if(mode==2)return false;
+                if(mode==6 && !fault && commands[10]==0x61010014){count=79;fault=true;}
+                return count==expected;
+            };
+            if(mode==3)commands[0]^=1;
+            const auto prior=commands;
+            volatile uint32_t& counter=mode==13?commands[79]:count;
+            auto published=NgreenChecksumGen12::publish(mode==14?scratch.source:commands.data(),
+                mode==8?79:80,mode==9?79:80,counter,observedHeap,scratch,live,same);
+            assert(published.published==(mode==0));
+            if(!mode) {
+                for(unsigned i=0;i<78;++i)assert(commands[i]==output[i]);
+                assert(count==80 && !commands[78] && !commands[79]);
+            } else if(mode==4 || mode==6 || mode==15 || mode==16)assert(published.mustStop && !published.restored);
+            else if(mode==5)assert(published.restored && !published.mustStop && commands==saved);
+            else if(mode!=7)assert(commands==prior);
+            for(unsigned i=80;i<84;++i)assert(commands[i]==0xabadf00d);
+            if(mode==14)for(unsigned i=0;i<80;++i)assert(scratch.source[i]==saved[i]);
         }
         heap.surface=heap.dynamic;
         assert(!build1080Batch(input,heap,output).ok && output==before);

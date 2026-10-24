@@ -9,6 +9,33 @@
 // Exact captured 1080p FrameChecksum shape only; other auxiliary kernels and
 // walker geometries are not silently accepted.
 namespace NgreenChecksumGen12 {
+constexpr uint32_t profile=1,nativeBodyWords=72,producedBodyWords=78,nativeEndReserveWords=2;
+constexpr uint32_t legacyStreamWords=nativeBodyWords+nativeEndReserveWords;
+constexpr uint32_t reservedStreamWords=producedBodyWords+nativeEndReserveWords;
+constexpr uint32_t shaderBytes=1576,reservationWords=6;
+// Body sizes above exclude the native END/NOOP pair. Native Video end
+// subtracts two before passing count to FIFO/ring; those are separate words.
+// The CPU reservation marker is consumed before native submission, never an
+// instruction or an ACK. Caller proves writable extent/lifetime separately.
+inline bool writeReservationTrailer(volatile uint32_t* commands,size_t words) noexcept {
+    if(!commands || words!=producedBodyWords ||
+        (reinterpret_cast<uintptr_t>(commands)&3U) ||
+        reinterpret_cast<uintptr_t>(commands)>UINTPTR_MAX-producedBodyWords*4)return false;
+    static constexpr uint32_t marker[reservationWords]={0x4e474352U,profile,nativeBodyWords,producedBodyWords,1,shaderBytes};
+    for(unsigned i=0;i<reservationWords;++i)commands[nativeBodyWords+i]=marker[i];
+    // Only six words inside the caller's reserved BODY are touched. The
+    // separate native END reserve is not this userspace builder's allocation.
+    return true;
+}
+inline bool reservationMatches(const volatile uint32_t* commands,size_t words) noexcept {
+    if(!commands || words!=reservedStreamWords || (reinterpret_cast<uintptr_t>(commands)&3U) ||
+        reinterpret_cast<uintptr_t>(commands)>UINTPTR_MAX-reservedStreamWords*4)return false;
+    static constexpr uint32_t marker[reservationWords]={0x4e474352U,profile,nativeBodyWords,producedBodyWords,1,shaderBytes};
+    for(unsigned i=0;i<reservationWords;++i)if(commands[nativeBodyWords+i]!=marker[i])return false;
+    // Native reserve contents may be stale. The authenticated end path must
+    // independently prove FIFO will overwrite its END/NOOP pair.
+    return true;
+}
 struct HeapAddresses {
     uint64_t surface=0,dynamic=0,instruction=0;
     uint32_t kernelSlot=0;
@@ -32,23 +59,26 @@ struct NativeHeapBindings {
         uint32_t rowPitch,bool write,uintptr_t sourceTask,uintptr_t sourceShared) noexcept {
         if(failed)return false;
         if(slot>=3 || seen!=((1U<<slot)-1U) || !nativeReturned || write ||
-            !resource || (resource&7U) || !address || (address&4095U) ||
-            address>UINT64_C(0x0000fffffffff000) || !rowPitch || !sourceTask || !sourceShared ||
+            !resource || (resource&7U) || !(address&~UINT64_C(4095)) ||
+            address>UINT64_C(0x0000ffffffffffff) || !rowPitch || !sourceTask || !sourceShared ||
             (seen && (task!=sourceTask || shared!=sourceShared))) {failed=true;return false;}
-        for(unsigned i=0;i<slot;++i)if(resources[i]==resource || gpu[i]==address){failed=true;return false;}
+        for(unsigned i=0;i<slot;++i)if(resources[i]==resource || (gpu[i]&~UINT64_C(4095))==(address&~UINT64_C(4095))){failed=true;return false;}
         resources[slot]=resource;gpu[slot]=address;pitch[slot]=rowPitch;
         task=sourceTask;shared=sourceShared;seen|=1U<<slot;return true;
     }
     bool copyObservedHeaps(uintptr_t currentTask,uintptr_t currentShared,HeapAddresses& output) const noexcept {
         if(failed || seen!=7 || !task || task!=currentTask || !shared || shared!=currentShared)return false;
         for(unsigned i=0;i<3;++i) {
-            if(!resources[i] || (resources[i]&7U) || !gpu[i] || (gpu[i]&4095U) ||
-                gpu[i]>UINT64_C(0x0000fffffffff000) || !pitch[i])return false;
-            for(unsigned j=0;j<i;++j)if(resources[j]==resources[i] || gpu[j]==gpu[i])return false;
+            if(!resources[i] || (resources[i]&7U) || !(gpu[i]&~UINT64_C(4095)) ||
+                gpu[i]>UINT64_C(0x0000ffffffffffff) || !pitch[i])return false;
+            for(unsigned j=0;j<i;++j)if(resources[j]==resources[i] || (gpu[j]&~UINT64_C(4095))==(gpu[i]&~UINT64_C(4095)))return false;
         }
         // Native token order is DYNAMIC, INSTRUCTION, SURFACE. It is not the
         // order of their DWORD pairs in STATE_BASE_ADDRESS.
-        const HeapAddresses candidate{gpu[2],gpu[0],gpu[1],1};
+        // Exact native3687a..368b1 floors each returned address to a page
+        // before setting the SBA modify bit. Preserve raw scalars above;
+        // reproduce that established alignment, never invent another mapping.
+        const HeapAddresses candidate{gpu[2]&~UINT64_C(4095),gpu[0]&~UINT64_C(4095),gpu[1]&~UINT64_C(4095),1};
         output=candidate;return true;
     }
 };
@@ -113,5 +143,65 @@ inline Result build1080Batch(const uint32_t* source,size_t words,const HeapAddre
     candidate[48]=0x40U;
     for(size_t i=0;i<78;++i)output[i]=candidate[i];
     return {true,"produced"};
+}
+// CPU publication only; never a GPU completion or native submit ACK. The
+// caller independently holds the mapped span/task/physical/native-IOLock
+// authority, plus the observed heap identities AND native append-END mode.
+// This function writes the two separately admitted kernel reserve words,
+// while writeReservationTrailer above touches only the user BODY allocation.
+// It must CANCEL every refused
+// candidate, including one successfully restored, rather than submit legacy
+// body/marker bytes. Lost authority forbids any rollback write.
+struct Publication {bool published=false,restored=true,mustStop=false;const char* reason="extent";};
+template<class Scratch,class Live,class Same>
+inline Publication publish(volatile uint32_t* commands,size_t capacity,size_t reserved,
+    volatile uint32_t& count,const HeapAddresses& heaps,Scratch& scratch,Live live,Same same) noexcept {
+    static_assert(sizeof(scratch.source)/sizeof(scratch.source[0])>=reservedStreamWords &&
+        sizeof(scratch.produced)/sizeof(scratch.produced[0])>=reservedStreamWords &&
+        sizeof(scratch.undo)/sizeof(scratch.undo[0])>=reservedStreamWords,"checksum scratch extent");
+    Publication result;
+    if(!commands || capacity>16384 || reserved>capacity || reserved<reservedStreamWords ||
+        count!=reservedStreamWords)return result;
+    const uintptr_t begin=reinterpret_cast<uintptr_t>(commands),counter=reinterpret_cast<uintptr_t>(&count);
+    const uintptr_t work=reinterpret_cast<uintptr_t>(&scratch);
+    const auto disjoint=[](uintptr_t a,size_t an,uintptr_t b,size_t bn) noexcept {
+        return a<=UINTPTR_MAX-an && b<=UINTPTR_MAX-bn && (a+an<=b || b+bn<=a);
+    };
+    if((begin&3U) || (counter&3U) || !disjoint(begin,reservedStreamWords*4,counter,4) ||
+        !disjoint(begin,reservedStreamWords*4,work,sizeof(scratch)) || !disjoint(counter,4,work,sizeof(scratch))) {
+        result.reason="alias";return result;
+    }
+    if(!same() || !live(reservedStreamWords)){result.reason="owner";return result;}
+    for(unsigned i=0;i<reservedStreamWords;++i)scratch.undo[i]=scratch.source[i]=commands[i];
+    if(!reservationMatches(scratch.source,reservedStreamWords)){result.reason="reservation";return result;}
+    const auto prepared=build1080Batch(scratch.source,nativeBodyWords,heaps,scratch.produced,producedBodyWords);
+    if(!prepared.ok){result.reason=prepared.reason;return result;}
+    scratch.produced[producedBodyWords]=scratch.produced[producedBodyWords+1]=0;
+    if(!same() || !live(reservedStreamWords)){result.reason="owner-before-write";return result;}
+    for(unsigned i=0;i<reservedStreamWords;++i)if(commands[i]!=scratch.undo[i]) {
+        result.reason="source-changed";return result;
+    }
+    const auto restore=[&]() noexcept {
+        if(!same() || !live(reservedStreamWords))return false;
+        for(unsigned i=0;i<reservedStreamWords;++i)commands[i]=scratch.undo[i];
+        __atomic_thread_fence(__ATOMIC_RELEASE);
+        if(!same() || !live(reservedStreamWords))return false;
+        for(unsigned i=0;i<reservedStreamWords;++i)if(commands[i]!=scratch.undo[i])return false;
+        return true;
+    };
+    for(unsigned i=0;i<reservedStreamWords;++i)commands[i]=scratch.produced[i];
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    bool verified=same() && live(reservedStreamWords);
+    if(verified)for(unsigned i=0;i<reservedStreamWords;++i)if(commands[i]!=scratch.produced[i]){verified=false;break;}
+    if(verified)verified=same() && live(reservedStreamWords);
+    if(!verified) {
+        result.reason="write-readback";result.restored=restore();result.mustStop=!result.restored;return result;
+    }
+    count=reservedStreamWords; // count-last: still no native descriptor/stamp/queue operation.
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    if(count!=reservedStreamWords || !same() || !live(reservedStreamWords)) {
+        result.reason="count-readback";result.restored=restore();result.mustStop=!result.restored;return result;
+    }
+    result.published=true;result.reason="published";return result;
 }
 }
