@@ -25799,7 +25799,7 @@ public:
 private:
     enum class State {Empty,Reserved,Bound,Ambiguous};
     struct Record {
-        State state=State::Empty;uint64_t serial=0,generation=0;
+        State state=State::Empty;uint64_t serial=0,generation=0;bool dispatchStarted=false;
         uintptr_t image=0,physical=0,context=0;
         TglNativeFenceBackingObservation::Snapshot fence{};
         TglNativeFreshStampObservation::Snapshot fresh{};
@@ -25844,12 +25844,19 @@ public:
         return true;
     }
 
+    bool beginExclusiveDispatch(Ticket ticket,uintptr_t image,uintptr_t physical,
+        uint64_t generation,uintptr_t context,const void* expectedInput) noexcept {
+        if(!onlyRetainedInput(ticket,image,physical,generation,context,true,expectedInput))return false;
+        auto* record=find(ticket);
+        if(!record || record->dispatchStarted)return false;
+        record->dispatchStarted=true;return true;
+    }
     Ticket reserve(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
         if(!image || !physical || !generation || !context || serial_==UINT64_MAX)return {};
         for(const auto& record:records_)if(record.state==State::Ambiguous || record.state==State::Reserved)return {};
         for(size_t i=0;i<records_.size();++i)if(records_[i].state==State::Empty) {
             auto& record=records_[i];record.state=State::Reserved;record.serial=++serial_;
-            record.image=image;record.physical=physical;record.generation=generation;record.context=context;
+            record.image=image;record.physical=physical;record.generation=generation;record.context=context;record.dispatchStarted=false;
             return {this,record.serial,i};
         }
         return {};
@@ -27636,14 +27643,11 @@ public:
         return state_->nativeOtherPending.retainInput(ticket,state_->image,state_->physical,
             state_->generation,state_->context,input);
     }
-    // Outside-dispatch query only. dispatchScopedFrame already holds busy;
-    // its callback needs an authority borrowed from that same protected
-    // interval, not a recursive call here and never a bypass of enter().
+private:
     template<class ExclusiveLease,class Scope>
-    bool checksumFrameInputHeld(const ExclusiveLease& lease,Scope& scope,
+    bool checksumFrameInputLocked(const ExclusiveLease& lease,Scope& scope,
         TglNativeOtherPendingFrames::Ticket ticket,bool requireReserved,const void* expectedInput) noexcept {
-        if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;
-        Unlock unlock{state_->busy};
+        if(!state_ || lease.get()!=this || !lease.exclusive())return false;
         uintptr_t current=0;uint32_t count=0,index=0;
         return state_->checksumProgram==ChecksumProgram::Prepared && !state_->removed &&
             state_->image && state_->image<=UINTPTR_MAX-0x2c6f6 &&
@@ -27659,6 +27663,59 @@ public:
             state_->read(state_->context+0x178,&index,4) && index==0 &&
             state_->nativeOtherPending.onlyRetainedInput(ticket,state_->image,state_->physical,
                 state_->generation,state_->context,requireReserved,expectedInput);
+    }
+public:
+    // Outside-dispatch query only; callbacks use the protected borrow below.
+    template<class ExclusiveLease,class Scope>
+    bool checksumFrameInputHeld(const ExclusiveLease& lease,Scope& scope,
+        TglNativeOtherPendingFrames::Ticket ticket,bool requireReserved,const void* expectedInput) noexcept {
+        if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;
+        Unlock unlock{state_->busy};
+        return checksumFrameInputLocked(lease,scope,ticket,requireReserved,expectedInput);
+    }
+    // Keep the SAME owner gate and physical item guard around native work and
+    // receipt binding. Borrowed predicates never re-enter enter(); no public
+    // raw state or independent table lifetime is handed to callbacks.
+    template<class ExclusiveLease,class Scope,class Invoke,class Sink>
+    int dispatchChecksumFrameWithReceipt(const ExclusiveLease& lease,Scope& scope,
+        TglNativeOtherPendingFrames::Ticket ticket,const void* expectedInput,
+        uintptr_t request,uintptr_t output,Invoke invoke,TglNativeFrameOutputReceipt& receipt,Sink sink) noexcept {
+        if(!state_ || lease.get()!=this || !lease.exclusive() || receipt.valid || !request || !output || !enter())return 5;
+        Unlock unlock{state_->busy};
+        if(!checksumFrameInputLocked(lease,scope,ticket,true,expectedInput) ||
+            !state_->nativeOtherPending.beginExclusiveDispatch(ticket,state_->image,state_->physical,
+                state_->generation,state_->context,expectedInput))return 5;
+        receipt={};
+        return state_->table.dispatchScopedItem(scope,state_->context,request,output,state_->read,
+            [&](uintptr_t entry,uintptr_t context,uintptr_t input,uintptr_t slot,Scope& active) noexcept -> int {
+                bool inside=true;
+                struct Leave {bool& inside;~Leave(){inside=false;}} leave{inside};
+                const auto authority=[&]() noexcept {
+                    return inside && checksumFrameInputLocked(lease,active,ticket,true,expectedInput);
+                };
+                if(!authority())return 5;
+                const int result=invoke(entry,context,input,slot,active,authority);
+                uintptr_t event=0;uint32_t index=0;
+                if(!result && authority() && state_->read(slot,&event,8) && event && event<=UINTPTR_MAX-8 &&
+                    state_->read(event+4,&index,4))receipt={context,event,index,true};
+                if(result || !receipt.valid)return result?result:5;
+                bool attempted=false,bound=false;
+                const auto bind=[&](const TglNativeOtherContextEventLineage& lineage,
+                    const TglNativeFenceBackingObservation::Snapshot& fence,
+                    const TglNativeFreshStampObservation::Snapshot& fresh) noexcept {
+                    if(attempted)return false;
+                    attempted=true;
+                    if(!authority() || lineage.context!=receipt.context || lineage.event!=receipt.event ||
+                        lineage.index!=receipt.index)return false;
+                    const bool accepted=state_->nativeOtherPending.bind(ticket,lineage,fence,fresh);
+                    bound=accepted && checksumFrameInputLocked(lease,active,ticket,false,expectedInput);
+                    return bound;
+                };
+                const int status=sink(active,std::as_const(receipt),bind);
+                // Zero without a validated bind cannot release/reuse native-
+                // invoked storage. The pending input stays retained on error.
+                return status?status:(bound && checksumFrameInputLocked(lease,active,ticket,false,expectedInput)?0:5);
+            });
     }
     template<class OwnerLease,class Scope>
     bool bindNativeOtherFrame(const OwnerLease& lease,Scope& scope,TglNativeOtherPendingFrames::Ticket ticket,

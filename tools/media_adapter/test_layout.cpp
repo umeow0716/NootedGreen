@@ -17,6 +17,18 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+// CPU-only item guard implementing the same synchronous scope contract.
+struct TestChecksumProtectedScope {
+    uintptr_t image=0;uint64_t generation=1;bool active=false;unsigned entries=0;
+    bool matches(uintptr_t i,uintptr_t p,uint64_t g) const noexcept {return i==image && p==0x9000 && g==generation;}
+    template<class Use> int withNativeRequestItem(uintptr_t context,Use use) noexcept {
+        if(active || context!=0x8000)return 5;
+        active=true;++entries;
+        struct Reset {bool& active;~Reset(){active=false;}} reset{active};
+        return use(*this);
+    }
+};
+
 void testAvcCapturedCountRefusal(std::array<uint32_t,512>& backing,size_t used,volatile uint32_t& count,NgreenAvcGen12::PublishScratch& scratch) {
     const auto originalBacking=backing;
     const auto untouchedScratch=scratch;
@@ -292,6 +304,10 @@ template<class T,class Released> void testNativeOtherInputRetirement(std::unique
     assert(!pending.retainInput(foreign,image,physical,1,context,input) && input.get()==original);
     assert(!pending.retainInput(ticket,image,physical,2,context,input) && input.get()==original);
     assert(pending.retainInput(ticket,image,physical,1,context,input) && !input && !released());
+    assert(pending.onlyRetainedInput(ticket,image,physical,1,context,true,original));
+    assert(!pending.beginExclusiveDispatch(ticket,image,physical,1,context,&ticket));
+    assert(pending.beginExclusiveDispatch(ticket,image,physical,1,context,original));
+    assert(!pending.beginExclusiveDispatch(ticket,image,physical,1,context,original));
     assert(pending.onlyRetainedInput(ticket,image,physical,1,context,true,original));
     assert(!pending.onlyRetainedInput(ticket,image,physical,1,context,true,nullptr));
     assert(!pending.onlyRetainedInput(ticket,image,physical,1,context,true,&ticket));
@@ -16929,6 +16945,7 @@ static void testRetainedVeboxFrames() {
                 std::array<std::array<uint8_t,0x1010>,6> linearPools{};
                 int linearCorrupt=-1;bool linearUnstable=false,linearReadDenied=false;unsigned linearReads=0;
                 uint32_t checksumBackingCount=1,checksumBackingIndex=0;
+                uintptr_t checksumFrameOutput=0;
                 auto readFamily=[&](uintptr_t p,void* out,size_t n) noexcept {
                     if(p>=image+0x26b73 && p<image+0x26bbb && (p-image-0x26b73)%12==0 && n==12) {
                         const size_t i=(p-image-0x26b73)/12;
@@ -16965,13 +16982,15 @@ static void testRetainedVeboxFrames() {
                         if(int(i)==rootCorruptSite)bytes[size_t(rootCorruptByte)]^=1;
                         std::memcpy(out,bytes.data(),n);return true;
                     }
+                    if(n==4 && p==0xb004) {const uint32_t value=0;std::memcpy(out,&value,4);return true;}
                     if(n==4 && (p==0x8174 || p==0x8178)) {
                         const auto value=p==0x8174?checksumBackingCount:checksumBackingIndex;
                         std::memcpy(out,&value,4);return true;
                     }
                     if(n!=8)return false;
                     uintptr_t value=0;
-                    if(p==0x8000)value=actualTable;
+                    if(p==0xa100)value=checksumFrameOutput;
+                    else if(p==0x8000)value=actualTable;
                     else if(p==0x8008)value=parentPhysical;
                     else if(p>=image+schema.table-16 && p<image+schema.table+schema.count*8 && !(p&7)) {
                         const size_t i=(p-(image+schema.table-16))/8;
@@ -17212,12 +17231,7 @@ static void testRetainedVeboxFrames() {
                     linearReadDenied=true;
                     assert(!retained->excludesPublishedAvcLinearCpuSpan(lease,0x300000,4));linearReadDenied=false;
                 }
-                struct FamilyScope {
-                    uintptr_t image;uint64_t generation=1;
-                    bool matches(uintptr_t i,uintptr_t p,uint64_t g) const noexcept {
-                        return i==image && p==0x9000 && g==generation;
-                    }
-                } scope{image};
+                TestChecksumProtectedScope scope{image};
                 const auto pendingFrame=retained->reserveNativeOtherFrame(lease,scope);
                 assert(pendingFrame.serial && !retained->reserveNativeOtherFrame(lease,scope).serial);
                 unsigned inputDrops=0;
@@ -17260,7 +17274,34 @@ static void testRetainedVeboxFrames() {
                 TglNativeFreshStampObservation::Snapshot current;
                 current.valid=true;current.device=0xe000;current.mapping=0xf000;current.table=0x10000;
                 current.channels=1;current.active[0]=true;current.observed[0]=1;
-                assert(retained->bindNativeOtherFrame(lease,scope,pendingFrame,outputLineage,expected,current));
+                if(checksumFamily) {
+                    unsigned nativeCalls=0,sinkCalls=0;
+                    TglNativeFrameOutputReceipt receipt;
+                    auto invoke=[&](uintptr_t entry,uintptr_t context,uintptr_t request,uintptr_t output,
+                        auto& active,auto authority) noexcept -> int {
+                        assert(entry==image+0x2190a && context==0x8000 && request==0xa000 && output==0xa100);
+                        assert(active.active && authority());++nativeCalls;
+                        // Public queries remain non-reentrant; only the
+                        // bounded borrow may read this already-held owner.
+                        assert(!retained->checksumFrameInputHeld(lease,active,pendingFrame,true,retainedInput));
+                        assert(authority());checksumFrameOutput=0xb000;return 0;
+                    };
+                    auto sink=[&](auto& active,const auto& observed,auto bind) noexcept -> int {
+                        ++sinkCalls;assert(active.active && observed.context==0x8000 && observed.event==0xb000 && observed.index==0);
+                        assert(!retained->bindNativeOtherFrame(lease,active,pendingFrame,outputLineage,expected,current));
+                        assert(bind(outputLineage,expected,current));
+                        assert(!bind(outputLineage,expected,current));return 0;
+                    };
+                    auto foreign=pendingFrame;foreign.owner=nullptr;
+                    assert(retained->dispatchChecksumFrameWithReceipt(lease,scope,foreign,retainedInput,0xa000,0xa100,invoke,receipt,sink)==5);
+                    assert(retained->dispatchChecksumFrameWithReceipt(lease,scope,pendingFrame,nullptr,0xa000,0xa100,invoke,receipt,sink)==5);
+                    assert(!nativeCalls && !scope.entries && !receipt.valid);
+                    assert(retained->dispatchChecksumFrameWithReceipt(lease,scope,pendingFrame,retainedInput,0xa000,0xa100,invoke,receipt,sink)==0);
+                    assert(nativeCalls==1 && sinkCalls==1 && scope.entries==1 && !scope.active && receipt.valid);
+                    TglNativeFrameOutputReceipt duplicate;
+                    assert(retained->dispatchChecksumFrameWithReceipt(lease,scope,pendingFrame,retainedInput,0xa000,0xa100,invoke,duplicate,sink)==5);
+                    assert(nativeCalls==1 && sinkCalls==1 && !duplicate.valid);
+                } else assert(retained->bindNativeOtherFrame(lease,scope,pendingFrame,outputLineage,expected,current));
                 if(checksumFamily) {
                     assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true,retainedInput));
                     assert(retained->checksumFrameInputHeld(lease,scope,pendingFrame,false,retainedInput));
