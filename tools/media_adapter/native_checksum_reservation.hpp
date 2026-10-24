@@ -52,6 +52,20 @@ struct InputSurfaceShape {
     }
 };
 struct InputSurfaceShapeResult {bool valid=false,mustStop=false;};
+// The native wrapper and CPU fault tests share this exact lock transaction.
+// Every successful lock has exactly one unlock attempt, including refusal.
+template<class Admit,class Lock,class Unlock,class Capture>
+inline InputSurfaceShapeResult captureInputSurfaceShape(uintptr_t handle,const InputGeometry& geometry,
+    Admit admit,Lock lock,Unlock unlock,Capture capture) noexcept {
+    static_assert(noexcept(admit()) && noexcept(lock()) && noexcept(unlock()) &&
+        noexcept(capture(std::declval<InputSurfaceShape&>())));
+    if(!handle || !admit() || !lock())return {};
+    InputSurfaceShape before,after;
+    const bool valid=admit() && capture(before) && before.covers(geometry) && admit() &&
+        capture(after) && after.covers(geometry) && before==after && admit();
+    const bool unlocked=unlock();
+    return {valid && unlocked && admit(),!unlocked};
+}
 #if defined(__APPLE__)
 // Caller keeps the typed CF reference and exclusive context authority alive.
 // Only metadata/CPU address differences are observed, never contents or GPU
@@ -59,15 +73,8 @@ struct InputSurfaceShapeResult {bool valid=false,mustStop=false;};
 // only AFTER the symmetric read-only unlock has returned successfully.
 template<class Admit>
 inline InputSurfaceShapeResult darwinInputSurfaceShape(uintptr_t handle,const InputGeometry& geometry,Admit admit) noexcept {
-    if(!handle || !admit())return {};
     const auto surface=reinterpret_cast<IOSurfaceRef>(handle);
     constexpr IOSurfaceLockOptions options=kIOSurfaceLockReadOnly|kIOSurfaceLockAvoidSync;
-    if(IOSurfaceLock(surface,options,nullptr)!=KERN_SUCCESS)return {};
-    struct Locked {
-        IOSurfaceRef surface;bool active=true;
-        ~Locked(){if(active)(void)IOSurfaceUnlock(surface,options,nullptr);}
-        bool finish() noexcept {active=false;return IOSurfaceUnlock(surface,options,nullptr)==KERN_SUCCESS;}
-    } lock{surface};
     const auto capture=[&](InputSurfaceShape& shape) noexcept {
         if(!admit())return false;
         shape.id=IOSurfaceGetID(surface);shape.format=IOSurfaceGetPixelFormat(surface);
@@ -89,11 +96,9 @@ inline InputSurfaceShapeResult darwinInputSurfaceShape(uintptr_t handle,const In
         }
         return admit() && shape.covers(geometry);
     };
-    InputSurfaceShape before,after;
-    const bool valid=capture(before) && capture(after) && before==after && admit();
-    const bool unlocked=lock.finish();
-    // Failed unlock is ambiguous ownership, never an ordinary admission miss.
-    return {valid && unlocked && admit(),!unlocked};
+    return captureInputSurfaceShape(handle,geometry,admit,
+        [&]() noexcept {return IOSurfaceLock(surface,options,nullptr)==KERN_SUCCESS;},
+        [&]() noexcept {return IOSurfaceUnlock(surface,options,nullptr)==KERN_SUCCESS;},capture);
 }
 #endif
 template<class Api> class OwnedCallbackInput {

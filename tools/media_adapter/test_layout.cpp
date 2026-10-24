@@ -20117,6 +20117,32 @@ static void testChecksumSurfaceShape() {
     // No inferred coded==visible equality and no invented1088 padding.
     assert(!shape.covers({1920,1089,1920,1080}));
 }
+static void testChecksumSurfaceShapeTransaction() {
+    using namespace NgreenNativeChecksumReservation;
+    const InputGeometry geometry{1920,1088,1920,1080};
+    const InputSurfaceShape shape{7,0x34323076,2,1920,1088,3133440,
+        {1920,960},{1088,544},{1920,1920},{0,2088960}};
+    for(unsigned mode=0;mode<13;++mode) {
+        unsigned locks=0,unlocks=0,captures=0;bool held=false;
+        const auto admit=[&]() noexcept {
+            return mode!=2 && !(mode==11 && captures) && !(mode==12 && unlocks);
+        };
+        const auto result=captureInputSurfaceShape(mode==1?0:7,geometry,admit,
+            [&]() noexcept {assert(!held);++locks;held=mode!=3;return held;},
+            [&]() noexcept {assert(held);++unlocks;held=false;return mode!=9 && mode!=10;},
+            [&](InputSurfaceShape& value) noexcept {
+                assert(held);++captures;value=shape;
+                if((mode==6 && captures==2))++value.id;
+                if((mode==7 && captures==1) || (mode==8 && captures==2))value.bytes=1;
+                return !(mode==4 || mode==10 || (mode==5 && captures==2));
+            });
+        assert(!held && result.valid==(mode==0) && result.mustStop==(mode==9 || mode==10));
+        assert(locks==(mode==1 || mode==2?0U:1U));
+        assert(unlocks==(mode==1 || mode==2 || mode==3?0U:1U));
+        if(mode<=3 && mode)assert(!captures);
+        if(mode==0 || mode==9 || mode==12)assert(captures==2);
+    }
+}
 void testOwnedChecksumInput() {
     using Fixture=ChecksumInputFixture;using Input=Fixture::Input;
     for(int mode=0;mode<37;++mode) {
@@ -20402,6 +20428,7 @@ void testOwnedChecksumCallbacks() {
 
 int main() {
     testChecksumSurfaceShape();
+    testChecksumSurfaceShapeTransaction();
     testOwnedChecksumInput();
     testOwnedChecksumCallbacks();
     testChecksumNativeHeapBindings();
