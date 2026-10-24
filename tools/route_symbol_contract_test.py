@@ -298,7 +298,10 @@ def main() -> None:
     assert "__ZL17get_surface_stateRK16surface_params_tjj12Blt3DOptMode6Intentj" in routes
     assert "__ZN25IOAccelCommandBufferPool212submitBufferEv" in routes
     assert "__ZL22blit3d_submit_rectlistP23IGHardwareBlit3DContextP15blit3d_params_tPK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyE" in routes
-    expected_route_count = 179
+    # Exact Main tail thunk and original heap-bind receipt routes are opt-in.
+    assert "__ZN23IGAccelVideoContextMain16endCommandStreamER24IOAccelCommandStreamInfo" in routes
+    assert "__ZN19IGAccelVideoContext13bind_resourceER24IOAccelCommandStreamInfojPP15IGAccelResourcePyPjb" in routes
+    expected_route_count = 181
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"

@@ -7066,7 +7066,7 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
     };
     auto &words=getMember<volatile uint32_t>(stream,0x34);
     const auto live=[&](uint32_t expected) {return same() && words==expected;};
-    bool published=false,mustStop=false;const char *refusal="publication";
+    bool published=false,mustStop=false;const char *refusal;
     {
         entry->translating=true;
         struct Reset {VfMediaSubmission &entry;~Reset(){entry.translating=false;}} reset{*entry};

@@ -33,7 +33,7 @@ def adapter_frame_contract(source):
     body = block(source, "struct NativeOtherFrameBackend {", "struct NativeLateFactoryBatch {")
     adoption = block(source, "struct NativeCodecBackend {", "selected->framesPublished=true;return 0;")
     for required in (
-        "binding.frame==scope.image()+0x27724?",
+        "else if(binding.frame==scope.image()+0x27724) {",
         "publishAvcInputCallbacks(lease,hook,",
         "reinterpret_cast<uintptr_t>(&dispatchOwnedAvcSize)",
         "reinterpret_cast<uintptr_t>(&dispatchOwnedAvcBuilder),sameOwner",
@@ -50,10 +50,11 @@ def adapter_frame_contract(source):
         "if(batch.items.ownerIndex(i)!=i)continue;" in source, "adapter: repeated-context batch pin not shared"
     gate = "if(!NgreenNativeAvcReservation::frameAdmission(image,entry,publicationReady,physical,generation,context,request))return 5;"
     assert body.count(gate) == 1, "adapter: exact AVC publication refusal missing or changed"
-    before, after = body.split(gate)
+    pinned = function_body(body, "static int dispatchPinned(")
+    before, after = pinned.split(gate)
     phase = "if(!NgreenNativeAvcReservation::framePhaseAdmission(image,owner->frameTable().nativeFrame(),physical,generation,owner->context(),input))return 5;"
     assert body.count(phase) == 1, "adapter: exact input-phase refusal missing"
-    reserve = body.index("const auto reservation=owner->reserveNativeOtherFrame")
+    reserve = pinned.index("const auto reservation=owner->reserveNativeOtherFrame")
     for required in (
         "NgreenNativeAvcReservation::captureScalingDefaults(image,defaults,&readMemory,",
         "leafMemoryPermissions(at,bytes,VM_PROT_READ,VM_PROT_WRITE)",
@@ -65,14 +66,14 @@ def adapter_frame_contract(source):
         "if(retainedInput && !owner->retainNativeOtherFrameInput(lease,scope,reservation,*ownedInput))return 5;",
     ):
         assert required in body, "adapter: owned input/phase/output lifetime admission missing"
-    assert body.index(phase) < reserve < body.index(gate), "adapter: phase refusal after reservation/native path"
+    assert pinned.index(phase) < reserve < pinned.index(gate), "adapter: phase refusal after reservation/native path"
     for required in (
         "callbacks[0x30/8]!=reinterpret_cast<uintptr_t>(&dispatchOwnedAvcSize)",
         "callbacks[0x60/8]!=reinterpret_cast<uintptr_t>(&dispatchOwnedAvcBuilder)",
         "owner->frameTable().nativeSize()!=image+0x2732c",
         "owner->frameTable().nativeBuilder()!=image+0x2737e",
     ):
-        assert required in body[:reserve], "adapter: exact paired callback admission missing"
+        assert required in pinned[:reserve], "adapter: exact paired callback admission missing"
     assert "queryPublication(lease,active,image,physical,generation,publication)" in before, \
         "adapter: frame admission precedes readiness query"
     assert "invoke()" not in before, "adapter: native invocation precedes publication refusal"
@@ -94,7 +95,7 @@ def adapter_frame_mutations(source):
         source.replace("leafMemoryPermissions(at,bytes,VM_PROT_READ,VM_PROT_WRITE)",
                        "leafMemoryPermissions(at,bytes,VM_PROT_READ,0)",1),
         source.replace("publishAvcInputCallbacks(lease,hook,", "publishFrame(lease,hook,", 1),
-        source.replace("binding.frame==scope.image()+0x27724?", "false?", 1),
+        source.replace("binding.frame==scope.image()+0x27724", "false", 1),
         source.replace("registry.promoteExclusive(lease,image,physical,generation,owner->context())", "decltype(exclusive){}", 1),
         source.replace("registry.demoteExclusive(exclusive,image,physical,generation,owner->context())", "decltype(lease){}", 1),
         source.replace("if(batch.items.ownerIndex(i)!=i)continue;", "", 1),
@@ -804,9 +805,15 @@ def mutation_contract(source, path):
     for mutation in mutations:
         old, new = mutation[:2]
         count = mutation[2] if len(mutation) == 3 else -1
-        if old == '__builtin_return_address(0)':
-            # Mutate the Media ownership boundary, not an unrelated observer
-            # that happens to precede it in the translation unit.
+        if old == 'getMember<void *>(context,0x708)!=resource':
+            # The checksum cancellation guard uses the same expression before
+            # this function. Mutate the mapped-span proof this case verifies.
+            target = function_body(source, 'static bool vfCaptureMediaMappedSpan(')
+            assert target.count(old) == 1
+            candidate = source.replace(target, target.replace(old, new, count), 1)
+        elif old in ('__builtin_return_address(0)', 'span.availableWords,span.reservedWords'):
+            # Mutate the Media ownership/publication boundary, not an
+            # earlier observer or checksum publication using the same token.
             target = function_body(source, 'void Gen11::vfMediaEnd(')
             candidate = source.replace(target, target.replace(old, new, count), 1)
         else:

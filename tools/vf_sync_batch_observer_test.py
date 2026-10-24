@@ -285,7 +285,7 @@ with tempfile.TemporaryDirectory(prefix='ngreen-bindings-') as directory:
                     str(cpp),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True)
 start = source.index('bool Gen11::vfObserveRingBatch(')
-stop = source.index('\nvoid Gen11::vfMediaEnd(', start)
+stop = source.index('\nbool Gen11::vfChecksumBindResource(', start)
 body = source[start:stop]
 assert body.count('__builtin_return_address(0)') == 1
 body = body.replace('__builtin_return_address(0)', 'testCaller')
