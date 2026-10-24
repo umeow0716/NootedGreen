@@ -299,6 +299,8 @@ private:
 	mach_vm_address_t oVfContextSubmit {};
 	static void vfMediaEnd(void *that,void *stream);
 	mach_vm_address_t oVfMediaEnd {};
+	static void vfChecksumEnd(void *that,void *stream);
+	mach_vm_address_t oVfChecksumEnd {};
 	static bool vfChecksumBindResource(void *that,void *stream,uint32_t identifier,
 	    void **resource,uint64_t *gpuAddress,uint32_t *pitch,bool write);
 	mach_vm_address_t oVfChecksumBindResource {};

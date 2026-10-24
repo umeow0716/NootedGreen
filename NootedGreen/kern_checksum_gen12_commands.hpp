@@ -79,7 +79,11 @@ struct NativeHeapBindings {
         // before setting the SBA modify bit. Preserve raw scalars above;
         // reproduce that established alignment, never invent another mapping.
         const HeapAddresses candidate{gpu[2]&~UINT64_C(4095),gpu[0]&~UINT64_C(4095),gpu[1]&~UINT64_C(4095),1};
-        output=candidate;return true;
+        // Explicit scalar stores also preserve the freestanding kernel ABI:
+        // an aggregate assignment can emit an out-of-line memcpy at -O0.
+        output.surface=candidate.surface;output.dynamic=candidate.dynamic;
+        output.instruction=candidate.instruction;output.kernelSlot=candidate.kernelSlot;
+        return true;
     }
 };
 struct Result {bool ok=false;const char* reason="shape";};
@@ -155,7 +159,9 @@ inline Result build1080Batch(const uint32_t* source,size_t words,const HeapAddre
 struct Publication {bool published=false,restored=true,mustStop=false;const char* reason="extent";};
 template<class Scratch,class Live,class Same>
 inline Publication publish(volatile uint32_t* commands,size_t capacity,size_t reserved,
-    volatile uint32_t& count,const HeapAddresses& heaps,Scratch& scratch,Live live,Same same) noexcept {
+    volatile uint32_t& count,const HeapAddresses& heaps,Scratch& scratch,Live&& live,Same&& same) noexcept {
+    // Borrow live authority predicates rather than copying a large closure
+    // into the freestanding kernel (or duplicating predicate-local state).
     static_assert(sizeof(scratch.source)/sizeof(scratch.source[0])>=reservedStreamWords &&
         sizeof(scratch.produced)/sizeof(scratch.produced[0])>=reservedStreamWords &&
         sizeof(scratch.undo)/sizeof(scratch.undo[0])>=reservedStreamWords,"checksum scratch extent");

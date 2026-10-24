@@ -221,6 +221,7 @@ static bool gVfMediaPublicationRouteReady = false;
 // AVC route alone must not advertise this independent auxiliary capability.
 static bool gVfChecksumPublicationRouteReady = false;
 static bool gVfChecksumNativeBindingsQualified = false;
+static mach_vm_address_t gVfChecksumMainVtable = 0;
 static mach_vm_address_t gVfChecksumBindCallers[3] {};
 mach_vm_address_t gVfMediaEndCaller = 0;
 bool gVfCaptureStreamResetBound = false;
@@ -3495,6 +3496,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			if (checkKernelArgument("-ngreenmediaadapter") && checkKernelArgument("-ngreenavcgen12")) {
 				gVfMediaPublicationRouteReady=false;
 				gVfChecksumNativeBindingsQualified=false;
+				gVfChecksumMainVtable=0;
+				gVfChecksumPublicationRouteReady=false;
 				for(unsigned i=0;i<3;++i)gVfChecksumBindCallers[i]=0;
 				const auto mediaEnd=patcher.solveSymbol(index,
 					"__ZN24IGAccelVideoContextMedia16endCommandStreamER24IOAccelCommandStreamInfo",address,size);
@@ -3630,6 +3633,49 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                     OSSynchronizeIO();gVfChecksumNativeBindingsQualified=true;
                 }
                 SYSLOG("ngreen","Checksum native heap binding receipt bound=%u ready=0",gVfChecksumNativeBindingsQualified?1U:0U);
+                // Main has its OWN tail thunk. Route only that entry, using
+                // the verified direct generic VideoEnd as continuation. Never
+                // copy its RIP-relative LEA or route generic VideoEnd itself.
+                const auto mainEnd=patcher.solveSymbol(index,
+                    "__ZN23IGAccelVideoContextMain16endCommandStreamER24IOAccelCommandStreamInfo",address,size);
+                static constexpr uint8_t mainPrefix[]={0x55,0x48,0x89,0xe5,0x48,0x8d,0x05};
+                static constexpr uint8_t mainSuffix[]={0x5d,0xff,0xa0,0x48,0x0a,0,0};
+                mach_vm_address_t mainTarget=0;
+                if(contains(mainEnd,0,18) && matches(mainEnd,mainPrefix,sizeof(mainPrefix)) &&
+                    matches(mainEnd+11,mainSuffix,sizeof(mainSuffix))) {
+                    const auto next=mainEnd+11;
+                    const auto *raw=reinterpret_cast<const volatile uint8_t*>(mainEnd);
+                    const uint32_t encoded=uint32_t(raw[7]) | (uint32_t(raw[8])<<8) |
+                        (uint32_t(raw[9])<<16) | (uint32_t(raw[10])<<24);
+                    const auto delta=static_cast<int32_t>(encoded);
+                    const uint64_t magnitude=delta<0?uint64_t(-int64_t(delta)):uint64_t(delta);
+                    if(delta<0?next>=magnitude:next<=UINT64_MAX-magnitude)
+                        mainTarget=delta<0?next-magnitude:next+magnitude;
+                }
+                const auto checksumFifo=patcher.solveSymbol(index,
+                    "__ZN18IGAccelFIFOChannel12submitBufferEP24IOAccelCommandDescriptor",address,size);
+                static constexpr uint8_t checksumEndMode[]={0x49,0x8b,0x46,0x20,0x48,0x85,0xc0,0xf,0x84,0x8e,0x0,0x0,0x0,0x41,0x8b,0x4e,0x30,0x48,0x85,0xc9,0xf,0x84,0x81,0x0,0x0,0x0,0x41,0x80,0x7e,0x68,0x0,0x74,0x14,0xc7,0x4,0x88,0x0,0x0,0x0,0x5,0x41,0x8b,0x4e,0x30,0xff,0xc1,0xc7,0x4,0x88,0x0,0x0,0x0,0x0};
+                const bool checksumEndQualified=bindQualified && gVfCaptureStreamResetBound &&
+                    contains(checksumFifo,0x4a,sizeof(checksumEndMode)) &&
+                    matches(checksumFifo+0x4a,checksumEndMode,sizeof(checksumEndMode)) &&
+                    mainEnd && mainEnd!=mediaEnd && mainEnd!=videoEnd && mainTarget==videoTable &&
+                    contains(mainTable,0xA48,8) &&
+                    getMember<mach_vm_address_t>(reinterpret_cast<void*>(mainTable),0xA48)==mainEnd;
+                if(checksumEndQualified) {
+                    this->oVfChecksumEnd=videoEnd;
+                    KernelPatcher::RouteRequest checksumRoute[]={
+                        {"__ZN23IGAccelVideoContextMain16endCommandStreamER24IOAccelCommandStreamInfo",vfChecksumEnd}
+                    };
+                    patcher.clearError();
+                    PANIC_COND(!patcher.routeMultiple(index,checksumRoute,address,size),
+                        "ngreen","Cannot install checksum Main end route");
+                    gVfChecksumMainVtable=mainTable+16;
+                    OSSynchronizeIO();
+                }
+                // Installation alone is not capability readiness: the owned
+                // program/size/builder/input leases must also be wired first.
+                SYSLOG("ngreen","Checksum Main end route bound=%u ready=0",checksumEndQualified?1U:0U);
+
 
 				const auto batchSubmit=patcher.solveSymbol(index,
 					"__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb",address,size);
@@ -6950,6 +6996,97 @@ bool Gen11::vfChecksumBindResource(void *that,void *stream,uint32_t identifier,
         rooted?reinterpret_cast<uintptr_t>(getMember<void*>(that,0x578)):0,
         rooted?reinterpret_cast<uintptr_t>(getMember<void*>(that,0x5a0)):0);
     return result;
+}
+
+void Gen11::vfChecksumEnd(void *that,void *stream)
+{
+    PANIC_COND(!callback || !callback->oVfChecksumEnd,"ngreen","Missing verified checksum Main end target");
+    void *accelerator=that?getMember<void*>(that,0x5A8):nullptr;
+    // Remains disabled until owned program/size/builder/input leases are all
+    // connected. A hook installation must not advertise that capability.
+    if(!gVfChecksumPublicationRouteReady || gVfIdentity!=VfIdentity::Virtual ||
+        accelerator!=gVfAccelerator || !checkKernelArgument("-ngreenmediaadapter") ||
+        !checkKernelArgument("-ngreenavcgen12")) {
+        FunctionCast(vfChecksumEnd,callback->oVfChecksumEnd)(that,stream);return;
+    }
+    auto *entry=VfMediaSubmissionScope::find(that);
+    const auto caller=reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0));
+    PANIC_COND(!entry || !VfMediaSubmissionScope::bindLocked(*entry,stream,caller),
+        "ngreen","Unscoped checksum Main end refused");
+    const auto refuse=[&](const char *reason) {
+        PANIC_COND(!VfMediaSubmissionScope::cancelChecksumLocked(*entry,stream,caller),
+            "ngreen","Lost checksum unsubmitted CPU stream ownership");
+        entry->checksumHeaps.reset();
+        SYSLOG("ngreen","Checksum Main end refused stage=%s queued=0 stamp-advanced=0",reason);
+    };
+    if(entry->failed){refuse("prior-error");return;}
+    // Other Main operations have no MediaKernel receipt. Do not infer a
+    // checksum from a generic RCS engine or from a readable command pointer.
+    if(!entry->checksumHeaps.seen && !entry->checksumHeaps.failed) {
+        FunctionCast(vfChecksumEnd,callback->oVfChecksumEnd)(that,stream);return;
+    }
+    if(!gVfChecksumNativeBindingsQualified || !gVfChecksumMainVtable ||
+        getMember<mach_vm_address_t>(that,0)!=gVfChecksumMainVtable) {
+        refuse("main-class");return;
+    }
+    VfMediaMappedSpan span{};
+    if(!vfCaptureMediaMappedSpan(*entry,stream,span)) {refuse("mapped-span");return;}
+    NgreenChecksumGen12::HeapAddresses heaps{};
+    if(!entry->checksumHeaps.copyObservedHeaps(reinterpret_cast<uintptr_t>(entry->task),
+        reinterpret_cast<uintptr_t>(entry->shared),heaps)) {refuse("heap-receipt");return;}
+    // Native end subtracts two, and FIFO appends END/NOOP only in mode one.
+    // Descriptor identity and mode must remain stable through publication.
+    void *descriptor=getMember<void*>(that,0x618);
+    if(!descriptor || getMember<volatile uint8_t>(descriptor,0x68)!=1U ||
+        getMember<volatile uint32_t>(that,0x1304)!=0U) {refuse("native-end-mode");return;}
+    uintptr_t resources[3];uint64_t rawGpu[3];uint32_t pitch[3];
+    for(unsigned i=0;i<3;++i) {
+        resources[i]=entry->checksumHeaps.resources[i];
+        rawGpu[i]=entry->checksumHeaps.gpu[i];pitch[i]=entry->checksumHeaps.pitch[i];
+    }
+    const auto same=[&]() {
+        VfMediaMappedSpan current{};
+        NgreenChecksumGen12::HeapAddresses observed{};
+        if(!vfCaptureMediaMappedSpan(*entry,stream,current) ||
+            current.resource!=span.resource || current.mapped!=span.mapped || current.map!=span.map ||
+            current.descriptor!=span.descriptor || current.gpuMap!=span.gpuMap || current.gpuBase!=span.gpuBase ||
+            current.backingBytes!=span.backingBytes || current.commands!=span.commands ||
+            current.bytes!=span.bytes || current.offset!=span.offset || current.used!=span.used ||
+            current.availableWords!=span.availableWords || current.reservedWords!=span.reservedWords ||
+            getMember<mach_vm_address_t>(that,0)!=gVfChecksumMainVtable ||
+            getMember<void*>(that,0x618)!=descriptor || getMember<volatile uint8_t>(descriptor,0x68)!=1U ||
+            getMember<volatile uint32_t>(that,0x1304)!=0U || entry->failed ||
+            !entry->checksumHeaps.copyObservedHeaps(reinterpret_cast<uintptr_t>(entry->task),
+                reinterpret_cast<uintptr_t>(entry->shared),observed) ||
+            observed.surface!=heaps.surface || observed.dynamic!=heaps.dynamic || observed.instruction!=heaps.instruction ||
+            observed.kernelSlot!=heaps.kernelSlot)return false;
+        for(unsigned i=0;i<3;++i)if(entry->checksumHeaps.resources[i]!=resources[i] ||
+            entry->checksumHeaps.gpu[i]!=rawGpu[i] || entry->checksumHeaps.pitch[i]!=pitch[i])return false;
+        return true;
+    };
+    auto &words=getMember<volatile uint32_t>(stream,0x34);
+    const auto live=[&](uint32_t expected) {return same() && words==expected;};
+    bool published=false,mustStop=false;const char *refusal="publication";
+    {
+        entry->translating=true;
+        struct Reset {VfMediaSubmission &entry;~Reset(){entry.translating=false;}} reset{*entry};
+        const auto publication=NgreenChecksumGen12::publish(span.commands,span.availableWords,span.reservedWords,
+            words,heaps,*entry->scratch,live,same);
+        published=publication.published;mustStop=publication.mustStop;refusal=publication.reason;
+    }
+    PANIC_COND(mustStop,"ngreen","Lost checksum publication rollback authority");
+    if(!published) {refuse(refusal);return;}
+    OSSynchronizeIO();
+    PANIC_COND(!live(NgreenChecksumGen12::reservedStreamWords),
+        "ngreen","Lost checksum mapping before native submission");
+    for(unsigned i=0;i<NgreenChecksumGen12::reservedStreamWords;++i)
+        PANIC_COND(span.commands[i]!=entry->scratch->produced[i],"ngreen","Changed checksum bytes before native submission");
+    PANIC_COND(!live(NgreenChecksumGen12::reservedStreamWords),
+        "ngreen","Lost checksum mapping after byte validation");
+    FunctionCast(vfChecksumEnd,callback->oVfChecksumEnd)(that,stream);
+    entry->checksumHeaps.reset();
+    // Native return is not a completion: the owned receipt/fence path must
+    // independently validate the actual GPU stamp before reusing any backing.
 }
 
 void Gen11::vfMediaEnd(void *that,void *stream)
