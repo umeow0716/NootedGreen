@@ -9,6 +9,7 @@
 #include "owned_resource.hpp"
 #include "../../NootedGreen/kern_avc_gen12_commands.hpp"
 #include "native_avc_reservation.hpp"
+#include "frame_checksum_gen12.hpp"
 #include <memory>
 #include <csignal>
 #include <sys/resource.h>
@@ -19722,6 +19723,37 @@ void testLinuxGen12CacheProfile() {
 }
 
 int main() {
+    {
+        // Captured group4 CPU bytes, independently decoded from the V391
+        // native recorder; not a GPU execution fixture.
+        using namespace NgreenFrameChecksumGen12;
+        const std::array<uint32_t,72> input{{
+            0x11000001,0,0x80000040,0x7a000004,0x001010a0,0,0,0,0,0x69041301,
+            0x6101000e,1,0,0,0x40a6e001,0,0x40a6c001,0,1,0,0x40a6d001,0,
+            1,0x1001,1,0x1001,0x70000007,0,0,0x01bf1000,0,0x007c0002,0,0,0,
+            0x70010002,0,0x40,0x400,0x70020002,0,0x40,0,
+            0x7103000f,0,0,0,0,0,0,0x07ff07ff,0x00020044,0,0,
+            0x00010000,1,0x00020044,0,0x44,0x00020000,
+            0x7a000004,0x001010a0,0,0,0,0,0x7a000004,0x0000089c,0,0,0,0
+        }};
+        HeapAddresses heap{0x40a6e000,0x40a6c000,0x40a6d000,1};
+        std::array<uint32_t,78> output{};
+        assert(build1080Batch(input,heap,output).ok);
+        assert(!output[0] && !output[1] && !output[2] && output[10]==0x61010014);
+        assert(output[13]==0x6c000 && output[14]==0x40a6e061 && output[35]==0x01bf1040);
+        for(size_t i=26;i<32;++i)assert(!output[i]);
+        for(size_t i=26;i<input.size();++i)
+            assert(output[i+6]==(i==29?input[i]|0x40U:i==42?0x40U:input[i]));
+        const auto before=output;
+        for(unsigned i=0;i<72;++i)for(unsigned bit=0;bit<32;++bit) {
+            auto bad=input;bad[i]^=1U<<bit;
+            assert(!build1080Batch(bad,heap,output).ok && output==before);
+        }
+        heap.surface=heap.dynamic;
+        assert(!build1080Batch(input,heap,output).ok && output==before);
+        heap.surface=0x40a6e001;
+        assert(!build1080Batch(input,heap,output).ok && output==before);
+    }
     testLinuxGen12CacheProfile();
     testAvcFrameOutputs();
     testAvcFrameLeasePromotion();
