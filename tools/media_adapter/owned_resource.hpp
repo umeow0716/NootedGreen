@@ -27331,6 +27331,14 @@ public:
     uintptr_t nativeBuilder() const noexcept {return ready_?nativeBuilder_:0;}
     size_t callbackCount() const noexcept {return ready_?callbackCount_:0;}
     uintptr_t nativeFrame() const noexcept {return ready_?nativeFrame_:0;}
+    // Classify by the resolved original address point, never shared2190a.
+    // This identifies the family only; current publication/owner/input/kernel
+    // authority must still be checked independently before dispatch.
+    bool isChecksumInputFamily(uintptr_t image) const noexcept {
+        return ready_ && image && image<=UINTPTR_MAX-0x754408 &&
+            originalVptr_==image+0x754408 && callbackCount_==18 &&
+            nativeFrame_==image+0x2190a;
+    }
     Publication publication() const noexcept {return publication_;}
     bool requiresRetention() const noexcept {
         return publication_==Publication::Published || publication_==Publication::RemovalPrepared || publication_==Publication::Ambiguous;
@@ -27655,7 +27663,7 @@ private:
             state_->retainedIdentity() && state_->nativeParentMatches() &&
             scope.matches(state_->image,state_->physical,state_->generation) &&
             state_->table.publication()==FrameTable::Publication::Published &&
-            state_->table.callbackCount()==18 && state_->table.nativeFrame()==state_->image+0x2190a &&
+            state_->table.isChecksumInputFamily(state_->image) &&
             state_->table.nativeSize()==state_->image+0x2c66a && state_->table.nativeBuilder()==state_->image+0x2c6f6 &&
             state_->read(state_->context,&current,8) &&
             current==reinterpret_cast<uintptr_t>(state_->table.addressPoint()) &&

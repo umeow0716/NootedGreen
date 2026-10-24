@@ -18,6 +18,39 @@ struct InputGeometry {
             requestWidth==other.requestWidth && requestHeight==other.requestHeight;
     }
 };
+// Immutable IOSurface metadata only. Offsets describe allocation bounds;
+// they are NEVER GPU addresses or a DMA/coherency/lifetime authorization.
+// Native9acb retains responsibility for each plane's resource+100 GPU value.
+struct InputSurfaceShape {
+    uint64_t id=0,format=0,planes=0,width=0,height=0,bytes=0;
+    std::array<uint64_t,2> planeWidth{},planeHeight{},pitch{},offset{};
+    bool operator==(const InputSurfaceShape& other) const noexcept {
+        return id==other.id && format==other.format && planes==other.planes &&
+            width==other.width && height==other.height && bytes==other.bytes &&
+            planeWidth==other.planeWidth && planeHeight==other.planeHeight &&
+            pitch==other.pitch && offset==other.offset;
+    }
+    bool covers(const InputGeometry& geometry) const noexcept {
+        // Exact native9458 maps both420v and420f to the same two-plane class.
+        if(!id || (format!=0x34323076 && format!=0x34323066) || planes!=2 ||
+            !width || !height || width>16384 || height>16384 ||
+            (width&1) || (height&1) || !bytes ||
+            !geometry.contextWidth || !geometry.contextHeight ||
+            !geometry.requestWidth || !geometry.requestHeight ||
+            geometry.contextWidth>width || geometry.requestWidth>width ||
+            geometry.contextHeight>height || geometry.requestHeight>height ||
+            planeWidth[0]!=width || planeWidth[1]!=width/2 ||
+            planeHeight[0]!=height || planeHeight[1]!=height/2)return false;
+        std::array<uint64_t,2> end{};
+        for(size_t i=0;i<2;++i) {
+            // Nativeae2e stores pitch-1 in18bits; validate before truncation.
+            if(pitch[i]<width || pitch[i]>0x40000 || offset[i]>bytes ||
+                planeHeight[i]>(bytes-offset[i])/pitch[i])return false;
+            end[i]=offset[i]+planeHeight[i]*pitch[i];
+        }
+        return end[0]<=offset[1] || end[1]<=offset[0];
+    }
+};
 template<class Api> class OwnedCallbackInput {
     using Pin=TglOwnedTypedCfReference<Api>;
     using Request=NgreenNativeAvcReservation::OwnedAvcCallbackRequest;

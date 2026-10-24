@@ -5979,6 +5979,11 @@ struct NativeOtherFrameBackend {
         auto* owner=lease.get();
         if(!owner || owner->family()!=TglNativeContextFamily::NativeOther ||
            !scope.matches(image,physical,generation))return 5;
+        // The checksum family's private size/builder hooks require its typed
+        // input phase and exclusive receipt-binding authority. Generic auxiliary
+        // dispatch cannot supply either, even though HME/BRC share2190a.
+        // Keep this route closed until dispatchChecksum owns that whole span.
+        if(owner->frameTable().isChecksumInputFamily(image))return 5;
         // Publication readiness alone cannot authorize borrowed-input AVC.
         // Refuse before reserving work while phase/callbacks are missing.
         if(!NgreenNativeAvcReservation::framePhaseAdmission(image,owner->frameTable().nativeFrame(),physical,generation,owner->context(),input))return 5;

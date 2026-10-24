@@ -17021,6 +17021,9 @@ static void testRetainedVeboxFrames() {
                 assert(owned.build(image,0x8000,hook,readFamily,qualified,executableFamily,
                     [](uintptr_t p,size_t n) noexcept {return p==hook && n==1;}));
                 assert(owned.callbackCount()==schema.count && owned.nativeFrame()==image+schema.callbacks[5]);
+                assert(owned.isChecksumInputFamily(image)==(schema.table==0x754408));
+                assert(!owned.isChecksumInputFamily(0) && !owned.isChecksumInputFamily(image+8) &&
+                    !owned.isChecksumInputFamily(UINTPTR_MAX-0x754407));
                 for(size_t i=0;i<schema.count;++i)
                     assert(owned.addressPoint()[i]==(i==5?hook:image+schema.callbacks[i]));
                 assert(!owned.addressPoint()[-2] && owned.addressPoint()[-1]==image+schema.rtti);
@@ -17044,6 +17047,7 @@ static void testRetainedVeboxFrames() {
                 assert(checksum.buildChecksumInputCallbacks(image,0x8000,hook,sizeHook,builderHook,
                     readFamily,qualified,executableFamily,ownedAvcEntry)==checksumFamily);
                 if(checksumFamily) {
+                    assert(checksum.isChecksumInputFamily(image));
                     assert(checksum.nativeFrame()==image+0x2190a && checksum.nativeSize()==image+0x2c66a &&
                         checksum.nativeBuilder()==image+0x2c6f6);
                     for(size_t slot=0;slot<schema.count;++slot)
@@ -20082,6 +20086,37 @@ struct ChecksumInputFixture {
             shape.requestWidth==1920 && shape.requestHeight==1080;
     }
 };
+static void testChecksumSurfaceShape() {
+    using namespace NgreenNativeChecksumReservation;
+    const InputGeometry geometry{1920,1088,1920,1080};
+    const InputSurfaceShape shape{7,0x34323076,2,1920,1088,3133440,
+        {1920,960},{1088,544},{1920,1920},{0,2088960}};
+    assert(shape.covers(geometry));
+    auto full=shape;full.format=0x34323066;assert(full.covers(geometry));
+    for(unsigned bad=0;bad<15;++bad) {
+        auto value=shape;auto dimensions=geometry;
+        switch(bad) {
+            case 0:value.id=0;break;
+            case 1:value.format=0x78343230;break;
+            case 2:value.planes=1;break;
+            case 3:value.width=1919;break;
+            case 4:value.height=1080;break;
+            case 5:dimensions.contextWidth=1921;break;
+            case 6:dimensions.requestHeight=1089;break;
+            case 7:value.planeWidth[1]=1920;break;
+            case 8:value.planeHeight[1]=543;break;
+            case 9:value.pitch[0]=1919;break;
+            case 10:value.pitch[1]=0x40001;break;
+            case 11:value.offset[1]=2088959;break;
+            case 12:value.bytes-=1;break;
+            case 13:value.offset[1]=UINT64_MAX;break;
+            case 14:dimensions.requestWidth=0;break;
+        }
+        assert(!value.covers(dimensions));
+    }
+    // No inferred coded==visible equality and no invented1088 padding.
+    assert(!shape.covers({1920,1089,1920,1080}));
+}
 void testOwnedChecksumInput() {
     using Fixture=ChecksumInputFixture;using Input=Fixture::Input;
     for(int mode=0;mode<37;++mode) {
@@ -20366,6 +20401,7 @@ void testOwnedChecksumCallbacks() {
 }
 
 int main() {
+    testChecksumSurfaceShape();
     testOwnedChecksumInput();
     testOwnedChecksumCallbacks();
     testChecksumNativeHeapBindings();
