@@ -124,4 +124,98 @@ inline BatchResult build1080Batch(const std::array<uint32_t,72>& source,
     candidate[48]=0x40U;
     output=candidate;return {true,"produced"};
 }
+// Caller must hold the original context's exclusive owner/physical epoch
+// from BEFORE these nested allocation reads through native return. Readable
+// mappings alone are never a lifetime lease. Use only before publication and
+// before any frame. A post-call failure is ambiguous and must be quarantined.
+struct AppendResult {bool ok=false,mutated=false;const char* reason="owner";};
+inline constexpr std::array<uint8_t,259> nativeLoaderBytes{{
+    0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x50,0x41,0x89,
+    0xd6,0x49,0x89,0xfd,0x8b,0x87,0x6c,0x01,0x00,0x00,0x8b,0xbf,0x90,0x01,0x00,0x00,
+    0x42,0x8d,0x0c,0x30,0x39,0xcf,0x0f,0x82,0xd2,0x00,0x00,0x00,0x45,0x8b,0xbd,0x68,
+    0x01,0x00,0x00,0x4d,0x8b,0xa5,0x98,0x01,0x00,0x00,0x49,0x01,0xc4,0x41,0x83,0xbd,
+    0x74,0x01,0x00,0x00,0x00,0x74,0x74,0x4d,0x8d,0x85,0xa8,0x11,0x00,0x00,0x41,0xb9,
+    0x01,0x00,0x00,0x00,0x4c,0x89,0xff,0x48,0xc1,0xe7,0x06,0x49,0x8b,0x18,0x41,0x8b,
+    0x8d,0x60,0x01,0x00,0x00,0xc7,0x44,0x3b,0x04,0x00,0x00,0x00,0x00,0x0f,0xb7,0x54,
+    0x3b,0x12,0xc1,0xe2,0x10,0x89,0x54,0x3b,0x10,0x83,0xe0,0xc0,0x8b,0x14,0x3b,0x83,
+    0xe2,0x3f,0x09,0xc2,0x89,0x14,0x3b,0x83,0x64,0x3b,0x0c,0x03,0xc1,0xe1,0x0b,0x81,
+    0xc1,0x00,0xf8,0x00,0x00,0x81,0xe1,0x00,0x00,0xff,0xff,0x89,0x4c,0x3b,0x14,0x41,
+    0x8b,0x85,0x74,0x01,0x00,0x00,0x49,0x39,0xc1,0x73,0x10,0x41,0x8b,0x85,0x6c,0x01,
+    0x00,0x00,0x49,0x83,0xc0,0x20,0x49,0xff,0xc1,0xeb,0xa0,0x44,0x89,0xf2,0x4c,0x89,
+    0xe7,0xe8,0xf0,0x1d,0x21,0x00,0x4f,0x89,0xa4,0xfd,0x90,0x43,0x00,0x00,0x47,0x89,
+    0xb4,0xbd,0x90,0x45,0x00,0x00,0x41,0x83,0xc6,0x3f,0x41,0x83,0xe6,0xc0,0x45,0x01,
+    0xb5,0x6c,0x01,0x00,0x00,0x41,0xff,0x85,0x68,0x01,0x00,0x00,0x44,0x89,0xf8,0x48,
+    0x83,0xc4,0x08,0x5b,0x41,0x5c,0x41,0x5d,0x41,0x5e,0x41,0x5f,0x5d,0xc3,0xe8,0xa4,
+    0x19,0x21,0x00,
+}};
+template<class Authority,class Read,class Writable,class Executable,class Invoke>
+inline AppendResult appendProgram(uintptr_t image,uintptr_t context,Authority authority,
+    Read read,Writable writable,Executable executable,Invoke invoke) noexcept {
+    if(!image || image>UINTPTR_MAX-0x76d5b8 || !context || context>UINTPTR_MAX-0x4748 ||
+        !authority(image,context))return {};
+    uintptr_t originalTable=0;
+    if(!read(context,&originalTable,sizeof(originalTable)) || originalTable!=image+0x754408)
+        return {false,false,"checksum-family"};
+    std::array<uint8_t,259> body{};
+    if(!executable(image+0x2c566,body.size()) ||
+        !read(image+0x2c566,body.data(),body.size()) || body!=nativeLoaderBytes)
+        return {false,false,"loader-identity"};
+    std::array<uint32_t,18> head{};
+    std::array<uint32_t,8> descriptorPool{};
+    uint8_t debug=1;
+    if(!read(context+0x160,head.data(),sizeof(head)) ||
+        !read(context+0x1198,descriptorPool.data(),sizeof(descriptorPool)) ||
+        !read(context+0x4690,&debug,1))return {false,false,"context-read"};
+    // Native2c158/9710 initialized one private page, one existing kernel and
+    // no frames. Check the rounded allocation requirement independently of
+    // native2c566, whose capacity comparison only checks unrounded bytes.
+    if(head[0]!=64 || head[1]!=1536 || head[2]!=1 || head[3]!=1536 || head[4]!=3 ||
+        head[5]!=1 || head[6] || head[7] || debug || head[10] || head[11]!=1 ||
+        head[12]!=4096 || head[13]!=1 || (!head[16] && !head[17]) ||
+        descriptorPool[0] || descriptorPool[1]!=1 || descriptorPool[2]!=4096 ||
+        descriptorPool[3]!=1 || (!descriptorPool[6] && !descriptorPool[7]))
+        return {false,false,"fresh-context"};
+    const uintptr_t heap=uint64_t(head[14])|(uint64_t(head[15])<<32);
+    const uintptr_t descriptors=uint64_t(descriptorPool[4])|(uint64_t(descriptorPool[5])<<32);
+    const auto disjoint=[](uintptr_t a,size_t an,uintptr_t b,size_t bn) noexcept {
+        return a && b && a<=UINTPTR_MAX-an && b<=UINTPTR_MAX-bn && (a+an<=b || b+bn<=a);
+    };
+    if((heap&4095) || (descriptors&4095) ||
+        !disjoint(heap,4096,descriptors,4096) || !disjoint(heap,4096,context,0x4748) ||
+        !disjoint(descriptors,4096,context,0x4748) ||
+        !writable(context,0x4748) || !writable(heap,4096) || !writable(descriptors,4096))
+        return {false,false,"allocation-domain"};
+    std::array<uint8_t,1536> original{},oldCode{};
+    std::array<uint32_t,32> oldDescriptors{};
+    std::array<uint64_t,2> oldPointers{};std::array<uint32_t,2> oldSizes{};
+    std::array<uint32_t,32> expectedDescriptors{};expectedDescriptors[5]=0x20000;
+    if(!read(image+0x76cff0,original.data(),1480) ||
+        !read(heap,oldCode.data(),oldCode.size()) || oldCode!=original ||
+        !read(descriptors,oldDescriptors.data(),sizeof(oldDescriptors)) || oldDescriptors!=expectedDescriptors ||
+        !read(context+0x4390,oldPointers.data(),sizeof(oldPointers)) || oldPointers[0]!=heap || oldPointers[1] ||
+        !read(context+0x4590,oldSizes.data(),sizeof(oldSizes)) || oldSizes[0]!=1480 || oldSizes[1])
+        return {false,false,"original-program"};
+    if(!authority(image,context))return {false,false,"owner-before-call"};
+    // The qualified original native helper is invoked exactly once. It only
+    // appends to native CPU allocations here; it does not submit GPU work.
+    const uint64_t returned=invoke(image+0x2c566,context,isa.data(),byteSize);
+    std::array<uint32_t,18> after{};std::array<uint32_t,8> poolAfter{};
+    std::array<uint64_t,2> pointers{};std::array<uint32_t,2> sizes{};
+    std::array<uint8_t,1576> appended{};
+    head[2]=2;head[3]=3136;expectedDescriptors[16]=1536;expectedDescriptors[21]=0x20000;
+    uintptr_t finalTable=0;
+    if(returned!=1 || !authority(image,context) ||
+        !read(context,&finalTable,sizeof(finalTable)) || finalTable!=originalTable ||
+        !read(context+0x160,after.data(),sizeof(after)) || after!=head ||
+        !read(context+0x1198,poolAfter.data(),sizeof(poolAfter)) || poolAfter!=descriptorPool ||
+        !read(heap,oldCode.data(),oldCode.size()) || oldCode!=original ||
+        !read(heap+1536,appended.data(),appended.size()) ||
+        !read(descriptors,oldDescriptors.data(),sizeof(oldDescriptors)) || oldDescriptors!=expectedDescriptors ||
+        !read(context+0x4390,pointers.data(),sizeof(pointers)) || pointers[0]!=heap || pointers[1]!=heap+1536 ||
+        !read(context+0x4590,sizes.data(),sizeof(sizes)) || sizes[0]!=1480 || sizes[1]!=byteSize)
+        return {false,true,"native-postcondition"};
+    for(size_t i=0;i<isa.size();++i)for(unsigned byte=0;byte<4;++byte)
+        if(appended[4*i+byte]!=uint8_t(isa[i]>>(8*byte)))return {false,true,"program-readback"};
+    return {true,true,"appended"};
+}
 }

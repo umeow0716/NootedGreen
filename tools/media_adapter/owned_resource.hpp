@@ -27276,6 +27276,30 @@ public:
         context_=context;originalVptr_=native.vtable;nativeFrame_=native.frame;
         nativeSize_=image+0x2732c;nativeBuilder_=image+0x2737e;ready_=true;return true;
     }
+    // FrameChecksum shares native2190a/size/builder with other auxiliary
+    // families. Only its complete original754408 table may select these
+    // owned callbacks. This builds private data; it does not authorize heap
+    // writes, shader installation, input borrowing or kernel submission.
+    template<class Read,class Qualify,class Executable,class OwnedExecutable>
+    bool buildChecksumInputCallbacks(uintptr_t image,uintptr_t context,
+        uintptr_t frameHook,uintptr_t sizeHook,uintptr_t builderHook,Read read,
+        Qualify qualify,Executable executable,OwnedExecutable ownedExecutable) noexcept {
+        if(attempted_)return false;
+        attempted_=true;
+        if(!image || image>UINTPTR_MAX-0x754498 || !frameHook || !sizeHook || !builderHook ||
+            frameHook==sizeHook || frameHook==builderHook || sizeHook==builderHook ||
+            !ownedExecutable(frameHook,1) || !ownedExecutable(sizeHook,1) ||
+            !ownedExecutable(builderHook,1))return false;
+        Binding native;
+        if(!native.resolve(image,context,read,qualify,executable) || native.callbackCount!=18 ||
+            native.vtable!=image+0x754408 || native.frame!=image+0x2190a ||
+            native.original[2+0x30/8]!=image+0x2c66a ||
+            native.original[2+0x60/8]!=image+0x2c6f6)return false;
+        table_=native.original;callbackCount_=native.callbackCount;
+        table_[2+0x28/8]=frameHook;table_[2+0x30/8]=sizeHook;table_[2+0x60/8]=builderHook;
+        context_=context;originalVptr_=native.vtable;nativeFrame_=native.frame;
+        nativeSize_=image+0x2c66a;nativeBuilder_=image+0x2c6f6;ready_=true;return true;
+    }
     uintptr_t nativeSize() const noexcept {return ready_?nativeSize_:0;}
     uintptr_t nativeBuilder() const noexcept {return ready_?nativeBuilder_:0;}
     size_t callbackCount() const noexcept {return ready_?callbackCount_:0;}

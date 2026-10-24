@@ -17004,6 +17004,29 @@ static void testRetainedVeboxFrames() {
                 auto ownedAvcEntry=[](uintptr_t p,size_t n) noexcept {
                     return n==1 && (p==hook || p==sizeHook || p==builderHook);
                 };
+                // Other auxiliary families have the same native frame/size/
+                // builder. A shared entry must never select checksum hooks.
+                Table checksum;
+                const bool checksumFamily=schema.table==0x754408;
+                assert(checksum.buildChecksumInputCallbacks(image,0x8000,hook,sizeHook,builderHook,
+                    readFamily,qualified,executableFamily,ownedAvcEntry)==checksumFamily);
+                if(checksumFamily) {
+                    assert(checksum.nativeFrame()==image+0x2190a && checksum.nativeSize()==image+0x2c66a &&
+                        checksum.nativeBuilder()==image+0x2c6f6);
+                    for(size_t slot=0;slot<schema.count;++slot)
+                        assert(checksum.addressPoint()[slot]==(slot==5?hook:slot==6?sizeHook:
+                            slot==12?builderHook:image+schema.callbacks[slot]));
+                    assert(checksum.addressPoint()[-1]==image+schema.rtti && !checksum.addressPoint()[-2]);
+                    assert(checksum.publish(readFamily,writeTable,admitTable));
+                    assert(checksum.detach(readFamily,writeTable,admitTable) && actualTable==image+schema.table);
+                    for(int bad=0;bad<3;++bad) {
+                        Table denied;
+                        assert(!denied.buildChecksumInputCallbacks(image,0x8000,hook,
+                            bad==0?hook:sizeHook,builderHook,readFamily,qualified,executableFamily,
+                            [&](uintptr_t p,size_t n) noexcept {return bad!=1 && ownedAvcEntry(p,n) &&
+                                !(bad==2 && p==builderHook);}));
+                    }
+                }
                 Table paired;
                 const bool avc=schema.callbacks[5]==0x27724;
                 assert(paired.buildAvcInputCallbacks(image,0x8000,hook,sizeHook,builderHook,
@@ -19722,7 +19745,73 @@ void testLinuxGen12CacheProfile() {
     assert(NGVfAvcPublication::profile==3);
 }
 
+static void testChecksumProgramAppend() {
+    using namespace NgreenFrameChecksumGen12;
+    constexpr uintptr_t image=0x100000,context=0x2000000,heap=0x3000000,descriptors=0x4000000;
+    for(unsigned test=0;test<16;++test) {
+        std::array<uint8_t,0x4748> object{};
+        std::array<uint8_t,4096> code{},dynamic{};
+        std::array<uint8_t,1480> original{};original.fill(0xa5);
+        std::memcpy(code.data(),original.data(),original.size());
+        auto put=[&](size_t at,auto value) {std::memcpy(object.data()+at,&value,sizeof(value));};
+        put(0,uintptr_t(image+(test==2?0x755070:0x754408)));
+        for(const auto& field:std::array<std::pair<size_t,uint32_t>,12>{{
+            {0x160,64},{0x164,1536},{0x168,test==9?2U:1U},{0x16c,1536},{0x170,3},
+            {0x174,test==15?2U:1U},{0x18c,1},{0x190,test==3?3111U:4096U},{0x194,1},
+            {0x119c,1},{0x11a0,4096},{0x11a4,1}}})put(field.first,field.second);
+        put(0x198,uintptr_t(test==4?descriptors:heap));put(0x1a0,uintptr_t(0x9000));
+        put(0x11a8,descriptors);put(0x11b0,uintptr_t(test==12?0:0xa000));
+        put(0x4390,heap);put(0x4590,uint32_t(1480));
+        const uint32_t curbe=0x20000;std::memcpy(dynamic.data()+20,&curbe,4);
+        if(test==8)dynamic[0]=1;
+        if(test==10)code[0]^=1;
+        unsigned calls=0;
+        auto read=[&](uintptr_t address,void* output,size_t bytes) noexcept {
+            if(test==14 && address==image+0x2c566)return false;
+            if(address==image+0x2c566 && bytes==nativeLoaderBytes.size()) {
+                std::memcpy(output,nativeLoaderBytes.data(),bytes);return true;
+            }
+            if(address==image+0x76cff0 && bytes==original.size()) {
+                std::memcpy(output,original.data(),bytes);return true;
+            }
+            const auto copy=[&](uintptr_t base,const auto& data) noexcept {
+                if(address<base || address-base>data.size() || bytes>data.size()-(address-base))return false;
+                std::memcpy(output,data.data()+address-base,bytes);return true;
+            };
+            return copy(context,object) || copy(heap,code) || copy(descriptors,dynamic);
+        };
+        auto writable=[&](uintptr_t address,size_t bytes) noexcept {
+            return (address==context && bytes==object.size()) ||
+                (address==heap && bytes==code.size() && test!=13) ||
+                (address==descriptors && bytes==dynamic.size());
+        };
+        auto authority=[&](uintptr_t i,uintptr_t c) noexcept {
+            return i==image && c==context && test!=1 && !(test==7 && calls);
+        };
+        auto executable=[&](uintptr_t address,size_t bytes) noexcept {
+            return test!=11 && address==image+0x2c566 && bytes==nativeLoaderBytes.size();
+        };
+        // This adapter models the writes independently observed by executing
+        // the original helper in Unicorn; no native/GPU execution in this test.
+        auto invoke=[&](uintptr_t entry,uintptr_t c,const uint32_t* source,unsigned bytes) noexcept -> uint64_t {
+            ++calls;assert(entry==image+0x2c566 && c==context && source==isa.data() && bytes==byteSize);
+            std::memcpy(code.data()+1536,source,bytes);
+            put(0x168,uint32_t(2));put(0x16c,uint32_t(3136));
+            put(0x4398,heap+1536);put(0x4594,uint32_t(byteSize));
+            const uint32_t offset=1536;
+            std::memcpy(dynamic.data()+64,&offset,4);std::memcpy(dynamic.data()+84,&curbe,4);
+            if(test==5)code[1536]^=1;
+            return test==6?2:1;
+        };
+        const auto result=appendProgram(image,context,authority,read,writable,executable,invoke);
+        if(!test)assert(result.ok && result.mutated && calls==1);
+        else if(test==5 || test==6 || test==7)assert(!result.ok && result.mutated && calls==1);
+        else assert(!result.ok && !result.mutated && !calls);
+    }
+}
+
 int main() {
+    testChecksumProgramAppend();
     {
         // Captured group4 CPU bytes, independently decoded from the V391
         // native recorder; not a GPU execution fixture.
