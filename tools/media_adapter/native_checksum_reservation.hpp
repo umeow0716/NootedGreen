@@ -51,7 +51,18 @@ struct InputSurfaceShape {
         return end[0]<=offset[1] || end[1]<=offset[0];
     }
 };
-struct InputSurfaceShapeResult {bool valid=false,mustStop=false;};
+enum class InputSurfaceShapeStage : uint32_t {
+    Ready, Handle, AdmissionBeforeLock, Lock, AdmissionBeforeCapture,
+    CaptureBefore, GeometryBefore, AdmissionBetweenCaptures, CaptureAfter,
+    GeometryAfter, Stability, AdmissionBeforeUnlock, Unlock, AdmissionAfterUnlock
+};
+struct InputSurfaceShapeResult {
+    bool valid=false,mustStop=false;
+    InputSurfaceShapeStage stage=InputSurfaceShapeStage::Ready;
+    InputSurfaceShape observed{};
+    uint32_t nativeStage=0;
+    int32_t lockStatus=0,unlockStatus=0;
+};
 // The native wrapper and CPU fault tests share this exact lock transaction.
 // Every successful lock has exactly one unlock attempt, including refusal.
 template<class Admit,class Lock,class Unlock,class Capture>
@@ -59,12 +70,29 @@ inline InputSurfaceShapeResult captureInputSurfaceShape(uintptr_t handle,const I
     Admit admit,Lock lock,Unlock unlock,Capture capture) noexcept {
     static_assert(noexcept(admit()) && noexcept(lock()) && noexcept(unlock()) &&
         noexcept(capture(std::declval<InputSurfaceShape&>())));
-    if(!handle || !admit() || !lock())return {};
+    InputSurfaceShapeResult result;
+    const auto denied=[&](InputSurfaceShapeStage stage) noexcept {result.stage=stage;return result;};
+    if(!handle)return denied(InputSurfaceShapeStage::Handle);
+    if(!admit())return denied(InputSurfaceShapeStage::AdmissionBeforeLock);
+    if(!lock())return denied(InputSurfaceShapeStage::Lock);
     InputSurfaceShape before,after;
-    const bool valid=admit() && capture(before) && before.covers(geometry) && admit() &&
-        capture(after) && after.covers(geometry) && before==after && admit();
+    bool valid=false;
+    if(!admit())result.stage=InputSurfaceShapeStage::AdmissionBeforeCapture;
+    else if(!capture(before))result.stage=InputSurfaceShapeStage::CaptureBefore;
+    else if(!before.covers(geometry))result.stage=InputSurfaceShapeStage::GeometryBefore;
+    else if(!admit())result.stage=InputSurfaceShapeStage::AdmissionBetweenCaptures;
+    else if(!capture(after))result.stage=InputSurfaceShapeStage::CaptureAfter;
+    else if(!after.covers(geometry))result.stage=InputSurfaceShapeStage::GeometryAfter;
+    else if(!(before==after))result.stage=InputSurfaceShapeStage::Stability;
+    else if(!admit())result.stage=InputSurfaceShapeStage::AdmissionBeforeUnlock;
+    else valid=true;
+    result.observed=before;
     const bool unlocked=unlock();
-    return {valid && unlocked && admit(),!unlocked};
+    result.mustStop=!unlocked;
+    if(!unlocked)result.stage=InputSurfaceShapeStage::Unlock;
+    else if(valid && !admit()){valid=false;result.stage=InputSurfaceShapeStage::AdmissionAfterUnlock;}
+    result.valid=valid && unlocked;
+    return result;
 }
 #if defined(__APPLE__)
 // Caller keeps the typed CF reference and exclusive context authority alive.
@@ -75,30 +103,40 @@ template<class Admit>
 inline InputSurfaceShapeResult darwinInputSurfaceShape(uintptr_t handle,const InputGeometry& geometry,Admit admit) noexcept {
     const auto surface=reinterpret_cast<IOSurfaceRef>(handle);
     constexpr IOSurfaceLockOptions options=kIOSurfaceLockReadOnly|kIOSurfaceLockAvoidSync;
+    uint32_t nativeStage=0;int32_t lockStatus=0,unlockStatus=0;
     const auto capture=[&](InputSurfaceShape& shape) noexcept {
+        nativeStage=1;
         if(!admit())return false;
+        nativeStage=2;
         shape.id=IOSurfaceGetID(surface);shape.format=IOSurfaceGetPixelFormat(surface);
         shape.planes=IOSurfaceGetPlaneCount(surface);
         if(!admit() || shape.planes!=2 ||
             (shape.format!=0x34323076 && shape.format!=0x34323066))return false;
+        nativeStage=3;
         shape.width=IOSurfaceGetWidth(surface);shape.height=IOSurfaceGetHeight(surface);
         shape.bytes=IOSurfaceGetAllocSize(surface);
         const auto base=reinterpret_cast<uintptr_t>(IOSurfaceGetBaseAddress(surface));
+        nativeStage=4;
         if(!base || shape.bytes>UINTPTR_MAX-base)return false;
         for(size_t i=0;i<2;++i) {
+            nativeStage=5+static_cast<uint32_t>(i)*2;
             if(!admit())return false;
             const auto plane=reinterpret_cast<uintptr_t>(IOSurfaceGetBaseAddressOfPlane(surface,i));
+            ++nativeStage;
             if(plane<base || plane-base>shape.bytes)return false;
             shape.offset[i]=plane-base;
             shape.planeWidth[i]=IOSurfaceGetWidthOfPlane(surface,i);
             shape.planeHeight[i]=IOSurfaceGetHeightOfPlane(surface,i);
             shape.pitch[i]=IOSurfaceGetBytesPerRowOfPlane(surface,i);
         }
+        nativeStage=9;
         return admit() && shape.covers(geometry);
     };
-    return captureInputSurfaceShape(handle,geometry,admit,
-        [&]() noexcept {return IOSurfaceLock(surface,options,nullptr)==KERN_SUCCESS;},
-        [&]() noexcept {return IOSurfaceUnlock(surface,options,nullptr)==KERN_SUCCESS;},capture);
+    auto result=captureInputSurfaceShape(handle,geometry,admit,
+        [&]() noexcept {lockStatus=IOSurfaceLock(surface,options,nullptr);return lockStatus==KERN_SUCCESS;},
+        [&]() noexcept {unlockStatus=IOSurfaceUnlock(surface,options,nullptr);return unlockStatus==KERN_SUCCESS;},capture);
+    result.nativeStage=nativeStage;result.lockStatus=lockStatus;result.unlockStatus=unlockStatus;
+    return result;
 }
 #endif
 // Fixed native2c314/9710/9628 allocation record. These are CPU and CF/shared

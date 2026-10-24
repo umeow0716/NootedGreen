@@ -5937,6 +5937,21 @@ struct NativeOtherFrameBackend {
             [&](uintptr_t surface,const auto& geometry) noexcept {
                 const auto result=NgreenNativeChecksumReservation::darwinInputSurfaceShape(surface,geometry,admitted);
                 observed("surface-shape",result.valid?0:5);
+                if(ticket<8) {
+                    const auto& shape=result.observed;
+                    os_log_error(OS_LOG_DEFAULT,
+                        "NGRN_CHECKSUM_SURFACE_SHAPE ticket=%{public}u stage=%{public}u native-stage=%{public}u lock=%{public}d unlock=%{public}d format=%{public}llu planes=%{public}llu width=%{public}llu height=%{public}llu bytes=%{public}llu context=%{public}u:%{public}u request=%{public}u:%{public}u",
+                        ticket,static_cast<unsigned>(result.stage),result.nativeStage,result.lockStatus,result.unlockStatus,
+                        static_cast<unsigned long long>(shape.format),static_cast<unsigned long long>(shape.planes),
+                        static_cast<unsigned long long>(shape.width),static_cast<unsigned long long>(shape.height),
+                        static_cast<unsigned long long>(shape.bytes),geometry.contextWidth,geometry.contextHeight,geometry.requestWidth,geometry.requestHeight);
+                    os_log_error(OS_LOG_DEFAULT,
+                        "NGRN_CHECKSUM_SURFACE_PLANES ticket=%{public}u widths=%{public}llu:%{public}llu heights=%{public}llu:%{public}llu pitches=%{public}llu:%{public}llu offsets=%{public}llu:%{public}llu",
+                        ticket,static_cast<unsigned long long>(shape.planeWidth[0]),static_cast<unsigned long long>(shape.planeWidth[1]),
+                        static_cast<unsigned long long>(shape.planeHeight[0]),static_cast<unsigned long long>(shape.planeHeight[1]),
+                        static_cast<unsigned long long>(shape.pitch[0]),static_cast<unsigned long long>(shape.pitch[1]),
+                        static_cast<unsigned long long>(shape.offset[0]),static_cast<unsigned long long>(shape.offset[1]));
+                }
                 if(result.mustStop){observed("surface-unlock-stop",5);_exit(70);}
                 return result.valid;
             },&writableDataMemory,admitted);

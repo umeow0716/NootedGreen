@@ -20264,6 +20264,15 @@ static void testChecksumSurfaceShapeTransaction() {
                 return !(mode==4 || mode==10 || (mode==5 && captures==2));
             });
         assert(!held && result.valid==(mode==0) && result.mustStop==(mode==9 || mode==10));
+        using Stage=InputSurfaceShapeStage;
+        constexpr Stage expected[]={Stage::Ready,Stage::Handle,Stage::AdmissionBeforeLock,
+            Stage::Lock,Stage::CaptureBefore,Stage::CaptureAfter,Stage::Stability,
+            Stage::GeometryBefore,Stage::GeometryAfter,Stage::Unlock,Stage::Unlock,
+            Stage::AdmissionBetweenCaptures,Stage::AdmissionAfterUnlock};
+        assert(result.stage==expected[mode]);
+        if(mode<=3 && mode)assert(result.observed.width==0);
+        else assert(result.observed.width==shape.width);
+        assert(result.nativeStage==0 && result.lockStatus==0 && result.unlockStatus==0);
         assert(locks==(mode==1 || mode==2?0U:1U));
         assert(unlocks==(mode==1 || mode==2 || mode==3?0U:1U));
         if(mode<=3 && mode)assert(!captures);
