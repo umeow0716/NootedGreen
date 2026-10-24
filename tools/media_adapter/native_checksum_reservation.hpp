@@ -2,8 +2,10 @@
 #include "native_avc_reservation.hpp"
 #include "../../NootedGreen/kern_checksum_gen12_commands.hpp"
 
-// Only exact FrameChecksum2190a: its size/builder EAX branches skip native
-// submit on failure. AVC27724 ignores those values and must not use this API.
+// Only exact FrameChecksum2190a. Size refusal precedes native22708.
+// Builder errors skip submit but leave22708's producer mutex held; the actual
+// builder bridge must fail-stop instead of returning into ordinary cleanup.
+// AVC27724 ignores callback EAX and must not use this API.
 namespace NgreenNativeChecksumReservation {
 // Captured data and one typed CF pin, not a surface-content lock, native
 // context lease, backing coherency proof or permission to submit. RootAdmit
@@ -144,7 +146,7 @@ public:
     using Live=bool(*)(void*,const Identity&) noexcept;
     using Read=bool(*)(uintptr_t,void*,size_t) noexcept;
     using Writable=bool(*)(uintptr_t,size_t) noexcept;
-    using Commit=bool(*)(void*,const Identity&) noexcept;
+    using Write=bool(*)(uintptr_t,uintptr_t) noexcept;
     struct Result {bool invoked=false;uint64_t status=5;const char* reason="phase";};
 private:
     enum class Stage {Ready,SizeRunning,Sized,BuilderRunning,Done,Failed};
@@ -154,8 +156,13 @@ private:
     Identity identity_;
     const Request& request_;
     void* authority_=nullptr;Live live_=nullptr;Read read_=nullptr;
-    Writable writable_=nullptr;Commit commit_=nullptr;
-    Stage stage_=Stage::Ready;Scope scope_;
+    Writable writable_=nullptr;Write write_=nullptr;
+    void* input_=nullptr;uintptr_t originalPayload_=0;
+    bool(*inputExcludes_)(const void*,uintptr_t,size_t) noexcept=nullptr;
+    bool(*inputMatches_)(const void*,const OwnedCallbackPhase&) noexcept=nullptr;
+    bool(*inputCommit_)(void*,OwnedCallbackPhase&) noexcept=nullptr;
+    InputGeometry inputGeometry_;
+    Stage stage_=Stage::Ready;bool builderEntered_=false;Scope scope_;
     struct Buffer {
         uintptr_t token=0,connection=0,base=0,end=0,cursor=0;
         uintptr_t sideCursor=0,sideEnd=0,body=0,side=0;
@@ -164,11 +171,11 @@ private:
         return a && b && a<=UINTPTR_MAX-an && b<=UINTPTR_MAX-bn && (a+an<=b || b+bn<=a);
     }
     bool live() const noexcept {
-        const bool admitted=stage_!=Stage::Failed && scope_.bound() && authority_ && live_ && read_ && writable_ && commit_ &&
+        const bool admitted=stage_!=Stage::Failed && scope_.bound() && authority_ && live_ && read_ && writable_ && write_ && input_ && originalPayload_ && inputExcludes_ && inputMatches_ && inputCommit_ &&
             identity_.image && identity_.image<=UINTPTR_MAX-0x754498 &&
             identity_.context && identity_.context<=UINTPTR_MAX-0x4748 &&
             identity_.physical && identity_.request && identity_.generation &&
-            request_.matchesContextIdentity(identity_.context) && live_(authority_,identity_);
+            live_(authority_,identity_) && inputMatches_(input_,*this);
         return admitted && stage_!=Stage::Failed;
     }
     template<class T> bool readContext(size_t offset,T& value) const noexcept {
@@ -180,12 +187,14 @@ private:
         return readContext(0x124,media) && media==1 && readContext(0x12c,shift) && shift==0 &&
             readContext(0x130,inner) && inner==69 && readContext(0x134,side) && side==36 &&
             readContext(0x174,count) && count==1 && readContext(0x178,index) && index==0 &&
-            readContext(0x138,width) && width==1920 && readContext(0x13c,height) && height==1080;
+            readContext(0x138,width) && width==inputGeometry_.contextWidth &&
+            readContext(0x13c,height) && height==inputGeometry_.contextHeight;
     }
     bool outsideInputs(uintptr_t address,size_t bytes) const noexcept {
         uintptr_t payload=0;
         const auto request=request_.callbackRequest();
         return request && read_(request+0x20,&payload,sizeof(payload)) && payload &&
+            inputExcludes_(input_,address,bytes) && disjoint(address,bytes,originalPayload_,24) &&
             disjoint(address,bytes,reinterpret_cast<uintptr_t>(this),sizeof(*this)) &&
             disjoint(address,bytes,identity_.context,0x4748) &&
             disjoint(address,bytes,identity_.request,0x28) &&
@@ -236,15 +245,39 @@ private:
         stage_=running;return true;
     }
 public:
-    OwnedCallbackPhase(Identity identity,const Request& request,void* authority,
-        Live live,Read read,Writable writable,Commit commit) noexcept
-        :identity_(identity),request_(request),authority_(authority),live_(live),read_(read),
-         writable_(writable),commit_(commit),scope_(reinterpret_cast<void*>(identity.context),*this) {}
+    // No raw-request constructor: a typed retained input must outlive this
+    // synchronous phase, including after transfer into its pending ticket.
+    template<class Api>
+    OwnedCallbackPhase(Identity identity,OwnedCallbackInput<Api>& input,void* authority,
+        Live live,Read read,Writable writable,Write write) noexcept
+        :identity_(identity),request_(input.callbackRequest()),authority_(authority),live_(live),read_(read),
+         writable_(writable),write_(write),input_(&input),originalPayload_(input.originalPayload()),
+         inputExcludes_([](const void* object,uintptr_t address,size_t bytes) noexcept {
+             return static_cast<const OwnedCallbackInput<Api>*>(object)->excludesOwnedStorage(address,bytes);
+         }),inputMatches_([](const void* object,const OwnedCallbackPhase& phase) noexcept {
+             const auto& held=*static_cast<const OwnedCallbackInput<Api>*>(object);
+             return held.nativeContext()==phase.identity_.context && held.originalRequest()==phase.identity_.request &&
+                 held.surface() && held.matchesContext(phase.identity_.context,phase.read_,[&]() noexcept {
+                     return phase.live_(phase.authority_,phase.identity_);
+                 });
+         }),inputCommit_([](void* object,OwnedCallbackPhase& phase) noexcept {
+             return static_cast<OwnedCallbackInput<Api>*>(object)->commitNativeOutput(
+                 phase.read_,phase.write_,phase.writable_,[&]() noexcept {
+                     return phase.live_(phase.authority_,phase.identity_);
+                 });
+         }),inputGeometry_(input.geometry()),scope_(reinterpret_cast<void*>(identity.context),*this) {}
     OwnedCallbackPhase(const OwnedCallbackPhase&)=delete;
     OwnedCallbackPhase& operator=(const OwnedCallbackPhase&)=delete;
     bool bound() const noexcept {return stage_==Stage::Ready && live();}
     bool started() const noexcept {return stage_!=Stage::Ready;}
-    bool complete() const noexcept {return stage_==Stage::Done && live();}
+    bool builderStarted() const noexcept {return builderEntered_;}
+    bool callbacksComplete() const noexcept {return stage_==Stage::Done && live();}
+    // Call with ACTUAL native2190a status, before receipt/bind changes the
+    // reservation. A post-builder7 can bypass native mutex release. This is
+    // not a GPU-completion test and must not consume an owned bind status.
+    bool nativeReturnRequiresStop(int nativeStatus) const noexcept {
+        return (builderEntered_ && nativeStatus!=0) || (nativeStatus==0 && !callbacksComplete());
+    }
     bool admitsOuter(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context,uintptr_t request) const noexcept {
         return identity_.image==image && identity_.physical==physical && identity_.generation==generation &&
             identity_.context==context && identity_.request==request && bound();
@@ -269,6 +302,7 @@ public:
         stage_=Stage::Sized;return {true,0,"sized"};
     }
     template<class Invoke> Result builder(uintptr_t context,uintptr_t request,uintptr_t token,Invoke invoke) noexcept {
+        builderEntered_=true; // Native2190a has passed22708 before this callback.
         if(!enter(Stage::Sized,Stage::BuilderRunning,context,request) || !geometry())return failed(false,"builder-admission");
         Buffer before;
         if(!capture(token,before,false))return failed(false,"builder-buffer");
@@ -286,18 +320,29 @@ public:
                 NgreenChecksumGen12::reservedStreamWords) || !live())return failed(true,"trailer");
         // Publish the native output field only through its still-owned input
         // graph. The commit is not GPU completion; pending pins outlive it.
-        if(!commit_(authority_,identity_) || !live())return failed(true,"input-output");
+        if(!inputCommit_(input_,*this) || !live())return failed(true,"input-output");
         stage_=Stage::Done;return {true,0,"built"};
     }
 };
 template<class Invoke>
-uint64_t sizeOrRefuse(uintptr_t context,uintptr_t request,uint32_t* used,uint32_t* capacity,Invoke invoke) noexcept {
-    if(auto* phase=OwnedCallbackPhase::current(context))return phase->size(context,request,used,capacity,invoke).status;
-    return 5;
+OwnedCallbackPhase::Result sizeResult(uintptr_t context,uintptr_t request,uint32_t* used,uint32_t* capacity,Invoke invoke) noexcept {
+    if(auto* phase=OwnedCallbackPhase::current(context))return phase->size(context,request,used,capacity,invoke);
+    return {false,5,"missing-phase"};
 }
 template<class Invoke>
-uint64_t builderOrRefuse(uintptr_t context,uintptr_t request,uintptr_t token,Invoke invoke) noexcept {
-    if(auto* phase=OwnedCallbackPhase::current(context))return phase->builder(context,request,token,invoke).status;
-    return 5;
+uint64_t sizeOrRefuse(uintptr_t context,uintptr_t request,uint32_t* used,uint32_t* capacity,Invoke invoke) noexcept {
+    return sizeResult(context,request,used,capacity,invoke).status;
+}
+template<class Invoke,class Stop>
+uint64_t builderOrStop(uintptr_t context,uintptr_t request,uintptr_t token,Invoke invoke,Stop stop) noexcept {
+    if(auto* phase=OwnedCallbackPhase::current(context)) {
+        const auto result=phase->builder(context,request,token,invoke);
+        if(!result.status)return 0;
+        stop(result);std::abort();
+    }
+    // No call to native227e0: it acquires an event/stamp and submits. Until
+    // a separately proven CPU-only unlock/cancel exists, do not let native
+    // teardown flush partial buffers or retain22708's user mutex forever.
+    stop(OwnedCallbackPhase::Result{false,5,"missing-phase"});std::abort();
 }
 }

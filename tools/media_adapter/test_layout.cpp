@@ -292,9 +292,11 @@ template<class T,class Released> void testNativeOtherInputRetirement(std::unique
     assert(!pending.retainInput(foreign,image,physical,1,context,input) && input.get()==original);
     assert(!pending.retainInput(ticket,image,physical,2,context,input) && input.get()==original);
     assert(pending.retainInput(ticket,image,physical,1,context,input) && !input && !released());
-    assert(pending.onlyRetainedInput(ticket,image,physical,1,context,true));
-    assert(!pending.onlyRetainedInput(foreign,image,physical,1,context,true));
-    assert(!pending.onlyRetainedInput(ticket,image,physical,2,context,true));
+    assert(pending.onlyRetainedInput(ticket,image,physical,1,context,true,original));
+    assert(!pending.onlyRetainedInput(ticket,image,physical,1,context,true,nullptr));
+    assert(!pending.onlyRetainedInput(ticket,image,physical,1,context,true,&ticket));
+    assert(!pending.onlyRetainedInput(foreign,image,physical,1,context,true,original));
+    assert(!pending.onlyRetainedInput(ticket,image,physical,2,context,true,original));
     if(whileRetained)whileRetained(retainedState);
     assert(!input && !released()); // Callback completion cannot release GPU-owned inputs.
     auto duplicate=std::make_unique<unsigned>(7);
@@ -308,8 +310,8 @@ template<class T,class Released> void testNativeOtherInputRetirement(std::unique
     fresh.valid=true;fresh.device=0x5000;fresh.mapping=0x6000;fresh.table=0x7000;
     fresh.channels=10;fresh.active[0]=true;fresh.observed[0]=6;
     assert(pending.bind(ticket,lineage,fence,fresh) && !released());
-    assert(!pending.onlyRetainedInput(ticket,image,physical,1,context,true));
-    assert(pending.onlyRetainedInput(ticket,image,physical,1,context,false));
+    assert(!pending.onlyRetainedInput(ticket,image,physical,1,context,true,original));
+    assert(pending.onlyRetainedInput(ticket,image,physical,1,context,false,original));
     NGVfTaskCompletion::Reply reply{};
     reply.abiVersion=NGVfTaskCompletion::version;reply.bytes=sizeof(reply);reply.registryId=99;reply.recordCount=1;
     std::memcpy(reply.familyUuid,NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid,16);
@@ -326,7 +328,7 @@ template<class T,class Released> void testNativeOtherInputRetirement(std::unique
     assert(!retired && !released() && pending.pending());
     assert(pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh,&retired));
     assert(retired && !pending.pending() && !released()); // No deletion in completion gate.
-    assert(!pending.onlyRetainedInput(ticket,image,physical,1,context,false));
+    assert(!pending.onlyRetainedInput(ticket,image,physical,1,context,false,original));
     assert(!pending.complete(ticket,image,physical,1,context,99,reply,fence,fresh,&retired));
     auto moved=std::move(retired);assert(moved && !retired && !released());
     moved.reset();assert(released()); // Explicit CPU fixture retirement outside all gates.
@@ -17218,13 +17220,14 @@ static void testRetainedVeboxFrames() {
                 } scope{image};
                 const auto pendingFrame=retained->reserveNativeOtherFrame(lease,scope);
                 assert(pendingFrame.serial && !retained->reserveNativeOtherFrame(lease,scope).serial);
-                if(checksumFamily)assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));
                 unsigned inputDrops=0;
                 struct InputOwner {
                     unsigned* drops;explicit InputOwner(unsigned& count) noexcept:drops(&count) {}
                     ~InputOwner() noexcept {++*drops;}
                 };
                 auto input=std::unique_ptr<InputOwner>(new InputOwner(inputDrops));
+                const auto* retainedInput=input.get();
+                if(checksumFamily)assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true,retainedInput));
                 if(avc || checksumFamily) {
                     scope.generation=2;
                     assert(!retained->retainNativeOtherFrameInput(lease,scope,pendingFrame,input) && input);
@@ -17232,16 +17235,17 @@ static void testRetainedVeboxFrames() {
                     assert(!retained->retainNativeOtherFrameInput(foreign,scope,pendingFrame,input) && input);
                     assert(retained->retainNativeOtherFrameInput(lease,scope,pendingFrame,input) && !input && !inputDrops);
                     if(checksumFamily) {
-                        assert(retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));
+                        assert(retained->checksumFrameInputHeld(lease,scope,pendingFrame,true,retainedInput));
+                        assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true,nullptr));
                         FamilyLease nonExclusive{retained,false};
-                        assert(!retained->checksumFrameInputHeld(nonExclusive,scope,pendingFrame,true));
-                        assert(!retained->checksumFrameInputHeld(foreign,scope,pendingFrame,true));
-                        scope.generation=2;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));scope.generation=1;
-                        checksumBackingCount=2;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));checksumBackingCount=1;
-                        checksumBackingIndex=1;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));checksumBackingIndex=0;
-                        parentPhysical+=8;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));parentPhysical-=8;
-                        actualTable+=8;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));actualTable-=8;
-                        assert(retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));
+                        assert(!retained->checksumFrameInputHeld(nonExclusive,scope,pendingFrame,true,retainedInput));
+                        assert(!retained->checksumFrameInputHeld(foreign,scope,pendingFrame,true,retainedInput));
+                        scope.generation=2;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true,retainedInput));scope.generation=1;
+                        checksumBackingCount=2;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true,retainedInput));checksumBackingCount=1;
+                        checksumBackingIndex=1;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true,retainedInput));checksumBackingIndex=0;
+                        parentPhysical+=8;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true,retainedInput));parentPhysical-=8;
+                        actualTable+=8;assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true,retainedInput));actualTable-=8;
+                        assert(retained->checksumFrameInputHeld(lease,scope,pendingFrame,true,retainedInput));
                     }
                 } else input.reset();
                 assert(!retained->nativeOtherWorkQuiescent());
@@ -17258,8 +17262,8 @@ static void testRetainedVeboxFrames() {
                 current.channels=1;current.active[0]=true;current.observed[0]=1;
                 assert(retained->bindNativeOtherFrame(lease,scope,pendingFrame,outputLineage,expected,current));
                 if(checksumFamily) {
-                    assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true));
-                    assert(retained->checksumFrameInputHeld(lease,scope,pendingFrame,false));
+                    assert(!retained->checksumFrameInputHeld(lease,scope,pendingFrame,true,retainedInput));
+                    assert(retained->checksumFrameInputHeld(lease,scope,pendingFrame,false,retainedInput));
                 }
                 NGVfTaskCompletion::Reply completed{};
                 completed.abiVersion=NGVfTaskCompletion::version;completed.bytes=sizeof(completed);
@@ -20113,13 +20117,15 @@ struct ChecksumCallbackFixture {
     alignas(16) std::array<uint8_t,0x4748> context{};
     alignas(16) std::array<uint8_t,0x130> producer{};
     alignas(16) std::array<uint8_t,0x28> originalRequest{};
-    alignas(16) std::array<uint8_t,24> originalPayload{},ownedPayload{};
+    alignas(16) std::array<uint8_t,24> originalPayload{};
     alignas(16) std::array<uint32_t,128> commands{};
     alignas(16) std::array<uint32_t,64> side{};
-    NgreenNativeAvcReservation::OwnedAvcCallbackRequest request;
+    ChecksumInputCfState cf;
+    std::unique_ptr<NgreenNativeChecksumReservation::OwnedCallbackInput<ChecksumInputCfApi>> input;
     uint32_t used=0,capacity=0;
     bool authority=true,quiescent=true,inputHeld=true,prepared=true,writable=true,commitAllowed=true,readAllowed=true;
     unsigned sizeCalls=0,builderCalls=0,commits=0;
+    bool outputWritable=true;
     int mode=0;
     static uintptr_t ptr(const void* p) noexcept {return reinterpret_cast<uintptr_t>(p);}
     template<class T> static void put(uintptr_t at,T value) noexcept {std::memcpy(reinterpret_cast<void*>(at),&value,sizeof(value));}
@@ -20129,7 +20135,8 @@ struct ChecksumCallbackFixture {
     bool readable(uintptr_t a,size_t n) const noexcept {
         return contains(a,n,ptr(context.data()),context.size()) || contains(a,n,ptr(producer.data()),producer.size()) ||
             contains(a,n,ptr(originalRequest.data()),originalRequest.size()) || contains(a,n,ptr(originalPayload.data()),originalPayload.size()) ||
-            contains(a,n,ptr(ownedPayload.data()),ownedPayload.size()) || contains(a,n,ptr(&request),sizeof(request)) ||
+            (input && (contains(a,n,input->callbackPayload(),24) ||
+             contains(a,n,input->callbackRequest().callbackRequest(),0x28))) ||
             contains(a,n,ptr(commands.data()),sizeof(commands)) || contains(a,n,ptr(side.data()),sizeof(side)) ||
             contains(a,n,ptr(&used),4) || contains(a,n,ptr(&capacity),4);
     }
@@ -20137,31 +20144,42 @@ struct ChecksumCallbackFixture {
         if(!active || !active->readAllowed || !out || !active->readable(a,n))return false;
         std::memcpy(out,reinterpret_cast<void*>(a),n);return true;
     }
-    static bool writeable(uintptr_t a,size_t n) noexcept {return active && active->writable && active->readable(a,n);}
+    static bool writeable(uintptr_t a,size_t n) noexcept {
+        return active && active->writable && active->readable(a,n) &&
+            (active->outputWritable || a!=ptr(active->originalPayload.data())+16);
+    }
     static bool live(void* cookie,const Phase::Identity& id) noexcept {
         auto*f=static_cast<ChecksumCallbackFixture*>(cookie);
         return active==f && f->authority && f->quiescent && f->inputHeld && f->prepared &&
             id.image==0x1000000 && id.physical==0x2000000 && id.generation==7 &&
             id.context==ptr(f->context.data()) && id.request==ptr(f->originalRequest.data());
     }
-    static bool commit(void* cookie,const Phase::Identity& id) noexcept {
-        auto*f=static_cast<ChecksumCallbackFixture*>(cookie);assert(live(cookie,id));++f->commits;
+    static bool writeOutput(uintptr_t address,uintptr_t value) noexcept {
+        auto*f=active;assert(f && address==ptr(f->originalPayload.data())+16 && value==0x99000000);++f->commits;
         if(f->mode==39) {
-            auto* phase=Phase::current(id.context);assert(phase);
+            const auto id=f->identity();auto* phase=Phase::current(id.context);assert(phase);
             auto result=phase->builder(id.context,id.request,ptr(f->producer.data())+0x48,
                 [](uintptr_t,uintptr_t,uintptr_t,uintptr_t) noexcept -> uint64_t {assert(false);return 0;});
             assert(result.status==5 && !result.invoked);
         }
-        return f->commitAllowed;
+        if(!f->commitAllowed)return false;
+        put(address,value);return true;
     }
     explicit ChecksumCallbackFixture(int value):mode(value) {
         active=this;commands.fill(0xcccccccc);side.fill(0xdddddddd);
         const auto c=ptr(context.data()),p=ptr(producer.data()),r=ptr(originalRequest.data());
         put(c+0x10,p);put(c+0x124,uint8_t(1));put(c+0x12c,uint8_t(0));
-        put(c+0x174,uint32_t(1));put(c+0x178,uint32_t(0));put(c+0x138,uint32_t(1920));put(c+0x13c,uint32_t(1080));
+        put(c+0x174,uint32_t(1));put(c+0x178,uint32_t(0));put(c+0x138,uint32_t(1920));put(c+0x13c,uint32_t(value==44?1088:1080));
         put(r+0x18,c);put(r+0x20,ptr(originalPayload.data()));
-        assert(request.capture(r,ptr(originalPayload.data()),ptr(ownedPayload.data()),&read,
-            [](uintptr_t,uintptr_t,uintptr_t) noexcept {return true;}));
+        put(ptr(originalPayload.data()),uintptr_t(0x7000));put(ptr(originalPayload.data())+8,uint32_t(1920));
+        put(ptr(originalPayload.data())+12,uint32_t(1080));put(c+0x4720,uintptr_t(0x99000000));
+        input=NgreenNativeChecksumReservation::OwnedCallbackInput<ChecksumInputCfApi>::captureForContext(
+            c,r,ChecksumInputCfApi{&cf},&read,[](uintptr_t surface,const auto& geometry) noexcept {
+                return surface==0x7000 && geometry.contextWidth==1920 &&
+                    (geometry.contextHeight==1080 || geometry.contextHeight==1088) &&
+                    geometry.requestWidth==1920 && geometry.requestHeight==1080;
+            },&writeable,[]() noexcept {return true;});
+        assert(input && cf.holds==1);
         const auto t=p+0x48,b=ptr(commands.data()),s=ptr(side.data());
         put(t+0x08,uintptr_t(19));put(t+0x10,b);put(t+0x18,b+sizeof(commands));put(t+0x20,b+78*4);
         put(t+0x60,s+39*4);put(t+0x68,s+sizeof(side));put(t+0x70,b);put(t+0x78,s);
@@ -20169,7 +20187,7 @@ struct ChecksumCallbackFixture {
     ~ChecksumCallbackFixture(){active=nullptr;}
     Phase::Identity identity() const noexcept {return {0x1000000,0x2000000,ptr(context.data()),ptr(originalRequest.data()),7};}
     uint64_t nativeSize(uintptr_t entry,uintptr_t c,uintptr_t r,uint32_t* body,uint32_t* sideWords) noexcept {
-        assert(entry==0x1000000+0x2c66a && c==ptr(context.data()) && r==request.callbackRequest());++sizeCalls;
+        assert(entry==0x1000000+0x2c66a && c==ptr(context.data()) && r==input->callbackRequest().callbackRequest());++sizeCalls;
         *body=mode==12?73:72;*sideWords=mode==13?35:36;
         put(c+0x130,uint32_t(69));put(c+0x134,uint32_t(36));
         if(mode==30) {
@@ -20182,7 +20200,8 @@ struct ChecksumCallbackFixture {
         return mode==10?31:(mode==11?UINT64_C(1)<<32:0);
     }
     uint64_t nativeBuilder(uintptr_t entry,uintptr_t c,uintptr_t r,uintptr_t token) noexcept {
-        assert(entry==0x1000000+0x2c6f6 && c==ptr(context.data()) && r==request.callbackRequest() && token==ptr(producer.data())+0x48);++builderCalls;
+        assert(entry==0x1000000+0x2c6f6 && c==ptr(context.data()) && r==input->callbackRequest().callbackRequest() && token==ptr(producer.data())+0x48);++builderCalls;
+        put(input->callbackPayload()+16,uintptr_t(mode==48?0x99001000:0x99000000));
         for(unsigned i=0;i<72;++i)commands[i]=0xf0000000U+i;
         for(unsigned i=0;i<36;++i)side[i]=0xa0000000U+i;
         put(token+0x78,ptr(side.data())+(mode==25?35:36)*4);put(c+0x41d8,token);
@@ -20198,13 +20217,20 @@ struct ChecksumCallbackFixture {
         return mode==24?31:0;
     }
 };
+// CPU result inspection only. Actual native builder entry uses builderOrStop
+// because native22708 has already acquired the producer mutex.
+template<class Invoke>
+uint64_t checksumBuilderCpuResult(uintptr_t context,uintptr_t request,uintptr_t token,Invoke invoke) noexcept {
+    auto* phase=NgreenNativeChecksumReservation::OwnedCallbackPhase::current(context);
+    return phase?phase->builder(context,request,token,invoke).status:5;
+}
 void testOwnedChecksumCallbacks() {
     using Fixture=ChecksumCallbackFixture;using Phase=Fixture::Phase;
     assert(NgreenNativeChecksumReservation::sizeOrRefuse(1,2,nullptr,nullptr,
         [](uintptr_t,uintptr_t,uintptr_t,uint32_t*,uint32_t*) noexcept -> uint64_t {assert(false);return 0;})==5);
-    assert(NgreenNativeChecksumReservation::builderOrRefuse(1,2,3,
+    assert(checksumBuilderCpuResult(1,2,3,
         [](uintptr_t,uintptr_t,uintptr_t,uintptr_t) noexcept -> uint64_t {assert(false);return 0;})==5);
-    for(int mode=0;mode<44;++mode) {
+    for(int mode=0;mode<52;++mode) {
         auto f=std::unique_ptr<Fixture>(new Fixture(mode));const auto identity=f->identity();
         const auto context=identity.context,request=identity.request,token=Fixture::ptr(f->producer.data())+0x48;
         uint32_t* used=&f->used;uint32_t* capacity=&f->capacity;uintptr_t actualContext=context,actualRequest=request,actualToken=token;
@@ -20212,7 +20238,7 @@ void testOwnedChecksumCallbacks() {
             case 1:f->authority=false;break;case 2:f->quiescent=false;break;case 3:f->inputHeld=false;break;
             case 4:actualRequest++;break;case 5:actualContext+=8;break;case 6:capacity=used;break;
             case 7:used=reinterpret_cast<uint32_t*>(context+0x200);break;
-            case 8:used=reinterpret_cast<uint32_t*>(f->request.callbackRequest());break;
+            case 8:used=reinterpret_cast<uint32_t*>(f->input->callbackRequest().callbackRequest());break;
             case 9:f->writable=false;break;
             case 14:Fixture::put(context+0x124,uint8_t(0));break;case 15:Fixture::put(context+0x12c,uint8_t(1));break;
             case 16:Fixture::put(context+0x174,uint32_t(2));break;case 17:Fixture::put(context+0x178,uint32_t(1));break;
@@ -20227,40 +20253,75 @@ void testOwnedChecksumCallbacks() {
             case 38:f->prepared=false;break;
             case 40:Fixture::put(context+0x13c,uint32_t(1088));break;
             case 41:f->readAllowed=false;break;
+            case 45:Fixture::put(f->input->callbackPayload()+8,uint32_t(1919));break;
+            case 46:Fixture::put(Fixture::ptr(f->originalPayload.data()),uintptr_t(0x7010));break;
+            case 47:Fixture::put(Fixture::ptr(f->originalRequest.data())+0x18,uintptr_t(1));break;
+            case 49:f->outputWritable=false;break;
         }
-        Phase phase(identity,f->request,f.get(),&Fixture::live,&Fixture::read,&Fixture::writeable,&Fixture::commit);
+        Phase phase(identity,*f->input,f.get(),&Fixture::live,&Fixture::read,&Fixture::writeable,&Fixture::writeOutput);
         const auto size=[&](uintptr_t e,uintptr_t c,uintptr_t r,uint32_t* u,uint32_t* b) noexcept {return f->nativeSize(e,c,r,u,b);};
+        if(mode==51) {
+            f->inputHeld=false;f->input.reset();
+            assert(!phase.bound());
+            assert(NgreenNativeChecksumReservation::sizeOrRefuse(context,request,used,capacity,size)==5 && !f->sizeCalls);
+            continue; // Root liveness denies access BEFORE the now-dead request reference.
+        }
         const auto builder=[&](uintptr_t e,uintptr_t c,uintptr_t r,uintptr_t t) noexcept {return f->nativeBuilder(e,c,r,t);};
         if(mode==31) {
-            Phase nested(identity,f->request,f.get(),&Fixture::live,&Fixture::read,&Fixture::writeable,&Fixture::commit);
+            Phase nested(identity,*f->input,f.get(),&Fixture::live,&Fixture::read,&Fixture::writeable,&Fixture::writeOutput);
             assert(!nested.bound() && phase.bound());
         }
-        if(mode==33) {assert(NgreenNativeChecksumReservation::builderOrRefuse(context,request,token,builder)==5);assert(f->builderCalls==0);continue;}
+        if(mode==33) {assert(checksumBuilderCpuResult(context,request,token,builder)==5);assert(f->builderCalls==0);continue;}
         const auto sized=NgreenNativeChecksumReservation::sizeOrRefuse(actualContext,actualRequest,used,capacity,size);
-        assert(f->sizeCalls==unsigned(!((mode>=1 && mode<=9) || mode==38 || mode==41)));
+        assert(f->sizeCalls==unsigned(!((mode>=1 && mode<=9) || mode==18 || mode==38 || mode==40 || mode==41 || (mode>=45 && mode<=47))));
         if(mode==10)assert(sized==31);if(mode==11)assert(sized==5);
         if(sized) {
-            assert(!phase.complete() && f->builderCalls==0 && f->commits==0);
+            assert(!phase.callbacksComplete() && !phase.builderStarted() && f->builderCalls==0 && f->commits==0);
+            assert(!phase.nativeReturnRequiresStop(int(sized)) && phase.nativeReturnRequiresStop(0));
             assert(f->commands[72]==0xcccccccc && f->commands[78]==0xcccccccc);continue;
         }
         assert(f->used==78 && f->capacity==36);
         uint32_t inner=0;assert(Fixture::read(context+0x130,&inner,4) && inner==69);
         if(mode==29)f->quiescent=false;
+        if(mode==50)f->inputHeld=false;
         if(mode==35)assert(NgreenNativeChecksumReservation::sizeOrRefuse(context,request,used,capacity,size)==5);
-        const auto result=NgreenNativeChecksumReservation::builderOrRefuse(context,request,actualToken,builder);
-        const bool rejectedBeforeBuilder=(mode>=19 && mode<=23) || mode==29 || mode==35 || mode==36 || mode==37;
+        const auto result=checksumBuilderCpuResult(context,request,actualToken,builder);
+        assert(phase.builderStarted());
+        const bool rejectedBeforeBuilder=(mode>=19 && mode<=23) || mode==29 || mode==35 || mode==36 || mode==37 || mode==50;
         assert(f->builderCalls==unsigned(!rejectedBeforeBuilder));
         if(mode==24)assert(result==31);
-        if(mode==0 || mode==31 || mode==32) {
-            assert(result==0 && phase.complete() && f->sizeCalls==1 && f->builderCalls==1 && f->commits==1);
+        assert(phase.nativeReturnRequiresStop(int(result))==(result!=0));
+        if(mode==0 || mode==31 || mode==32 || mode==44) {
+            assert(result==0 && phase.callbacksComplete() && f->sizeCalls==1 && f->builderCalls==1 && f->commits==1);
+            assert(!phase.nativeReturnRequiresStop(0) && phase.nativeReturnRequiresStop(7));
             assert(NgreenChecksumGen12::reservationMatches(f->commands.data(),80));
             for(unsigned i=0;i<72;++i)assert(f->commands[i]==0xf0000000U+i);
-            if(mode==32)assert(NgreenNativeChecksumReservation::builderOrRefuse(context,request,token,builder)==5 && f->builderCalls==1);
-        } else assert(result!=0 && !phase.complete());
+            if(mode==32)assert(checksumBuilderCpuResult(context,request,token,builder)==5 && f->builderCalls==1);
+        } else assert(result!=0 && !phase.callbacksComplete());
         assert(f->sizeCalls==1 && f->builderCalls<=1);
         assert(f->commands[78]==0xcccccccc && f->commands[79]==0xcccccccc); // Native END reserve untouched.
     }
-    puts("CHECKSUM_CALLBACK_PHASE_CPU_OK modes=44 native_once/body78/side36/no_END_write/refusal_and_reentry=PASS GPU_NOT_EXECUTED");
+    for(int mode=0;mode<4;++mode) {
+        const pid_t child=fork();assert(child>=0);
+        if(!child) {
+            rlimit core{0,0};assert(setrlimit(RLIMIT_CORE,&core)==0);
+            auto f=std::unique_ptr<Fixture>(new Fixture(mode==2?24:0));
+            const auto id=f->identity();const auto token=Fixture::ptr(f->producer.data())+0x48;
+            Phase phase(id,*f->input,f.get(),&Fixture::live,&Fixture::read,&Fixture::writeable,&Fixture::writeOutput);
+            auto size=[&](uintptr_t e,uintptr_t c,uintptr_t r,uint32_t* u,uint32_t* b) noexcept {return f->nativeSize(e,c,r,u,b);};
+            auto builder=[&](uintptr_t e,uintptr_t c,uintptr_t r,uintptr_t t) noexcept {return f->nativeBuilder(e,c,r,t);};
+            if(mode!=0)assert(NgreenNativeChecksumReservation::sizeOrRefuse(id.context,id.request,&f->used,&f->capacity,size)==0);
+            if(mode==3)f->commitAllowed=false;
+            const auto result=NgreenNativeChecksumReservation::builderOrStop(id.context,id.request,token,builder,
+                [mode](const auto& result) noexcept {assert(result.status);if(mode!=3)_exit(77);});
+            assert(mode==1 && result==0 && phase.callbacksComplete());_exit(0);
+        }
+        int status=0;assert(waitpid(child,&status,0)==child);
+        if(mode==1)assert(WIFEXITED(status) && WEXITSTATUS(status)==0);
+        else if(mode==3)assert(WIFSIGNALED(status) && WTERMSIG(status)==SIGABRT);
+        else assert(WIFEXITED(status) && WEXITSTATUS(status)==77);
+    }
+    puts("CHECKSUM_CALLBACK_PHASE_CPU_OK modes=52 native_once/body78/side36/no_END_write/refusal_and_reentry=PASS GPU_NOT_EXECUTED");
 }
 
 int main() {

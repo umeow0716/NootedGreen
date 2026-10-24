@@ -5670,21 +5670,31 @@ uint64_t dispatchOwnedAvcBuilder(void* context,const void* input,void* token) no
         },[]() noexcept {_exit(70);});
 }
 // Exact checksum2190a checks both callback EAX values before submit. A
-// missing/refused owned phase returns5; do not use AVC's ignored-EAX stop API.
+// size refusal returns5 before22708. Builder refusal must stop: native
+// skips submit but otherwise leaves the producer mutex/counter held.
 uint64_t dispatchOwnedChecksumSize(void* context,const void* input,uint32_t* used,uint32_t* capacity) noexcept {
-    return NgreenNativeChecksumReservation::sizeOrRefuse(reinterpret_cast<uintptr_t>(context),
+    const auto result=NgreenNativeChecksumReservation::sizeResult(reinterpret_cast<uintptr_t>(context),
         reinterpret_cast<uintptr_t>(input),used,capacity,
         [](uintptr_t entry,uintptr_t object,uintptr_t request,uint32_t* body,uint32_t* side) noexcept {
             using Native=uint64_t(*)(uintptr_t,uintptr_t,uint32_t*,uint32_t*);
             return reinterpret_cast<Native>(entry)(object,request,body,side);
         });
+    if(result.status)os_log_error(OS_LOG_DEFAULT,
+        "NGRN_CHECKSUM_CALLBACK_REFUSED phase=size stage=%{public}s status=%{public}llu invoked=%{public}d",
+        result.reason,static_cast<unsigned long long>(result.status),int(result.invoked));
+    return result.status;
 }
 uint64_t dispatchOwnedChecksumBuilder(void* context,const void* input,void* token) noexcept {
-    return NgreenNativeChecksumReservation::builderOrRefuse(reinterpret_cast<uintptr_t>(context),
+    return NgreenNativeChecksumReservation::builderOrStop(reinterpret_cast<uintptr_t>(context),
         reinterpret_cast<uintptr_t>(input),reinterpret_cast<uintptr_t>(token),
         [](uintptr_t entry,uintptr_t object,uintptr_t request,uintptr_t buffer) noexcept {
             using Native=uint64_t(*)(uintptr_t,uintptr_t,uintptr_t);
             return reinterpret_cast<Native>(entry)(object,request,buffer);
+        },[](const auto& result) noexcept {
+            os_log_error(OS_LOG_DEFAULT,
+                "NGRN_CHECKSUM_CALLBACK_REFUSED phase=builder stage=%{public}s status=%{public}llu invoked=%{public}d stop=1",
+                result.reason,static_cast<unsigned long long>(result.status),int(result.invoked));
+            _exit(70);
         });
 }
 struct NativeOtherFrameBackend {

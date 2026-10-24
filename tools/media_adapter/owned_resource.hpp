@@ -25777,6 +25777,7 @@ public:
             auto value=value_;auto destroy=destroy_;quarantine();if(value)destroy(value);
         }
         explicit operator bool() const noexcept {return value_!=nullptr;}
+        bool owns(const void* expected) const noexcept {return expected && value_==expected;}
     };
     class RetiredInputs {
         friend class TglNativeOtherPendingFrames;
@@ -25833,11 +25834,11 @@ public:
     // callbacks write single backing. false only proves this same input is
     // still held after native return/bind; it is NOT permission to reuse it.
     bool onlyRetainedInput(Ticket ticket,uintptr_t image,uintptr_t physical,
-        uint64_t generation,uintptr_t context,bool requireReserved) const noexcept {
+        uint64_t generation,uintptr_t context,bool requireReserved,const void* expectedInput) const noexcept {
         if(ticket.owner!=this || ticket.slot>=records_.size() || !ticket.serial)return false;
         const auto& current=records_[ticket.slot];
         if(current.serial!=ticket.serial || current.image!=image || current.physical!=physical ||
-            current.generation!=generation || current.context!=context || !current.input ||
+            current.generation!=generation || current.context!=context || !current.input.owns(expectedInput) ||
             (current.state!=State::Reserved && (requireReserved || current.state!=State::Bound)))return false;
         for(const auto& other:records_)if(&other!=&current && other.state!=State::Empty)return false;
         return true;
@@ -27635,9 +27636,12 @@ public:
         return state_->nativeOtherPending.retainInput(ticket,state_->image,state_->physical,
             state_->generation,state_->context,input);
     }
+    // Outside-dispatch query only. dispatchScopedFrame already holds busy;
+    // its callback needs an authority borrowed from that same protected
+    // interval, not a recursive call here and never a bypass of enter().
     template<class ExclusiveLease,class Scope>
     bool checksumFrameInputHeld(const ExclusiveLease& lease,Scope& scope,
-        TglNativeOtherPendingFrames::Ticket ticket,bool requireReserved) noexcept {
+        TglNativeOtherPendingFrames::Ticket ticket,bool requireReserved,const void* expectedInput) noexcept {
         if(!state_ || lease.get()!=this || !lease.exclusive() || !enter())return false;
         Unlock unlock{state_->busy};
         uintptr_t current=0;uint32_t count=0,index=0;
@@ -27654,7 +27658,7 @@ public:
             state_->read(state_->context+0x174,&count,4) && count==1 &&
             state_->read(state_->context+0x178,&index,4) && index==0 &&
             state_->nativeOtherPending.onlyRetainedInput(ticket,state_->image,state_->physical,
-                state_->generation,state_->context,requireReserved);
+                state_->generation,state_->context,requireReserved,expectedInput);
     }
     template<class OwnerLease,class Scope>
     bool bindNativeOtherFrame(const OwnerLease& lease,Scope& scope,TglNativeOtherPendingFrames::Ticket ticket,
