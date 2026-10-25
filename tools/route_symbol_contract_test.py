@@ -301,7 +301,8 @@ def main() -> None:
     # Exact Main tail thunk and original heap-bind receipt routes are opt-in.
     assert "__ZN23IGAccelVideoContextMain16endCommandStreamER24IOAccelCommandStreamInfo" in routes
     assert "__ZN19IGAccelVideoContext13bind_resourceER24IOAccelCommandStreamInfojPP15IGAccelResourcePyPjb" in routes
-    expected_route_count = 181
+    assert "__ZN19IGAccelVideoContext12unmap_memoryEPP11IOMemoryMap" in routes
+    expected_route_count = 182
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"

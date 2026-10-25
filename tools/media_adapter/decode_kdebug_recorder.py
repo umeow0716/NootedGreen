@@ -36,7 +36,7 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          23: 'cpu_map_header_pair', 24: 'cpu_map_list_boundary',
          25: 'native_render_surface_output', 26: 'native_pool_allocation_metadata',
          27: 'native_pool_allocation_chunk',28: 'native_rect_input_metadata',
-         29: 'native_rect_input_chunk'}
+         29: 'native_rect_input_chunk', 30: 'native_leased_ssh_cpu_pair'}
 RESOURCE_SLOTS = {
     1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
     2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
@@ -44,6 +44,16 @@ RESOURCE_SLOTS = {
 
 
 def validate_leaf(kind, words):
+    if kind == 30:
+        if (len(words)!=296 or words[0:2]!=[1,576] or words[4]&~15 or
+                any(words[5:8]) or words[2] not in (0,576) or words[3] not in (0,576) or
+                bool(words[4]&2)!=(words[2]==576) or bool(words[4]&4)!=(words[3]==576) or
+                words[4]&6 and not words[4]&1 or
+                words[4]&8 and (words[4]!=15 or words[8:152]!=words[152:296]) or
+                not words[2] and any(words[8:152]) or not words[3] and any(words[152:296])):
+            raise ValueError('invalid native leased SSH CPU pair')
+        return
+
     if kind == 28:
         if (len(words)!=160 or words[0]!=1 or words[1]>272 or words[2]>272 or
                 words[3]>24 or words[4]>24 or words[6]&~31 or words[7]!=4096 or words[8]!=32 or
@@ -800,6 +810,20 @@ class DiskSink:
 
 
 def self_test():
+    ssh=[1,576,576,576,15,0,0,0]+list(range(144))*2
+    validate_leaf(30,ssh)
+    for index,value in ((0,2),(1,575),(2,575),(3,575),(4,31),(5,1),(6,1),(7,1),(295,999)):
+        bad=list(ssh);bad[index]=value
+        try:validate_leaf(30,bad)
+        except ValueError:pass
+        else:raise AssertionError('SSH wire negative accepted')
+    refused=[1,576,0,0,0,0,0,0]+[0]*288
+    validate_leaf(30,refused)
+    for index in (8,151,152,295):
+        bad=list(refused);bad[index]=1
+        try:validate_leaf(30,bad)
+        except ValueError:pass
+        else:raise AssertionError('refused SSH payload accepted')
     for text in (False,True):
         data=b'owned bytes\nsecond line\n'
         hashed=SourceDigest(io.BytesIO(data))

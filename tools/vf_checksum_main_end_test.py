@@ -42,6 +42,12 @@ def test_qualification(root):
       expected=bytes(int(x.strip(),0) for x in literal.group(1).split(','))
       actual=read(0x36602+offset,count)
       assert len(expected)==count and expected==actual, name
+     literal=re.search(r'static constexpr uint8_t unmapPrefix\[\]=\{([^}]+)\}',s)
+     expected=bytes(int(x.strip(),0) for x in literal.group(1).split(','))
+     assert len(expected)==15 and expected==read(0x77e92,15)
+     call=read(0x36602+0x243,5)
+     assert call[0]==0xe8 and 0x36602+0x248+struct.unpack_from('<i',call,1)[0]==0x77e92
+     assert 'gVfChecksumSshUnmapCaller=mediaKernel+0x248;' in s
      assert 'gVfChecksumSurfaceBindCaller=mediaKernel+0x1db;' in s
      assert struct.unpack('<q',read(0xd2b70+0xa48,8))[0]==0x36a6c
     prefix=r'''
@@ -149,7 +155,7 @@ int main(){
 def test_end(root):
     source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
     a=source.index('void Gen11::vfChecksumEnd(');b=source.index('\nvoid Gen11::vfMediaEnd(',a);body=source[a:b].replace('reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0))','fakeCaller')
-    a=source.index('\tstatic bool bindLocked(');b=source.index('\tstatic VfMediaSubmission *find(',a);scope=source[a:b]
+    a=source.index('\tstatic bool bindLocked(');b=source.index('    static VfMediaSubmission *findCurrent(',a);scope=source[a:b]
     # Complete 72-DW captured checksum CPU body; not a GPU execution fixture.
     words=(0x11000001,0x0,0x80000040,0x7a000004,0x1010a0,0x0,0x0,0x0,0x0,0x69041301,0x6101000e,0x1,0x0,0x0,0x40a6e001,0x0,0x40a6c001,0x0,0x1,0x0,0x40a6d001,0x0,0x1,0x1001,0x1,0x1001,0x70000007,0x0,0x0,0x1bf1000,0x0,0x7c0002,0x0,0x0,0x0,0x70010002,0x0,0x40,0x400,0x70020002,0x0,0x40,0x0,0x7103000f,0x0,0x0,0x0,0x0,0x0,0x0,0x7ff07ff,0x20044,0x0,0x0,0x10000,0x1,0x20044,0x0,0x44,0x20000,0x7a000004,0x1010a0,0x0,0x0,0x0,0x0,0x7a000004,0x89c,0x0,0x0,0x0,0x0,)
     prefix=r'''
@@ -304,7 +310,7 @@ def test_end(root):
 def test_surface_bind_returns(root):
     source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
     a=source.index('bool Gen11::vfChecksumBindResource(')
-    b=source.index('\nvoid Gen11::vfChecksumEnd(',a)
+    b=source.index('\nvoid Gen11::vfChecksumUnmap(',a)
     body=source[a:b].replace('reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0))','fakeCaller')
     prefix=r'''
 #include "NootedGreen/kern_checksum_gen12_commands.hpp"
@@ -452,9 +458,99 @@ int main(){
     subprocess.run([*CXX,'-std=c++17','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(ROOT),str(path),'-o',str(root/'checksum_adoption_actual')],check=True)
     subprocess.run([str(root/'checksum_adoption_actual')],check=True)
 
+def test_ssh_unmap(root):
+    source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
+    a=source.index('void Gen11::vfChecksumUnmap(');b=source.index('\nvoid Gen11::vfChecksumEnd(',a)
+    body=source[a:b].replace('reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0))','fakeCaller')
+    q=source.index('                    const auto pureGetter=')
+    qualifier=source[q:source.index('                    const bool qualifiedMap=',q)]
+    prefix=r'''
+#include <cassert>
+#include <initializer_list>
+#include <cstdint>
+#include <cstring>
+#include "NootedGreen/kern_checksum_gen12_commands.hpp"
+using mach_vm_address_t=uintptr_t;
+template<class T> T& getMember(void*p,size_t n){return *reinterpret_cast<T*>(static_cast<uint8_t*>(p)+n);}
+#define PANIC_COND(c,...) do{if(c)throw 1;}while(0)
+#define SYSLOG(...) do{}while(0)
+#define FunctionCast(f,p) reinterpret_cast<decltype(&Gen11::f)>(p)
+bool opt=true,flight=true,surface=true,released=false,present=true;unsigned nativeCalls=0,records=0,copies=0,mode=0;
+bool checkKernelArgument(const char*){return opt;}bool vfFlightEnabled(){return flight;}
+uintptr_t fakeCaller=0x5550,gVfChecksumSshUnmapCaller=0x5550,gVfChecksumMainVtable=0x8880;
+uintptr_t gVfChecksumMapAddressGetter=0x1110,gVfChecksumMapLengthGetter=0x2220,gVfBatchCpuCopy=0;
+uintptr_t pmap=0x9990,gVfCpuKernelPmapStore=0x9990;uintptr_t*gVfCpuKernelPmapSlot=&pmap;
+volatile uint32_t gVfChecksumSshCaptureCount=0;
+bool OSCompareAndSwap(uint32_t a,uint32_t b,volatile uint32_t*p){if(*p!=a)return false;*p=b;return true;}
+alignas(16) uint8_t context[0x600]{};int accelerator=0;void*gVfAccelerator=&accelerator;
+struct VfMediaSubmission {
+ bool failed=false,translating=false;void*accelerator=&::accelerator;void*context=::context;uint32_t flightGroup=4;
+ struct{unsigned seen=7;bool failed=false;uint64_t gpu[3]={0,0,0x444000};}checksumHeaps;
+ struct{bool admitted(){return surface;}}checksumSurfaces;
+}entry;
+struct VfMediaSubmissionScope{static VfMediaSubmission*findCurrent(){return present?&entry:nullptr;}};
+NgreenChecksumGen12::NativeSshMapPair saved;
+void vfFlightRecord(uint32_t kind,uint32_t group,uint64_t id,const volatile uint32_t*data,uint32_t count){
+ assert(!released && kind==30 && group==4 && id==0x444000 && count==296);++records;
+ auto*out=reinterpret_cast<uint32_t*>(&saved);for(unsigned i=0;i<count;++i)out[i]=data[i];
+}
+constexpr uintptr_t slot=0xffff800000001000ULL,map=slot+0x1000,table=slot+0x2000,cpu=slot+0x3000;
+uint64_t nofault(uint64_t at,uint64_t output,uint64_t bytes){
+ assert(!released);auto*out=reinterpret_cast<void*>(output);uint64_t value=0;
+ if(at==slot)value=map;else if(at==map)value=table;
+ else if(at==table+0x118)value=mode==16?0x3330:0x1110;
+ else if(at==table+0x128)value=0x2220;else if(at==map+0x28)value=cpu;else if(at==map+0x30)value=4096;
+ else if(at==cpu && bytes==576){++copies;if(mode==17)return 0;auto*w=static_cast<uint32_t*>(out);
+  for(unsigned i=0;i<144;++i)w[i]=i;if(mode==18 && copies==2)w[143]^=1;return bytes;}
+ else {assert(false);return 0;}
+ assert(bytes==8);std::memcpy(out,&value,8);return 8;
+}
+void original(void**p){assert(p==reinterpret_cast<void**>(slot));assert(!released);++nativeCalls;released=true;}
+struct Gen11{static Gen11*callback;uintptr_t oVfChecksumUnmap=0;static void vfChecksumUnmap(void**);};
+Gen11 owner;Gen11*Gen11::callback=&owner;
+'''
+    suffix=r'''
+int main(){
+ for(unsigned offset: {0x28U,0x30U}) {
+  const uint8_t expected[]={0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,uint8_t(offset),0x5d,0xc3};
+  uint8_t raw[10];std::memcpy(raw,expected,10);
+  assert(pureGetter(reinterpret_cast<uintptr_t>(raw),expected,10));
+  assert(!pureGetter(0,expected,10) && !pureGetter(reinterpret_cast<uintptr_t>(raw),expected,9));
+  for(unsigned i=0;i<10;++i)for(unsigned bit=0;bit<8;++bit) {
+   raw[i]^=1U<<bit;assert(!pureGetter(reinterpret_cast<uintptr_t>(raw),expected,10));raw[i]^=1U<<bit;
+  }
+ }
+ for(mode=0;mode<20;++mode){
+  opt=flight=surface=present=true;released=false;copies=nativeCalls=records=0;gVfChecksumSshCaptureCount=0;
+  fakeCaller=0x5550;pmap=gVfCpuKernelPmapStore;gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&nofault);
+  owner.oVfChecksumUnmap=reinterpret_cast<uintptr_t>(&original);entry=VfMediaSubmission{};
+  getMember<uintptr_t>(context,0)=gVfChecksumMainVtable;getMember<void*>(context,0x5a8)=gVfAccelerator;
+  if(mode==1)fakeCaller=0;if(mode==2)opt=false;if(mode==3)flight=false;if(mode==4)gVfBatchCpuCopy=0;
+  if(mode==5)pmap=0;if(mode==6)present=false;if(mode==7)entry.failed=true;if(mode==8)entry.translating=true;
+  if(mode==9)entry.accelerator=nullptr;if(mode==10)entry.checksumHeaps.seen=6;if(mode==11)entry.checksumHeaps.failed=true;
+  if(mode==12)surface=false;if(mode==13)getMember<uintptr_t>(context,0)=0;
+  if(mode==14)getMember<void*>(context,0x5a8)=nullptr;if(mode==15)gVfChecksumSshCaptureCount=2;
+  if(mode==19)owner.oVfChecksumUnmap=0;
+  bool panic=false;try{Gen11::vfChecksumUnmap(reinterpret_cast<void**>(slot));}catch(int){panic=true;}
+  assert(panic==(mode==19) && nativeCalls==(mode==19?0:1));
+  assert(records==((mode==0 || (mode>=16 && mode<=18))?1:0));
+  if(mode==0)assert(saved.flags==15 && copies==2);
+  if(mode==16)assert(saved.flags==0 && copies==0);
+  if(mode==17)assert(saved.flags==1 && copies==1);
+  if(mode==18)assert(saved.flags==7 && copies==2);
+ }
+}
+'''
+    path=root/'checksum_unmap_actual.cpp';path.write_text(prefix+body+qualifier+suffix)
+    executable=root/'checksum_unmap_actual'
+    subprocess.run([*CXX,'-std=c++14','-fsanitize=address,undefined','-I'+str(ROOT),str(path),'-o',str(executable)],check=True)
+    subprocess.run([str(executable)],check=True)
+    print('Actual native SSH unmap observer:20 cases/native-once/copy-before-release/short-read and changed pair PASS; CPU-only')
+
 if __name__=="__main__":
     with tempfile.TemporaryDirectory(prefix="ngreen-checksum-main-end-") as directory:
         destination=Path(directory)
+        test_ssh_unmap(destination)
         test_qualification(destination)
         test_readiness(destination)
         test_end(destination)

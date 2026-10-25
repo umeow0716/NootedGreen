@@ -20606,7 +20606,42 @@ void testOwnedChecksumCallbacks() {
     puts("CHECKSUM_CALLBACK_PHASE_CPU_OK modes=60 native_once/body78/side36/no_END_write/refusal_and_reentry=PASS GPU_NOT_EXECUTED");
 }
 
+void testNativeChecksumSshMapLease() {
+    constexpr uint64_t slot=0xffff800000001000ULL,map=slot+0x1000,table=slot+0x2000,cpu=slot+0x3000;
+    for(unsigned mode=0;mode<20;++mode) {
+        unsigned copies=0;uint32_t expected[144];for(unsigned i=0;i<144;++i)expected[i]=0xabc00000U+i;
+        const auto read=[&](uintptr_t at,void *out,size_t bytes)->uint64_t {
+            uint64_t value=0;bool scalar=true;
+            if(at==slot)value=(mode==3?0x2000:mode==13 && copies?map+8:map);
+            else if(at==map)value=mode==4?0x3000:mode==19?UINT64_MAX-7:table;
+            else if(at==table+0x118)value=mode==5?0x100:0x1110;
+            else if(at==table+0x128)value=mode==6?0x200:0x2220;
+            else if(at==map+0x28)value=mode==7?0x4000:mode==17?UINT64_MAX-7:mode==14 && copies?cpu+8:cpu;
+            else if(at==map+0x30)value=mode==8?575:mode==9?64U*1024U*1024U+1:mode==15 && copies?8192:4096;
+            else if(at==cpu && bytes==576) {
+                scalar=false;++copies;
+                if((mode==10 && copies==1)||(mode==11 && copies==2))return 0;
+                if(mode==16)return 577;
+                std::memcpy(out,expected,576);
+                if(mode==12 && copies==2)static_cast<uint32_t*>(out)[143]^=1;
+            } else {assert(false && "unqualified CPU extent read");return 0;}
+            if(scalar){assert(bytes==8);std::memcpy(out,&value,8);}return bytes;
+        };
+        const auto r=NgreenChecksumGen12::captureNativeSshMap(mode==2?0:mode==18?slot+1:slot,
+            0x1110,0x2220,read,[&](){return mode!=1;});
+        assert(r.version==1 && r.bytes==576 && !r.atomic && !r.reserved0 && !r.reserved1);
+        if(mode==0)assert(r.flags==15 && r.first==576 && r.second==576 && copies==2 &&
+            !std::memcmp(r.before,expected,576) && !std::memcmp(r.after,expected,576));
+        else assert(!(r.flags&8));
+        if(!r.first)for(auto w:r.before)assert(!w);
+        if(!r.second)for(auto w:r.after)assert(!w);
+        if(mode==12)assert(r.flags==7 && r.first==576 && r.second==576);
+        if(mode==13 || mode==14 || mode==15)assert(r.flags==3 && r.first==576 && !r.second);
+    }
+}
+
 int main() {
+    testNativeChecksumSshMapLease();
     testChecksumSurfaceLayout();
     testChecksumSurfaceCacheTransaction();
     testChecksumSurfaceHeapObservation();

@@ -81,6 +81,49 @@ inline bool reservationMatches(const volatile uint32_t* commands,size_t words) n
     // independently prove FIFO will overwrite its END/NOOP pair.
     return true;
 }
+// Original Main unmap call owns a live IOMemoryMap until its release.
+// The caller qualifies exact native caller/getter bodies and supplies a
+// nofault CPU reader. No getter, retain, mapping or GPU operation occurs here.
+struct NativeSshMapPair {
+    uint32_t version=1,bytes=576,first=0,second=0,flags=0,atomic=0,reserved0=0,reserved1=0;
+    uint32_t before[144]{},after[144]{};
+};
+template<class Read,class Live>
+inline NativeSshMapPair captureNativeSshMap(uintptr_t outSlot,uintptr_t addressGetter,
+    uintptr_t lengthGetter,Read read,Live live) noexcept {
+    NativeSshMapPair result{};
+    const auto pointer=[](uint64_t x) noexcept {return (x>>47)==0x1ffffU && !(x&7U);};
+    uint64_t map=0,table=0,address=0,length=0,va=0,len=0;
+    if(!pointer(outSlot) || !live() || read(outSlot,&map,8)!=8 || !pointer(map) ||
+       map>UINTPTR_MAX-0x38 || read(map,&table,8)!=8 || !pointer(table) ||
+       table>UINTPTR_MAX-0x130 || read(table+0x118,&va,8)!=8 || read(table+0x128,&len,8)!=8 ||
+       va!=addressGetter || len!=lengthGetter || !addressGetter || !lengthGetter ||
+       read(map+0x28,&address,8)!=8 || read(map+0x30,&length,8)!=8 ||
+       !pointer(address) || length<result.bytes || length>64U*1024U*1024U ||
+       address>UINTPTR_MAX-length || !live())return result;
+    result.flags=1;
+    const auto same=[&]() noexcept {
+        uint64_t object=0,vtable=0,a=0,n=0,v=0,l=0;
+        return live() && read(outSlot,&object,8)==8 && object==map &&
+            read(map,&vtable,8)==8 && vtable==table &&
+            read(table+0x118,&v,8)==8 && v==va && read(table+0x128,&l,8)==8 && l==len &&
+            read(map+0x28,&a,8)==8 && a==address && read(map+0x30,&n,8)==8 && n==length && live();
+    };
+    if(!same())return result;
+    const auto first=read(address,result.before,result.bytes);
+    result.first=first<=result.bytes?uint32_t(first):0;
+    if(first!=result.bytes){for(auto &w:result.before)w=0;result.first=0;return result;}
+    result.flags|=2;
+    if(!same())return result;
+    const auto second=read(address,result.after,result.bytes);
+    result.second=second<=result.bytes?uint32_t(second):0;
+    if(second!=result.bytes){for(auto &w:result.after)w=0;result.second=0;return result;}
+    result.flags|=4;
+    bool equal=true;for(unsigned i=0;i<144;++i)if(result.before[i]!=result.after[i])equal=false;
+    if(same() && equal)result.flags|=8;
+    return result;
+}
+static_assert(sizeof(NativeSshMapPair)==296U*4U,"native SSH CPU receipt extent");
 struct HeapAddresses {
     uint64_t surface=0,dynamic=0,instruction=0;
     uint32_t kernelSlot=0;

@@ -225,6 +225,8 @@ static mach_vm_address_t gVfChecksumMainVtable = 0;
 static mach_vm_address_t gVfChecksumBindCallers[3] {};
 static mach_vm_address_t gVfChecksumSurfaceBindCaller = 0;
 static volatile uint32_t gVfChecksumSurfaceBindLogCount = 0;
+static mach_vm_address_t gVfChecksumSshUnmapCaller=0,gVfChecksumMapAddressGetter=0,gVfChecksumMapLengthGetter=0;
+static volatile uint32_t gVfChecksumSshCaptureCount=0;
 mach_vm_address_t gVfMediaEndCaller = 0;
 bool gVfCaptureStreamResetBound = false;
 mach_vm_address_t gVfMediaKernelMappedMemoryVtable = 0;
@@ -1370,6 +1372,15 @@ public:
 		// not permission for the diagnostic AVC cancellation continuation.
 		return used==offset+count*4 && words==0 && sideband==0 && valid==0;
 	}
+    static VfMediaSubmission *findCurrent() {
+        if(!gVfContextLock)return nullptr;
+        void *owner=reinterpret_cast<void *>(current_thread());VfMediaSubmission *found=nullptr;
+        const auto state=IOSimpleLockLockDisableInterrupt(gVfContextLock);
+        for(auto &entry:gVfMediaSubmissions)if(entry.thread==owner && entry.scratch) {
+            if(found){found=nullptr;break;}found=&entry;
+        }
+        IOSimpleLockUnlockEnableInterrupt(gVfContextLock,state);return found;
+    }
 	static VfMediaSubmission *find(void *context) {
 		void *owner=reinterpret_cast<void *>(current_thread());
 		VfMediaSubmission *found=nullptr;
@@ -3503,6 +3514,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				gVfChecksumPublicationRouteReady=false;
 				for(unsigned i=0;i<3;++i)gVfChecksumBindCallers[i]=0;
                 gVfChecksumSurfaceBindCaller=0;
+                gVfChecksumSshUnmapCaller=gVfChecksumMapAddressGetter=gVfChecksumMapLengthGetter=0;
 				const auto mediaEnd=patcher.solveSymbol(index,
 					"__ZN24IGAccelVideoContextMedia16endCommandStreamER24IOAccelCommandStreamInfo",address,size);
 				const auto videoEnd=patcher.solveSymbol(index,
@@ -3680,6 +3692,37 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                         "ngreen","Cannot install checksum Main end route");
                     gVfChecksumMainVtable=mainTable+16;
                     OSSynchronizeIO();
+                }
+                if(checkKernelArgument("-ngreenchecksumcapture") && checksumEndQualified) {
+                    const auto unmap=patcher.solveSymbol(index,"__ZN19IGAccelVideoContext12unmap_memoryEPP11IOMemoryMap",address,size);
+                    const auto vaGetter=patcher.solveSymbol(KernelPatcher::KernelID,"__ZN11IOMemoryMap17getVirtualAddressEv");
+                    const auto lenGetter=patcher.solveSymbol(KernelPatcher::KernelID,"__ZN11IOMemoryMap9getLengthEv");
+                    patcher.clearError(); // Optional observation failure must not poison native routing.
+                    static constexpr uint8_t unmapPrefix[]={0x55,0x48,0x89,0xe5,0x53,0x50,0x48,0x89,0xfb,0x48,0x8b,0x3f,0x48,0x85,0xff};
+                    static constexpr uint8_t vaBody[]={0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x28,0x5d,0xc3};
+                    static constexpr uint8_t lenBody[]={0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x30,0x5d,0xc3};
+                    const auto pureGetter=[](mach_vm_address_t getter,const uint8_t *expected,size_t bytes) {
+                        if(!getter || bytes!=10)return false;
+                        const auto *code=reinterpret_cast<const volatile uint8_t*>(getter);
+                        for(size_t i=0;i<bytes;++i)if(code[i]!=expected[i])return false;
+                        return true;
+                    };
+                    const bool qualifiedMap=vaGetter && lenGetter &&
+                        bindAnchor(unmap,0,unmapPrefix,sizeof(unmapPrefix)) && callTarget(mediaKernel,0x243)==unmap &&
+                        pureGetter(vaGetter,vaBody,sizeof(vaBody)) && pureGetter(lenGetter,lenBody,sizeof(lenBody));
+                    if(qualifiedMap) {
+                        KernelPatcher::RouteRequest route[]={
+                            {"__ZN19IGAccelVideoContext12unmap_memoryEPP11IOMemoryMap",vfChecksumUnmap,this->oVfChecksumUnmap}
+                        };
+                        patcher.clearError();
+                        PANIC_COND(!patcher.routeMultiple(index,route,address,size) || !this->oVfChecksumUnmap,
+                            "ngreen","Cannot install original native SSH release observation");
+                        gVfChecksumMapAddressGetter=vaGetter;gVfChecksumMapLengthGetter=lenGetter;
+                        OSSynchronizeIO();gVfChecksumSshUnmapCaller=mediaKernel+0x248;
+                    }
+                    SYSLOG("ngreen","V393: native leased SSH CPU observation bound=%u",
+                        qualifiedMap && gVfBatchCpuCopy && gVfCpuKernelPmapSlot &&
+                        *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore?1U:0U);
                 }
                 // Capability advertises the qualified KERNEL half only. The
                 // independent selector4 client still prepares its owned program,
@@ -7031,6 +7074,47 @@ bool Gen11::vfChecksumBindResource(void *that,void *stream,uint32_t identifier,
         rooted?reinterpret_cast<uintptr_t>(getMember<void*>(that,0x578)):0,
         rooted?reinterpret_cast<uintptr_t>(getMember<void*>(that,0x5a0)):0);
     return result;
+}
+
+// The exact original Main call still owns its IOMemoryMap here. Copy
+// before ORIGINAL unmap releases it; never create/retain another map or call
+// a getter. Qualified pure getters prove the two native object field offsets.
+void Gen11::vfChecksumUnmap(void **map)
+{
+    PANIC_COND(!callback || !callback->oVfChecksumUnmap,"ngreen","Missing original checksum unmap continuation");
+    const auto caller=reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0));
+    if(checkKernelArgument("-ngreenchecksumcapture") && vfFlightEnabled() && gVfBatchCpuCopy &&
+       gVfCpuKernelPmapSlot && *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore &&
+       gVfChecksumSshUnmapCaller && caller==gVfChecksumSshUnmapCaller) {
+        auto *entry=VfMediaSubmissionScope::findCurrent();
+        const auto live=[&]() {
+            return entry && entry==VfMediaSubmissionScope::findCurrent() && !entry->failed && !entry->translating &&
+                entry->accelerator==gVfAccelerator && entry->checksumHeaps.seen==7 && !entry->checksumHeaps.failed &&
+                entry->checksumSurfaces.admitted() && entry->context &&
+                getMember<mach_vm_address_t>(entry->context,0)==gVfChecksumMainVtable &&
+                getMember<void*>(entry->context,0x5a8)==entry->accelerator &&
+                gVfCpuKernelPmapSlot && *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore;
+        };
+        if(live()) {
+            uint32_t ticket=2;
+            for(unsigned attempt=0;attempt<4;++attempt) {
+                const uint32_t n=gVfChecksumSshCaptureCount;if(n>=2)break;
+                if(OSCompareAndSwap(n,n+1,&gVfChecksumSshCaptureCount)){ticket=n;break;}
+            }
+            if(ticket<2) {
+                using Copy=uint64_t (*)(uint64_t,uint64_t,uint64_t);
+                const auto copy=reinterpret_cast<Copy>(gVfBatchCpuCopy);
+                const auto receipt=NgreenChecksumGen12::captureNativeSshMap(reinterpret_cast<uintptr_t>(map),
+                    gVfChecksumMapAddressGetter,gVfChecksumMapLengthGetter,
+                    [&](uintptr_t at,void *out,size_t bytes) {return copy(at,reinterpret_cast<uintptr_t>(out),bytes);},live);
+                vfFlightRecord(30,entry->flightGroup,entry->checksumHeaps.gpu[2],
+                    reinterpret_cast<const uint32_t*>(&receipt),sizeof(receipt)/4U);
+                SYSLOG("ngreen","V393: native leased SSH CPU pair ticket=%u bytes=%u copied=%u:%u flags=%x atomic=0",
+                    ticket,receipt.bytes,receipt.first,receipt.second,receipt.flags);
+            }
+        }
+    }
+    FunctionCast(vfChecksumUnmap,callback->oVfChecksumUnmap)(map); // Exactly once, including refusals.
 }
 
 void Gen11::vfChecksumEnd(void *that,void *stream)
