@@ -5,6 +5,11 @@ compiler="${CXX:-clang++}"
 task_output="$(mktemp -d "${TMPDIR:-/tmp}/ngreen-static.XXXXXX")"
 printf 'Diagnostic directory: %s\n' "$task_output"
 failed=0
+if python3 -B tools/media_adapter/checksum_isa.py --self-test; then
+    printf 'PASS native Gen11-to-Gen12 checksum ISA footprint regressions\n'
+else
+    failed=1
+fi
 if python3 -B tools/vf_checksum_main_end_test.py; then
     printf 'PASS actual checksum Main end/CPU refusal and native qualification tests\n'
 else
