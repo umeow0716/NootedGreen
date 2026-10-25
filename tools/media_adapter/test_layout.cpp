@@ -20385,6 +20385,7 @@ struct ChecksumCallbackFixture {
     alignas(16) std::array<uint8_t,24> originalPayload{};
     alignas(16) std::array<uint32_t,128> commands{};
     alignas(16) std::array<uint32_t,64> side{};
+    alignas(4096) std::array<uint8_t,4096> dsh{},ish{};
     alignas(4096) std::array<uint32_t,1024> ssh{};
     ChecksumInputCfState cf;
     std::unique_ptr<NgreenNativeChecksumReservation::OwnedCallbackInput<ChecksumInputCfApi>> input;
@@ -20405,6 +20406,7 @@ struct ChecksumCallbackFixture {
              contains(a,n,input->callbackRequest().callbackRequest(),0x28))) ||
             contains(a,n,ptr(commands.data()),sizeof(commands)) || contains(a,n,ptr(side.data()),sizeof(side)) ||
             contains(a,n,ptr(ssh.data()),sizeof(ssh)) ||
+            contains(a,n,ptr(dsh.data()),dsh.size()) || contains(a,n,ptr(ish.data()),ish.size()) ||
             contains(a,n,ptr(&used),4) || contains(a,n,ptr(&capacity),4);
     }
     static bool read(uintptr_t a,void* out,size_t n) noexcept {
@@ -20578,6 +20580,26 @@ void testOwnedChecksumCallbacks() {
             assert(NgreenChecksumGen12::reservationMatches(f->commands.data(),80));
             assert(f->ssh[17]==0x04000000 && f->ssh[33]==0x04000000 && f->ssh[49]==0x06000000);
             for(unsigned i=0;i<72;++i)assert(f->commands[i]==0xf0000000U+i);
+            if(mode==0) {
+                const auto code=Fixture::ptr(f->ish.data()),dynamic=Fixture::ptr(f->dsh.data());
+                const std::array<uint32_t,18> header{{64,1536,2,3136,3,1,0,0,0,0,0,1,4096,1,
+                    uint32_t(code),uint32_t(code>>32),0x8000,0}};
+                const std::array<uint32_t,8> pool{{0,1,4096,1,uint32_t(dynamic),uint32_t(dynamic>>32),0x9000,0}};
+                const std::array<uint64_t,2> pointers{{code,code+1536}};const std::array<uint32_t,2> sizes{{1480,1576}};
+                Fixture::put(context+0x160,header);Fixture::put(context+0x1198,pool);
+                Fixture::put(context+0x4390,pointers);Fixture::put(context+0x4590,sizes);Fixture::put(context+0x41c8,uint32_t(1));
+                std::memcpy(f->ish.data()+1536,NgreenFrameChecksumGen12::isa.data(),1576);
+                unsigned emitted=0;const auto emit=[&](unsigned role,unsigned copy,const uint8_t* data,size_t bytes) {
+                    assert(role>=1 && role<=5 && copy<2);++emitted;
+                    if(role==2)assert(bytes==4096 && !std::memcmp(data+1536,NgreenFrameChecksumGen12::isa.data(),1576));
+                    if(role==4)assert(bytes==312 && !std::memcmp(data,f->commands.data(),312));
+                    if(role==5)assert(bytes==144 && !std::memcmp(data,f->side.data(),144));
+                };
+                assert(phase.observePreparedHeaps(token,emit)==0 && emitted==10);
+                f->readAllowed=false;emitted=0;
+                assert(phase.observePreparedHeaps(token,emit)!=0 && !emitted);f->readAllowed=true;
+                assert(phase.callbacksComplete() && !phase.nativeReturnRequiresStop(0) && f->sizeCalls==1 && f->builderCalls==1);
+            }
             if(mode==32)assert(checksumBuilderCpuResult(context,request,token,builder)==5 && f->builderCalls==1);
         } else assert(result!=0 && !phase.callbacksComplete());
         assert(f->sizeCalls==1 && f->builderCalls<=1);
@@ -20640,7 +20662,60 @@ void testNativeChecksumSshMapLease() {
     }
 }
 
+void testPreparedChecksumHeapObservation() {
+    constexpr uintptr_t context=0x100000,dsh=0x200000,ish=0x300000,ssh=0x400000;
+    for(unsigned mode=0;mode<25;++mode) {
+        std::array<uint8_t,0x5000> object{};std::array<uint8_t,4096> dynamic{},instruction{},surface{};
+        for(unsigned i=0;i<4096;++i){dynamic[i]=uint8_t(i);instruction[i]=uint8_t(i+1);surface[i]=uint8_t(i+2);}
+        const auto put=[&](size_t at,const auto& value){std::memcpy(object.data()+at,&value,sizeof(value));};
+        std::array<uint32_t,18> head{{64,1536,2,3136,3,1,0,0,0,0,0,1,4096,1,uint32_t(ish),0,0x1230,0}};
+        std::array<uint32_t,8> pool{{0,1,4096,1,uint32_t(dsh),0,0x4560,0}};
+        NgreenNativeChecksumReservation::SurfaceHeapObservation view{0,1,4096,1,ssh,0x5670,0x6780,0x7890};
+        std::array<uint64_t,2> pointers{{ish,ish+1536}};std::array<uint32_t,2> sizes{{1480,1576}};
+        uint32_t curbes=1;
+        if(mode==4)head[2]=1;if(mode==5)head[3]=3135;if(mode==6)pool[2]=2048;
+        if(mode==7)view.bytes=512;if(mode==8)pointers[1]++;if(mode==9)sizes[1]=1575;
+        if(mode==10)curbes=2;if(mode==11)pool[4]++;if(mode==12)pool[4]=ish;
+        if(mode==13)pool[4]=context+4096;if(mode==21)pool[4]=0;
+        if(mode==23){head[14]=0xfffff000;head[15]=0xffffffff;pointers[0]=UINTPTR_MAX-4095;pointers[1]=0;}
+        if(mode==24)head[7]=1; // Actual native builder increments its frame counter.
+        put(0x160,head);put(0x1198,pool);put(0x21a8,view);put(0x4390,pointers);put(0x4590,sizes);put(0x41c8,curbes);
+        unsigned dataReads=0,emissions=0;bool alive=mode!=1;
+        const auto read=[&](uintptr_t at,void* out,size_t bytes) {
+            if(at>=context && at<=context+object.size() && bytes<=context+object.size()-at) {
+                if(mode==3 && at==context+0x160)return false;
+                if(mode==22 && at==context+0x4590)return false;
+                std::memcpy(out,object.data()+at-context,bytes);
+                if(mode==18 && dataReads>=3 && at==context+0x160)static_cast<uint32_t*>(out)[3]^=1;
+                return true;
+            }
+            const uint8_t* source=nullptr;
+            if(at==dsh && bytes==4096)source=dynamic.data();
+            if(at==ish && bytes==4096)source=instruction.data();
+            if(at==ssh && bytes==4096)source=surface.data();
+            assert(source && "observer requested unknown CPU extent");++dataReads;
+            if((mode==15 && dataReads==1)||(mode==16 && dataReads==4))return false;
+            std::memcpy(out,source,bytes);
+            if(mode==17 && dataReads==6)static_cast<uint8_t*>(out)[0]^=1;
+            if(mode==19 && dataReads==6)alive=false;
+            return true;
+        };
+        const auto status=NgreenNativeChecksumReservation::observePreparedHeapBytes(mode==2?0:context,
+            read,[&](){return alive;},[&](uintptr_t,size_t){return mode!=14;},
+            [&](unsigned role,unsigned copy,const uint8_t* data,size_t bytes) {
+                assert(role>=1 && role<=3 && copy<2);
+                const auto* expected=role==1?dynamic.data():role==2?instruction.data():surface.data();
+                assert(bytes==4096 && !std::memcmp(data,expected,bytes));
+                ++emissions;if(mode==20)alive=false;
+            });
+        if(mode==0 || mode==24)assert(status==0 && dataReads==6 && emissions==6);
+        else if(mode==20)assert(status==7 && emissions==6);
+        else assert(status && !emissions);
+    }
+}
+
 int main() {
+    testPreparedChecksumHeapObservation();
     testNativeChecksumSshMapLease();
     testChecksumSurfaceLayout();
     testChecksumSurfaceCacheTransaction();

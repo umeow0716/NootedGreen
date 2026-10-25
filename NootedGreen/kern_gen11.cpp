@@ -226,7 +226,9 @@ static mach_vm_address_t gVfChecksumBindCallers[3] {};
 static mach_vm_address_t gVfChecksumSurfaceBindCaller = 0;
 static volatile uint32_t gVfChecksumSurfaceBindLogCount = 0;
 static mach_vm_address_t gVfChecksumSshUnmapCaller=0,gVfChecksumMapAddressGetter=0,gVfChecksumMapLengthGetter=0;
-static volatile uint32_t gVfChecksumSshCaptureCount=0;
+static volatile uint32_t gVfChecksumSshCaptureCount=0,gVfChecksumHeapBindingCount=0;
+// Two per-boot owned CPU buffers; no allocation inside the native release.
+static NgreenChecksumGen12::NativeSshMapPagePair gVfChecksumSshPagePairs[2];
 mach_vm_address_t gVfMediaEndCaller = 0;
 bool gVfCaptureStreamResetBound = false;
 mach_vm_address_t gVfMediaKernelMappedMemoryVtable = 0;
@@ -3737,6 +3739,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                     SYSLOG("ngreen","V392: checksum-only pre-submit cancellation armed=%u",
                         gVfChecksumPublicationRouteReady && gVfChecksumSurfaceBindCaller &&
                         gVfCaptureStreamResetBound && !checkKernelArgument("-ngreencaptureonly")?1U:0U);
+                if(checkKernelArgument("-ngreenchecksumcapture"))
+                    SYSLOG("ngreen","V393: complete checksum CPU observation armed=%u",
+                        gVfChecksumPublicationRouteReady && gVfChecksumSurfaceBindCaller && gVfCaptureStreamResetBound &&
+                        gVfChecksumSshUnmapCaller && gVfChecksumMapAddressGetter && gVfChecksumMapLengthGetter &&
+                        gVfBatchCpuCopy && gVfCpuKernelPmapSlot && *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore &&
+                        !checkKernelArgument("-ngreencaptureonly")?1U:0U);
 
 
 
@@ -7035,6 +7043,25 @@ bool Gen11::vfObserveRingBatch(void *that,uint64_t gpu,uint32_t stamp,
 	return FunctionCast(vfObserveRingBatch,callback->oVfObserveRingBatch)(that,gpu,stamp,cpu,count,flagA,flagB);
 }
 
+static void vfFlightChecksumPageChunk(uint32_t group,uint64_t identity,uint32_t ticket,
+    uint32_t part,uint32_t flags,const uint32_t *data) {
+    const uint32_t prefix[]={1,ticket,part,4096,4096,flags,0,0};
+    NGFlightTrace::emitCpuWordsPrefixed(gVfFlightTrace,[]() {
+        return static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightRecordSerial));
+    },31,group,identity,prefix,arrsize(prefix),data,1024);
+}
+
+static void vfObserveChecksumHeapBinding(unsigned slot,uint32_t identifier,bool recorded,uint64_t gpu,uint32_t pitch) {
+    if(!checkKernelArgument("-ngreenchecksumcapture"))return;
+    for(unsigned attempt=0;attempt<4;++attempt) {
+        const uint32_t n=gVfChecksumHeapBindingCount;if(n>=6)return;
+        if(OSCompareAndSwap(n,n+1,&gVfChecksumHeapBindingCount)) {
+            SYSLOG("ngreen","V393: native checksum heap slot=%u id=%x recorded=%u gpu=%08x:%08x pitch=%u atomic=0",
+                slot,identifier,recorded?1U:0U,uint32_t(gpu>>32),uint32_t(gpu),pitch);return;
+        }
+    }
+}
+
 bool Gen11::vfChecksumBindResource(void *that,void *stream,uint32_t identifier,
     void **resource,uint64_t *gpuAddress,uint32_t *pitch,bool write)
 {
@@ -7073,6 +7100,9 @@ bool Gen11::vfChecksumBindResource(void *that,void *stream,uint32_t identifier,
         copied?*gpuAddress:0,copied?*pitch:0,write,
         rooted?reinterpret_cast<uintptr_t>(getMember<void*>(that,0x578)):0,
         rooted?reinterpret_cast<uintptr_t>(getMember<void*>(that,0x5a0)):0);
+    const bool recorded=!entry->checksumHeaps.failed && entry->checksumHeaps.seen==((1U<<(slot+1))-1U);
+    vfObserveChecksumHeapBinding(slot,identifier,recorded,recorded?entry->checksumHeaps.gpu[slot]:0,
+        recorded?entry->checksumHeaps.pitch[slot]:0);
     return result;
 }
 
@@ -7104,11 +7134,17 @@ void Gen11::vfChecksumUnmap(void **map)
             if(ticket<2) {
                 using Copy=uint64_t (*)(uint64_t,uint64_t,uint64_t);
                 const auto copy=reinterpret_cast<Copy>(gVfBatchCpuCopy);
-                const auto receipt=NgreenChecksumGen12::captureNativeSshMap(reinterpret_cast<uintptr_t>(map),
+                auto& receipt=gVfChecksumSshPagePairs[ticket];
+                NgreenChecksumGen12::captureNativeSshMapInto(receipt,reinterpret_cast<uintptr_t>(map),
                     gVfChecksumMapAddressGetter,gVfChecksumMapLengthGetter,
                     [&](uintptr_t at,void *out,size_t bytes) {return copy(at,reinterpret_cast<uintptr_t>(out),bytes);},live);
-                vfFlightRecord(30,entry->flightGroup,entry->checksumHeaps.gpu[2],
-                    reinterpret_cast<const uint32_t*>(&receipt),sizeof(receipt)/4U);
+                const uint32_t metadata[]={2,receipt.bytes,receipt.first,receipt.second,receipt.flags,0,ticket+1,0};
+                vfFlightRecord(30,entry->flightGroup,entry->checksumHeaps.gpu[2],metadata,sizeof(metadata)/sizeof(metadata[0]));
+                for(unsigned part=0;part<2;++part) {
+                    if((part?receipt.second:receipt.first)!=4096)continue;
+                    vfFlightChecksumPageChunk(entry->flightGroup,entry->checksumHeaps.gpu[2],ticket+1,
+                        part,receipt.flags,part?receipt.after:receipt.before);
+                }
                 SYSLOG("ngreen","V393: native leased SSH CPU pair ticket=%u bytes=%u copied=%u:%u flags=%x atomic=0",
                     ticket,receipt.bytes,receipt.first,receipt.second,receipt.flags);
             }

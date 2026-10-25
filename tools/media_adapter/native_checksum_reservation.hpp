@@ -155,6 +155,70 @@ struct SurfaceHeapObservation {
         output=before;return true;
     }
 };
+// Snapshot original CPU allocations only while the caller owns the native
+// producer/context/input. No resource getter, mapping or GPU operation. A
+// rejection is observational and must never replace the native callback result.
+template<class Read,class Admit,class Exclude,class Emit>
+uint32_t observePreparedHeapBytes(uintptr_t context,Read read,Admit admit,Exclude exclude,Emit emit) noexcept {
+    if(!context || (context&7U) || context>UINTPTR_MAX-0x4748 || !admit())return 1;
+    struct Header {
+        std::array<uint32_t,18> head{};std::array<uint32_t,8> pool{};
+        SurfaceHeapObservation surface{};std::array<uint64_t,2> pointers{};
+        std::array<uint32_t,2> sizes{};uint32_t curbeCount=0;
+        bool operator==(const Header& o) const noexcept {
+            return head==o.head && pool==o.pool && !std::memcmp(&surface,&o.surface,sizeof(surface)) &&
+                pointers==o.pointers && sizes==o.sizes && curbeCount==o.curbeCount;
+        }
+    };
+    const auto header=[&](Header& h) noexcept {
+        return admit() && read(context+0x160,h.head.data(),sizeof(h.head)) &&
+            read(context+0x1198,h.pool.data(),sizeof(h.pool)) &&
+            SurfaceHeapObservation::capture(context,read,admit,h.surface) &&
+            read(context+0x4390,h.pointers.data(),sizeof(h.pointers)) &&
+            read(context+0x4590,h.sizes.data(),sizeof(h.sizes)) &&
+            read(context+0x41c8,&h.curbeCount,4) && admit();
+    };
+    Header expected{},again{};
+    if(!header(expected))return 2;
+    // Native2cc16 advances context+17c after building. It is sampled and
+    // compared for stability, never mistaken for appendProgram's initial0.
+    const auto& h=expected.head;const auto& pool=expected.pool;
+    const uintptr_t ish=uint64_t(h[14])|(uint64_t(h[15])<<32);
+    const uintptr_t dsh=uint64_t(pool[4])|(uint64_t(pool[5])<<32);
+    const uintptr_t ssh=expected.surface.cpu;
+    if(h[0]!=64 || h[1]!=1536 || h[2]!=2 || h[3]!=3136 || h[4]!=3 || h[5]!=1 || h[6] ||
+       h[10] || h[11]!=1 || h[12]!=4096 || h[13]!=1 || (!h[16] && !h[17]) ||
+       pool[0] || pool[1]!=1 || pool[2]!=4096 || pool[3]!=1 || (!pool[6] && !pool[7]) ||
+       expected.surface.bytes!=4096 || expected.curbeCount!=1 ||
+       expected.pointers[0]!=ish || ish>UINTPTR_MAX-4096 || expected.pointers[1]!=ish+1536 ||
+       expected.sizes[0]!=1480 || expected.sizes[1]!=1576)return 3;
+    const uintptr_t base[]={dsh,ish,ssh};
+    const auto disjoint=[](uintptr_t a,size_t n,uintptr_t b,size_t m) noexcept {
+        return a && b && a<=UINTPTR_MAX-n && b<=UINTPTR_MAX-m && (a+n<=b || b+m<=a);
+    };
+    for(unsigned i=0;i<3;++i) {
+        if(!base[i] || (base[i]&4095U) || !disjoint(base[i],4096,context,0x4748) ||
+           !exclude(base[i],4096) || !admit())return 4;
+        for(unsigned j=0;j<i;++j)if(!disjoint(base[i],4096,base[j],4096))return 4;
+    }
+    // Full private4KiB CPU allocations include IDD/CURBE, original and appended
+    // ISA/padding, and every source surface slot. SSH is pre-KMD relocation.
+    std::array<uint8_t,4096> dshA{},dshB{};
+    std::array<uint8_t,4096> ishA{},ishB{};
+    std::array<uint8_t,4096> sshA{},sshB{};
+    if(!read(dsh,dshA.data(),dshA.size()) || !read(ish,ishA.data(),ishA.size()) ||
+       !read(ssh,sshA.data(),sshA.size()) || !header(again) || !(again==expected))return 5;
+    if(!read(dsh,dshB.data(),dshB.size()) || !read(ish,ishB.data(),ishB.size()) ||
+       !read(ssh,sshB.data(),sshB.size()) || !header(again) || !(again==expected))return 5;
+    const bool stable=dshA==dshB && ishA==ishB && sshA==sshB;
+    if(!stable || !admit())return 6;
+    for(unsigned copy=0;copy<2;++copy) {
+        emit(1U,copy,copy?dshB.data():dshA.data(),dshA.size());
+        emit(2U,copy,copy?ishB.data():ishA.data(),ishA.size());
+        emit(3U,copy,copy?sshB.data():sshA.data(),sshA.size());
+    }
+    return admit()?0:7; // CPU pair equality is NOT GPU atomicity/coherence.
+}
 // Runs only after original builder setup, under its existing producer lock
 // and the prepared exclusive owner. A failure after entry MUST fail-stop;
 // do not roll back or flush an ambiguous native stream.
@@ -333,7 +397,7 @@ private:
     bool(*inputMatches_)(const void*,const OwnedCallbackPhase&) noexcept=nullptr;
     bool(*inputCommit_)(void*,OwnedCallbackPhase&) noexcept=nullptr;
     InputGeometry inputGeometry_;
-    Stage stage_=Stage::Ready;bool builderEntered_=false,sizeSucceeded_=false;Scope scope_;
+    Stage stage_=Stage::Ready;bool builderEntered_=false,sizeSucceeded_=false;uintptr_t preparedSide_=0;Scope scope_;
     struct Buffer {
         uintptr_t token=0,connection=0,base=0,end=0,cursor=0;
         uintptr_t sideCursor=0,sideEnd=0,body=0,side=0;
@@ -456,6 +520,34 @@ public:
             identity_.context==context && identity_.request==request && bound();
     }
     static OwnedCallbackPhase* current(uintptr_t context) noexcept {return Scope::get(reinterpret_cast<void*>(context));}
+    template<class Emit> uint32_t observePreparedHeaps(uintptr_t token,Emit emit) noexcept {
+        Buffer buffer{},after{};
+        if(stage_!=Stage::Done || !callbacksComplete() || !live() || !geometry() || !capture(token,buffer,true) ||
+           !preparedSide_ || preparedSide_>UINTPTR_MAX-144 || buffer.side!=preparedSide_+144 ||
+           !outsideInputs(preparedSide_,144))return 1;
+        std::array<uint8_t,312> bodyA{},bodyB{};std::array<uint8_t,144> sideA{},sideB{};
+        if(!read_(buffer.body,bodyA.data(),bodyA.size()) || !read_(preparedSide_,sideA.data(),sideA.size()) || !live())return 8;
+        const auto result=observePreparedHeapBytes(identity_.context,read_,[&]() noexcept {
+            return stage_==Stage::Done && live() && geometry();
+        },[&](uintptr_t at,size_t bytes) noexcept {
+            uintptr_t producer=0;
+            return live() && outsideInputs(at,bytes) && readContext(0x10,producer) &&
+                disjoint(at,bytes,producer,0x130) &&
+                disjoint(at,bytes,buffer.base,size_t(buffer.end-buffer.base)) &&
+                disjoint(at,bytes,preparedSide_,39*4);
+        },emit);
+        if(result)return result;
+        if(!read_(buffer.body,bodyB.data(),bodyB.size()) || !read_(preparedSide_,sideB.data(),sideB.size()) ||
+           bodyA!=bodyB || sideA!=sideB || !live() || !capture(token,after,true) ||
+           after.token!=buffer.token || after.connection!=buffer.connection || after.base!=buffer.base ||
+           after.end!=buffer.end || after.cursor!=buffer.cursor || after.body!=buffer.body ||
+           after.side!=buffer.side || after.sideCursor!=buffer.sideCursor || after.sideEnd!=buffer.sideEnd)return 8;
+        for(unsigned copy=0;copy<2;++copy) {
+            emit(4U,copy,copy?bodyB.data():bodyA.data(),bodyA.size());
+            emit(5U,copy,copy?sideB.data():sideA.data(),sideA.size());
+        }
+        return stage_==Stage::Done && live()?0:7;
+    }
     template<class Invoke> Result size(uintptr_t context,uintptr_t request,
         uint32_t* used,uint32_t* capacity,Invoke invoke) noexcept {
         const auto u=reinterpret_cast<uintptr_t>(used),c=reinterpret_cast<uintptr_t>(capacity);
@@ -510,7 +602,7 @@ public:
         // Publish the native output field only through its still-owned input
         // graph. The commit is not GPU completion; pending pins outlive it.
         if(!inputCommit_(input_,*this) || !live())return failed(true,"input-output");
-        stage_=Stage::Done;return {true,0,"built"};
+        preparedSide_=before.side;stage_=Stage::Done;return {true,0,"built"};
     }
 };
 template<class Invoke>

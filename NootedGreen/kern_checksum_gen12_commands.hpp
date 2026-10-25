@@ -84,14 +84,17 @@ inline bool reservationMatches(const volatile uint32_t* commands,size_t words) n
 // Original Main unmap call owns a live IOMemoryMap until its release.
 // The caller qualifies exact native caller/getter bodies and supplies a
 // nofault CPU reader. No getter, retain, mapping or GPU operation occurs here.
-struct NativeSshMapPair {
-    uint32_t version=1,bytes=576,first=0,second=0,flags=0,atomic=0,reserved0=0,reserved1=0;
-    uint32_t before[144]{},after[144]{};
+template<unsigned Words> struct NativeSshMapPairOf {
+    static_assert(Words==144 || Words==1024,"qualified SSH copy extent");
+    uint32_t version=Words==1024?2:1,bytes=Words*4,first=0,second=0,flags=0,atomic=0,reserved0=0,reserved1=0;
+    uint32_t before[Words]{},after[Words]{};
 };
-template<class Read,class Live>
-inline NativeSshMapPair captureNativeSshMap(uintptr_t outSlot,uintptr_t addressGetter,
+template<unsigned Words,class Read,class Live>
+inline void captureNativeSshMapInto(NativeSshMapPairOf<Words>& result,uintptr_t outSlot,uintptr_t addressGetter,
     uintptr_t lengthGetter,Read read,Live live) noexcept {
-    NativeSshMapPair result{};
+    result.version=Words==1024?2:1;result.bytes=Words*4;
+    result.first=result.second=result.flags=result.atomic=result.reserved0=result.reserved1=0;
+    for(unsigned i=0;i<Words;++i)result.before[i]=result.after[i]=0;
     const auto pointer=[](uint64_t x) noexcept {return (x>>47)==0x1ffffU && !(x&7U);};
     uint64_t map=0,table=0,address=0,length=0,va=0,len=0;
     if(!pointer(outSlot) || !live() || read(outSlot,&map,8)!=8 || !pointer(map) ||
@@ -100,7 +103,7 @@ inline NativeSshMapPair captureNativeSshMap(uintptr_t outSlot,uintptr_t addressG
        va!=addressGetter || len!=lengthGetter || !addressGetter || !lengthGetter ||
        read(map+0x28,&address,8)!=8 || read(map+0x30,&length,8)!=8 ||
        !pointer(address) || length<result.bytes || length>64U*1024U*1024U ||
-       address>UINTPTR_MAX-length || !live())return result;
+       address>UINTPTR_MAX-length || !live())return;
     result.flags=1;
     const auto same=[&]() noexcept {
         uint64_t object=0,vtable=0,a=0,n=0,v=0,l=0;
@@ -109,21 +112,27 @@ inline NativeSshMapPair captureNativeSshMap(uintptr_t outSlot,uintptr_t addressG
             read(table+0x118,&v,8)==8 && v==va && read(table+0x128,&l,8)==8 && l==len &&
             read(map+0x28,&a,8)==8 && a==address && read(map+0x30,&n,8)==8 && n==length && live();
     };
-    if(!same())return result;
+    if(!same())return;
     const auto first=read(address,result.before,result.bytes);
     result.first=first<=result.bytes?uint32_t(first):0;
-    if(first!=result.bytes){for(auto &w:result.before)w=0;result.first=0;return result;}
+    if(first!=result.bytes){for(auto &w:result.before)w=0;result.first=0;return;}
     result.flags|=2;
-    if(!same())return result;
+    if(!same())return;
     const auto second=read(address,result.after,result.bytes);
     result.second=second<=result.bytes?uint32_t(second):0;
-    if(second!=result.bytes){for(auto &w:result.after)w=0;result.second=0;return result;}
+    if(second!=result.bytes){for(auto &w:result.after)w=0;result.second=0;return;}
     result.flags|=4;
-    bool equal=true;for(unsigned i=0;i<144;++i)if(result.before[i]!=result.after[i])equal=false;
+    bool equal=true;for(unsigned i=0;i<Words;++i)if(result.before[i]!=result.after[i])equal=false;
     if(same() && equal)result.flags|=8;
-    return result;
+    return;
 }
-static_assert(sizeof(NativeSshMapPair)==296U*4U,"native SSH CPU receipt extent");
+using NativeSshMapPair=NativeSshMapPairOf<144>;
+using NativeSshMapPagePair=NativeSshMapPairOf<1024>;
+template<class Read,class Live>
+inline NativeSshMapPair captureNativeSshMap(uintptr_t slot,uintptr_t va,uintptr_t length,Read read,Live live) noexcept {
+    NativeSshMapPair result{};captureNativeSshMapInto(result,slot,va,length,read,live);return result;
+}
+static_assert(sizeof(NativeSshMapPair)==296U*4U && sizeof(NativeSshMapPagePair)==2056U*4U,"native SSH CPU receipt extent");
 struct HeapAddresses {
     uint64_t surface=0,dynamic=0,instruction=0;
     uint32_t kernelSlot=0;

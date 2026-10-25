@@ -6,6 +6,8 @@ CPU instruction-footprint tests do not prove GPU execution or PF safety.
 """
 import argparse
 import hashlib
+import json
+import sqlite3
 from pathlib import Path
 import re
 import struct
@@ -220,8 +222,217 @@ def self_test():
         pass
     else:
         raise ValueError('unknown semantic instruction option ignored')
+    heap_decoder_self_test()
     print('CHECKSUM_ISA_FOOTPRINT_OK native-Gen11 old-loop-limit=0 fixed=240 '
           '5-legacy/20-independent-negatives no-GPU-proof')
+
+
+def decode_heap_lines(lines):
+    """Strict owned CPU-source pairs; never GPU/completion attestation."""
+    totals={1:4096,2:4096,3:4096,4:312,5:144};groups={}
+    identity=re.compile(r'VTEncoderXPCService\[([0-9]+):([0-9a-fA-F]+)\].*?(NGRN_CHECKSUM_HEAP.*)')
+    for ordinal,line in enumerate(lines):
+        if ordinal>=65536:raise ValueError("heap log line-count bound")
+        if len(line)>4096:raise ValueError('heap log line bound')
+        if 'NGRN_CHECKSUM_HEAP' not in line:continue
+        match=identity.search(line)
+        if not match:raise ValueError('missing native process/thread identity')
+        pid,thread,text=match.groups();text=text.strip()
+        begin=re.fullmatch(r'NGRN_CHECKSUM_HEAPS_BEGIN seq=([12]) schema=1',text)
+        data=re.fullmatch(r'NGRN_CHECKSUM_HEAP_CPU seq=([12]) role=([1-5]) copy=([01]) offset=([0-9]+) bytes=([0-9]+) total=([0-9]+) hex=([0-9a-f]+)',text)
+        end=re.fullmatch(r'NGRN_CHECKSUM_HEAPS_END seq=([12]) status=([0-9]+) atomic=0 source_only=1',text)
+        if not (begin or data or end):raise ValueError('malformed owned heap record')
+        key=(pid,thread,(begin or data or end).group(1))
+        if key not in groups:
+            if len(groups)>=8:raise ValueError('heap group budget')
+            groups[key]={'begin':False,'end':None,'blocks':{}}
+        g=groups[key]
+        if begin:
+            if g['begin'] or g['blocks'] or g['end'] is not None:raise ValueError('duplicate/late heap begin')
+            g['begin']=True
+        elif end:
+            if not g['begin'] or g['end'] is not None:raise ValueError('orphan/duplicate heap end')
+            g['end']=int(end.group(2))
+        else:
+            if not g['begin'] or g['end'] is not None:raise ValueError('heap data outside source interval')
+            _,role,copy,offset,count,total,encoded=data.groups()
+            role,copy,offset,count,total=map(int,(role,copy,offset,count,total))
+            if (total!=totals[role] or offset%128 or offset>=total or
+                    count!=min(128,total-offset) or len(encoded)!=count*2):raise ValueError('heap block extent')
+            slot=(role,copy,offset)
+            if slot in g['blocks']:raise ValueError('duplicate heap block')
+            g['blocks'][slot]=bytes.fromhex(encoded)
+    if not groups:raise ValueError('no owned heap records')
+    result=[]
+    for (pid,thread,sequence),g in groups.items():
+        if not g['begin'] or g['end']!=0:raise ValueError('heap group incomplete/refused')
+        heaps={}
+        for role,total in totals.items():
+            copies=[]
+            for copy in (0,1):
+                chunks=[g['blocks'].get((role,copy,offset)) for offset in range(0,total,128)]
+                if any(x is None for x in chunks):raise ValueError('missing heap block')
+                copies.append(b''.join(chunks))
+            if copies[0]!=copies[1]:raise ValueError('unstable heap pair')
+            heaps[role]=copies[0]
+        result.append((pid,thread,int(sequence),heaps))
+    return result
+
+
+def heap_decoder_self_test():
+    prefix='VTEncoderXPCService[111:abc] (OwnedFixture) '
+    lines=[prefix+'NGRN_CHECKSUM_HEAPS_BEGIN seq=1 schema=1']
+    for role,total in {1:4096,2:4096,3:4096,4:312,5:144}.items():
+        data=bytes((i+role)&255 for i in range(total))
+        for copy in (0,1):
+            for offset in range(0,total,128):
+                block=data[offset:offset+128]
+                lines.append(prefix+f'NGRN_CHECKSUM_HEAP_CPU seq=1 role={role} copy={copy} offset={offset} bytes={len(block)} total={total} hex={block.hex()}')
+    lines.append(prefix+'NGRN_CHECKSUM_HEAPS_END seq=1 status=0 atomic=0 source_only=1')
+    groups=decode_heap_lines(lines)
+    if len(groups)!=1 or len(groups[0][3])!=5:raise ValueError('heap fixture lost domains')
+    cases=[lines[1:],lines[:-1],lines[:2]+lines[1:],lines[:-1]+[lines[-1].replace('status=0','status=5')],
+           lines[:2]+lines[3:],lines+[lines[-1]],
+           [x.replace('offset=0 bytes=128','offset=1 bytes=128') for x in lines],
+           [x.replace('total=4096','total=4095') for x in lines],
+           [x.replace('copy=1 offset=0 bytes=128 total=4096 hex=01','copy=1 offset=0 bytes=128 total=4096 hex=ff') for x in lines],
+           [x.replace('VTEncoderXPCService[111:abc]','unknown-process') for x in lines],
+           [x.replace('seq=1','seq=3') for x in lines],
+           [x.replace('atomic=0','atomic=1') for x in lines],
+           [x.replace('bytes=128','bytes=129') for x in lines]]
+    for case in cases:
+        try:decode_heap_lines(case)
+        except ValueError:pass
+        else:raise ValueError('heap negative accepted')
+    page=bytes(range(256))*16
+    headers=[[2,4096,4096,4096,15,0,1,0],
+             [1,1,0,4096,4096,15,0,0], [1,1,1,4096,4096,15,0,0]]
+    rows=[]
+    for index,head in enumerate(headers):
+        kind=30 if index==0 else 31
+        payload=struct.pack('<'+str(len(head))+'I',*head)+(b'' if index==0 else page)
+        meta={'kind':kind,'word_count':len(payload)//4,'group':4,'identity':'0000000040040000','thread':2748}
+        rows.append((kind,json.dumps(meta),payload))
+    variants=[rows,rows[1:],rows[:2],rows+[rows[1]],
+              rows[:2]+[(31,rows[2][1],rows[2][2][:-1]+bytes([rows[2][2][-1]^1]))],
+              [(30,rows[0][1],struct.pack('<8I',2,4096,4096,4096,7,0,1,0)),*rows[1:]],
+              rows[:2]+[(31,rows[2][1].replace('2748','2749'),rows[2][2])],
+              [(30,rows[0][1].replace('"word_count": 8','"word_count": 9'),rows[0][2]),*rows[1:]],
+              rows[:2]+[(31,rows[2][1].replace('40040000','40041000'),rows[2][2])],
+              [(30,'not-json',rows[0][2]),*rows[1:]],rows*3,
+              rows[:2]+[(31,rows[2][1],bytes(6148))],
+              rows[:2]+[(31,rows[2][1],rows[2][2][:-4])]]
+    with tempfile.TemporaryDirectory(prefix='ngreen-checksum-page-wire-') as directory:
+        for mode,variant in enumerate(variants):
+            path=Path(directory)/f'page{mode}.sqlite3';database=sqlite3.connect(path)
+            database.execute('CREATE TABLE records(id INTEGER PRIMARY KEY,kind INTEGER,metadata TEXT,payload BLOB)')
+            database.executemany('INSERT INTO records(kind,metadata,payload) VALUES(?,?,?)',variant);database.commit();database.close()
+            try:decoded=kernel_ssh_pages(path)
+            except ValueError:
+                if mode==0:raise
+            else:
+                if mode or len(decoded)!=1 or decoded[0]['data']!=page:raise ValueError('kernel page negative accepted')
+    # Independent native store-set check: table and unused tail cannot mutate.
+    before=bytearray(4096);struct.pack_into('<I',before,64,0x25017000);struct.pack_into('<I',before,72,479)
+    after=bytearray(before);struct.pack_into('<I',after,96,0x40020000)
+    if relocation_difference(before,after)['outside_native_store_set']:raise ValueError('native address store rejected')
+    pitch=bytearray(before);struct.pack_into('<I',pitch,76,1<<18)
+    if relocation_difference(before,pitch)['outside_native_store_set']!=[19]:raise ValueError('unexpected pitch high bit hidden')
+    after[4000]=1
+    if relocation_difference(before,after)['outside_native_store_set']!=[1000]:raise ValueError('unexpected tail store hidden')
+    print('CHECKSUM_CPU_HEAP_DECODER_OK five-domains/13-log/12-page-negatives/store-set CPU-only')
+
+
+def kernel_ssh_pages(path):
+    from decode_kdebug_recorder import validate_leaf
+    if not path.is_file() or path.stat().st_size>64*1024*1024:raise ValueError('kernel CPU database bound')
+    connection=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)
+    try:
+        rows=connection.execute('SELECT kind,substr(metadata,1,4097),length(metadata),substr(payload,1,6145),length(payload) FROM records WHERE kind IN (30,31) ORDER BY id LIMIT 7').fetchall()
+    except sqlite3.Error as error:
+        raise ValueError('invalid kernel CPU database') from error
+    finally:connection.close()
+    if not rows or len(rows)>6:raise ValueError('kernel SSH record budget/missing data')
+    groups={}
+    for kind,encoded,meta_bytes,payload,payload_bytes in rows:
+        if (not isinstance(encoded,str) or not isinstance(payload,bytes) or
+                type(meta_bytes) is not int or type(payload_bytes) is not int or
+                meta_bytes>4096 or payload_bytes>6144 or payload_bytes%4):raise ValueError('kernel SSH record extent')
+        metadata=json.loads(encoded)
+        if not isinstance(metadata,dict):raise ValueError('kernel SSH metadata shape')
+        words=list(struct.unpack('<'+str(payload_bytes//4)+'I',payload))
+        validate_leaf(kind,words)
+        if (metadata.get('kind')!=kind or metadata.get('word_count')!=len(words) or
+                type(metadata.get('group')) is not int or metadata['group']<=0 or
+                type(metadata.get('thread')) is not int or metadata['thread']<=0 or
+                not re.fullmatch('[0-9a-f]{16}',metadata.get('identity',''))):raise ValueError('kernel SSH identity')
+        if kind==30:
+            if len(words)!=8 or words[0]!=2:raise ValueError('legacy partial SSH is not a full page')
+            key=(metadata['group'],metadata['identity'],words[6])
+            if key in groups:raise ValueError('duplicate kernel SSH metadata')
+            groups[key]={'metadata':metadata,'header':words,'copies':{}}
+        else:
+            key=(metadata['group'],metadata['identity'],words[1]);g=groups.get(key)
+            if not g or words[2] in g['copies']:raise ValueError('orphan/duplicate kernel SSH copy')
+            if metadata['thread']!=g['metadata']['thread'] or words[5]!=g['header'][4]:raise ValueError('kernel SSH source changed')
+            g['copies'][words[2]]=payload[32:]
+    result=[]
+    for (group,identity,ticket),g in groups.items():
+        if (g['header'][2:5]!=[4096,4096,15] or set(g['copies'])!={0,1} or
+                g['copies'][0]!=g['copies'][1]):raise ValueError('kernel SSH incomplete/unstable pair')
+        result.append({'group':group,'identity':identity,'ticket':ticket,'thread':g['metadata']['thread'],'data':g['copies'][0]})
+    return result
+
+
+def relocation_difference(source,actual):
+    before=struct.unpack('<1024I',source);after=struct.unpack('<1024I',actual)
+    allowed={};active=[]
+    for state in range(8):
+        base=16+state*16
+        if before[base+2]&0x3fff:
+            active.append(state);allowed[base+8]=allowed[base+9]=0xffffffff
+            if before[base]&0xe0000000==0x20000000:allowed[base+3]=0x3ffff
+    changed=[i for i in range(1024) if before[i]!=after[i]]
+    return {'active_source_states':active,'changed_dwords':changed,
+            'outside_native_store_set':[i for i in changed if (before[i]^after[i])&~allowed.get(i,0)],
+            'scope':'STATIC_NATIVE_MAIN_STORE_SET_ONLY_NOT_BACKING_PROOF'}
+
+
+def audit_heap_log(path,output,kernel_records=None):
+    output.mkdir(mode=0o700)
+    try:
+        if not path.is_file() or path.stat().st_size>128*1024*1024:raise ValueError("heap log file bound")
+        with path.open() as stream:groups=decode_heap_lines(iter(lambda:stream.readline(4097),''))
+        report={'scope':'OWNED_PRE_KMD_CPU_ONLY','source_authenticity':'NOT_VERIFIED_BY_THIS_AUDITOR','gpu_execution_proof':False,'atomic':False,'groups':[]}
+        for pid,thread,seq,heaps in groups:
+            item={'pid':int(pid),'thread':thread,'sequence':seq,'heaps':{},
+                  'owned_isa_match':heaps[2][1536:3112]==header_binary(HEADER.read_text()),
+                  'original_isa_match':hashlib.sha256(heaps[2][:1480]).hexdigest()==NATIVE_SHA,
+                  'idd0':list(struct.unpack_from('<8I',heaps[1],0)),
+                  'idd1':list(struct.unpack_from('<8I',heaps[1],64)),
+                  'curbe':list(struct.unpack_from('<16I',heaps[1],1024))}
+            for role,data in heaps.items():
+                name=f'pid{pid}-thread{thread}-seq{seq}-role{role}.bin'
+                (output/name).write_bytes(data);(output/name).chmod(0o400)
+                item['heaps'][str(role)]={'file':name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+            report['groups'].append(item)
+        if kernel_records:
+            report['kernel_ssh_pages']=[]
+            for page in kernel_ssh_pages(kernel_records):
+                data=page.pop('data');name=f"kernel-group{page['group']}-ticket{page['ticket']}-ssh.bin"
+                (output/name).write_bytes(data);(output/name).chmod(0o400);page['file']=name;page['sha256']=hashlib.sha256(data).hexdigest()
+                page['source_comparisons']=[]
+                for pid,thread,seq,heaps in groups:
+                    difference=relocation_difference(heaps[3],data)
+                    page['source_comparisons'].append(dict(pid=int(pid),thread=thread,sequence=seq,
+                        same_native_thread=int(thread,16)==page['thread'],**difference))
+                page['association']='CANDIDATES_ONLY_NOT_UNIQUE_FRAME_OR_BACKING_PROOF'
+                report['kernel_ssh_pages'].append(page)
+        (output/'report.json').write_text(json.dumps(report,indent=2)+'\n')
+    except ValueError as error:
+        (output/'rejected.json').write_text(json.dumps({'complete':False,'reason':str(error),'gpu_execution_proof':False})+'\n')
+        raise
+    print('CHECKSUM_CPU_HEAPS_COMPLETE groups='+str(len(groups))+' GPU=NOT_PROVEN')
 
 
 def rebuild(iga, image, write):
@@ -274,8 +485,17 @@ if __name__ == '__main__':
     parser.add_argument('--iga', type=Path)
     parser.add_argument('--image', type=Path)
     parser.add_argument('--write', action='store_true')
+    parser.add_argument('--heap-log', type=Path)
+    parser.add_argument('--output-dir', type=Path)
+    parser.add_argument('--kernel-records', type=Path)
     arguments = parser.parse_args()
-    if arguments.self_test:
+    if arguments.heap_log:
+        if not arguments.output_dir or arguments.self_test or arguments.iga or arguments.image or arguments.write:
+            parser.error('heap-log requires a fresh output-dir and isolated analysis mode')
+        audit_heap_log(arguments.heap_log,arguments.output_dir,arguments.kernel_records)
+    elif arguments.kernel_records or arguments.output_dir:
+        parser.error("kernel-records requires isolated heap-log mode")
+    elif arguments.self_test:
         self_test()
     else:
         if not arguments.iga or not arguments.image:

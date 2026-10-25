@@ -313,6 +313,8 @@ def test_surface_bind_returns(root):
     b=source.index('\nvoid Gen11::vfChecksumUnmap(',a)
     body=source[a:b].replace('reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0))','fakeCaller')
     prefix=r'''
+void vfObserveChecksumHeapBinding(unsigned,unsigned,bool,unsigned long,unsigned) {}
+
 #include "NootedGreen/kern_checksum_gen12_commands.hpp"
 #include <cassert>
 #include <cstdio>
@@ -406,6 +408,44 @@ int main(){check();assert(observed==1);
     subprocess.run([str(root/'checksum_capture_arm_actual')],check=True)
 
 
+def test_complete_heap_arm(root):
+    source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
+    marker=source.index('V393: complete checksum CPU observation armed=')
+    a=source.rfind('                if(checkKernelArgument(',0,marker);b=source.index(';',marker)+1
+    body=source[a:b]
+    prefix=r"""
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <initializer_list>
+bool enabled=true,early=false,gVfChecksumPublicationRouteReady=true,gVfCaptureStreamResetBound=true;
+uintptr_t gVfChecksumSurfaceBindCaller=1,gVfChecksumSshUnmapCaller=1,gVfChecksumMapAddressGetter=1,gVfChecksumMapLengthGetter=1,gVfBatchCpuCopy=1;
+uintptr_t pmap=0x100,gVfCpuKernelPmapStore=0x100,*gVfCpuKernelPmapSlot=&pmap;int observed=-1;
+bool checkKernelArgument(const char*s){return !strcmp(s,"-ngreenchecksumcapture")?enabled:early;}
+#define SYSLOG(module,format,value) observed=(value)
+void check(){observed=-1;
+"""
+    suffix=r"""
+}
+int main(){
+ check();assert(observed==1);
+ for(bool* value:{&gVfChecksumPublicationRouteReady,&gVfCaptureStreamResetBound}) {
+  *value=false;check();assert(observed==0);*value=true;
+ }
+ for(uintptr_t* value:{&gVfChecksumSurfaceBindCaller,&gVfChecksumSshUnmapCaller,&gVfChecksumMapAddressGetter,&gVfChecksumMapLengthGetter,&gVfBatchCpuCopy}) {
+  *value=0;check();assert(observed==0);*value=1;
+ }
+ gVfCpuKernelPmapSlot=nullptr;check();assert(observed==0);gVfCpuKernelPmapSlot=&pmap;
+ pmap=0;check();assert(observed==0);pmap=gVfCpuKernelPmapStore;
+ early=true;check();assert(observed==0);early=false;enabled=false;check();assert(observed==-1);
+}
+"""
+    path=root/'checksum_complete_arm.cpp';path.write_text(prefix+body+suffix)
+    binary=root/'checksum_complete_arm'
+    subprocess.run([*CXX,'-std=c++17','-fsanitize=address,undefined',str(path),'-o',str(binary)],check=True)
+    subprocess.run([str(binary)],check=True)
+
+
 def test_user_adoption(root):
     source=(ROOT/'tools/media_adapter/adapter.cpp').read_text()
     start=source.index('            bool published=false;')
@@ -490,9 +530,14 @@ struct VfMediaSubmission {
 }entry;
 struct VfMediaSubmissionScope{static VfMediaSubmission*findCurrent(){return present?&entry:nullptr;}};
 NgreenChecksumGen12::NativeSshMapPair saved;
+NgreenChecksumGen12::NativeSshMapPagePair gVfChecksumSshPagePairs[2];
 void vfFlightRecord(uint32_t kind,uint32_t group,uint64_t id,const volatile uint32_t*data,uint32_t count){
- assert(!released && kind==30 && group==4 && id==0x444000 && count==296);++records;
+ assert(!released && kind==30 && group==4 && id==0x444000 && count==8);++records;
  auto*out=reinterpret_cast<uint32_t*>(&saved);for(unsigned i=0;i<count;++i)out[i]=data[i];
+}
+void vfFlightChecksumPageChunk(uint32_t group,uint64_t id,uint32_t ticket,uint32_t part,uint32_t flags,const uint32_t*data){
+ assert(!released && group==4 && id==0x444000 && ticket==1 && part<2 && (flags&1));++records;
+ for(unsigned i=0;i<1024;++i)assert(data[i]==(i^((mode==18 && part==1 && i==143)?1U:0U)));
 }
 constexpr uintptr_t slot=0xffff800000001000ULL,map=slot+0x1000,table=slot+0x2000,cpu=slot+0x3000;
 uint64_t nofault(uint64_t at,uint64_t output,uint64_t bytes){
@@ -500,8 +545,8 @@ uint64_t nofault(uint64_t at,uint64_t output,uint64_t bytes){
  if(at==slot)value=map;else if(at==map)value=table;
  else if(at==table+0x118)value=mode==16?0x3330:0x1110;
  else if(at==table+0x128)value=0x2220;else if(at==map+0x28)value=cpu;else if(at==map+0x30)value=4096;
- else if(at==cpu && bytes==576){++copies;if(mode==17)return 0;auto*w=static_cast<uint32_t*>(out);
-  for(unsigned i=0;i<144;++i)w[i]=i;if(mode==18 && copies==2)w[143]^=1;return bytes;}
+ else if(at==cpu && bytes==4096){++copies;if(mode==17)return 0;auto*w=static_cast<uint32_t*>(out);
+  for(unsigned i=0;i<1024;++i)w[i]=i;if(mode==18 && copies==2)w[143]^=1;return bytes;}
  else {assert(false);return 0;}
  assert(bytes==8);std::memcpy(out,&value,8);return 8;
 }
@@ -533,7 +578,7 @@ int main(){
   if(mode==19)owner.oVfChecksumUnmap=0;
   bool panic=false;try{Gen11::vfChecksumUnmap(reinterpret_cast<void**>(slot));}catch(int){panic=true;}
   assert(panic==(mode==19) && nativeCalls==(mode==19?0:1));
-  assert(records==((mode==0 || (mode>=16 && mode<=18))?1:0));
+  assert(records==((mode==0 || mode==18)?3:(mode==16 || mode==17)?1:0));
   if(mode==0)assert(saved.flags==15 && copies==2);
   if(mode==16)assert(saved.flags==0 && copies==0);
   if(mode==17)assert(saved.flags==1 && copies==1);
@@ -556,4 +601,5 @@ if __name__=="__main__":
         test_end(destination)
         test_surface_bind_returns(destination)
         test_checksum_capture_arm(destination)
+        test_complete_heap_arm(destination)
         test_user_adoption(destination)

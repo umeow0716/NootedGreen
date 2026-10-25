@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <array>
+#include <algorithm>
 #include <cstdlib>
 
 extern "C" __attribute__((visibility("default")))
@@ -5685,7 +5686,7 @@ uint64_t dispatchOwnedChecksumSize(void* context,const void* input,uint32_t* use
     return result.status;
 }
 uint64_t dispatchOwnedChecksumBuilder(void* context,const void* input,void* token) noexcept {
-    return NgreenNativeChecksumReservation::builderOrStop(reinterpret_cast<uintptr_t>(context),
+    const uint64_t result=NgreenNativeChecksumReservation::builderOrStop(reinterpret_cast<uintptr_t>(context),
         reinterpret_cast<uintptr_t>(input),reinterpret_cast<uintptr_t>(token),
         [](uintptr_t entry,uintptr_t object,uintptr_t request,uintptr_t buffer) noexcept {
             using Native=uint64_t(*)(uintptr_t,uintptr_t,uintptr_t);
@@ -5696,6 +5697,32 @@ uint64_t dispatchOwnedChecksumBuilder(void* context,const void* input,void* toke
                 result.reason,static_cast<unsigned long long>(result.status),int(result.invoked));
             _exit(70);
         });
+    // Original builder has returned, but native2190a has not flushed227e0:
+    // its original CPU producer and the typed phase/input are still owned.
+    static std::atomic<unsigned> snapshots{0};unsigned selected=2;
+    for(unsigned attempt=0;attempt<4;++attempt) {
+        auto current=snapshots.load(std::memory_order_relaxed);if(current>=2)break;
+        if(snapshots.compare_exchange_weak(current,current+1,std::memory_order_relaxed)){selected=current;break;}
+    }
+    if(result==0 && selected<2) {
+        const unsigned seq=selected+1;
+        os_log_error(OS_LOG_DEFAULT,"NGRN_CHECKSUM_HEAPS_BEGIN seq=%{public}u schema=1",seq);
+        auto* phase=NgreenNativeChecksumReservation::OwnedCallbackPhase::current(reinterpret_cast<uintptr_t>(context));
+        const uint32_t status=phase?phase->observePreparedHeaps(reinterpret_cast<uintptr_t>(token),
+            [&](unsigned role,unsigned copy,const uint8_t* data,size_t bytes) noexcept {
+                static constexpr char digits[]="0123456789abcdef";
+                for(size_t offset=0;offset<bytes;offset+=128) {
+                    const size_t count=std::min(size_t(128),bytes-offset);char hex[257]{};
+                    for(size_t i=0;i<count;++i){hex[2*i]=digits[data[offset+i]>>4];hex[2*i+1]=digits[data[offset+i]&15];}
+                    os_log_error(OS_LOG_DEFAULT,
+                        "NGRN_CHECKSUM_HEAP_CPU seq=%{public}u role=%{public}u copy=%{public}u offset=%{public}u bytes=%{public}u total=%{public}u hex=%{public}s",
+                        seq,role,copy,unsigned(offset),unsigned(count),unsigned(bytes),hex);
+                }
+            }):1U;
+        os_log_error(OS_LOG_DEFAULT,"NGRN_CHECKSUM_HEAPS_END seq=%{public}u status=%{public}u atomic=0 source_only=1",seq,status);
+    }
+    return result; // Observer refusal never replaces the original native status.
+
 }
 struct NativeOtherFrameBackend {
     using Lease=NativeFactoryFrameBatch::Lease;

@@ -36,7 +36,7 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          23: 'cpu_map_header_pair', 24: 'cpu_map_list_boundary',
          25: 'native_render_surface_output', 26: 'native_pool_allocation_metadata',
          27: 'native_pool_allocation_chunk',28: 'native_rect_input_metadata',
-         29: 'native_rect_input_chunk', 30: 'native_leased_ssh_cpu_pair'}
+         29: 'native_rect_input_chunk', 30: 'native_leased_ssh_cpu_pair', 31: 'native_leased_ssh_page_chunk'}
 RESOURCE_SLOTS = {
     1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
     2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
@@ -45,6 +45,13 @@ RESOURCE_SLOTS = {
 
 def validate_leaf(kind, words):
     if kind == 30:
+        if len(words)==8 and words[0]==2:
+            if (words[1]!=4096 or words[2] not in (0,4096) or words[3] not in (0,4096) or
+                    words[4]&~15 or words[5] or words[6] not in (1,2) or words[7] or
+                    bool(words[4]&2)!=(words[2]==4096) or bool(words[4]&4)!=(words[3]==4096) or
+                    words[4]&6 and not words[4]&1 or words[4]&8 and words[4]!=15):
+                raise ValueError('invalid native leased SSH page metadata')
+            return
         if (len(words)!=296 or words[0:2]!=[1,576] or words[4]&~15 or
                 any(words[5:8]) or words[2] not in (0,576) or words[3] not in (0,576) or
                 bool(words[4]&2)!=(words[2]==576) or bool(words[4]&4)!=(words[3]==576) or
@@ -53,7 +60,12 @@ def validate_leaf(kind, words):
                 not words[2] and any(words[8:152]) or not words[3] and any(words[152:296])):
             raise ValueError('invalid native leased SSH CPU pair')
         return
-
+    if kind == 31:
+        if (len(words)!=1032 or words[0]!=1 or words[1] not in (1,2) or words[2] not in (0,1) or
+                words[3:5]!=[4096,4096] or words[5]&~15 or not words[5]&1 or
+                not words[5]&(2<<words[2]) or words[5]&8 and words[5]!=15 or any(words[6:8])):
+            raise ValueError('invalid native leased SSH page chunk')
+        return
     if kind == 28:
         if (len(words)!=160 or words[0]!=1 or words[1]>272 or words[2]>272 or
                 words[3]>24 or words[4]>24 or words[6]&~31 or words[7]!=4096 or words[8]!=32 or
@@ -810,6 +822,16 @@ class DiskSink:
 
 
 def self_test():
+    page=[2,4096,4096,4096,15,0,1,0]
+    chunk=[1,1,0,4096,4096,15,0,0]+list(range(1024))
+    validate_leaf(30,page);validate_leaf(31,chunk)
+    for kind,raw,changes in ((30,page,((0,3),(1,4095),(2,4095),(3,4095),(4,31),(5,1),(6,3),(7,1))),
+                             (31,chunk,((0,2),(1,3),(2,2),(3,4095),(4,4095),(5,1),(6,1),(7,1)))):
+        for index,value in changes:
+            bad=list(raw);bad[index]=value
+            try:validate_leaf(kind,bad)
+            except ValueError:pass
+            else:raise AssertionError('SSH page wire negative accepted')
     ssh=[1,576,576,576,15,0,0,0]+list(range(144))*2
     validate_leaf(30,ssh)
     for index,value in ((0,2),(1,575),(2,575),(3,575),(4,31),(5,1),(6,1),(7,1),(295,999)):
