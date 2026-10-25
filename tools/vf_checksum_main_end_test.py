@@ -166,7 +166,7 @@ def test_end(root):
     #define PANIC_COND(c,t,m) do{if(c)throw Panic{};}while(0)
     template<class...A>void logOnly(const char*,const char*f,A...args){std::printf(f,args...);std::puts("");}
     #define SYSLOG logOnly
-    bool args=true;bool checkKernelArgument(const char*){return args;}
+    bool args=true,checksumCapture=false;bool checkKernelArgument(const char*flag){return !strcmp(flag,"-ngreenchecksumcapture")?checksumCapture:args;}
     void* current_thread(){return reinterpret_cast<void*>(0x4000);}
     enum class VfIdentity {Virtual,Physical};VfIdentity gVfIdentity=VfIdentity::Virtual;
     bool gVfChecksumPublicationRouteReady=true,gVfChecksumNativeBindingsQualified=true,gVfCaptureStreamResetBound=true,gVfMediaPublicationAbiVerified=true;
@@ -231,10 +231,10 @@ def test_end(root):
      getMember<uint32_t>(context,0x6dc)=1;getMember<void*>(context,0xfe0)=commands;getMember<void*>(context,0x708)=commands;
      void*s=context+0x650;getMember<uint32_t>(s,0x30)=128;getMember<uint32_t>(s,0x34)=80;
      getMember<uint32_t>(s,0x38)=36;getMember<uint8_t>(s,0x3c)=1;
-     present=mapping=args=true;gVfChecksumPublicationRouteReady=gVfChecksumNativeBindingsQualified=gVfCaptureStreamResetBound=gVfMediaPublicationAbiVerified=true;
+     checksumCapture=false;present=mapping=args=true;gVfChecksumPublicationRouteReady=gVfChecksumNativeBindingsQualified=gVfCaptureStreamResetBound=gVfMediaPublicationAbiVerified=true;
      gVfIdentity=VfIdentity::Virtual;gVfAccelerator=accel;fakeCaller=123;captureCalls=nativeCalls=0;
     }
-    int main(){setbuf(stdout,nullptr);for(mode=0;mode<54;++mode){setup();void*s=context+0x650;
+    int main(){setbuf(stdout,nullptr);for(mode=0;mode<56;++mode){setup();void*s=context+0x650;
      switch(mode){
      case 1:gVfChecksumPublicationRouteReady=false;break;
      case 2:gVfIdentity=VfIdentity::Physical;break;
@@ -279,6 +279,8 @@ def test_end(root):
      case 45:entry.checksumSurfaces.count=2;break;
      case 46:entry.checksumSurfaces.resources[2]=0;break;
      case 47:entry.checksumSurfaces.gpu[0]=UINT64_C(0x1000000000000);break;
+     case 54:checksumCapture=true;break;
+     case 55:checksumCapture=true;entry.checksumSurfaces.gpu[0]+=32;break;
      case 48:entry.checksumSurfaces.gpu[2]+=4;break; // buffer is element-, not tile-aligned
 
      }
@@ -292,7 +294,7 @@ def test_end(root):
      else if(!panic && !forwarded){assert(entry.failed);assert(!entry.captureCancelled && !entry.translating);assert(getMember<uint32_t>(s,0x34)==0 && getMember<uint8_t>(s,0x3c)==0);assert(memcmp(before.data(),commands,sizeof(commands))==0);}
      else if(mode!=20 && mode!=21)assert(memcmp(before.data(),commands,sizeof(commands))==0);
      }
-     puts("Actual MainEnd body: 54 forward/publication/cancel/authority-loss cases PASS; native once/no submission on refusal");
+     puts("Actual MainEnd body: 56 forward/publication/cancel/authority-loss cases PASS; native once/no submission on refusal");
     }
     '''
     p=root/'checksum_end_actual.cpp';p.write_text(prefix+body+post)
@@ -369,6 +371,35 @@ int main(){
     subprocess.run([str(root/'checksum_surface_bind_actual')],check=True)
 
 
+def test_checksum_capture_arm(root):
+    source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
+    start=source.index('                if(checkKernelArgument("-ngreenchecksumcapture"))')
+    end=source.index(';',source.index('SYSLOG(',start))+1
+    body=source[start:end]
+    assert len(body.encode())<1024
+    code=r'''
+#include <cassert>
+#include <cstring>
+#include <initializer_list>
+bool enabled=true,early=false,gVfChecksumPublicationRouteReady=true,gVfCaptureStreamResetBound=true;
+uintptr_t gVfChecksumSurfaceBindCaller=1;int observed=-1;
+bool checkKernelArgument(const char*s){return !strcmp(s,"-ngreenchecksumcapture")?enabled:early;}
+#define SYSLOG(module,format,value) observed=(value)
+void check(){observed=-1;
+'''.replace('#include <cassert>','#include <cassert>\n#include <cstdint>')+body+r'''
+}
+int main(){check();assert(observed==1);
+ for(bool* gate:{&gVfChecksumPublicationRouteReady,&gVfCaptureStreamResetBound}){
+  *gate=false;check();assert(observed==0);*gate=true;}
+ gVfChecksumSurfaceBindCaller=0;check();assert(observed==0);gVfChecksumSurfaceBindCaller=1;
+ early=true;check();assert(observed==0);early=false;enabled=false;check();assert(observed==-1);
+}
+'''
+    path=root/'checksum_capture_arm_actual.cpp';path.write_text(code)
+    subprocess.run([*CXX,'-std=c++17','-fsanitize=address,undefined',str(path),'-o',str(root/'checksum_capture_arm_actual')],check=True)
+    subprocess.run([str(root/'checksum_capture_arm_actual')],check=True)
+
+
 def test_user_adoption(root):
     source=(ROOT/'tools/media_adapter/adapter.cpp').read_text()
     start=source.index('            bool published=false;')
@@ -428,4 +459,5 @@ if __name__=="__main__":
         test_readiness(destination)
         test_end(destination)
         test_surface_bind_returns(destination)
+        test_checksum_capture_arm(destination)
         test_user_adoption(destination)

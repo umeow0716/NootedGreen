@@ -3690,6 +3690,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                 OSSynchronizeIO();
                 SYSLOG("ngreen","Checksum Main end route bound=%u ready=%u",checksumEndQualified?1U:0U,
                     gVfChecksumPublicationRouteReady?1U:0U);
+                if(checkKernelArgument("-ngreenchecksumcapture"))
+                    SYSLOG("ngreen","V392: checksum-only pre-submit cancellation armed=%u",
+                        gVfChecksumPublicationRouteReady && gVfChecksumSurfaceBindCaller &&
+                        gVfCaptureStreamResetBound && !checkKernelArgument("-ngreencaptureonly")?1U:0U);
+
 
 
 				const auto batchSubmit=patcher.solveSymbol(index,
@@ -6763,7 +6768,7 @@ IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
 	}
 	const IOReturn result=FunctionCast(vfContextSubmit, callback->oVfContextSubmit)(
 		that, input, output, options, stamp);
-	if(mediaScope.failed() && checkKernelArgument("-ngreencaptureonly"))
+	if(mediaScope.failed() && (checkKernelArgument("-ngreencaptureonly") || checkKernelArgument("-ngreenchecksumcapture")))
 		SYSLOG("ngreen","V386: capture-only outer error native=%x returned=%x completion=NOT_EVALUATED",
 			result,kIOReturnBadArgument);
 	return mediaScope.failed()?kIOReturnBadArgument:result;
@@ -7068,6 +7073,15 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
         SYSLOG("ngreen","V392: checksum surface admission refused count=%u failed=%u queued=0 stamp-advanced=0",
             entry->checksumSurfaces.count,entry->checksumSurfaces.failed?1U:0U);
         refuse("surface-native-bindings");return;
+    }
+    // Diagnostic opt-in cancels this checksum ONLY. Earlier native BCS/RCS/
+    // VCS work may already exist. No checksum stamp, END or queue operation
+    // runs and the outer submission returns its existing real error path.
+    if(checkKernelArgument("-ngreenchecksumcapture")) {
+        SYSLOG("ngreen","V392: checksum-only capture cancelled before native end checksum-queued=0 stamp-advanced=0 completion=NOT_EVALUATED");
+        // Reuse the existing generic pre-end receipt schema, not a hardware ACK.
+        SYSLOG("ngreen","V386: capture-only publication cancelled before native end queued=0 native-called=0 stamp-advanced=0 completion=NOT_EVALUATED");
+        refuse("checksum-capture-only");return;
     }
     uintptr_t surfaceResources[3];uint64_t surfaceGpu[3];
     uint32_t surfacePitch[3],surfaceIds[3],surfaceWrite[3];
