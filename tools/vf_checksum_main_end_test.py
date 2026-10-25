@@ -35,6 +35,14 @@ def test_qualification(root):
         f.seek(off+va-start);return f.read(num)
       raise AssertionError('fixed range absent')
      thunk=read(0x36a6c,18);fifo=read(0x4c710,53)
+     import re
+     for name,offset,count in [('surfaceOutputs',0x1c8,12),('surfaceCall',0x1d4,7)]:
+      literal=re.search(r'static constexpr uint8_t '+name+r'\[\]=\{([^}]+)\}',s)
+      assert literal, name
+      expected=bytes(int(x.strip(),0) for x in literal.group(1).split(','))
+      actual=read(0x36602+offset,count)
+      assert len(expected)==count and expected==actual, name
+     assert 'gVfChecksumSurfaceBindCaller=mediaKernel+0x1db;' in s
      assert struct.unpack('<q',read(0xd2b70+0xa48,8))[0]==0x36a6c
     prefix=r'''
     #include <cstdint>
@@ -168,7 +176,7 @@ def test_end(root):
     NgreenAvcGen12::PublishScratch scratch;
     struct VfMediaSubmission {
      void*thread;void*context;void*accelerator;void*task;void*shared;void*gpuTask;NgreenAvcGen12::PublishScratch*scratch;
-     NgreenChecksumGen12::NativeHeapBindings checksumHeaps;bool translating,failed,captureCancelled;
+     NgreenChecksumGen12::NativeHeapBindings checksumHeaps;NgreenChecksumGen12::NativeSurfaceBindings checksumSurfaces;bool translating,failed,captureCancelled;
     } entry;
     bool present=true;
     struct VfMediaSubmissionScope {
@@ -186,6 +194,13 @@ def test_end(root):
      ++captureCalls;
      if(!mapping || getMember<uint8_t>(s,0x3c)!=1)return false;
      if(mode==18 && captureCalls==2)entry.checksumHeaps.pitch[0]++;
+     if(captureCalls==2){
+      if(mode==49)entry.checksumSurfaces.gpu[0]+=4096;
+      if(mode==50)++entry.checksumSurfaces.identifier[0];
+      if(mode==51)++entry.checksumSurfaces.pitch[0];
+      if(mode==52)entry.checksumSurfaces.writeUse[0]^=1;
+      if(mode==53)entry.checksumSurfaces.resources[0]+=4096;
+     }
      if(mode==20 && commands[0]==0)return false; // identity lost AFTER actual CPU writes
      out={reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x3000),
      reinterpret_cast<void*>(0x4000),reinterpret_cast<void*>(0x5000),0x60000000,4096,commands,4096,128,1024,992,224,"admitted",4096,1,0,10,0,4096,getMember<uint32_t>(s,0x34)};
@@ -203,10 +218,11 @@ def test_end(root):
     post+=r'''
     void setup(){
      memset(context,0,sizeof(context));memset(shared,0,sizeof(shared));memset(descriptor,0,sizeof(descriptor));
-     entry={current_thread(),context,accel,task,shared,gpuTask,&scratch,{},false,false,false};entry.checksumHeaps.reset();
+     entry={current_thread(),context,accel,task,shared,gpuTask,&scratch,{},{},false,false,false};entry.checksumHeaps.reset();
      memcpy(commands,captured,sizeof(captured));assert(NgreenChecksumGen12::writeReservationTrailer(commands,78));commands[78]=0x1234;commands[79]=0x5678;
      uint64_t gpu[]={uint64_t(captured[16]&~1U)|(uint64_t(captured[17])<<32),uint64_t(captured[20]&~1U)|(uint64_t(captured[21])<<32),uint64_t(captured[14]&~1U)|(uint64_t(captured[15])<<32)};
      for(unsigned i=0;i<3;++i)assert(entry.checksumHeaps.record(i,true,0x10000+i*4096,gpu[i],4096,false,reinterpret_cast<uintptr_t>(task),reinterpret_cast<uintptr_t>(shared)));
+     for(unsigned i=0;i<3;++i)assert(entry.checksumSurfaces.record(true,0x50000+i*4096,0x70000000+i*4096,1920,10+i,false));
      getMember<uintptr_t>(context,0)=gVfChecksumMainVtable;getMember<void*>(context,0x5a8)=accel;
      getMember<void*>(context,0x578)=task;getMember<void*>(context,0x5a0)=shared;
      getMember<void*>(shared,0x78)=accel;getMember<void*>(shared,0x80)=task;getMember<void*>(shared,0x88)=gpuTask;
@@ -218,7 +234,7 @@ def test_end(root):
      present=mapping=args=true;gVfChecksumPublicationRouteReady=gVfChecksumNativeBindingsQualified=gVfCaptureStreamResetBound=gVfMediaPublicationAbiVerified=true;
      gVfIdentity=VfIdentity::Virtual;gVfAccelerator=accel;fakeCaller=123;captureCalls=nativeCalls=0;
     }
-    int main(){setbuf(stdout,nullptr);for(mode=0;mode<40;++mode){setup();void*s=context+0x650;
+    int main(){setbuf(stdout,nullptr);for(mode=0;mode<54;++mode){setup();void*s=context+0x650;
      switch(mode){
      case 1:gVfChecksumPublicationRouteReady=false;break;
      case 2:gVfIdentity=VfIdentity::Physical;break;
@@ -255,23 +271,103 @@ def test_end(root):
      case 37:mapping=false;getMember<uint32_t>(context,0x6dc)=2;break;
      case 38:mapping=false;gVfCaptureStreamResetBound=false;break;
      case 39:gVfChecksumNativeBindingsQualified=false;break;
+     case 40:entry.checksumSurfaces.reset();break;
+     case 41:entry.checksumSurfaces.gpu[0]+=32;break;
+     case 42:entry.checksumSurfaces.gpu[1]+=32;break;
+     case 43:entry.checksumSurfaces.gpu[2]+=1;break;
+     case 44:entry.checksumSurfaces.failed=true;break;
+     case 45:entry.checksumSurfaces.count=2;break;
+     case 46:entry.checksumSurfaces.resources[2]=0;break;
+     case 47:entry.checksumSurfaces.gpu[0]=UINT64_C(0x1000000000000);break;
+     case 48:entry.checksumSurfaces.gpu[2]+=4;break; // buffer is element-, not tile-aligned
+
      }
      std::array<uint32_t,1024> before{};memcpy(before.data(),commands,sizeof(commands));
      bool panic=false;try{Gen11::vfChecksumEnd(context,s);}catch(Panic&){panic=true;}
      bool expectedPanic=mode==5 || mode==6 || mode==20 || mode==21 || mode==25 || mode==26 || mode==27 || (mode>=28 && mode<=38);
      assert(panic==expectedPanic);
-     bool forwarded=mode==0 || (mode>=1 && mode<=4) || mode==8 || mode==23;
+     bool forwarded=mode==0 || mode==48 || (mode>=1 && mode<=4) || mode==8 || mode==23;
      if(nativeCalls!=unsigned(forwarded))std::fprintf(stderr,"mode=%d calls=%u expected=%u\n",mode,nativeCalls,unsigned(forwarded));assert(nativeCalls==unsigned(forwarded));
-     if(mode==0){assert(commands[0]==0 && commands[10]==0x61010014);assert(commands[78]==0 && commands[79]==0);assert(!entry.failed && !entry.translating && entry.checksumHeaps.seen==0);}
+     if(mode==0 || mode==48){assert(commands[0]==0 && commands[10]==0x61010014);assert(commands[78]==0 && commands[79]==0);assert(!entry.failed && !entry.translating && entry.checksumHeaps.seen==0);}
      else if(!panic && !forwarded){assert(entry.failed);assert(!entry.captureCancelled && !entry.translating);assert(getMember<uint32_t>(s,0x34)==0 && getMember<uint8_t>(s,0x3c)==0);assert(memcmp(before.data(),commands,sizeof(commands))==0);}
      else if(mode!=20 && mode!=21)assert(memcmp(before.data(),commands,sizeof(commands))==0);
      }
-     puts("Actual MainEnd body: 40 forward/publication/cancel/authority-loss cases PASS; native once/no submission on refusal");
+     puts("Actual MainEnd body: 54 forward/publication/cancel/authority-loss cases PASS; native once/no submission on refusal");
     }
     '''
     p=root/'checksum_end_actual.cpp';p.write_text(prefix+body+post)
     subprocess.run([*CXX,'-std=c++14','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(ROOT),str(p),'-o',str(root/'checksum_end_actual')],check=True)
     subprocess.run([str(root/'checksum_end_actual')],check=True)
+
+def test_surface_bind_returns(root):
+    source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
+    a=source.index('bool Gen11::vfChecksumBindResource(')
+    b=source.index('\nvoid Gen11::vfChecksumEnd(',a)
+    body=source[a:b].replace('reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0))','fakeCaller')
+    prefix=r'''
+#include "NootedGreen/kern_checksum_gen12_commands.hpp"
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+using mach_vm_address_t=uintptr_t;
+template<class T>T&getMember(void*p,size_t o){return *reinterpret_cast<T*>(static_cast<unsigned char*>(p)+o);}
+#define PANIC_COND(c,t,m) assert(!(c))
+template<class...A>void logOnly(const char*,const char*,A...){++logs;}
+unsigned logs=0;
+#define SYSLOG logOnly
+enum class VfIdentity{Virtual,Physical};VfIdentity gVfIdentity=VfIdentity::Virtual;
+bool gVfChecksumNativeBindingsQualified=true,present=true,returned=true;
+uintptr_t gVfChecksumBindCallers[3]={10,20,30},gVfChecksumSurfaceBindCaller=40,fakeCaller=40;
+volatile uint32_t gVfChecksumSurfaceBindLogCount=0;
+bool OSCompareAndSwap(uint32_t a,uint32_t b,volatile uint32_t*p){if(*p!=a)return false;*p=b;return true;}
+alignas(16) unsigned char context[0x700],accel[8],foreign[8];void*gVfAccelerator=accel;
+struct Entry{bool translating=false;void*accelerator=accel;NgreenChecksumGen12::NativeHeapBindings checksumHeaps{};NgreenChecksumGen12::NativeSurfaceBindings checksumSurfaces{};} entry;
+struct VfMediaSubmissionScope{static Entry*find(void*p){return present&&p==context?&entry:nullptr;}};
+uint64_t nextGpu;uintptr_t nextResource;uint32_t nextPitch=1920;unsigned nativeCalls=0;
+bool nativeImpl(void*,void*,uint32_t,void**r,uint64_t*g,uint32_t*p,bool){++nativeCalls;if(r)*r=reinterpret_cast<void*>(nextResource);if(g)*g=nextGpu;if(p)*p=nextPitch;return returned;}
+#define FunctionCast(fn,addr) nativeImpl
+struct Gen11{static Gen11*callback;uintptr_t oVfChecksumBindResource=1;static bool vfChecksumBindResource(void*,void*,uint32_t,void**,uint64_t*,uint32_t*,bool);};
+Gen11 instance;Gen11*Gen11::callback=&instance;
+'''
+    # Declaration order matters for the real production SYSLOG instantiation.
+    prefix=prefix.replace('template<class...A>void logOnly','extern unsigned logs;\ntemplate<class...A>void logOnly')
+    suffix=r'''
+int main(){
+ for(unsigned mode=0;mode<19;++mode){
+  entry={};present=returned=gVfChecksumNativeBindingsQualified=true;gVfIdentity=VfIdentity::Virtual;
+  fakeCaller=40;logs=nativeCalls=gVfChecksumSurfaceBindLogCount=0;
+  getMember<void*>(context,0x5a8)=accel;
+  if(mode==1)fakeCaller=41;if(mode==2)entry.translating=true;if(mode==3)entry.accelerator=foreign;
+  if(mode==4)present=false;if(mode==5)returned=false;if(mode==6)gVfChecksumNativeBindingsQualified=false;
+  if(mode==7)gVfIdentity=VfIdentity::Physical;
+  for(unsigned i=0;i<3;++i){
+   nextGpu=0x50000000+i*4096;nextResource=0x1000+i*4096;
+   if(mode==8&&i==0)nextGpu+=32;if(mode==9&&i==1)nextGpu+=32;
+   if(mode==10&&i==2)++nextGpu;if(mode==11&&i==2)nextGpu+=4;
+   if(mode==12&&i==1)nextResource=0;if(mode==13&&i==1)++nextResource;
+   if(mode==14&&i==1)nextGpu=0;if(mode==15&&i==1)nextGpu=UINT64_C(0x1000000000000);
+   void*r=nullptr;uint64_t gpu=0;uint32_t pitch=0;
+   const bool native=Gen11::vfChecksumBindResource(context,mode==16?context:context+0x650,10+i,
+       &r,mode==17?nullptr:&gpu,&pitch,mode==18);
+   assert(native==returned);
+  }
+  assert(nativeCalls==3);
+  assert(entry.checksumSurfaces.admitted()==(mode==0||mode==11||mode==18));
+  if(mode==1||mode==4||mode==6||mode==7)assert(entry.checksumSurfaces.count==0);
+ }
+ entry={};present=returned=gVfChecksumNativeBindingsQualified=true;gVfIdentity=VfIdentity::Virtual;
+ fakeCaller=40;gVfChecksumSurfaceBindLogCount=logs=0;getMember<void*>(context,0x5a8)=accel;
+ for(unsigned n=0;n<100;++n){entry.checksumSurfaces.reset();nextGpu=0x50000000;nextResource=0x1000;
+  void*r;uint64_t gpu;uint32_t pitch;
+  assert(Gen11::vfChecksumBindResource(context,context+0x650,10,&r,&gpu,&pitch,false));}
+ assert(logs==24 && gVfChecksumSurfaceBindLogCount==24);
+ puts("Actual native surface bind callback: 19 cases/native-once/unchanged result/no pointer-follow/24-log bound PASS");
+}
+'''
+    path=root/'checksum_surface_bind_actual.cpp';path.write_text(prefix+body+suffix)
+    subprocess.run([*CXX,'-std=c++17','-fsanitize=address,undefined','-I'+str(ROOT),str(path),'-o',str(root/'checksum_surface_bind_actual')],check=True)
+    subprocess.run([str(root/'checksum_surface_bind_actual')],check=True)
+
 
 def test_user_adoption(root):
     source=(ROOT/'tools/media_adapter/adapter.cpp').read_text()
@@ -331,4 +427,5 @@ if __name__=="__main__":
         test_qualification(destination)
         test_readiness(destination)
         test_end(destination)
+        test_surface_bind_returns(destination)
         test_user_adoption(destination)

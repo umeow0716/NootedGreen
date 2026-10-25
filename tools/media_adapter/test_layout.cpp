@@ -20027,6 +20027,32 @@ static void testChecksumNativeHeapBindings() {
     }
 }
 
+static void testChecksumNativeSurfaceBindings() {
+    using NgreenChecksumGen12::NativeSurfaceBindings;
+    for(unsigned mode=0;mode<13;++mode) {
+        NativeSurfaceBindings b{};
+        for(unsigned i=0;i<3;++i) {
+            uintptr_t resource=0x1000+i*4096;uint64_t gpu=0x40000000+i*4096;
+            bool copied=true;
+            if(mode==1 && i==0)gpu+=32;
+            if(mode==2 && i==1)gpu+=32;
+            if(mode==3 && i==2)gpu+=1;
+            if(mode==4 && i==2)gpu+=4;
+            if(mode==5 && i==1)copied=false;
+            if(mode==6 && i==1)resource=0;
+            if(mode==7 && i==1)++resource;
+            if(mode==8 && i==1)gpu=0;
+            if(mode==9 && i==1)gpu=UINT64_C(0x1000000000000);
+            if(mode==10 && i==2)break;
+            b.record(copied,resource,gpu,1920,10+i,mode==12);
+        }
+        if(mode==11)b.record(true,0x5000,0x50000000,1920,13,false);
+        assert(b.admitted()==(mode==0 || mode==4 || mode==12));
+        b.reset();assert(!b.count && !b.failed && !b.admitted());
+        for(unsigned i=0;i<3;++i)assert(!b.resources[i] && !b.gpu[i] && !b.pitch[i] && !b.identifier[i] && !b.writeUse[i]);
+    }
+}
+
 // Owned CPU fixtures for the actual paired checksum size/builder phase. No
 // native Apple entry, IOSurface API or GPU is invoked by these tests.
 struct ChecksumInputCfState {
@@ -20590,6 +20616,7 @@ int main() {
     testOwnedChecksumInput();
     testOwnedChecksumCallbacks();
     testChecksumNativeHeapBindings();
+    testChecksumNativeSurfaceBindings();
     testChecksumCapability();
     testChecksumProgramAppend();
     {

@@ -223,6 +223,8 @@ static bool gVfChecksumPublicationRouteReady = false;
 static bool gVfChecksumNativeBindingsQualified = false;
 static mach_vm_address_t gVfChecksumMainVtable = 0;
 static mach_vm_address_t gVfChecksumBindCallers[3] {};
+static mach_vm_address_t gVfChecksumSurfaceBindCaller = 0;
+static volatile uint32_t gVfChecksumSurfaceBindLogCount = 0;
 mach_vm_address_t gVfMediaEndCaller = 0;
 bool gVfCaptureStreamResetBound = false;
 mach_vm_address_t gVfMediaKernelMappedMemoryVtable = 0;
@@ -1226,6 +1228,7 @@ struct VfMediaSubmission {
 	void *gpuTask;
 	NgreenAvcGen12::PublishScratch *scratch;
 	NgreenChecksumGen12::NativeHeapBindings checksumHeaps;
+	NgreenChecksumGen12::NativeSurfaceBindings checksumSurfaces;
 	bool translating;
 	bool failed;
 	bool captureCancelled;
@@ -1273,7 +1276,7 @@ public:
 				if (!OSCompareAndSwapPtr(nullptr,owner,&entry.thread)) continue;
 				entry.context=context;entry.accelerator=accelerator;entry.task=nullptr;
 				entry.shared=nullptr;entry.gpuTask=nullptr;
-				entry.scratch=nullptr;entry.checksumHeaps.reset();entry.translating=false;entry.failed=false;entry.captureCancelled=false;slot=&entry;
+				entry.scratch=nullptr;entry.checksumHeaps.reset();entry.checksumSurfaces.reset();entry.translating=false;entry.failed=false;entry.captureCancelled=false;slot=&entry;
 				entry.flightGroup=static_cast<uint32_t>(OSIncrementAtomic(&gVfFlightGroupSerial));
 				break;
 			}
@@ -1395,7 +1398,7 @@ private:
 		state=IOSimpleLockLockDisableInterrupt(gVfContextLock);
 		slot->context=nullptr;slot->accelerator=nullptr;slot->task=nullptr;
 		slot->shared=nullptr;slot->gpuTask=nullptr;
-		slot->checksumHeaps.reset();
+		slot->checksumHeaps.reset();slot->checksumSurfaces.reset();
 		PANIC_COND(!OSCompareAndSwapPtr(owner,nullptr,&slot->thread),"ngreen",
 		           "Lost owned AVC submission thread slot");
 		IOSimpleLockUnlockEnableInterrupt(gVfContextLock,state);
@@ -3499,6 +3502,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				gVfChecksumMainVtable=0;
 				gVfChecksumPublicationRouteReady=false;
 				for(unsigned i=0;i<3;++i)gVfChecksumBindCallers[i]=0;
+                gVfChecksumSurfaceBindCaller=0;
 				const auto mediaEnd=patcher.solveSymbol(index,
 					"__ZN24IGAccelVideoContextMedia16endCommandStreamER24IOAccelCommandStreamInfo",address,size);
 				const auto videoEnd=patcher.solveSymbol(index,
@@ -3585,6 +3589,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                 static constexpr uint8_t secondOutputs[]={0x48,0x8d,0x4d,0xc8,0x4c,0x8d,0x45,0xa0,0x4c,0x8d,0x4d,0xd4};
                 static constexpr uint8_t thirdOutputs[]={0x48,0x8d,0x4d,0xc8,0x4c,0x8d,0x45,0x98,0x4c,0x8d,0x4d,0xd4};
                 static constexpr uint8_t bindCall[]={0xff,0x90,0x78,0x0b,0,0};
+                static constexpr uint8_t surfaceOutputs[]={0x48,0x8d,0x4d,0xc8,0x4c,0x8d,0x45,0xb8,0x4c,0x8d,0x4d,0xd4};
+                static constexpr uint8_t surfaceCall[]={0x41,0xff,0x92,0x78,0x0b,0,0};
                 static constexpr uint8_t readOnlyBind[]={0xc7,0x04,0x24,0,0,0,0};
                 static constexpr uint8_t outputUse[]={0x49,0x8b,0x3e,0x48,0x8b,0x07,0xff,0x50,0x20,
                     0x49,0x8b,0x3e,0x4c,0x89,0xe6,0x4c,0x89,0xfa};
@@ -3610,6 +3616,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                     bindAnchor(mediaKernel,0x63,firstOutputs,sizeof(firstOutputs)) &&
                     bindAnchor(mediaKernel,0xc5,secondOutputs,sizeof(secondOutputs)) &&
                     bindAnchor(mediaKernel,0xfc,thirdOutputs,sizeof(thirdOutputs)) &&
+                    bindAnchor(mediaKernel,0x1c8,surfaceOutputs,sizeof(surfaceOutputs)) &&
+                    bindAnchor(mediaKernel,0x1d4,surfaceCall,sizeof(surfaceCall)) &&
                     bindAnchor(mediaKernel,0x94,readOnlyBind,sizeof(readOnlyBind)) &&
                     bindAnchor(mediaKernel,0xb8,readOnlyBind,sizeof(readOnlyBind)) &&
                     bindAnchor(mediaKernel,0xef,readOnlyBind,sizeof(readOnlyBind)) &&
@@ -3620,6 +3628,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                     gVfChecksumBindCallers[0]=mediaKernel+0xa7;
                     gVfChecksumBindCallers[1]=mediaKernel+0xd7;
                     gVfChecksumBindCallers[2]=mediaKernel+0x10e;
+                    gVfChecksumSurfaceBindCaller=mediaKernel+0x1db;
                     // Lilu rounds its copy to whole instructions. The first
                     // 17 bytes contain no PC-relative operation; unlike the
                     // Main LEA thunk they are safe to use in its trampoline.
@@ -6989,12 +6998,27 @@ bool Gen11::vfChecksumBindResource(void *that,void *stream,uint32_t identifier,
     if(!gVfChecksumNativeBindingsQualified || gVfIdentity!=VfIdentity::Virtual)return result;
     unsigned slot=3;
     for(unsigned i=0;i<3;++i)if(caller==gVfChecksumBindCallers[i])slot=i;
-    if(slot==3)return result;
+    if(slot==3 && caller!=gVfChecksumSurfaceBindCaller)return result;
     auto* entry=VfMediaSubmissionScope::find(that);
     if(!entry)return result;
     const bool rooted=stream==static_cast<uint8_t*>(that)+0x650 && !entry->translating &&
         entry->accelerator==gVfAccelerator && getMember<void*>(that,0x5a8)==entry->accelerator;
     const bool copied=result && rooted && resource && gpuAddress && pitch;
+    if(slot==3) {
+        const unsigned ordinal=entry->checksumSurfaces.count;
+        entry->checksumSurfaces.record(copied,copied?reinterpret_cast<uintptr_t>(*resource):0,
+            copied?*gpuAddress:0,copied?*pitch:0,identifier,write);
+        bool log=false;
+        if(ordinal<3)for(unsigned attempt=0;attempt<4;++attempt) {
+            const uint32_t count=gVfChecksumSurfaceBindLogCount;
+            if(count>=24)break;
+            if(OSCompareAndSwap(count,count+1,&gVfChecksumSurfaceBindLogCount)){log=true;break;}
+        }
+        if(log)SYSLOG("ngreen","V392: native checksum surface bind ordinal=%u copied=%u gpu=%08x:%08x pitch=%u write-use=%u atomic=0",
+            ordinal,copied?1U:0U,copied?uint32_t(*gpuAddress>>32):0U,copied?uint32_t(*gpuAddress):0U,
+            copied?*pitch:0U,write?1U:0U);
+        return result;
+    }
     // Only the native caller's output scalars and retained root fields are
     // copied here. Do not follow a resource/task/shared pointer in this hook.
     entry->checksumHeaps.record(slot,copied,copied?reinterpret_cast<uintptr_t>(*resource):0,
@@ -7022,7 +7046,7 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
     const auto refuse=[&](const char *reason) {
         PANIC_COND(!VfMediaSubmissionScope::cancelChecksumLocked(*entry,stream,caller),
             "ngreen","Lost checksum unsubmitted CPU stream ownership");
-        entry->checksumHeaps.reset();
+        entry->checksumHeaps.reset();entry->checksumSurfaces.reset();
         SYSLOG("ngreen","Checksum Main end refused stage=%s queued=0 stamp-advanced=0",reason);
     };
     if(entry->failed){refuse("prior-error");return;}
@@ -7040,6 +7064,18 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
     NgreenChecksumGen12::HeapAddresses heaps{};
     if(!entry->checksumHeaps.copyObservedHeaps(reinterpret_cast<uintptr_t>(entry->task),
         reinterpret_cast<uintptr_t>(entry->shared),heaps)) {refuse("heap-receipt");return;}
+    if(!entry->checksumSurfaces.admitted()) {
+        SYSLOG("ngreen","V392: checksum surface admission refused count=%u failed=%u queued=0 stamp-advanced=0",
+            entry->checksumSurfaces.count,entry->checksumSurfaces.failed?1U:0U);
+        refuse("surface-native-bindings");return;
+    }
+    uintptr_t surfaceResources[3];uint64_t surfaceGpu[3];
+    uint32_t surfacePitch[3],surfaceIds[3],surfaceWrite[3];
+    for(unsigned i=0;i<3;++i) {
+        surfaceResources[i]=entry->checksumSurfaces.resources[i];surfaceGpu[i]=entry->checksumSurfaces.gpu[i];
+        surfacePitch[i]=entry->checksumSurfaces.pitch[i];surfaceIds[i]=entry->checksumSurfaces.identifier[i];
+        surfaceWrite[i]=entry->checksumSurfaces.writeUse[i];
+    }
     // Native end subtracts two, and FIFO appends END/NOOP only in mode one.
     // Descriptor identity and mode must remain stable through publication.
     void *descriptor=getMember<void*>(that,0x618);
@@ -7066,6 +7102,11 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
                 reinterpret_cast<uintptr_t>(entry->shared),observed) ||
             observed.surface!=heaps.surface || observed.dynamic!=heaps.dynamic || observed.instruction!=heaps.instruction ||
             observed.kernelSlot!=heaps.kernelSlot)return false;
+        if(!entry->checksumSurfaces.admitted())return false;
+        for(unsigned i=0;i<3;++i)
+            if(entry->checksumSurfaces.resources[i]!=surfaceResources[i] || entry->checksumSurfaces.gpu[i]!=surfaceGpu[i] ||
+               entry->checksumSurfaces.pitch[i]!=surfacePitch[i] || entry->checksumSurfaces.identifier[i]!=surfaceIds[i] ||
+               entry->checksumSurfaces.writeUse[i]!=surfaceWrite[i])return false;
         for(unsigned i=0;i<3;++i)if(entry->checksumHeaps.resources[i]!=resources[i] ||
             entry->checksumHeaps.gpu[i]!=rawGpu[i] || entry->checksumHeaps.pitch[i]!=pitch[i])return false;
         return true;
@@ -7090,7 +7131,7 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
     PANIC_COND(!live(NgreenChecksumGen12::reservedStreamWords),
         "ngreen","Lost checksum mapping after byte validation");
     FunctionCast(vfChecksumEnd,callback->oVfChecksumEnd)(that,stream);
-    entry->checksumHeaps.reset();
+    entry->checksumHeaps.reset();entry->checksumSurfaces.reset();
     // Native return is not a completion: the owned receipt/fence path must
     // independently validate the actual GPU stamp before reusing any backing.
 }

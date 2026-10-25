@@ -131,6 +131,37 @@ struct NativeHeapBindings {
         return true;
     }
 };
+// Exact checksum profile: two Y-tiled inputs and one R32_UINT buffer.
+// Gen12 PRM Vol2d pp812-813 requires a 4KiB-aligned tiled base. These are
+// ORIGINAL native bind outputs, not IOSurface CPU offsets or invented PTEs.
+// The write-use flag is retained for identity only; it is NOT PTE permission.
+struct NativeSurfaceBindings {
+    volatile uintptr_t resources[3];
+    volatile uint64_t gpu[3];
+    volatile uint32_t pitch[3],identifier[3],writeUse[3];
+    uint32_t count; bool failed;
+    void reset() noexcept {
+        for(unsigned i=0;i<3;++i){resources[i]=0;gpu[i]=0;pitch[i]=identifier[i]=writeUse[i]=0;}
+        count=0;failed=false;
+    }
+    bool record(bool copied,uintptr_t resource,uint64_t address,uint32_t rowPitch,
+                uint32_t sourceIdentifier,bool write) noexcept {
+        if(count>=3){failed=true;return false;}
+        const unsigned slot=count++;
+        resources[slot]=resource;gpu[slot]=address;pitch[slot]=rowPitch;
+        identifier[slot]=sourceIdentifier;writeUse[slot]=write?1U:0U;
+        if(!copied || !resource || (resource&7U) || !address ||
+           address>UINT64_C(0x0000ffffffffffff))failed=true;
+        return !failed;
+    }
+    bool admitted() const noexcept {
+        if(failed || count!=3)return false;
+        for(unsigned i=0;i<3;++i)
+            if(!resources[i] || (resources[i]&7U) || !gpu[i] ||
+               gpu[i]>UINT64_C(0x0000ffffffffffff) || (gpu[i]&(i<2?4095U:3U)))return false;
+        return true;
+    }
+};
 struct Result {bool ok=false;const char* reason="shape";};
 inline Result build1080Batch(const uint32_t* source,size_t words,const HeapAddresses& heap,
     volatile uint32_t* output,size_t capacity) noexcept {
