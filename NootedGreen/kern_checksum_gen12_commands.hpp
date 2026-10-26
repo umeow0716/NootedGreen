@@ -214,6 +214,39 @@ struct NativeSurfaceBindings {
         return true;
     }
 };
+// Extents for diagnostic CPU page coverage, derived from the SAME paired
+// final SSH and original bind outputs. This grants no mapping or submission.
+// Y-tiled rows are whole 32-row tiles; never infer a visible 1080 height.
+inline bool checksumObservedSurfaceRanges(const NativeSshMapPagePair& pair,
+    const NativeSurfaceBindings& bindings,uint64_t (&bytes)[3]) noexcept {
+    for(auto &n:bytes)n=0;
+    if(pair.version!=2 || pair.bytes!=4096 || pair.first!=4096 || pair.second!=4096 ||
+       pair.flags!=15 || pair.atomic || !bindings.admitted())return false;
+    for(unsigned i=0;i<1024;++i)if(pair.before[i]!=pair.after[i])return false;
+    uint32_t shape[64]{};
+    for(unsigned i=0;i<64;++i)shape[i]=pair.after[i];
+    for(unsigned i=0;i<3;++i) {
+        auto *state=shape+16+i*16;
+        const uint64_t gpu=uint64_t(state[8])|(uint64_t(state[9])<<32);
+        if(gpu!=bindings.gpu[i] || ((state[1]>>24)&0x7fU)!=(i<2?4U:6U))return false;
+        // Existing native layout verifier expects pre-normalization MOCS.
+        // Only this local CPU copy is restored for that structural check.
+        state[1]=(state[1]&~UINT32_C(0x7f000000))|((i<2?0x4eU:0x2aU)<<24);
+        if(i<2 && (state[3]&0x3ffffU)+1!=bindings.pitch[i])return false;
+    }
+    if(!checksumSurfaceLayoutCompatible(shape,64))return false;
+    const uint64_t pitch=(shape[19]&0x3ffffU)+1;
+    const uint64_t height=((shape[18]>>16)&0x3fffU)+1;
+    const uint64_t uvPitch=(shape[35]&0x3ffffU)+1;
+    if((height&31U) || ((height/2)&31U) || (pitch&127U) || uvPitch!=pitch)return false;
+    // Exact current BUFFER profile has Depth=0. Unsupported depth is missing
+    // coverage, never a guessed allocation extent.
+    if(shape[51]>>21)return false;
+    const uint64_t elements=(shape[50]&0x7fU)|(((shape[50]>>16)&0x3fffU)<<7);
+    const uint64_t y=pitch*height,uv=uvPitch*(height/2),out=(elements+1)*4;
+    if(!y || !uv || !out || out!=bindings.pitch[2] || y>4U*1024U*1024U || uv>4U*1024U*1024U || out>4U*1024U*1024U)return false;
+    bytes[0]=y;bytes[1]=uv;bytes[2]=out;return true;
+}
 struct Result {bool ok=false;const char* reason="shape";};
 inline Result build1080Batch(const uint32_t* source,size_t words,const HeapAddresses& heap,
     volatile uint32_t* output,size_t capacity) noexcept {

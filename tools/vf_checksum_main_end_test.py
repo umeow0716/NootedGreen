@@ -592,9 +592,51 @@ int main(){
     subprocess.run([str(executable)],check=True)
     print('Actual native SSH unmap observer:20 cases/native-once/copy-before-release/short-read and changed pair PASS; CPU-only')
 
+def test_observed_surface_ranges(root):
+    fixture=r'''
+#include "NootedGreen/kern_checksum_gen12_commands.hpp"
+#include <cassert>
+#include <cstdio>
+using namespace NgreenChecksumGen12;
+int main(){
+ for(unsigned mode=0;mode<17;++mode){
+  NativeSshMapPagePair pair{};pair.first=pair.second=4096;pair.flags=15;
+  NativeSurfaceBindings bindings{};
+  for(unsigned i=0;i<16;++i)pair.before[i]=i<8?64+i*64:0;
+  for(unsigned i=0;i<3;++i){auto*s=pair.before+16+16*i;
+   s[0]=i==0?0x25017000U:i==1?0x24297000U:0x835d4000U;
+   s[1]=(i<2?4U:6U)<<24;s[7]=0x09770000;
+   s[2]=i<2?479U|((i?543U:1087U)<<16):127U|(7U<<16);
+   s[3]=i<2?1919:3;s[8]=i==0?0x40020000:i==1?0x4021e000:0x40a6f000;
+   assert(bindings.record(true,0x1000+i*0x1000,s[8],i<2?1920:4096,i,i==2));
+  }
+  for(unsigned i=0;i<1024;++i)pair.after[i]=pair.before[i];
+  if(mode==1)pair.version=1;if(mode==2)pair.first=4092;if(mode==3)pair.second=4092;
+  if(mode==4)pair.flags=7;if(mode==5)pair.atomic=1;if(mode==6)bindings.failed=true;
+  if(mode==7)pair.after[1023]=1;if(mode==8)bindings.gpu[0]+=4096;
+  if(mode==9)pair.before[17]=pair.after[17]=0x4e000000;
+  if(mode==10)bindings.pitch[0]=2048;if(mode==11)bindings.pitch[2]=4;
+  if(mode==12)pair.before[18]=pair.after[18]=479|(1085U<<16);
+  if(mode==13)pair.before[35]=pair.after[35]=2047;
+  if(mode==14)pair.before[51]=pair.after[51]=3|(1U<<21);
+  if(mode==15)pair.before[20]=pair.after[20]=1;
+  if(mode==16){pair.before[18]=pair.after[18]=479|(1023U<<16);pair.before[34]=pair.after[34]=479|(511U<<16);}
+  uint64_t sizes[3]={1,2,3};const bool ok=checksumObservedSurfaceRanges(pair,bindings,sizes);
+  assert(ok==(mode==0 || mode==16));
+  if(ok){assert(sizes[0]==1920U*(mode==16?1024:1088));assert(sizes[1]==sizes[0]/2 && sizes[2]==4096);}
+  else assert(!sizes[0] && !sizes[1] && !sizes[2]);
+ }std::puts("Observed final SSH ranges: two geometries and15 refusals PASS; original output bind4096, not BUFFER row pitch4");
+}
+'''
+    path=root/'observed_ranges.cpp';path.write_text(fixture)
+    binary=root/'observed_ranges'
+    subprocess.run([*CXX,'-std=c++14','-fsanitize=address,undefined','-I'+str(ROOT),str(path),'-o',str(binary)],check=True)
+    subprocess.run([str(binary)],check=True)
+
 if __name__=="__main__":
     with tempfile.TemporaryDirectory(prefix="ngreen-checksum-main-end-") as directory:
         destination=Path(directory)
+        test_observed_surface_ranges(destination)
         test_ssh_unmap(destination)
         test_qualification(destination)
         test_readiness(destination)
