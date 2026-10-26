@@ -51,6 +51,7 @@ usage() {
 	printf '  sudo %s --arm-exactly-one-contained-tgl-start --manifest /absolute/manifest.tsv\n' "$0" >&2
 	printf '  sudo %s --arm-exactly-one-contained-metal-smoke --manifest /absolute/manifest.tsv\n' "$0" >&2
 	printf '  sudo %s --arm-exactly-one-contained-media-smoke --manifest /absolute/manifest.tsv\n' "$0" >&2
+	printf '  %s --check-domain-memory /absolute/domain.xml\n' "$0" >&2
 }
 
 runtime_seconds_for_mode() {
@@ -68,6 +69,151 @@ require_root() {
 		printf 'FAIL: root is required for kernel journal containment.\n' >&2
 		exit 1
 	fi
+}
+
+memory_guard_sample() {
+	python3 -B - "$@" <<'PY'
+import os
+import stat
+import sys
+import xml.etree.ElementTree as ET
+
+FLOOR_KIB = 4 * 1024 * 1024
+OVERHEAD_KIB = 1 * 1024 * 1024
+SWAP_CEILING_KIB = 8 * 1024 * 1024
+RAPID_SWAP_KIB_PER_SECOND = 128 * 1024
+
+
+def fail(message):
+    raise ValueError(message)
+
+
+def parse_memory_kib(xml_bytes):
+    if len(xml_bytes) > 1024 * 1024:
+        fail("domain XML exceeds 1 MiB")
+    upper = xml_bytes.upper()
+    if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
+        fail("domain XML contains a prohibited declaration")
+    root = ET.fromstring(xml_bytes)
+    memory = root.findall("./memory")
+    current = root.findall("./currentMemory")
+    if len(memory) != 1 or len(current) > 1:
+        fail("domain XML has invalid memory element cardinality")
+
+    def convert(element):
+        text = (element.text or "").strip()
+        if not text.isdigit():
+            fail("domain memory is not an unsigned integer")
+        value = int(text)
+        if value <= 0:
+            fail("domain memory is zero")
+        unit = element.attrib.get("unit", "KiB").strip().lower()
+        scales = {
+            "b": 1,
+            "byte": 1,
+            "bytes": 1,
+            "kib": 1024,
+            "mib": 1024 * 1024,
+            "gib": 1024 * 1024 * 1024,
+        }
+        if unit not in scales:
+            fail("domain memory uses an unsupported unit")
+        byte_count = value * scales[unit]
+        return (byte_count + 1023) // 1024
+
+    values = [convert(memory[0])]
+    if current:
+        values.append(convert(current[0]))
+    return max(values)
+
+
+def parse_meminfo(text):
+    wanted = {"MemAvailable", "SwapTotal", "SwapFree"}
+    values = {}
+    for line in text.splitlines():
+        fields = line.split()
+        key = fields[0][:-1] if fields and fields[0].endswith(":") else ""
+        if key not in wanted:
+            continue
+        if key in values or len(fields) != 3 or not fields[1].isdigit() or fields[2] != "kB":
+            fail("malformed /proc/meminfo")
+        values[key] = int(fields[1])
+    if set(values) != wanted or values["SwapFree"] > values["SwapTotal"]:
+        fail("incomplete /proc/meminfo")
+    return values
+
+
+def evaluate(mode, guest_kib, info, now_ms, previous_swap=None, previous_ms=None):
+    swap_used = info["SwapTotal"] - info["SwapFree"]
+    required = FLOOR_KIB
+    if mode == "startup":
+        required += guest_kib + OVERHEAD_KIB
+    if info["MemAvailable"] < required:
+        fail("available memory is below the reserved headroom")
+    if swap_used >= SWAP_CEILING_KIB:
+        fail("host swap use reached the 8 GiB ceiling")
+    if mode == "live" and previous_swap is not None and previous_ms is not None:
+        elapsed = now_ms - previous_ms
+        growth = swap_used - previous_swap
+        if elapsed <= 0:
+            fail("monotonic clock did not advance")
+        if growth > 0 and growth * 1000 > RAPID_SWAP_KIB_PER_SECOND * elapsed:
+            fail("host swap is increasing faster than 128 MiB/s")
+    return required, swap_used
+
+
+def self_test():
+    domain = b"<domain><memory unit='GiB'>16</memory><currentMemory unit='MiB'>8192</currentMemory><maxMemory unit='GiB'>64</maxMemory></domain>"
+    guest = parse_memory_kib(domain)
+    assert guest == 16 * 1024 * 1024
+    info = {"MemAvailable": 22 * 1024 * 1024, "SwapTotal": 32 * 1024 * 1024, "SwapFree": 31 * 1024 * 1024}
+    required, swap_used = evaluate("startup", guest, info, 1000)
+    assert required == 21 * 1024 * 1024 and swap_used == 1024 * 1024
+    assert parse_memory_kib(b"<domain><memory unit='bytes'>1073741824</memory></domain>") == 1024 * 1024
+    rejected = 0
+    cases = [
+        lambda: evaluate("startup", guest, dict(info, MemAvailable=required - 1), 1000),
+        lambda: evaluate("live", guest, {"MemAvailable": FLOOR_KIB, "SwapTotal": 9 * 1024 * 1024, "SwapFree": 1024 * 1024}, 2000),
+        lambda: evaluate("live", guest, info, 2000, swap_used - 256 * 1024, 1000),
+        lambda: parse_memory_kib(b"<!DOCTYPE domain><domain><memory>1</memory></domain>"),
+        lambda: parse_memory_kib(b"<domain><memory>1</memory><memory>2</memory></domain>"),
+    ]
+    for case in cases:
+        try:
+            case()
+        except ValueError:
+            rejected += 1
+    assert rejected == len(cases)
+    evaluate("live", guest, info, 3000, swap_used - 64 * 1024, 2000)
+    print("MEMORY_GUARD_SELF_TEST_PASS cases=8")
+
+
+try:
+    mode = sys.argv[1]
+    if mode == "self-test":
+        self_test()
+        raise SystemExit(0)
+    if mode not in {"startup", "live"} or len(sys.argv) != 5:
+        fail("invalid memory guard arguments")
+    xml_path = sys.argv[2]
+    path_stat = os.lstat(xml_path)
+    if not stat.S_ISREG(path_stat.st_mode) or stat.S_ISLNK(path_stat.st_mode):
+        fail("domain XML is not a regular non-symlink file")
+    with open(xml_path, "rb", buffering=0) as stream:
+        xml_bytes = stream.read(1024 * 1024 + 1)
+    guest_kib = parse_memory_kib(xml_bytes)
+    with open("/proc/meminfo", "r", encoding="ascii") as stream:
+        info = parse_meminfo(stream.read(65536))
+    with open("/proc/uptime", "r", encoding="ascii") as stream:
+        now_ms = int(float(stream.read(128).split()[0]) * 1000)
+    previous_swap = None if sys.argv[3] == "-" else int(sys.argv[3])
+    previous_ms = None if sys.argv[4] == "-" else int(sys.argv[4])
+    required, swap_used = evaluate(mode, guest_kib, info, now_ms, previous_swap, previous_ms)
+    print(f"MEMORY_GATE_PASS mode={mode} guest_kib={guest_kib} available_kib={info['MemAvailable']} required_kib={required} swap_used_kib={swap_used} monotonic_ms={now_ms}")
+except (OSError, ET.ParseError, ValueError, IndexError) as error:
+    print(f"MEMORY_GATE_FAIL reason={str(error).replace(chr(10), ' ')}", file=sys.stderr)
+    raise SystemExit(1)
+PY
 }
 
 validate_evidence_dir() {
@@ -343,6 +489,8 @@ internal_run_mode() {
 	local deadline_unit="${guard_unit}-deadline"
 	local run_failed=0
 	local cleanup_trap=""
+	local memory_sample memory_tail memory_previous_swap memory_previous_ms
+	local memory_sample_ticks=0
 	journal_pid=""
 	watcher_pid=""
 	trace_instance=""
@@ -386,8 +534,19 @@ internal_run_mode() {
 	schedule_deadline "$evidence_dir" "$deadline_unit" "$runtime_seconds"
 
 	# This is the only VM start in the controller. The kernel watcher, private
-	# trace collector and independent deadline must all be live first.
+	# trace collector and independent deadline must all be live first. Reserve
+	# the inactive XML's full guest allocation plus explicit host/QEMU headroom.
 	require_dynamic_test_not_frozen
+	if ! memory_sample=$(memory_guard_sample startup \
+		"${evidence_dir}/domain-recheck.xml" - - 2>&1); then
+		log_line "$evidence_dir" "FAIL pre-start memory admission: ${memory_sample}"
+		exit 1
+	fi
+	log_line "$evidence_dir" "${memory_sample}"
+	memory_tail=${memory_sample#*swap_used_kib=}
+	memory_previous_swap=${memory_tail%% *}
+	memory_tail=${memory_sample#*monotonic_ms=}
+	memory_previous_ms=${memory_tail%% *}
 	if ! virsh -c "$libvirt_uri" start "$domain_name" \
 		>>"${evidence_dir}/virsh-start.log" 2>&1; then
 		log_line "$evidence_dir" "FAIL one-shot domain start returned failure"
@@ -414,6 +573,23 @@ internal_run_mode() {
 			bounded_destroy "$evidence_dir" "observer-exit" || true
 			run_failed=1
 			break
+		fi
+		((memory_sample_ticks += 1))
+		if ((memory_sample_ticks >= 4)); then
+			memory_sample_ticks=0
+			if ! memory_sample=$(memory_guard_sample live \
+				"${evidence_dir}/domain-recheck.xml" \
+				"$memory_previous_swap" "$memory_previous_ms" 2>&1); then
+				log_line "$evidence_dir" "FAIL live memory containment: ${memory_sample}"
+				bounded_destroy "$evidence_dir" "memory-containment" || true
+				run_failed=1
+				break
+			fi
+			log_line "$evidence_dir" "${memory_sample}"
+			memory_tail=${memory_sample#*swap_used_kib=}
+			memory_previous_swap=${memory_tail%% *}
+			memory_tail=${memory_sample#*monotonic_ms=}
+			memory_previous_ms=${memory_tail%% *}
 		fi
 		sleep 0.25
 	done
@@ -525,6 +701,14 @@ arm_mode() {
 }
 
 case ${1:-} in
+	--memory-self-test)
+		(($# == 1)) || { usage; exit 64; }
+		memory_guard_sample self-test
+		;;
+	--check-domain-memory)
+		(($# == 2)) && [[ ${2:-} = /* ]] || { usage; exit 64; }
+		memory_guard_sample startup "$2" - -
+		;;
 	--arm-exactly-one-contained-run)
 		(($# == 3)) && [[ ${2:-} == --manifest ]] || { usage; exit 64; }
 		arm_mode "$3" trace-only

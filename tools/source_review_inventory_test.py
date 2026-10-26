@@ -90,7 +90,6 @@ EXPECTED_EXTERNAL_ABI_PARTITIONS = {
 # Keeping the exact list here prevents an executable tool from silently being
 # added outside the all-program ledger.
 INDIRECT_OR_EXTERNAL_PROGRAMS = {
-    "tools/host_vf_contained_run.sh": "source-contracted guarded host controller",
     "tools/host_vf_runtime_manifest.py": "imported by manifest mutation test",
     "tools/host_vf_runtime_preflight.sh": "source-contracted read-only preflight",
     "tools/host_vf_trace_analyzer.py": "executed by trace analyzer test and guarded host controller",

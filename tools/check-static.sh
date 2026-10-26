@@ -91,6 +91,11 @@ if bash -n tools/*.sh; then
 else
     failed=1
 fi
+if tools/host_vf_contained_run.sh --memory-self-test; then
+    printf 'PASS contained VF memory admission and live-containment self-test\n'
+else
+    failed=1
+fi
 for source in NootedGreen/*.cpp; do
     if "$compiler" --target=x86_64-apple-macos13 -std=c++14 \
         -fsyntax-only -ffreestanding -fno-builtin \
