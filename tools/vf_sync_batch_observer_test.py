@@ -512,3 +512,93 @@ with tempfile.TemporaryDirectory(prefix='ngreen-sync-batch-') as directory:
             assert report['partial_or_missing_end'] > 0
         sink.close()
 print('PASS actual synchronous observer ASan/UBSan native-once cases; actual nofault CPU map backend 17 cases plus strict decoder/SQL; owned callbacks only')
+
+# New prepared-page CPU reader: fake canonical addresses backed only by owned
+# arrays. No native getter, mapper, descriptor, VM or GPU call is possible.
+prepared_cache_test = r'''
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <array>
+#include <vector>
+#include "NootedGreen/kern_flight_trace.hpp"
+using namespace NGFlightTrace;
+struct Image {
+    static constexpr uint64_t d=0xffff800000100000ULL,v=0xffff800000102000ULL;
+    static constexpr uint64_t e=0xffff800000104000ULL,p=0xffff800000106000ULL;
+    static constexpr uint64_t u=0xffff800000108000ULL,x=0xffff80000010a000ULL;
+    std::array<std::array<uint8_t,4096>,6> data{};
+    std::array<uint64_t,6> bases{{d,v,e,p,u,x}};
+    PreparedPhysicalCacheAuthority authority{0xffff800000900000ULL,0xffff800000900100ULL,true};
+    bool alive=true,deny=false,change=false;unsigned pageReads=0;
+    template<class T> void set(uint64_t at,T value) {
+        for(unsigned i=0;i<6;++i)if(at>=bases[i] && at-bases[i]<=4096-sizeof(T)) {
+            std::memcpy(data[i].data()+at-bases[i],&value,sizeof(value));return;
+        }
+        assert(false);
+    }
+    Image() {
+        set(d,v);set(d+0x20,uint32_t(0x10));set(d+0x50,uint64_t(8192));
+        set(d+0x88,uint32_t(1));set(d+0x90,e);
+        set(v+0x130,authority.dmaMethod);set(v+0x138,authority.physicalMethod);
+        set(e+0x10,p);set(e+0x18,uint64_t(120));set(p+0x28,uint32_t(4));
+        for(unsigned i=0;i<4;++i)set(p+48+8*i,uint64_t(0x12345+i));
+        PreparedPhysicalCacheBlock block{};block.upl=u;set(p+80,block);
+    }
+    bool read(uint64_t at,void* out,uint32_t bytes) {
+        if(deny)return false;
+        if(change && at==p+48 && ++pageReads==2)set(p+48,uint64_t(0x54321));
+        for(unsigned i=0;i<6;++i)if(at>=bases[i] && bytes<=4096 && at-bases[i]<=4096-bytes) {
+            std::memcpy(out,data[i].data()+at-bases[i],bytes);return true;
+        }
+        return false;
+    }
+    PreparedPhysicalCacheSample run(uint64_t offset=0) {
+        return observePreparedPhysicalCache(d,offset,authority,
+            [&](uint64_t at,void* out,uint32_t bytes){return read(at,out,bytes);},[&](){return alive;});
+    }
+};
+int main() {
+    Image a;auto r=a.run();assert(r.flags==15 && r.physical==0x12345000 && r.bytes==4096);
+    r=a.run(4096);assert(r.flags==15 && r.physical==0x12346000);
+    r=a.run(37);assert(r.flags==15 && r.physical==0x12345025 && r.bytes==4059);
+    Image b;b.set(Image::e+0x18,uint64_t(160));
+    PreparedPhysicalCacheBlock second{};second.upl=Image::u;second.pageInfo=2;second.offset=4096;
+    b.set(Image::p+120,second);r=b.run(4196);assert(r.flags==15 && r.physical==0x12347064);
+    Image c;c.set(Image::p+0x28,uint32_t(0));c.set(Image::e+0x18,uint64_t(88));
+    PreparedPhysicalCacheBlock external{};external.upl=Image::u;external.pageInfo=Image::x;external.flags=2;
+    c.set(Image::p+48,external);c.set(Image::x,uint64_t(0x789));c.set(Image::x+8,uint64_t(0x78a));
+    r=c.run(4096);assert(r.flags==15 && r.physical==0x78a000);
+    unsigned rejected=0;
+    for(unsigned test=0;test<16;++test) {
+        Image bad;
+        switch(test) {
+        case 0:bad.authority.exactLayout=false;break;
+        case 1:bad.set(Image::d+0x88,uint32_t(0));break;
+        case 2:bad.set(Image::v+0x138,uint64_t(0));break;
+        case 3:bad.set(Image::v+0x130,uint64_t(0));break;
+        case 4:bad.set(Image::d+0x50,uint64_t(0));break;
+        case 5:bad.set(Image::d+0x50,uint64_t(0x400001));break;
+        case 6:bad.set(Image::d+0x20,uint32_t(0x20));break;
+        case 7:bad.set(Image::e+0x10,uint64_t(0x1000));break;
+        case 8:bad.set(Image::e+0x18,uint64_t(119));break;
+        case 9:bad.set(Image::p+0x28,uint32_t(16385));break;
+        case 10:bad.set(Image::p+80+32,uint32_t(1));break;
+        case 11:bad.set(Image::p+80+28,uint32_t(4096));break;
+        case 12:bad.set(Image::p+48,uint64_t(0));break;
+        case 13:bad.change=true;break;
+        case 14:bad.alive=false;break;
+        case 15:bad.deny=true;break;
+        }
+        assert(bad.run().flags==0);++rejected;
+    }
+    assert(a.run(8192).flags==0 && rejected==16);
+}
+'''
+with tempfile.TemporaryDirectory(prefix='ngreen-prepared-physical-cache-') as directory:
+    task = Path(directory)
+    (task/'test.cpp').write_text(prepared_cache_test)
+    subprocess.run(['clang++','-std=c++14','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+                    '-I',str(root),str(task/'test.cpp'),'-o',str(task/'test')],check=True,capture_output=True,timeout=30)
+    subprocess.run([str(task/'test')],check=True,capture_output=True,timeout=10)
+print('PASS actual prepared physical-cache reader: internal/multiple/external blocks, partial-page and17 refusal cases; owned CPU fixtures only')

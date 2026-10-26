@@ -19,6 +19,106 @@ struct MapListNode {
 inline bool canonicalKernelObject(uint64_t address) {
     return (address>>47)==0x1ffffU && !(address&7U);
 }
+// Exact kernel1291d44a IOGeneralMemoryDescriptor prepared-cache layout.
+// CPU metadata only: no virtual call, prepare, DMA map, page-table write or
+// ownership grant. Caller must separately pin the ORIGINAL descriptor and
+// qualify both method addresses/layout before supplying this authority.
+struct PreparedPhysicalCacheAuthority {
+    uint64_t physicalMethod=0,dmaMethod=0;
+    bool exactLayout=false;
+};
+struct PreparedPhysicalCacheSample {
+    uint64_t physical=0,bytes=0;
+    uint32_t flags=0;
+    const char *reason="admission";
+};
+struct PreparedPhysicalCacheView {
+    uint64_t vtable=0,length=0,entries=0,data=0,dataBytes=0;
+    uint32_t options=0,wired=0,pages=0,blocks=0;
+    bool same(const PreparedPhysicalCacheView& b) const {
+        return vtable==b.vtable && length==b.length && entries==b.entries && data==b.data &&
+            dataBytes==b.dataBytes && options==b.options && wired==b.wired && pages==b.pages && blocks==b.blocks;
+    }
+};
+struct PreparedPhysicalCacheBlock {
+    uint64_t upl=0,pageInfo=0,offset=0;
+    uint32_t mappedPage=0,pageOffset=0,flags=0,padding=0;
+    bool same(const PreparedPhysicalCacheBlock& b) const {
+        return upl==b.upl && pageInfo==b.pageInfo && offset==b.offset && mappedPage==b.mappedPage &&
+            pageOffset==b.pageOffset && flags==b.flags && padding==b.padding;
+    }
+};
+static_assert(sizeof(PreparedPhysicalCacheBlock)==40,"native ioPLBlock size");
+template<class Read,class Live>
+inline PreparedPhysicalCacheSample observePreparedPhysicalCache(uint64_t descriptor,uint64_t offset,
+    const PreparedPhysicalCacheAuthority& authority,Read&& read,Live&& live) {
+    PreparedPhysicalCacheSample result{};
+    if(!canonicalKernelObject(descriptor) || descriptor>UINT64_MAX-0x98U || !authority.exactLayout ||
+       !canonicalKernelObject(authority.physicalMethod) || !canonicalKernelObject(authority.dmaMethod) || !live())return result;
+    const auto fetch=[&](uint64_t at,void *out,uint32_t bytes) {
+        return at && bytes && at<=UINT64_MAX-bytes && live() && read(at,out,bytes) && live();
+    };
+    const auto capture=[&](PreparedPhysicalCacheView& view) {
+        uint64_t physical=0,dma=0;
+        if(!fetch(descriptor,&view.vtable,8) || !canonicalKernelObject(view.vtable) || view.vtable>UINT64_MAX-0x140U ||
+           !fetch(view.vtable+0x138U,&physical,8) || physical!=authority.physicalMethod ||
+           !fetch(view.vtable+0x130U,&dma,8) || dma!=authority.dmaMethod ||
+           !fetch(descriptor+0x20U,&view.options,4) ||
+           ((view.options&0xf0U)!=0x10U && (view.options&0xf0U)!=0x30U) ||
+           !fetch(descriptor+0x50U,&view.length,8) || !view.length || view.length>UINT64_C(4)*1024*1024 ||
+           !fetch(descriptor+0x88U,&view.wired,4) || !view.wired ||
+           !fetch(descriptor+0x90U,&view.entries,8) || !canonicalKernelObject(view.entries) || view.entries>UINT64_MAX-0x20U ||
+           !fetch(view.entries+0x10U,&view.data,8) || !canonicalKernelObject(view.data) ||
+           !fetch(view.entries+0x18U,&view.dataBytes,8) || view.dataBytes<88 || view.dataBytes>1024*1024 ||
+           view.data>UINT64_MAX-view.dataBytes || !fetch(view.data+0x28U,&view.pages,4) || view.pages>16384U)return false;
+        const uint64_t prefix=48U+uint64_t(view.pages)*8U;
+        if(prefix>=view.dataBytes || (view.dataBytes-prefix)%40U)return false;
+        view.blocks=static_cast<uint32_t>((view.dataBytes-prefix)/40U);
+        return view.blocks && view.blocks<=64U;
+    };
+    PreparedPhysicalCacheView before{},after{};
+    result.reason="prepared-view";
+    if(!capture(before) || offset>=before.length)return result;
+    const uint64_t blockBase=before.data+48U+uint64_t(before.pages)*8U;
+    PreparedPhysicalCacheBlock selected{},again{};
+    uint64_t selectedAt=0,nextOffset=before.length,previous=0;
+    result.reason="block-layout";
+    for(uint32_t i=0;i<before.blocks;++i) {
+        PreparedPhysicalCacheBlock block{};
+        const uint64_t at=blockBase+uint64_t(i)*40U;
+        if(!fetch(at,&block,40) || block.offset>=before.length ||
+           (i?block.offset<=previous:block.offset!=0))return result;
+        previous=block.offset;
+        if(block.offset<=offset){selected=block;selectedAt=at;}
+        else if(selectedAt && nextOffset==before.length)nextOffset=block.offset;
+    }
+    if(!selectedAt || selected.pageOffset>=4096U || (selected.flags&~2U) ||
+       !canonicalKernelObject(selected.upl) || offset-selected.offset>UINT64_MAX-selected.pageOffset)return result;
+    const uint64_t local=offset-selected.offset+selected.pageOffset,index=local>>12;
+    uint64_t pageAddress=0;
+    result.reason="page-layout";
+    if(selected.flags&2U) {
+        const uint64_t extent=nextOffset-selected.offset+selected.pageOffset;
+        const uint64_t pageCount=(extent+4095U)/4096U;
+        if(!canonicalKernelObject(selected.pageInfo) || pageCount>16384U || index>=pageCount ||
+           selected.pageInfo>UINT64_MAX-index*8U)return result;
+        pageAddress=selected.pageInfo+index*8U;
+    } else {
+        if(selected.pageInfo>=before.pages || index>=before.pages-selected.pageInfo)return result;
+        pageAddress=before.data+48U+(selected.pageInfo+index)*8U;
+    }
+    uint64_t first=0,second=0;
+    result.reason="page-pair";
+    if(!fetch(pageAddress,&first,8) || !(first&UINT64_C(0xffffffff)) ||
+       !capture(after) || !before.same(after) || !fetch(selectedAt,&again,40) || !selected.same(again) ||
+       !fetch(pageAddress,&second,8) || first!=second || !live())return result;
+    result.physical=((first&UINT64_C(0xffffffff))<<12)|(local&4095U);
+    result.bytes=4096U-(local&4095U);
+    if(result.bytes>before.length-offset)result.bytes=before.length-offset;
+    if(result.bytes>nextOffset-offset)result.bytes=nextOffset-offset;
+    result.flags=15U;result.reason="prepared-cpu-page";
+    return result; // Pair equality is not atomicity, IOVA or GPU-fetch proof.
+}
 // CPU snapshot walker only: callbacks must use the bound native nofault copy,
 // not virtual getters or retain. Equality does NOT exclude reuse/ABA and never
 // supplies a lifetime lease. No address below is a GPU memory dereference.
