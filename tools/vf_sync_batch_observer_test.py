@@ -619,6 +619,9 @@ int main() {
     c.set(Image::p+48,external);c.set(Image::x,uint64_t(0x789));c.set(Image::x+8,uint64_t(0x78a));
     r=c.run(4096);assert(r.flags==15 && r.physical==0x78a000);
     unsigned rejected=0;
+    const char* reasons[]={"admission","descriptor-not-wired","physical-method","dma-method",
+        "descriptor-length","descriptor-length","descriptor-type","cache-data","cache-block-layout",
+        "cache-pages","block-layout","block-layout","page-pair","page-pair","admission","descriptor-vtable"};
     for(unsigned test=0;test<16;++test) {
         Image bad;
         switch(test) {
@@ -639,9 +642,11 @@ int main() {
         case 14:bad.alive=false;break;
         case 15:bad.deny=true;break;
         }
-        assert(bad.run().flags==0);++rejected;
+        const auto refused=bad.run();
+        assert(refused.flags==0 && std::strcmp(refused.reason,reasons[test])==0);++rejected;
     }
-    assert(a.run(8192).flags==0 && rejected==16);
+    r=a.run(8192);assert(r.flags==0 && std::strcmp(r.reason,"descriptor-offset")==0 && rejected==16);
+    r=a.run();assert(r.options==0x10 && r.wired==1 && r.descriptorBytes==8192 && r.cacheBytes==120 && r.pages==4 && r.blocks==1);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='ngreen-prepared-physical-cache-') as directory:

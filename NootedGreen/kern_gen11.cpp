@@ -7276,8 +7276,9 @@ static void vfObserveChecksumPreparedResources(VfMediaSubmission& entry,
             const auto sample=NGFlightTrace::observePreparedPhysicalCache(before.descriptor,offset+done,
                 gVfPreparedPhysicalCacheAuthority,read,stable);
             if(sample.flags!=15U || !sample.bytes){
-                SYSLOG("ngreen","V395: prepared CPU page refused ticket=%u role=%u reason=%s",
-                    ticket+1,role,sample.reason);reason=2;break;
+                SYSLOG("ngreen","V397: prepared CPU page refused ticket=%u role=%u reason=%s options=%x wired=%u bytes=%llx cache-bytes=%llx pages=%u blocks=%u atomic=0",
+                    ticket+1,role,sample.reason,sample.options,sample.wired,sample.descriptorBytes,
+                    sample.cacheBytes,sample.pages,sample.blocks);reason=2;break;
             }
             uint64_t step=sample.bytes;
             const uint64_t gpuPage=4096U-((gpu+done)&4095U);

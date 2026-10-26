@@ -30,6 +30,8 @@ struct PreparedPhysicalCacheAuthority {
 struct PreparedPhysicalCacheSample {
     uint64_t physical=0,bytes=0;
     uint32_t flags=0;
+    uint32_t options=0,wired=0,pages=0,blocks=0;
+    uint64_t descriptorBytes=0,cacheBytes=0;
     const char *reason="admission";
 };
 struct PreparedPhysicalCacheView {
@@ -60,25 +62,48 @@ inline PreparedPhysicalCacheSample observePreparedPhysicalCache(uint64_t descrip
     };
     const auto capture=[&](PreparedPhysicalCacheView& view) {
         uint64_t physical=0,dma=0;
-        if(!fetch(descriptor,&view.vtable,8) || !canonicalKernelObject(view.vtable) || view.vtable>UINT64_MAX-0x140U ||
-           !fetch(view.vtable+0x138U,&physical,8) || physical!=authority.physicalMethod ||
-           !fetch(view.vtable+0x130U,&dma,8) || dma!=authority.dmaMethod ||
-           !fetch(descriptor+0x20U,&view.options,4) ||
-           ((view.options&0xf0U)!=0x10U && (view.options&0xf0U)!=0x30U) ||
-           !fetch(descriptor+0x50U,&view.length,8) || !view.length || view.length>UINT64_C(4)*1024*1024 ||
-           !fetch(descriptor+0x88U,&view.wired,4) || !view.wired ||
-           !fetch(descriptor+0x90U,&view.entries,8) || !canonicalKernelObject(view.entries) || view.entries>UINT64_MAX-0x20U ||
-           !fetch(view.entries+0x10U,&view.data,8) || !canonicalKernelObject(view.data) ||
-           !fetch(view.entries+0x18U,&view.dataBytes,8) || view.dataBytes<88 || view.dataBytes>1024*1024 ||
-           view.data>UINT64_MAX-view.dataBytes || !fetch(view.data+0x28U,&view.pages,4) || view.pages>16384U)return false;
+        result.reason="descriptor-vtable";
+        if(!fetch(descriptor,&view.vtable,8) || !canonicalKernelObject(view.vtable) || view.vtable>UINT64_MAX-0x140U)return false;
+        result.reason="physical-method";
+        if(!fetch(view.vtable+0x138U,&physical,8) || physical!=authority.physicalMethod)return false;
+        result.reason="dma-method";
+        if(!fetch(view.vtable+0x130U,&dma,8) || dma!=authority.dmaMethod)return false;
+        result.reason="descriptor-options-read";
+        if(!fetch(descriptor+0x20U,&view.options,4))return false;
+        result.options=view.options;result.reason="descriptor-type";
+        if((view.options&0xf0U)!=0x10U && (view.options&0xf0U)!=0x30U)return false;
+        result.reason="descriptor-length-read";
+        if(!fetch(descriptor+0x50U,&view.length,8))return false;
+        result.descriptorBytes=view.length;result.reason="descriptor-length";
+        if(!view.length || view.length>UINT64_C(4)*1024*1024)return false;
+        result.reason="descriptor-wired-read";
+        if(!fetch(descriptor+0x88U,&view.wired,4))return false;
+        result.wired=view.wired;result.reason="descriptor-not-wired";
+        if(!view.wired)return false;
+        result.reason="descriptor-entries";
+        if(!fetch(descriptor+0x90U,&view.entries,8) || !canonicalKernelObject(view.entries) || view.entries>UINT64_MAX-0x20U)return false;
+        result.reason="cache-data";
+        if(!fetch(view.entries+0x10U,&view.data,8) || !canonicalKernelObject(view.data))return false;
+        result.reason="cache-length-read";
+        if(!fetch(view.entries+0x18U,&view.dataBytes,8))return false;
+        result.cacheBytes=view.dataBytes;result.reason="cache-length";
+        if(view.dataBytes<88 || view.dataBytes>1024*1024 || view.data>UINT64_MAX-view.dataBytes)return false;
+        result.reason="cache-pages-read";
+        if(!fetch(view.data+0x28U,&view.pages,4))return false;
+        result.pages=view.pages;result.reason="cache-pages";
+        if(view.pages>16384U)return false;
         const uint64_t prefix=48U+uint64_t(view.pages)*8U;
+        result.reason="cache-block-layout";
         if(prefix>=view.dataBytes || (view.dataBytes-prefix)%40U)return false;
         view.blocks=static_cast<uint32_t>((view.dataBytes-prefix)/40U);
+        result.blocks=view.blocks;result.reason="cache-block-count";
         return view.blocks && view.blocks<=64U;
     };
     PreparedPhysicalCacheView before{},after{};
     result.reason="prepared-view";
-    if(!capture(before) || offset>=before.length)return result;
+    if(!capture(before))return result;
+    result.reason="descriptor-offset";
+    if(offset>=before.length)return result;
     const uint64_t blockBase=before.data+48U+uint64_t(before.pages)*8U;
     PreparedPhysicalCacheBlock selected{},again{};
     uint64_t selectedAt=0,nextOffset=before.length,previous=0;
@@ -114,8 +139,10 @@ inline PreparedPhysicalCacheSample observePreparedPhysicalCache(uint64_t descrip
     }
     uint64_t first=0,second=0;
     result.reason="page-pair";
-    if(!fetch(pageAddress,&first,8) || !(first&UINT64_C(0xffffffff)) ||
-       !capture(after) || !before.same(after) || !fetch(selectedAt,&again,40) || !selected.same(again) ||
+    if(!fetch(pageAddress,&first,8) || !(first&UINT64_C(0xffffffff)))return result;
+    if(!capture(after))return result;
+    result.reason="page-pair";
+    if(!before.same(after) || !fetch(selectedAt,&again,40) || !selected.same(again) ||
        !fetch(pageAddress,&second,8) || first!=second || !live())return result;
     result.physical=((first&UINT64_C(0xffffffff))<<12)|(local&4095U);
     result.bytes=4096U-(local&4095U);
