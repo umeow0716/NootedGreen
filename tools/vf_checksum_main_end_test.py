@@ -11,6 +11,7 @@ import shlex
 import struct
 import subprocess
 import tempfile
+import sys
 
 ROOT=Path(__file__).resolve().parents[1]
 CXX=shlex.split(os.environ.get("CXX","clang++"))
@@ -649,7 +650,7 @@ def test_prepared_capture_arm(root):
 enum class VfIdentity {Virtual,Physical};VfIdentity gVfIdentity=VfIdentity::Virtual;
 bool enabled=true,early=false,lockAllowed=true,publishLock=true;
 bool gVfChecksumPublicationRouteReady=true,gVfChecksumNativeBindingsQualified=true,gVfCaptureStreamResetBound=true;
-bool gVfNativeObjectLayoutBound=true,gVfMediaMapOffsetLayoutVerified=true;
+bool gVfNativeObjectLayoutBound=true,gVfPreparedGpuSpanLayoutBound=true,gVfMediaMapOffsetLayoutVerified=true;
 uintptr_t gVfChecksumSurfaceBindCaller=1,gVfChecksumSshUnmapCaller=1,gVfChecksumMapAddressGetter=1,gVfChecksumMapLengthGetter=1,gVfBatchCpuCopy=1;
 uintptr_t pmap=1,gVfCpuKernelPmapStore=1,*gVfCpuKernelPmapSlot=&pmap;
 uintptr_t mapper=0,*gVfCpuSystemMapperSlot=&mapper;
@@ -662,7 +663,7 @@ bool checkKernelArgument(const char*s){return !strcmp(s,"-ngreenchecksumcapture"
 void check(){observed=-1;initializers=0;gVfPageTableUpdateLock=nullptr;__ACTUAL__}
 int main(){check();assert(observed==1 && initializers==1);
  for(bool*value:{&gVfChecksumPublicationRouteReady,&gVfChecksumNativeBindingsQualified,&gVfCaptureStreamResetBound,
- &gVfNativeObjectLayoutBound,&gVfMediaMapOffsetLayoutVerified,&gVfPreparedPhysicalCacheAuthority.exactLayout}){
+ &gVfNativeObjectLayoutBound,&gVfPreparedGpuSpanLayoutBound,&gVfMediaMapOffsetLayoutVerified,&gVfPreparedPhysicalCacheAuthority.exactLayout}){
   *value=false;check();assert(observed==0 && !initializers);*value=true;}
  for(uintptr_t*value:{&gVfChecksumSurfaceBindCaller,&gVfChecksumSshUnmapCaller,&gVfChecksumMapAddressGetter,
  &gVfChecksumMapLengthGetter,&gVfBatchCpuCopy,&gVfNativeBatchMapVtable,&gVfMediaSysMemoryVtable,
@@ -705,7 +706,7 @@ std::vector<uint8_t> memory(1024*1024);
 const uint64_t shared=base+0x90000,task=base+0xa0000,gpuTask=base+0xc0000;
 uintptr_t gVfNativeBatchMapVtable=base+0xe0000,gVfMediaSysMemoryVtable=base+0xe1000;
 NGFlightTrace::PreparedPhysicalCacheAuthority gVfPreparedPhysicalCacheAuthority{base+0xd0000,base+0xd0100,true};
-bool gVfNativeObjectLayoutBound=true,gVfMediaMapOffsetLayoutVerified=true;
+bool gVfNativeObjectLayoutBound=true,gVfPreparedGpuSpanLayoutBound=true,gVfMediaMapOffsetLayoutVerified=true;
 void* mapper=nullptr;void**gVfCpuSystemMapperSlot=&mapper;
 uintptr_t gVfBatchCpuCopy;
 uint64_t copy(uint64_t from,uint64_t to,uint64_t n){
@@ -736,7 +737,7 @@ void vfFlightRecord(uint32_t kind,uint32_t group,uint64_t,const volatile uint32_
 }
 template<class T,unsigned long N>constexpr unsigned arrsize(const T(&)[N]){return N;}
 __ACTUAL__
-int main(){for(unsigned mode=0;mode<25;++mode){
+int main(){for(unsigned mode=0;mode<28;++mode){
  std::fill(memory.begin(),memory.end(),0);records.clear();pteRecords.clear();snapshots.clear();
  gVfPageTableUpdateLock=mode==20?nullptr:&lockObject;nativeRead=mode!=23;changeTable=mode==24;
  gVfLeafObservationReader=reinterpret_cast<uintptr_t>(&readLeaf);
@@ -752,11 +753,12 @@ int main(){for(unsigned mode=0;mode<25;++mode){
  const uint64_t sizes[]={4096,4096,4096,2088960,1044480,4096};
  for(unsigned role=0;role<6;++role){
   const uint64_t r=base+role*0x10000,m=r+0x1000,sys=r+0x2000,d=r+0x3000,e=r+0x4000,p=r+0x5000,u=r+0x9000;
-  const uint64_t gpu=0x40000000+role*0x400000;
-  set(r+0x40,m);set(r+0x88,sys);set(m,gVfNativeBatchMapVtable);set(m+0x88,reinterpret_cast<uint64_t>(entry.accelerator));set(m+0x90,gpuTask);set(m+0x18,sys);set(m+0x98,gpu);
-  set(sys,gVfMediaSysMemoryVtable);set(sys+0x28,reinterpret_cast<uint64_t>(entry.accelerator));set(sys+0x40,sizes[role]);set(sys+0xd0,d);
-  set(d,descriptorTable);set(d+0x20,uint32_t(mode==3?0x20:0x10));set(d+0x50,sizes[role]);set(d+0x88,uint32_t(1));set(d+0x90,e);
-  const uint32_t pages=uint32_t((sizes[role]+4095)/4096);set(e+0x10,p);set(e+0x18,uint64_t(48+8*pages+40));set(p+0x28,pages);
+  const uint64_t gpu=mode==26 && role==4?0x40000000+3*0x400000+2088960:0x40000000+role*0x400000;
+  set(r+0x14,uint8_t(0x80));set(r+0x40,m);set(r+0x80,sys);set(m+0x20,uint32_t(4));set(m,gVfNativeBatchMapVtable);set(m+0x88,reinterpret_cast<uint64_t>(entry.accelerator));set(m+0x90,gpuTask);set(m+0x18,sys);set(m+0x98,gpu);
+  const uint64_t backingBytes=mode==26 && role==3?sizes[3]+sizes[4]:sizes[role];
+  set(sys,gVfMediaSysMemoryVtable);set(sys+0x28,reinterpret_cast<uint64_t>(entry.accelerator));set(sys+0x40,backingBytes);set(sys+0xd0,d);
+  set(d,descriptorTable);set(d+0x20,uint32_t(mode==3?0x20:0x10));set(d+0x50,backingBytes);set(d+0x88,uint32_t(1));set(d+0x90,e);
+  const uint32_t pages=uint32_t((backingBytes+4095)/4096);set(e+0x10,p);set(e+0x18,uint64_t(48+8*pages+40));set(p+0x28,pages);
   for(unsigned i=0;i<pages;++i)set(p+48+8*i,uint64_t(0x10000+role*0x1000+i));
   NGFlightTrace::PreparedPhysicalCacheBlock block{};block.upl=u;set(p+48+8*pages,block);
   if(role<3)assert(entry.checksumHeaps.record(role,true,r,gpu,4096,false,task,shared));
@@ -764,11 +766,14 @@ int main(){for(unsigned mode=0;mode<25;++mode){
    s[0]=i==0?0x25017000U:i==1?0x24297000U:0x835d4000U;s[1]=(i<2?4U:6U)<<24;s[7]=0x09770000;
    s[2]=i<2?479U|((i?543U:1087U)<<16):127U|(7U<<16);s[3]=i<2?1919:3;s[8]=gpu;
   }
+  if((mode==25 || mode==26) && role>=3 && role<5){set(r+0x14,uint8_t(0x82));set(r+0x80,uint64_t(0));}
+  if(mode==26 && role==4)set(r+0x40,base+3*0x10000+0x1000);
+  if(mode==27 && role==3)set(r+0x14,uint8_t(0x83));
   if(mode==1 && role==3)set(m+0x10,uint32_t(0x40));
   if(role==3)switch(mode){
    case 5:set(m,gVfNativeBatchMapVtable+8);break;
    case 6:set(sys,gVfMediaSysMemoryVtable+8);break;
-   case 7:set(r+0x88,uint64_t(0));break;
+   case 7:set(r+0x80,uint64_t(0));break;
    case 8:set(m+0x18,sys+8);break;
    case 9:set(m+0x88,reinterpret_cast<uint64_t>(entry.accelerator)+8);break;
    case 10:set(m+0x90,gpuTask+8);break;
@@ -788,13 +793,13 @@ int main(){for(unsigned mode=0;mode<25;++mode){
  vfObserveChecksumPreparedResources(entry,pair,0,[&](){return mode!=2;});
  if(mode==2 || mode==4){assert(records.empty() && snapshots.empty());continue;}
  unsigned begins=0,ends=0,pages=0;uint64_t covered[6]{};
- for(const auto&r:records){if(r[3]==0)++begins;else if(r[3]==2){++ends;assert((r[15]==0)==(mode==0 || mode>=20 || mode!=3 && r[2]!=3));}else{++pages;covered[r[2]]+=r[11];}
+ for(const auto&r:records){if(r[3]==0)++begins;else if(r[3]==2){++ends;assert((r[15]==0)==(mode==0 || mode==16 || mode>=20 && mode<27 || mode!=3 && r[2]!=3));}else{++pages;covered[r[2]]+=r[11];}
   std::printf("CPU32 %u",mode);for(auto w:r)std::printf(" %u",w);std::puts("");}
  assert(begins==6 && ends==6);if(mode==0){assert(pages==769);for(unsigned i=0;i<6;++i)assert(covered[i]==sizes[i]);}
  if(mode==1)assert(!covered[3]);if(mode==3)assert(!pages);
  assert(!lockDepth && pteRecords.size()==pages);
  assert(snapshots.size()==6);
- const unsigned expectedStage[]={0,8,0,0,0,4,10,3,7,5,6,9,11,12,13,14,15,0,0,0,0,0,0,0,0};
+ const unsigned expectedStage[]={0,8,0,0,0,4,10,7,7,5,6,9,11,12,13,14,0,0,0,0,0,0,0,0,0,0,0,3};
  for(const auto&r:snapshots){assert(r[13]==(r[2]==3?expectedStage[mode]:0));std::printf("SNAP34 %u",mode);for(auto w:r)std::printf(" %u",w);std::puts("");}
  for(const auto&r:pteRecords){std::printf("PTE33 %u",mode);for(auto w:r)std::printf(" %u",w);std::puts("");}
  }std::puts("Actual six-resource prepared CPU runtime: full coverage/foreign mode/missing descriptor/owner roots PASS; no native invocation");}
@@ -811,20 +816,20 @@ int main(){for(unsigned mode=0;mode<25;++mode){
         if line.startswith('CPU32 '):
             mode,*words=[int(n) for n in line.split()[1:]]
             module.validate_leaf(32,words)
-            rows_by_mode.setdefault(mode,[]).append((4,{'thread':77,'identity':f'{0x40000000+words[2]*0x400000:016x}'},struct.pack('<16I',*words)))
+            rows_by_mode.setdefault(mode,[]).append((4,{'thread':77,'identity':f'{(0x40000000+3*0x400000+2088960 if mode==26 and words[2]==4 else 0x40000000+words[2]*0x400000):016x}'},struct.pack('<16I',*words)))
         elif line.startswith('SNAP34 '):
             mode,*words=[int(n) for n in line.split()[1:]]
             module.validate_leaf(34,words)
-            snapshots_by_mode.setdefault(mode,[]).append((4,{'thread':77,'identity':f'{0x40000000+words[2]*0x400000:016x}'},struct.pack('<660I',*words)))
+            snapshots_by_mode.setdefault(mode,[]).append((4,{'thread':77,'identity':f'{(0x40000000+3*0x400000+2088960 if mode==26 and words[2]==4 else 0x40000000+words[2]*0x400000):016x}'},struct.pack('<660I',*words)))
         elif line.startswith('PTE33 '):
             mode,*words=[int(n) for n in line.split()[1:]]
             module.validate_leaf(33,words)
-            leaves_by_mode.setdefault(mode,[]).append((4,{'thread':77,'identity':f'{0x40000000+words[2]*0x400000:016x}'},struct.pack('<16I',*words)))
+            leaves_by_mode.setdefault(mode,[]).append((4,{'thread':77,'identity':f'{(0x40000000+3*0x400000+2088960 if mode==26 and words[2]==4 else 0x40000000+words[2]*0x400000):016x}'},struct.pack('<16I',*words)))
     for mode,rows in rows_by_mode.items():
         report=module.prepared_resource_coverage(rows,leaves_by_mode.get(mode,()))
-        if mode>=20:assert report['stable_native_task_leaf_reads']==0
+        if 20<=mode<=24:assert report['stable_native_task_leaf_reads']==0
         else:assert report['stable_native_task_leaf_reads']==report['task_leaf_pages']
-        assert report['resources']==6 and report['complete_cpu_page_coverage']==(6 if mode==0 or mode>=20 else 0 if mode==3 else 5)
+        assert report['resources']==6 and report['complete_cpu_page_coverage']==(6 if mode==0 or mode==16 or 20<=mode<=26 else 0 if mode==3 else 5)
         assert not report['iova_mapping_proven'] and not report['gpu_execution_proof']
     for mode,snapshots in snapshots_by_mode.items():
         admission=module.prepared_resource_admission(snapshots)
@@ -834,7 +839,7 @@ int main(){for(unsigned mode=0;mode<25;++mode){
         if mode==10:assert admission['resources'][3]['stage']=='map-task' and admission['resources'][3]['expected_matches_before']['map_task'] is False
         if mode==8:assert admission['resources'][3]['stage']=='map-memory-association' and admission['resources'][3]['before']['map_memory_descriptor'] is None
     good=snapshots_by_mode[0][0];bad_snapshots=[]
-    for field,value in ((0,2),(2,6),(3,2636),(4,145),(12,3),(13,18),(14,1),(17,0),(30,0),(31,1)):
+    for field,value in ((0,3),(2,6),(3,2636),(4,145),(12,3),(13,18),(14,1),(17,0),(30,0),(31,1)):
         words=list(struct.unpack('<660I',good[2]));words[field]=value
         bad_snapshots.append((good[0],good[1],struct.pack('<660I',*words)))
     partial=snapshots_by_mode[5][3];words=list(struct.unpack('<660I',partial[2]));words[106]=1
@@ -868,9 +873,92 @@ int main(){for(unsigned mode=0;mode<25;++mode){
         else:raise AssertionError('prepared task leaf corruption accepted')
     print(output.splitlines()[-1]);print(f'Strict actual CPU resource scope decoder: full/refused coverage and {len(negatives)} corrupt scopes rejected')
 
+def test_native_prepared_span_binding(root):
+    source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
+    start=source.index('const auto spanUpdate=patcher.solveSymbol(')
+    finish=source.index('SYSLOG("ngreen","V396: native map backing and zero descriptor cursor',start)
+    body=source[start:finish]
+    native=ROOT/'sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics'
+    with native.open('rb') as f:
+        f.seek(0x1459d);descriptor=f.read(20);f.seek(0x146a2);cursor=f.read(6)
+    assert len(descriptor)==20 and len(cursor)==6
+    fixture=r'''
+#include <cstdint>
+#include <cstring>
+#include <cassert>
+#include <cstdio>
+alignas(16) uint8_t image[1024]{};
+uintptr_t address=reinterpret_cast<uintptr_t>(image);size_t size=sizeof(image);
+bool gVfNativeObjectLayoutBound=true,gVfPreparedGpuSpanLayoutBound=false;unsigned mode=0;
+struct MockPatcher{uintptr_t solveSymbol(int,const char*,uintptr_t,size_t){return mode==1?0:mode==2?address+1000:address+32;}}patcher;
+bool matches(uintptr_t at,const uint8_t*bytes,size_t n){return !std::memcmp(reinterpret_cast<void*>(at),bytes,n);}
+void bind(){const int index=1;__ACTUAL__}
+int main(){const uint8_t descriptor[]={__DESCRIPTOR__},cursor[]={__CURSOR__};
+ for(mode=0;mode<4;++mode){gVfNativeObjectLayoutBound=mode!=3;std::memcpy(image+32+0x1d,descriptor,20);std::memcpy(image+32+0x122,cursor,6);bind();assert(gVfPreparedGpuSpanLayoutBound==(mode==0));}
+ mode=0;gVfNativeObjectLayoutBound=true;
+ for(unsigned i=0;i<26;++i){std::memcpy(image+32+0x1d,descriptor,20);std::memcpy(image+32+0x122,cursor,6);
+  image[32+(i<20?0x1d+i:0x122+i-20)]^=1;bind();assert(!gVfPreparedGpuSpanLayoutBound);}
+ std::puts("Actual native map->descriptor/zero-cursor binding: positive,missing/range/class refusals and26 byte mutations PASS");
+}
+'''.replace('__ACTUAL__',body).replace('__DESCRIPTOR__',','.join(hex(x) for x in descriptor)).replace('__CURSOR__',','.join(hex(x) for x in cursor))
+    cpp=root/'native_span_binding.cpp';cpp.write_text(fixture);binary=root/'native_span_binding'
+    subprocess.run([*CXX,'-std=c++14','-fsanitize=address,undefined',str(cpp),'-o',str(binary)],check=True)
+    subprocess.run([str(binary)],check=True)
+
+def test_prepared_captured_views(root,database):
+    import sqlite3,importlib.util
+    spec=importlib.util.spec_from_file_location('prepared_replay_decoder',ROOT/'tools/media_adapter/decode_kdebug_recorder.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    with sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True) as db:
+        rows=db.execute('SELECT payload FROM records WHERE kind=34 ORDER BY id LIMIT 13').fetchall()
+    assert 0<len(rows)<=12
+    data=root/'captured-prefixes.bin'
+    with data.open('wb') as out:
+        out.write(struct.pack('<I',len(rows)))
+        for payload, in rows:
+            words=list(struct.unpack('<660I',payload));module.validate_leaf(34,words)
+            assert words[12]&47==47
+            out.write(payload)
+    fixture=r'''
+#include "NootedGreen/kern_flight_trace.hpp"
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <vector>
+struct Region{uint64_t address;std::vector<uint8_t> bytes;};
+int main(int argc,char**argv){assert(argc==2);std::ifstream file(argv[1],std::ios::binary);
+ uint32_t count=0;file.read(reinterpret_cast<char*>(&count),4);assert(count>0 && count<=12);
+ for(unsigned row=0;row<count;++row){uint32_t w[660]{};file.read(reinterpret_cast<char*>(w),sizeof(w));assert(file.good());
+  auto q=[](const uint32_t*p,unsigned i){return uint64_t(p[i])|(uint64_t(p[i+1])<<32);};
+  std::vector<Region> regions;
+  auto add=[&](uint64_t address,unsigned start,unsigned bytes){Region r{};r.address=address;r.bytes.resize(bytes);std::memcpy(r.bytes.data(),w+start,bytes);regions.push_back(r);};
+  const uint64_t resource=q(w,24),map=q(w+32,0x40/4),memory=q(w+104,0x18/4);
+  add(resource,32,144);add(map,104,296);add(memory,456,408);
+  NGFlightTrace::PreparedResourceAuthority authority{q(w,16),q(w,18),q(w,20),q(w,22)};
+  NGFlightTrace::PreparedResourceView view{};uint32_t stage=99;
+  auto read=[&](uint64_t at,void*out,uint32_t bytes){for(const auto&r:regions)if(at>=r.address && bytes<=r.bytes.size() && at-r.address<=r.bytes.size()-bytes){std::memcpy(out,r.bytes.data()+(at-r.address),bytes);return true;}return false;};
+  const bool accepted=NGFlightTrace::capturePreparedResource(resource,q(w,28),q(w,26),authority,view,read,[](){return true;},&stage);
+  assert(accepted && stage==0 && view.offset==0 && view.memory==memory && view.descriptor==q(w+456,0xd0/4));
+  assert(view.prepareValue==w[104+0x20/4] && view.resourceType==(w[32+0x14/4]&255));
+  const uint64_t delta=q(w,28)-view.gpu;assert(delta<=view.bytes && q(w,26)<=view.bytes-delta);
+  std::printf("CAPTURED_RESOURCE_VIEW_PASS role=%u native-kind=%x prepare-value=%u logical-offset=%llu bytes=%llu\n",w[2],view.resourceType,view.prepareValue,static_cast<unsigned long long>(delta),static_cast<unsigned long long>(q(w,26)));
+ }
+ char trailing;assert(!file.get(trailing));std::puts("Captured prefix replay only: no descriptor page/PTE/GPU execution proof");
+}
+'''
+    cpp=root/'captured_replay.cpp';cpp.write_text(fixture);binary=root/'captured_replay'
+    subprocess.run([*CXX,'-std=c++14','-fsanitize=address,undefined','-I'+str(ROOT),str(cpp),'-o',str(binary)],check=True)
+    subprocess.run([str(binary),str(data)],check=True)
+
 if __name__=="__main__":
     with tempfile.TemporaryDirectory(prefix="ngreen-checksum-main-end-") as directory:
         destination=Path(directory)
+        if sys.argv[1:]:
+            assert len(sys.argv)==3 and sys.argv[1]=='--prepared-replay'
+            test_prepared_captured_views(destination,Path(sys.argv[2]));raise SystemExit(0)
+        test_native_prepared_span_binding(destination)
         test_prepared_capture_arm(destination)
         test_prepared_resource_runtime(destination)
         test_observed_surface_ranges(destination)

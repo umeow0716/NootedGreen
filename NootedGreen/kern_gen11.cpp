@@ -193,6 +193,7 @@ static void **gVfCpuKernelPmapSlot = nullptr;
 static void *gVfCpuKernelPmapStore = nullptr;
 static void **gVfCpuSystemMapperSlot = nullptr;
 static NGFlightTrace::PreparedPhysicalCacheAuthority gVfPreparedPhysicalCacheAuthority{};
+static bool gVfPreparedGpuSpanLayoutBound=false;
 static mach_vm_address_t gVfBatchCpuCopy = 0;
 static mach_vm_address_t gVfBatchCaller = 0;
 static mach_vm_address_t gVfSurfaceCallers[3] {};
@@ -3397,6 +3398,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// Failure disables diagnostics, never changes submission admission.
 		if (vfActive) {
 			gVfRootObservationVtable = gVfRootObservationGetter = 0;
+			gVfPreparedGpuSpanLayoutBound=false;
 			gVfLeafObservationReader = 0;
 			gVfLeafObservationDummyBound = false;
 			gVfNativeObjectLayoutBound=false;
@@ -3506,6 +3508,16 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					matches(sysMeta+0x17U,sysClassSize,sizeof(sysClassSize));
 				SYSLOG("ngreen","V385: native object snapshot sizes bound=%u map=296 memory=408",
 				       gVfNativeObjectLayoutBound?1U:0U);
+				const auto spanUpdate=patcher.solveSymbol(index,
+					"__ZN19IGHardwarePageTable11updateRangeERK14IGAddressRangePK16IGAccelMemoryMap",address,size);
+				static constexpr uint8_t spanDescriptor[]={0x48,0x8b,0x42,0x18,0x48,0x85,0xc0,0x74,0x09,
+					0x48,0x8b,0x80,0xd0,0,0,0,0xeb,0x02,0x31,0xc0};
+				static constexpr uint8_t spanZeroCursor[]={0x31,0xc0,0x49,0x89,0x45,0xf8};
+				gVfPreparedGpuSpanLayoutBound=gVfNativeObjectLayoutBound && spanUpdate &&
+					spanUpdate>=address && spanUpdate-address<=size && 0x128U<=size-(spanUpdate-address) &&
+					matches(spanUpdate+0x1d,spanDescriptor,sizeof(spanDescriptor)) &&
+					matches(spanUpdate+0x122,spanZeroCursor,sizeof(spanZeroCursor));
+				SYSLOG("ngreen","V396: native map backing and zero descriptor cursor bound=%u",gVfPreparedGpuSpanLayoutBound?1U:0U);
 				SYSLOG("ngreen", "V377: native batch CPU provenance observation bound=%u",
 				       gVfNativeBatchLayoutBound && gVfNativeBatchMapVtable && gVfLeafObservationReader ? 1U:0U);
 			}
@@ -3777,13 +3789,15 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                         gVfBatchCpuCopy && gVfCpuKernelPmapSlot && *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore &&
                         gVfCpuSystemMapperSlot && gVfPreparedPhysicalCacheAuthority.exactLayout &&
                         gVfPreparedPhysicalCacheAuthority.physicalMethod && gVfPreparedPhysicalCacheAuthority.dmaMethod &&
-                        gVfNativeObjectLayoutBound && gVfMediaMapOffsetLayoutVerified &&
+                        gVfNativeObjectLayoutBound && gVfPreparedGpuSpanLayoutBound && gVfMediaMapOffsetLayoutVerified &&
                         gVfNativeBatchMapVtable && gVfMediaSysMemoryVtable &&
                         gVfLeafObservationReader && gVfRootObservationVtable && !checkKernelArgument("-ngreencaptureonly");
                     const bool preparedChecksumLock=preparedChecksumBindings && vfEnsurePageTableUpdateLock();
                     SYSLOG("ngreen","V394: checksum prepared CPU backing and task leaves armed=%u",
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
                     SYSLOG("ngreen","V395: checksum resource admission prefix pairs armed=%u",
+                        preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
+                    SYSLOG("ngreen","V396: typed native checksum backing and task leaves armed=%u",
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
                 }
 				const auto batchSubmit=patcher.solveSymbol(index,
@@ -7152,7 +7166,7 @@ static void vfObserveChecksumPreparedResources(VfMediaSubmission& entry,
     const NgreenChecksumGen12::NativeSshMapPagePair& pair,uint32_t ticket,Live&& ownerLive)
 {
     if(ticket>=2 || !gVfPreparedPhysicalCacheAuthority.exactLayout || !gVfBatchCpuCopy ||
-       !gVfNativeObjectLayoutBound || !gVfMediaMapOffsetLayoutVerified ||
+       !gVfNativeObjectLayoutBound || !gVfPreparedGpuSpanLayoutBound || !gVfMediaMapOffsetLayoutVerified ||
        !gVfNativeBatchMapVtable || !gVfMediaSysMemoryVtable || !gVfCpuSystemMapperSlot)return;
     uint64_t surfaceBytes[3]{};
     if(!ownerLive() || !NgreenChecksumGen12::checksumObservedSurfaceRanges(pair,entry.checksumSurfaces,surfaceBytes)) {
@@ -7199,7 +7213,7 @@ static void vfObserveChecksumPreparedResources(VfMediaSubmission& entry,
         };
         auto& raw=gVfChecksumResourceSnapshots[ticket][role];
         for(auto& word:raw)word=0;
-        raw[0]=1;raw[1]=ticket+1;raw[2]=role;raw[3]=sizeof(raw);
+        raw[0]=2;raw[1]=ticket+1;raw[2]=role;raw[3]=sizeof(raw);
         const uint64_t identities[]={authority.mapTable,authority.memoryTable,authority.accelerator,
             authority.task,resource,bytes,gpu};
         for(unsigned i=0;i<7;++i){raw[16+2*i]=uint32_t(identities[i]);raw[17+2*i]=uint32_t(identities[i]>>32);}

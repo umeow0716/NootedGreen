@@ -47,7 +47,7 @@ RESOURCE_SLOTS = {
 
 def validate_leaf(kind, words):
     if kind == 34:
-        if (len(words)!=660 or words[:1]!=[1] or words[1] not in (1,2) or words[2]>=6 or
+        if (len(words)!=660 or words[0] not in (1,2) or words[1] not in (1,2) or words[2]>=6 or
                 words[3]!=2640 or words[12]&~63 or words[13]>17 or any(words[14:16]) or
                 words[30] not in (0,1) or bool(words[30])!=(words[13]==0) or words[31] or
                 words[27] or not 0<words[26]<=4*1024*1024):
@@ -637,9 +637,9 @@ def prepared_resource_admission(rows):
                 return int.from_bytes(raw[offset:offset+size],'little')
             r,m,a,b=32+part*36,104+part*74,252+part*102,456+part*102
             counts=[w[4+part],w[6+part],w[8+part],w[10+part]]
-            parts.append({'resource_map':field(r,counts[0],0x40),'resource_backing80':field(r,counts[0],0x80),
+            parts.append({'resource_type':field(r,counts[0],0x14,1),'resource_map':field(r,counts[0],0x40),'resource_backing80':field(r,counts[0],0x80),
                 'resource_backing88':field(r,counts[0],0x88),'map_class':field(m,counts[1],0),
-                'map_memory':field(m,counts[1],0x18),'map_offset':field(m,counts[1],0x20),
+                'map_memory':field(m,counts[1],0x18),'map_prepare_value':field(m,counts[1],0x20,4),
                 'map_owner':field(m,counts[1],0x88),'map_task':field(m,counts[1],0x90),
                 'map_gpu':field(m,counts[1],0x98),'map_flags':field(m,counts[1],0x10,4),
                 'map_rotated':field(m,counts[1],0x11c,1),
@@ -648,10 +648,14 @@ def prepared_resource_admission(rows):
                 'map_memory_class':field(b,counts[3],0),'map_memory_owner':field(b,counts[3],0x28),
                 'map_memory_bytes':field(b,counts[3],0x40),'map_memory_descriptor':field(b,counts[3],0xd0)})
         expected={'map_class':q(16),'backing_class':q(18),'map_owner':q(20),'backing_owner':q(20),'map_task':q(22)}
+        if w[0]==2:
+            expected={'map_class':q(16),'map_memory_class':q(18),'map_owner':q(20),'map_memory_owner':q(20),'map_task':q(22)}
         comparisons={name:(None if parts[0][name] is None else parts[0][name]==value) for name,value in expected.items()}
         output.append({'group':group,'ticket':w[1],'role':w[2],'thread':metadata['thread'],
             'resource':q(24),'gpu':q(28),'requested_bytes':q(26),'copied_prefix_bytes':w[4:12],
-            'pair_flags':w[12],'admitted':bool(w[30]),'stage':stages[w[13]],'stage_id':w[13],
+            'pair_flags':w[12],'admitted':bool(w[30]),'model_version':w[0],
+            'stage':('resource-type' if w[0]==2 and w[13]==3 else 'native-prepare-value' if w[0]==2 and w[13]==15 else stages[w[13]]),'stage_id':w[13],
+            'selected_backing_source':'map-memory' if w[0]==2 else 'legacy-resource-backing',
             'expected':expected,'expected_matches_before':comparisons,'before':parts[0],'after':parts[1]})
     return {'captures':len(output),'resources':output,'atomic_snapshot':False,
         'native_object_lease_proven':False,'gpu_execution_proof':False}

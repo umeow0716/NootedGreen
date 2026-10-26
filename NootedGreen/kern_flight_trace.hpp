@@ -129,9 +129,11 @@ struct PreparedResourceAuthority {
 };
 struct PreparedResourceView {
     uint64_t map=0,memory=0,descriptor=0,gpu=0,offset=0,bytes=0;
+    uint32_t resourceType=0,prepareValue=0;
     bool same(const PreparedResourceView& b) const {
         return map==b.map && memory==b.memory && descriptor==b.descriptor &&
-            gpu==b.gpu && offset==b.offset && bytes==b.bytes;
+            gpu==b.gpu && offset==b.offset && bytes==b.bytes &&
+            resourceType==b.resourceType && prepareValue==b.prepareValue;
     }
 };
 // Borrowed native resource -> prepared metadata only. Read must be nofault;
@@ -150,17 +152,25 @@ inline bool capturePreparedResource(uint64_t resource,uint64_t gpu,uint64_t byte
     const auto get=[&](uint64_t at,void *out,uint32_t n) {
         return at && at<=UINT64_MAX-n && live() && read(at,out,n) && live();
     };
-    uint64_t backing=0,table=0,owner=0,task=0,mapMemory=0,memoryOwner=0;
-    uint32_t flags=0;uint8_t rotated=0;
+    uint64_t backing=0,table=0,owner=0,task=0,mapMemory=0,memoryOwner=0,resource80=0,resource88=0;
+    uint32_t flags=0;uint8_t rotated=0,type=0;
     stage(2);
     if(!get(resource+0x40,&view.map,8) || !canonicalKernelObject(view.map) || view.map>UINT64_MAX-0x120)return false;
     stage(3);
-    if(!get(resource+0x88,&backing,8) || (!backing && !get(resource+0x80,&backing,8)) ||
-       !canonicalKernelObject(backing) || backing>UINT64_MAX-0xd8)return false;
+    if(!get(resource+0x14,&type,1) || (type!=0x80U && type!=0x82U) ||
+       !get(resource+0x80,&resource80,8) || !get(resource+0x88,&resource88,8))return false;
+    view.resourceType=type;
     stage(4);if(!get(view.map,&table,8) || table!=authority.mapTable)return false;
     stage(5);if(!get(view.map+0x88,&owner,8) || owner!=authority.accelerator)return false;
     stage(6);if(!get(view.map+0x90,&task,8) || task!=authority.task)return false;
-    stage(7);if(!get(view.map+0x18,&mapMemory,8) || mapMemory!=backing)return false;
+    // Native updateRange follows map+18 -> backing+D0. Resource82 is a
+    // plane view: its80/88 fields are empty, unlike internal resource80.
+    // No arbitrary fallback: accept only these exact type-specific relations.
+    stage(7);
+    if(!get(view.map+0x18,&mapMemory,8) || !canonicalKernelObject(mapMemory) || mapMemory>UINT64_MAX-0xd8 ||
+       (type==0x80U && (resource80!=mapMemory || resource88)) ||
+       (type==0x82U && (resource80 || resource88)))return false;
+    backing=mapMemory;
     stage(8);if(!get(view.map+0x10,&flags,4) || (flags&0x40U))return false;
     stage(9);if(!get(view.map+0x11c,&rotated,1) || rotated)return false;
     stage(10);if(!get(backing,&table,8) || table!=authority.memoryTable)return false;
@@ -168,7 +178,11 @@ inline bool capturePreparedResource(uint64_t resource,uint64_t gpu,uint64_t byte
     stage(12);if(!get(backing+0xd0,&view.descriptor,8) || !canonicalKernelObject(view.descriptor))return false;
     stage(13);if(!get(backing+0x40,&view.bytes,8) || !view.bytes || view.bytes>4U*1024U*1024U)return false;
     stage(14);if(!get(view.map+0x98,&view.gpu,8) || !view.gpu || gpu<view.gpu)return false;
-    stage(15);if(!get(view.map+0x20,&view.offset,8) || view.offset>view.bytes)return false;
+    // This is IGAccelMemoryMap, NOT IOMemoryMap. Family prepare stores
+    // accelerator+a0's DWORD at20; it is never a descriptor byte offset.
+    // Exact native updateRange initializes its descriptor iterator at zero.
+    stage(15);if(!get(view.map+0x20,&view.prepareValue,4))return false;
+    view.offset=0;
     stage(16);if(gpu-view.gpu>view.bytes-view.offset || bytes>view.bytes-view.offset-(gpu-view.gpu))return false;
     stage(17);if(!live())return false;
     stage(0);
