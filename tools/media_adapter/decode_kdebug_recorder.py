@@ -36,7 +36,8 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          23: 'cpu_map_header_pair', 24: 'cpu_map_list_boundary',
          25: 'native_render_surface_output', 26: 'native_pool_allocation_metadata',
          27: 'native_pool_allocation_chunk',28: 'native_rect_input_metadata',
-         29: 'native_rect_input_chunk', 30: 'native_leased_ssh_cpu_pair', 31: 'native_leased_ssh_page_chunk'}
+         29: 'native_rect_input_chunk', 30: 'native_leased_ssh_cpu_pair', 31: 'native_leased_ssh_page_chunk',
+         32: 'prepared_resource_cpu_page'}
 RESOURCE_SLOTS = {
     1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
     2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
@@ -44,6 +45,25 @@ RESOURCE_SLOTS = {
 
 
 def validate_leaf(kind, words):
+    if kind == 32:
+        if (len(words)!=16 or words[0]!=1 or words[1] not in (1,2) or words[2]>=6 or
+                words[3]>2 or words[4]>1024 or words[6] or not 0<words[5]<=4*1024*1024 or
+                words[8] or words[7]>4*1024*1024 or words[12] or words[14]>1 or words[15]>4):
+            raise ValueError('invalid prepared-resource CPU page envelope')
+        phase,pages,extent,offset,physical,size,flags,reason=(words[3],words[4],words[5],words[7],
+            words[9]|words[10]<<32,words[11],words[13],words[15])
+        if phase==0:
+            valid=not pages and not physical and not size and reason in (0,1) and flags==(1 if reason==0 else 0)
+        elif phase==1:
+            valid=(pages<1024 and not reason and flags==15 and 0<physical<(1<<44) and
+                0<size<=4096 and
+                size<=4096-(physical&4095) and offset+size<=4*1024*1024)
+        else:
+            valid=(not physical and size<=extent and offset>=size and flags in (0,1) and
+                (reason!=0 or size==extent and pages>0 and flags==1))
+        if not valid:
+            raise ValueError('invalid prepared-resource CPU page phase')
+        return
     if kind == 30:
         if len(words)==8 and words[0]==2:
             if (words[1]!=4096 or words[2] not in (0,4096) or words[3] not in (0,4096) or
@@ -513,6 +533,43 @@ class Decoder:
                 'upstream_complete': False, 'gpu_execution_proof': False}
 
 
+def prepared_resource_coverage(rows):
+    """Strict CPU scope correlation. Never an IOVA/lifetime/completion grant."""
+    scopes={};tickets={};total=0
+    for group,metadata,payload in rows:
+        total+=1
+        if total>12312 or len(payload)!=64:raise ValueError('prepared-resource record budget/extent')
+        words=list(struct.unpack('<16I',payload));validate_leaf(32,words)
+        ticket,role,phase=words[1:4];key=(group,ticket,role)
+        if not group or not metadata.get('thread') or not int(metadata.get('identity','0'),16):
+            raise ValueError('prepared-resource missing scope identity')
+        if ticket in tickets and tickets[ticket]!=group:raise ValueError('prepared-resource ticket reused')
+        tickets[ticket]=group
+        if phase==0:
+            if key in scopes or len(scopes)>=12:raise ValueError('prepared-resource duplicate/budget')
+            scopes[key]={'thread':metadata['thread'],'identity':metadata['identity'],
+                'extent':words[5],'start':words[7],'bytes':0,'pages':0,'ended':False,'reason':None}
+        else:
+            state=scopes.get(key)
+            if not state or state['ended'] or state['thread']!=metadata['thread'] or state['identity']!=metadata['identity']:
+                raise ValueError('prepared-resource missing begin/duplicate end/foreign owner')
+            if words[5]!=state['extent'] or words[4]!=state['pages'] or words[7]!=state['start']+state['bytes']:
+                raise ValueError('prepared-resource extent/ordinal/offset discontinuity')
+            if phase==1:
+                if words[11]>state['extent']-state['bytes']:raise ValueError('prepared-resource page overflow')
+                state['bytes']+=words[11];state['pages']+=1
+            else:
+                if words[11]!=state['bytes']:raise ValueError('prepared-resource end byte mismatch')
+                state['ended']=True;state['reason']=words[15]
+    if any(not state['ended'] for state in scopes.values()):raise ValueError('prepared-resource missing end')
+    missing={str(ticket):sorted(set(range(6))-{key[2] for key in scopes if key[1]==ticket}) for ticket in tickets}
+    if any(missing.values()):raise ValueError('prepared-resource missing resource role')
+    return {'resources':len(scopes),'complete_cpu_page_coverage':sum(state['reason']==0 for state in scopes.values()),
+        'refused_resources':sum(state['reason']!=0 for state in scopes.values()),
+        'reason_by_resource':{f'{key[0]}:{key[1]}:{key[2]}':state['reason'] for key,state in scopes.items()},
+        'atomic_snapshot':False,'native_object_lease_proven':False,'iova_mapping_proven':False,'gpu_execution_proof':False}
+
+
 class DiskSink:
     """Disk-backed ID uniqueness/index; no growing seen-ID set or inode flood."""
     def __init__(self, directory):
@@ -700,6 +757,15 @@ class DiskSink:
                              json.dumps(metadata, separators=(',', ':')), raw))
         except sqlite3.IntegrityError as exc:
             raise ValueError('duplicate completed flight record ID') from exc
+
+    def prepared_resource_report(self):
+        rows=self.db.execute('SELECT group_id,metadata,payload FROM records WHERE kind=32 ORDER BY id LIMIT 12313')
+        try:
+            result=prepared_resource_coverage((group,json.loads(metadata),payload) for group,metadata,payload in rows)
+            result['scope_error']=None
+            return result
+        except (ValueError,KeyError,TypeError,struct.error) as exc:
+            return {'scope_error':str(exc),'complete_cpu_page_coverage':0,'gpu_execution_proof':False}
 
     def backing_report(self, cpu_alias=False):
         table = 'cpu_backings' if cpu_alias else 'backings'
@@ -1308,6 +1374,7 @@ if __name__ == '__main__':
         rect_input_report = sink.rect_input_report()
         resource_report = sink.resource_report()
         map_list_report = sink.map_list_report()
+        prepared_resource_report = sink.prepared_resource_report()
         scope_report = sink.scope_coverage_report()
         try:
             sink.close()
@@ -1317,6 +1384,7 @@ if __name__ == '__main__':
         report['source_bytes']=hashed_source.bytes if hashed_source else 0
         report['source_file_complete']=source_complete
         report['source_sha256']=hashed_source.digest.hexdigest() if source_complete else None
+        report['prepared_resource_cpu_pages'] = prepared_resource_report
         report['rings'] = ring_report
         report['backings'] = backing_report
         report['cpu_alias_backings'] = cpu_alias_report

@@ -89,7 +89,12 @@ inline PreparedPhysicalCacheSample observePreparedPhysicalCache(uint64_t descrip
         if(!fetch(at,&block,40) || block.offset>=before.length ||
            (i?block.offset<=previous:block.offset!=0))return result;
         previous=block.offset;
-        if(block.offset<=offset){selected=block;selectedAt=at;}
+        if(block.offset<=offset){
+            // Preserve the freestanding import surface even at -O0.
+            selected.upl=block.upl;selected.pageInfo=block.pageInfo;selected.offset=block.offset;
+            selected.mappedPage=block.mappedPage;selected.pageOffset=block.pageOffset;
+            selected.flags=block.flags;selected.padding=block.padding;selectedAt=at;
+        }
         else if(selectedAt && nextOffset==before.length)nextOffset=block.offset;
     }
     if(!selectedAt || selected.pageOffset>=4096U || (selected.flags&~2U) ||
@@ -118,6 +123,50 @@ inline PreparedPhysicalCacheSample observePreparedPhysicalCache(uint64_t descrip
     if(result.bytes>nextOffset-offset)result.bytes=nextOffset-offset;
     result.flags=15U;result.reason="prepared-cpu-page";
     return result; // Pair equality is not atomicity, IOVA or GPU-fetch proof.
+}
+struct PreparedResourceAuthority {
+    uint64_t mapTable=0,memoryTable=0,accelerator=0,task=0;
+};
+struct PreparedResourceView {
+    uint64_t map=0,memory=0,descriptor=0,gpu=0,offset=0,bytes=0;
+    bool same(const PreparedResourceView& b) const {
+        return map==b.map && memory==b.memory && descriptor==b.descriptor &&
+            gpu==b.gpu && offset==b.offset && bytes==b.bytes;
+    }
+};
+// Borrowed native resource -> prepared metadata only. Read must be nofault;
+// Live is supplied by the original native owner. Pair equality is non-atomic,
+// supplies no lifetime lease, and cannot identify an IOVA as physical RAM.
+template<class Read,class Live>
+inline bool capturePreparedResource(uint64_t resource,uint64_t gpu,uint64_t bytes,
+    const PreparedResourceAuthority& authority,PreparedResourceView& view,Read&& read,Live&& live) {
+    if(!canonicalKernelObject(resource) || resource>UINT64_MAX-0x90U || !bytes ||
+       bytes>4U*1024U*1024U || !gpu || gpu>UINT64_C(0x0000ffffffffffff)-bytes ||
+       !canonicalKernelObject(authority.mapTable) || !canonicalKernelObject(authority.memoryTable) ||
+       !canonicalKernelObject(authority.accelerator) || !canonicalKernelObject(authority.task))return false;
+    const auto get=[&](uint64_t at,void *out,uint32_t n) {
+        return at && at<=UINT64_MAX-n && live() && read(at,out,n) && live();
+    };
+    uint64_t backing=0,table=0,owner=0,task=0,mapMemory=0,memoryOwner=0;
+    uint32_t flags=0;uint8_t rotated=0;
+    if(!get(resource+0x40,&view.map,8) || !canonicalKernelObject(view.map) || view.map>UINT64_MAX-0x120 ||
+       !get(resource+0x88,&backing,8) || (!backing && !get(resource+0x80,&backing,8)) ||
+       !canonicalKernelObject(backing) || backing>UINT64_MAX-0xd8 ||
+       !get(view.map,&table,8) || table!=authority.mapTable ||
+       !get(view.map+0x88,&owner,8) || owner!=authority.accelerator ||
+       !get(view.map+0x90,&task,8) || task!=authority.task ||
+       !get(view.map+0x18,&mapMemory,8) || mapMemory!=backing ||
+       !get(view.map+0x10,&flags,4) || (flags&0x40U) ||
+       !get(view.map+0x11c,&rotated,1) || rotated ||
+       !get(backing,&table,8) || table!=authority.memoryTable ||
+       !get(backing+0x28,&memoryOwner,8) || memoryOwner!=authority.accelerator ||
+       !get(backing+0xd0,&view.descriptor,8) || !canonicalKernelObject(view.descriptor) ||
+       !get(backing+0x40,&view.bytes,8) || !view.bytes || view.bytes>4U*1024U*1024U ||
+       !get(view.map+0x98,&view.gpu,8) || !view.gpu || gpu<view.gpu ||
+       !get(view.map+0x20,&view.offset,8) || view.offset>view.bytes ||
+       gpu-view.gpu>view.bytes-view.offset || bytes>view.bytes-view.offset-(gpu-view.gpu))return false;
+    view.memory=backing;
+    return live();
 }
 // CPU snapshot walker only: callbacks must use the bound native nofault copy,
 // not virtual getters or retain. Equality does NOT exclude reuse/ABA and never

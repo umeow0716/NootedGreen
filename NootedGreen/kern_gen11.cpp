@@ -7130,6 +7130,94 @@ bool Gen11::vfChecksumBindResource(void *that,void *stream,uint32_t identifier,
 // The exact original Main call still owns its IOMemoryMap here. Copy
 // before ORIGINAL unmap releases it; never create/retain another map or call
 // a getter. Qualified pure getters prove the two native object field offsets.
+template<class Live>
+static void vfObserveChecksumPreparedResources(VfMediaSubmission& entry,
+    const NgreenChecksumGen12::NativeSshMapPagePair& pair,uint32_t ticket,Live&& ownerLive)
+{
+    if(!gVfPreparedPhysicalCacheAuthority.exactLayout || !gVfBatchCpuCopy ||
+       !gVfNativeObjectLayoutBound || !gVfMediaMapOffsetLayoutVerified ||
+       !gVfNativeBatchMapVtable || !gVfMediaSysMemoryVtable || !gVfCpuSystemMapperSlot)return;
+    uint64_t surfaceBytes[3]{};
+    if(!ownerLive() || !NgreenChecksumGen12::checksumObservedSurfaceRanges(pair,entry.checksumSurfaces,surfaceBytes)) {
+        SYSLOG("ngreen","V394: checksum prepared CPU resources refused reason=final-ssh-range ticket=%u",ticket+1);return;
+    }
+    using Copy=uint64_t (*)(uint64_t,uint64_t,uint64_t);
+    const auto copy=reinterpret_cast<Copy>(gVfBatchCpuCopy);
+    // Unmap precedes native End: bindLocked has NOT populated entry.task/
+    // shared/gpuTask yet. Use the already recorded native heap roots, without
+    // mutating submission admission or pretending End has run.
+    const uint64_t task=entry.checksumHeaps.task,shared=entry.checksumHeaps.shared;
+    uint64_t sharedOwner=0,sharedTask=0,gpuTask=0;
+    if(!NGFlightTrace::canonicalKernelObject(task) || !NGFlightTrace::canonicalKernelObject(shared) ||
+       shared>UINT64_MAX-0x90U || !ownerLive() ||
+       copy(shared+0x78,reinterpret_cast<uint64_t>(&sharedOwner),8)!=8 ||
+       copy(shared+0x80,reinterpret_cast<uint64_t>(&sharedTask),8)!=8 ||
+       copy(shared+0x88,reinterpret_cast<uint64_t>(&gpuTask),8)!=8 ||
+       sharedOwner!=reinterpret_cast<uint64_t>(entry.accelerator) || sharedTask!=task ||
+       !NGFlightTrace::canonicalKernelObject(gpuTask) || !ownerLive()) {
+        SYSLOG("ngreen","V394: checksum prepared CPU resources refused reason=heap-root ticket=%u",ticket+1);return;
+    }
+    NGFlightTrace::PreparedResourceAuthority authority{};
+    authority.mapTable=gVfNativeBatchMapVtable;authority.memoryTable=gVfMediaSysMemoryVtable;
+    authority.accelerator=reinterpret_cast<uint64_t>(entry.accelerator);
+    authority.task=gpuTask;
+    for(uint32_t role=0;role<6;++role) {
+        const unsigned slot=role<3?role:role-3;
+        const uint64_t resource=role<3?entry.checksumHeaps.resources[slot]:entry.checksumSurfaces.resources[slot];
+        const uint64_t gpu=role<3?entry.checksumHeaps.gpu[slot]:entry.checksumSurfaces.gpu[slot];
+        const uint64_t bytes=role<3?4096U:surfaceBytes[slot];
+        const auto live=[&]() {
+            uint64_t ownerNow=0,taskNow=0,gpuNow=0;
+            return ownerLive() && entry.checksumHeaps.task==task && entry.checksumHeaps.shared==shared &&
+                getMember<uint64_t>(entry.context,0x578)==task &&
+                getMember<uint64_t>(entry.context,0x5a0)==shared &&
+                copy(shared+0x78,reinterpret_cast<uint64_t>(&ownerNow),8)==8 && ownerNow==sharedOwner &&
+                copy(shared+0x80,reinterpret_cast<uint64_t>(&taskNow),8)==8 && taskNow==task &&
+                copy(shared+0x88,reinterpret_cast<uint64_t>(&gpuNow),8)==8 && gpuNow==gpuTask &&
+                (role<3?entry.checksumHeaps.resources[slot]:entry.checksumSurfaces.resources[slot])==resource &&
+                (role<3?entry.checksumHeaps.gpu[slot]:entry.checksumSurfaces.gpu[slot])==gpu;
+        };
+        const auto read=[&](uint64_t at,void *out,uint32_t n) {
+            return live() && copy(at,reinterpret_cast<uint64_t>(out),n)==n && live();
+        };
+        NGFlightTrace::PreparedResourceView before{};
+        const bool admitted=NGFlightTrace::capturePreparedResource(resource,gpu,bytes,authority,before,read,live);
+        uint64_t offset=admitted?before.offset+(gpu-before.gpu):0,done=0;
+        uint32_t pages=0,reason=admitted?0U:1U;
+        const auto emit=[&](uint32_t phase,uint64_t physical,uint64_t sampledBytes,uint32_t flags) {
+            // Kind32 v1: logical scope/descriptor offset and CPU physical RAM
+            // remain separate from mapper presence. No IOVA or GPU claim.
+            const uint32_t data[]={1,ticket+1,role,phase,pages,uint32_t(bytes),uint32_t(bytes>>32),
+                uint32_t(offset+done),uint32_t((offset+done)>>32),uint32_t(physical),uint32_t(physical>>32),
+                uint32_t(sampledBytes),uint32_t(sampledBytes>>32),flags,*gVfCpuSystemMapperSlot?1U:0U,reason};
+            vfFlightRecord(32,entry.flightGroup,gpu,data,arrsize(data));
+        };
+        emit(0,0,0,admitted?1U:0U);
+        while(!reason && done<bytes && pages<1024U) {
+            const auto stable=[&]() {
+                NGFlightTrace::PreparedResourceView current{};
+                return live() && NGFlightTrace::capturePreparedResource(resource,gpu,bytes,authority,current,read,live) && before.same(current);
+            };
+            const auto sample=NGFlightTrace::observePreparedPhysicalCache(before.descriptor,offset+done,
+                gVfPreparedPhysicalCacheAuthority,read,stable);
+            if(sample.flags!=15U || !sample.bytes){reason=2;break;}
+            uint64_t step=sample.bytes;
+            const uint64_t gpuPage=4096U-((gpu+done)&4095U);
+            if(step>gpuPage)step=gpuPage;if(step>bytes-done)step=bytes-done;
+            if(!stable()){reason=3;break;}
+            emit(1,sample.physical,step,sample.flags);done+=step;++pages;
+        }
+        if(!reason && done!=bytes)reason=4;
+        NGFlightTrace::PreparedResourceView after{};
+        const bool stable=admitted && live() &&
+            NGFlightTrace::capturePreparedResource(resource,gpu,bytes,authority,after,read,live) && before.same(after);
+        if(!reason && !stable)reason=3;
+        emit(2,0,done,stable?1U:0U);
+        SYSLOG("ngreen","V394: checksum prepared CPU resource ticket=%u role=%u pages=%u reason=%u stable=%u atomic=0",
+            ticket+1,role,pages,reason,stable?1U:0U);
+    }
+}
+
 void Gen11::vfChecksumUnmap(void **map)
 {
     PANIC_COND(!callback || !callback->oVfChecksumUnmap,"ngreen","Missing original checksum unmap continuation");
@@ -7168,6 +7256,7 @@ void Gen11::vfChecksumUnmap(void **map)
                 }
                 SYSLOG("ngreen","V393: native leased SSH CPU pair ticket=%u bytes=%u copied=%u:%u flags=%x atomic=0",
                     ticket,receipt.bytes,receipt.first,receipt.second,receipt.flags);
+                vfObserveChecksumPreparedResources(*entry,receipt,ticket,live);
             }
         }
     }

@@ -277,7 +277,7 @@ def product_symbol_surface():
     for name, values in partitions.items():
         expected_count, expected_digest = EXPECTED_EXTERNAL_ABI_PARTITIONS[name]
         assert len(values) == expected_count, (
-            f"product {name} ABI import count changed: {len(values)}"
+            f"product {name} ABI import count changed: {len(values)}; imports={values}"
         )
         actual_digest = digest_paths(values)
         assert actual_digest == expected_digest, (

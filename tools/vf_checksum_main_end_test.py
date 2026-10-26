@@ -310,7 +310,7 @@ def test_end(root):
 def test_surface_bind_returns(root):
     source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
     a=source.index('bool Gen11::vfChecksumBindResource(')
-    b=source.index('\nvoid Gen11::vfChecksumUnmap(',a)
+    b=source.index('\ntemplate<class Live>\nstatic void vfObserveChecksumPreparedResources(',a)
     body=source[a:b].replace('reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0))','fakeCaller')
     prefix=r'''
 void vfObserveChecksumHeapBinding(unsigned,unsigned,bool,unsigned long,unsigned) {}
@@ -529,6 +529,7 @@ struct VfMediaSubmission {
  struct{bool admitted(){return surface;}}checksumSurfaces;
 }entry;
 struct VfMediaSubmissionScope{static VfMediaSubmission*findCurrent(){return present?&entry:nullptr;}};
+template<class Live>static void vfObserveChecksumPreparedResources(VfMediaSubmission&,const NgreenChecksumGen12::NativeSshMapPagePair&,uint32_t,Live&&) {}
 NgreenChecksumGen12::NativeSshMapPair saved;
 NgreenChecksumGen12::NativeSshMapPagePair gVfChecksumSshPagePairs[2];
 void vfFlightRecord(uint32_t kind,uint32_t group,uint64_t id,const volatile uint32_t*data,uint32_t count){
@@ -633,9 +634,132 @@ int main(){
     subprocess.run([*CXX,'-std=c++14','-fsanitize=address,undefined','-I'+str(ROOT),str(path),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True)
 
+def test_prepared_resource_runtime(root):
+    source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
+    a=source.index('template<class Live>\nstatic void vfObserveChecksumPreparedResources(')
+    b=source.index('\nvoid Gen11::vfChecksumUnmap(',a)
+    body=source[a:b]
+    fixture=r'''
+#include "NootedGreen/kern_checksum_gen12_commands.hpp"
+#include "NootedGreen/kern_flight_trace.hpp"
+#include <cassert>
+#include <cstring>
+#include <vector>
+#include <array>
+#include <cstdio>
+using mach_vm_address_t=uintptr_t;
+template<class T>T getMember(void*p,size_t n){T v;std::memcpy(&v,static_cast<uint8_t*>(p)+n,sizeof(v));return v;}
+#define SYSLOG(...) do{}while(0)
+constexpr uint64_t base=0xffff800000000000ULL;
+std::vector<uint8_t> memory(1024*1024);
+const uint64_t shared=base+0x90000,task=base+0xa0000,gpuTask=base+0xc0000;
+uintptr_t gVfNativeBatchMapVtable=base+0xe0000,gVfMediaSysMemoryVtable=base+0xe1000;
+NGFlightTrace::PreparedPhysicalCacheAuthority gVfPreparedPhysicalCacheAuthority{base+0xd0000,base+0xd0100,true};
+bool gVfNativeObjectLayoutBound=true,gVfMediaMapOffsetLayoutVerified=true;
+void* mapper=nullptr;void**gVfCpuSystemMapperSlot=&mapper;
+uintptr_t gVfBatchCpuCopy;
+uint64_t copy(uint64_t from,uint64_t to,uint64_t n){
+ if(from<base || n>memory.size() || from-base>memory.size()-n)return 0;
+ std::memcpy(reinterpret_cast<void*>(to),memory.data()+from-base,n);return n;
+}
+template<class T>void set(uint64_t at,T value){assert(at>=base && at-base<=memory.size()-sizeof(T));std::memcpy(memory.data()+at-base,&value,sizeof(T));}
+struct VfMediaSubmission {void*accelerator=reinterpret_cast<void*>(base+0xb0000);void*context;
+ uint32_t flightGroup=4;NgreenChecksumGen12::NativeHeapBindings checksumHeaps{};NgreenChecksumGen12::NativeSurfaceBindings checksumSurfaces{};};
+std::vector<std::array<uint32_t,16>> records;
+void vfFlightRecord(uint32_t kind,uint32_t group,uint64_t,const volatile uint32_t*p,uint32_t n){
+ assert(kind==32 && group==4 && n==16);std::array<uint32_t,16> r{};for(unsigned i=0;i<16;++i)r[i]=p[i];records.push_back(r);
+}
+template<class T,unsigned long N>constexpr unsigned arrsize(const T(&)[N]){return N;}
+__ACTUAL__
+int main(){for(unsigned mode=0;mode<20;++mode){
+ std::fill(memory.begin(),memory.end(),0);records.clear();
+ alignas(16) uint8_t context[0x600]{};VfMediaSubmission entry{};entry.context=context;
+ std::memcpy(context+0x578,&task,8);std::memcpy(context+0x5a0,&shared,8);
+ set(shared+0x78,reinterpret_cast<uint64_t>(entry.accelerator));set(shared+0x80,task);set(shared+0x88,gpuTask);
+ const uint64_t descriptorTable=base+0xe2000;
+ set(descriptorTable+0x130,gVfPreparedPhysicalCacheAuthority.dmaMethod);set(descriptorTable+0x138,gVfPreparedPhysicalCacheAuthority.physicalMethod);
+ NgreenChecksumGen12::NativeSshMapPagePair pair{};pair.first=pair.second=4096;pair.flags=15;
+ for(unsigned i=0;i<16;++i)pair.before[i]=i<8?64+i*64:0;
+ const uint64_t sizes[]={4096,4096,4096,2088960,1044480,4096};
+ for(unsigned role=0;role<6;++role){
+  const uint64_t r=base+role*0x10000,m=r+0x1000,sys=r+0x2000,d=r+0x3000,e=r+0x4000,p=r+0x5000,u=r+0x9000;
+  const uint64_t gpu=0x40000000+role*0x400000;
+  set(r+0x40,m);set(r+0x88,sys);set(m,gVfNativeBatchMapVtable);set(m+0x88,reinterpret_cast<uint64_t>(entry.accelerator));set(m+0x90,gpuTask);set(m+0x18,sys);set(m+0x98,gpu);
+  set(sys,gVfMediaSysMemoryVtable);set(sys+0x28,reinterpret_cast<uint64_t>(entry.accelerator));set(sys+0x40,sizes[role]);set(sys+0xd0,d);
+  set(d,descriptorTable);set(d+0x20,uint32_t(mode==3?0x20:0x10));set(d+0x50,sizes[role]);set(d+0x88,uint32_t(1));set(d+0x90,e);
+  const uint32_t pages=uint32_t((sizes[role]+4095)/4096);set(e+0x10,p);set(e+0x18,uint64_t(48+8*pages+40));set(p+0x28,pages);
+  for(unsigned i=0;i<pages;++i)set(p+48+8*i,uint64_t(0x10000+role*0x1000+i));
+  NGFlightTrace::PreparedPhysicalCacheBlock block{};block.upl=u;set(p+48+8*pages,block);
+  if(role<3)assert(entry.checksumHeaps.record(role,true,r,gpu,4096,false,task,shared));
+  else {unsigned i=role-3;assert(entry.checksumSurfaces.record(true,r,gpu,i<2?1920:4096,i,i==2));auto*s=pair.before+16+16*i;
+   s[0]=i==0?0x25017000U:i==1?0x24297000U:0x835d4000U;s[1]=(i<2?4U:6U)<<24;s[7]=0x09770000;
+   s[2]=i<2?479U|((i?543U:1087U)<<16):127U|(7U<<16);s[3]=i<2?1919:3;s[8]=gpu;
+  }
+  if(mode==1 && role==3)set(m+0x10,uint32_t(0x40));
+  if(role==3)switch(mode){
+   case 5:set(m,gVfNativeBatchMapVtable+8);break;
+   case 6:set(sys,gVfMediaSysMemoryVtable+8);break;
+   case 7:set(r+0x88,uint64_t(0));break;
+   case 8:set(m+0x18,sys+8);break;
+   case 9:set(m+0x88,reinterpret_cast<uint64_t>(entry.accelerator)+8);break;
+   case 10:set(m+0x90,gpuTask+8);break;
+   case 11:set(m+0x11c,uint8_t(1));break;
+   case 12:set(sys+0x28,reinterpret_cast<uint64_t>(entry.accelerator)+8);break;
+   case 13:set(sys+0xd0,uint64_t(0x1000));break;
+   case 14:set(sys+0x40,uint64_t(4*1024*1024+1));break;
+   case 15:set(m+0x98,gpu+4096);break;
+   case 16:set(m+0x20,sizes[role]+1);break;
+   case 17:set(d,descriptorTable+8);break;
+   case 18:set(d+0x88,uint32_t(0));break;
+   case 19:set(p+48,uint64_t(0));break;
+  }
+ }
+ for(unsigned i=0;i<1024;++i)pair.after[i]=pair.before[i];
+ gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&copy);if(mode==4)set(shared+0x80,task+8);
+ vfObserveChecksumPreparedResources(entry,pair,0,[&](){return mode!=2;});
+ if(mode==2 || mode==4){assert(records.empty());continue;}
+ unsigned begins=0,ends=0,pages=0;uint64_t covered[6]{};
+ for(const auto&r:records){if(r[3]==0)++begins;else if(r[3]==2){++ends;assert((r[15]==0)==(mode==0 || mode!=3 && r[2]!=3));}else{++pages;covered[r[2]]+=r[11];}
+  std::printf("CPU32 %u",mode);for(auto w:r)std::printf(" %u",w);std::puts("");}
+ assert(begins==6 && ends==6);if(mode==0){assert(pages==769);for(unsigned i=0;i<6;++i)assert(covered[i]==sizes[i]);}
+ if(mode==1)assert(!covered[3]);if(mode==3)assert(!pages);
+ }std::puts("Actual six-resource prepared CPU runtime: full coverage/foreign mode/missing descriptor/owner roots PASS; no native invocation");}
+'''.replace('__ACTUAL__',body)
+    path=root/'prepared_resources.cpp';path.write_text(fixture)
+    binary=root/'prepared_resources'
+    subprocess.run([*CXX,'-std=c++14','-fsanitize=address,undefined','-I'+str(ROOT),str(path),'-o',str(binary)],check=True)
+    output=subprocess.run([str(binary)],check=True,capture_output=True,text=True).stdout
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('ngreen_prepared_decode',ROOT/'tools/media_adapter/decode_kdebug_recorder.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    rows_by_mode={}
+    for line in output.splitlines():
+        if line.startswith('CPU32 '):
+            mode,*words=[int(n) for n in line.split()[1:]]
+            module.validate_leaf(32,words)
+            rows_by_mode.setdefault(mode,[]).append((4,{'thread':77,'identity':f'{0x40000000+words[2]*0x400000:016x}'},struct.pack('<16I',*words)))
+    for mode,rows in rows_by_mode.items():
+        report=module.prepared_resource_coverage(rows)
+        assert report['resources']==6 and report['complete_cpu_page_coverage']==(6 if mode==0 else 0 if mode==3 else 5)
+        assert not report['iova_mapping_proven'] and not report['gpu_execution_proof']
+    rows=rows_by_mode[0]
+    negatives=[rows[1:],rows[:-1],rows[:2]+[rows[1]]+rows[2:],[rows[1],rows[0]]+rows[2:],
+        [row for row in rows if struct.unpack('<16I',row[2])[2]!=5],
+        [rows[0],(4,{'thread':78,'identity':rows[1][1]['identity']},rows[1][2])]+rows[2:]]
+    for index,field,value in ((1,4,7),(1,7,1),(1,11,4097),(2,11,4095),(2,15,0),(0,0,2)):
+        bad=list(rows);words=list(struct.unpack('<16I',bad[index][2]));words[field]=value
+        if bad[index][2]==struct.pack('<16I',*words):continue
+        bad[index]=(bad[index][0],bad[index][1],struct.pack('<16I',*words));negatives.append(bad)
+    for bad in negatives:
+        try:module.prepared_resource_coverage(bad)
+        except ValueError:pass
+        else:raise AssertionError('prepared resource corrupt scope accepted')
+    print(output.splitlines()[-1]);print(f'Strict actual CPU resource scope decoder: full/refused coverage and {len(negatives)} corrupt scopes rejected')
+
 if __name__=="__main__":
     with tempfile.TemporaryDirectory(prefix="ngreen-checksum-main-end-") as directory:
         destination=Path(directory)
+        test_prepared_resource_runtime(destination)
         test_observed_surface_ranges(destination)
         test_ssh_unmap(destination)
         test_qualification(destination)
