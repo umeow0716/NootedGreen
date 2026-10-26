@@ -192,6 +192,7 @@ static mach_vm_address_t gVfCpuBackingLookup = 0;
 static void **gVfCpuKernelPmapSlot = nullptr;
 static void *gVfCpuKernelPmapStore = nullptr;
 static void **gVfCpuSystemMapperSlot = nullptr;
+static NGFlightTrace::PreparedPhysicalCacheAuthority gVfPreparedPhysicalCacheAuthority{};
 static mach_vm_address_t gVfBatchCpuCopy = 0;
 static mach_vm_address_t gVfBatchCaller = 0;
 static mach_vm_address_t gVfSurfaceCallers[3] {};
@@ -3001,6 +3002,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			gVfMediaMapOffsetLayoutVerified = false;
 			gVfCpuBackingLookup=0;gVfCpuKernelPmapSlot=nullptr;
 			gVfCpuKernelPmapStore=nullptr;gVfCpuSystemMapperSlot=nullptr;
+			gVfPreparedPhysicalCacheAuthority={};
 			gVfMediaMapAddress = gVfMediaMapLength = gVfMediaMapDescriptor = gVfMediaMapOptions = 0;
 			const auto process = patcher.solveSymbol(index,
 				"__ZN15IOAccelContext218processDataBuffersEj", address, size);
@@ -3028,6 +3030,25 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				0x48,0x8b,0x07,0xff,0x90,0x38,0x01,0x00,0x00};
 			gVfMediaMapOffsetLayoutVerified=mapPhysical &&
 				anchorMatches(mapPhysical+0x53,mapOffsetUse,sizeof(mapOffsetUse));
+			// Prepared metadata is read directly, never through either virtual
+			// method. Bind the layout to all reviewed BootKC-linked bytes.
+			const auto preparedPhysical=patcher.solveSymbol(KernelPatcher::KernelID,
+				"__ZN25IOGeneralMemoryDescriptor18getPhysicalSegmentEyPyj");
+			const auto preparedDma=patcher.solveSymbol(KernelPatcher::KernelID,
+				"__ZNK25IOGeneralMemoryDescriptor19dmaCommandOperationEjPvj");
+			const auto preparedMapper=patcher.solveSymbol(KernelPatcher::KernelID,"__ZN8IOMapper7gSystemE");
+			const bool preparedLayout=preparedPhysical && preparedDma && preparedMapper &&
+				NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(preparedPhysical),720)==UINT64_C(0x1310a28d6256735c) &&
+				NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(preparedDma),1024)==UINT64_C(0xf383ff4366dd7555) &&
+				NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(preparedDma+1024),1024)==UINT64_C(0x0e005644b664144d) &&
+				NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(preparedDma+2048),160)==UINT64_C(0x25a17a997245dbb9) &&
+				preparedDma+0x254+getMember<int32_t>(reinterpret_cast<void *>(preparedDma),0x24f)==preparedMapper;
+			if(preparedLayout) {
+				gVfPreparedPhysicalCacheAuthority.physicalMethod=preparedPhysical;
+				gVfPreparedPhysicalCacheAuthority.dmaMethod=preparedDma;
+				gVfPreparedPhysicalCacheAuthority.exactLayout=true;
+			}
+			SYSLOG("ngreen","V394: prepared CPU cache layout bound=%u",preparedLayout?1U:0U);
 			const auto cpuLookup=patcher.solveSymbol(KernelPatcher::KernelID,"_pmap_find_phys_nofault");
 			const auto cpuFindPa=patcher.solveSymbol(KernelPatcher::KernelID,"_pmap_find_pa");
 			const auto kernelPmap=patcher.solveSymbol(KernelPatcher::KernelID,"_kernel_pmap");

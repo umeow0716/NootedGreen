@@ -161,13 +161,20 @@ elif sys.argv[1:]:
             (sys.argv[3], 0x2b1bc0, 57, 0x51b84c628134c4ea),
             (sys.argv[3], 0x2ccdc0, 362, 0xd8a37de28d61bb88),
             (sys.argv[3], 0x2c8b10, 208, 0x292f758de9058cc4),
-            (sys.argv[3], 0x2b1880, 816, 0x88e1cd84195161db)):
+            (sys.argv[3], 0x2b1880, 816, 0x88e1cd84195161db),
+            (sys.argv[3], 0x8dd0a0, 720, 0x1310a28d6256735c),
+            (sys.argv[3], 0x8dc800, 1024, 0xf383ff4366dd7555),
+            (sys.argv[3], 0x8dcc00, 1024, 0x0e005644b664144d),
+            (sys.argv[3], 0x8dd000, 160, 0x25a17a997245dbb9)):
         data = bounded(path, offset, size)
         assert f'0x{digest:016x}' in source and fnv(data) == digest
         for index in range(size):
             bad = bytearray(data); bad[index] ^= 1
             assert fnv(bad) != digest
             mutations += 1
+    mapper_test = bounded(sys.argv[3], 0x8dca4c, 8)
+    assert mapper_test[:3] == bytes.fromhex('48833d') and mapper_test[7] == 0
+    assert 0xffffff8000adca54 + struct.unpack_from('<i', mapper_test, 3)[0] == 0xffffff80011e4ba8
     assert bounded(sys.argv[2], 0x42f7a, 14) == bytes.fromhex('554889e54156534883ec104989f6')
     caller = bounded(sys.argv[2], 0x4c828, 47)
     assert caller == bytes.fromhex('498bbc2430010000498b7618498b4e20458b4630450fb64e6a410fb64669488b1f4883ec084489fa50ff9318010000')
@@ -283,6 +290,48 @@ with tempfile.TemporaryDirectory(prefix='ngreen-bindings-') as directory:
     binary=Path(directory)/'binding'
     subprocess.run([os.environ.get('CXX','clang++'),'-std=c++14','-O1','-g','-fsanitize=address,undefined',
                     str(cpp),'-o',str(binary)],check=True)
+    subprocess.run([str(binary)],check=True)
+# Compile the production layout-binding statements, independently refusing each
+# symbol, each code chunk, and the actual RIP-relative mapper target.
+prepared_begin=source.index('const auto preparedPhysical=patcher.solveSymbol(')
+prepared_end=source.index('const auto cpuLookup=patcher.solveSymbol(',prepared_begin)
+prepared_fixture=r'''
+#include <cstdint>
+#include <cstring>
+#include <cassert>
+#include <cstdio>
+alignas(16) static uint8_t arena[8192];
+static unsigned scenario;
+struct Authority {uint64_t physicalMethod=0,dmaMethod=0;bool exactLayout=false;} gVfPreparedPhysicalCacheAuthority;
+struct KernelPatcher {enum {KernelID=0};};
+struct MockPatcher {uintptr_t solveSymbol(int,const char *name){
+ const char *names[]={"__ZN25IOGeneralMemoryDescriptor18getPhysicalSegmentEyPyj",
+ "__ZNK25IOGeneralMemoryDescriptor19dmaCommandOperationEjPvj","__ZN8IOMapper7gSystemE"};
+ for(unsigned i=0;i<3;++i)if(!std::strcmp(name,names[i]))return scenario==i+1?0:reinterpret_cast<uintptr_t>(arena+(i+1)*1024);
+ assert(false);return 0;
+}} patcher;
+template<class T>T getMember(void *p,unsigned n){T v;std::memcpy(&v,static_cast<uint8_t *>(p)+n,sizeof(v));return v;}
+namespace NGFlightTrace {uint64_t boundedCodeHash(const volatile uint8_t *p,unsigned bytes){
+ const unsigned offsets[]={1024,2048,3072,4096},sizes[]={720,1024,1024,160};
+ const uint64_t hashes[]={UINT64_C(0x1310a28d6256735c),UINT64_C(0xf383ff4366dd7555),UINT64_C(0x0e005644b664144d),UINT64_C(0x25a17a997245dbb9)};
+ for(unsigned i=0;i<4;++i)if(p==arena+offsets[i]){assert(bytes==sizes[i]);return hashes[i]^(scenario==i+4?1:0);}
+ assert(false);return 0;
+}}
+#define SYSLOG(...) do{}while(0)
+static void bind(){__ACTUAL_PREPARED__}
+int main(){for(scenario=0;scenario<=8;++scenario){
+ gVfPreparedPhysicalCacheAuthority={};
+ const int32_t displacement=static_cast<int32_t>(3072-2048-0x254+(scenario==8?8:0));
+ std::memcpy(arena+2048+0x24f,&displacement,4);bind();
+ assert(gVfPreparedPhysicalCacheAuthority.exactLayout==(scenario==0));
+ assert(bool(gVfPreparedPhysicalCacheAuthority.physicalMethod)==(scenario==0));
+ assert(bool(gVfPreparedPhysicalCacheAuthority.dmaMethod)==(scenario==0));
+ }std::puts("PASS actual prepared-cache binding: exact admission and eight independent refusals; no native call");}
+'''.replace('__ACTUAL_PREPARED__',source[prepared_begin:prepared_end])
+with tempfile.TemporaryDirectory(prefix='ngreen-prepared-binding-') as directory:
+    cpp=Path(directory)/'binding.cpp';cpp.write_text(prepared_fixture)
+    binary=Path(directory)/'binding'
+    subprocess.run([os.environ.get('CXX','clang++'),'-std=c++14','-O1','-g','-fsanitize=address,undefined',str(cpp),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True)
 start = source.index('bool Gen11::vfObserveRingBatch(')
 stop = source.index('\n}', source.index('return FunctionCast(vfObserveRingBatch,', start)) + 2
