@@ -230,6 +230,9 @@ static mach_vm_address_t gVfChecksumSshUnmapCaller=0,gVfChecksumMapAddressGetter
 static volatile uint32_t gVfChecksumSshCaptureCount=0,gVfChecksumHeapBindingCount=0;
 // Two per-boot owned CPU buffers; no allocation inside the native release.
 static NgreenChecksumGen12::NativeSshMapPagePair gVfChecksumSshPagePairs[2];
+// Two already bounded unmap tickets, six original resource receipts. Fixed
+// prefix pairs only; no allocation or pointer search in the native callback.
+static uint32_t gVfChecksumResourceSnapshots[2][6][660];
 mach_vm_address_t gVfMediaEndCaller = 0;
 bool gVfCaptureStreamResetBound = false;
 mach_vm_address_t gVfMediaKernelMappedMemoryVtable = 0;
@@ -3780,6 +3783,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                     const bool preparedChecksumLock=preparedChecksumBindings && vfEnsurePageTableUpdateLock();
                     SYSLOG("ngreen","V394: checksum prepared CPU backing and task leaves armed=%u",
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
+                    SYSLOG("ngreen","V395: checksum resource admission prefix pairs armed=%u",
+                        preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
                 }
 				const auto batchSubmit=patcher.solveSymbol(index,
 					"__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb",address,size);
@@ -7146,7 +7151,7 @@ template<class Live>
 static void vfObserveChecksumPreparedResources(VfMediaSubmission& entry,
     const NgreenChecksumGen12::NativeSshMapPagePair& pair,uint32_t ticket,Live&& ownerLive)
 {
-    if(!gVfPreparedPhysicalCacheAuthority.exactLayout || !gVfBatchCpuCopy ||
+    if(ticket>=2 || !gVfPreparedPhysicalCacheAuthority.exactLayout || !gVfBatchCpuCopy ||
        !gVfNativeObjectLayoutBound || !gVfMediaMapOffsetLayoutVerified ||
        !gVfNativeBatchMapVtable || !gVfMediaSysMemoryVtable || !gVfCpuSystemMapperSlot)return;
     uint64_t surfaceBytes[3]{};
@@ -7192,8 +7197,52 @@ static void vfObserveChecksumPreparedResources(VfMediaSubmission& entry,
         const auto read=[&](uint64_t at,void *out,uint32_t n) {
             return live() && copy(at,reinterpret_cast<uint64_t>(out),n)==n && live();
         };
+        auto& raw=gVfChecksumResourceSnapshots[ticket][role];
+        for(auto& word:raw)word=0;
+        raw[0]=1;raw[1]=ticket+1;raw[2]=role;raw[3]=sizeof(raw);
+        const uint64_t identities[]={authority.mapTable,authority.memoryTable,authority.accelerator,
+            authority.task,resource,bytes,gpu};
+        for(unsigned i=0;i<7;++i){raw[16+2*i]=uint32_t(identities[i]);raw[17+2*i]=uint32_t(identities[i]>>32);}
+        const auto value=[](const uint32_t *words,unsigned offset) {
+            return uint64_t(words[offset/4])|(uint64_t(words[offset/4+1])<<32);
+        };
+        const auto prefix=[&](uint64_t from,uint32_t *to,uint32_t bytes,uint64_t exactClass) {
+            if(!NGFlightTrace::canonicalKernelObject(from) || from>UINT64_MAX-bytes || !live())return 0U;
+            if(exactClass) {
+                const uint64_t first=copy(from,reinterpret_cast<uint64_t>(to),8);
+                if(first!=8 || value(to,0)!=exactClass || !live())return first<=8?uint32_t(first):0U;
+            }
+            const uint64_t copied=copy(from,reinterpret_cast<uint64_t>(to),bytes);
+            const uint32_t valid=copied<=bytes?uint32_t(copied):0U;
+            for(uint32_t i=valid;i<bytes;++i)reinterpret_cast<uint8_t*>(to)[i]=0;
+            return valid;
+        };
+        const auto snapshot=[&](unsigned part) {
+            auto *r=raw+32+part*36,*m=raw+104+part*74;
+            auto *a=raw+252+part*102,*b=raw+456+part*102;
+            raw[4+part]=prefix(resource,r,144,0);
+            if(raw[4+part]!=144)return;
+            const uint64_t map=value(r,0x40),backing=value(r,0x88)?value(r,0x88):value(r,0x80);
+            raw[6+part]=prefix(map,m,296,authority.mapTable);
+            raw[8+part]=prefix(backing,a,408,authority.memoryTable);
+            if(raw[6+part]==296)raw[10+part]=prefix(value(m,0x18),b,408,authority.memoryTable);
+        };
+        if(live())raw[12]|=1;
+        snapshot(0);
         NGFlightTrace::PreparedResourceView before{};
-        const bool admitted=NGFlightTrace::capturePreparedResource(resource,gpu,bytes,authority,before,read,live);
+        uint32_t admissionStage=0;
+        const bool admitted=NGFlightTrace::capturePreparedResource(resource,gpu,bytes,authority,before,read,live,&admissionStage);
+        snapshot(1);if(live())raw[12]|=2;
+        for(unsigned part=0;part<4;++part) {
+            static constexpr unsigned starts[]={32,104,252,456},words[]={36,74,102,102};
+            bool equal=raw[4+2*part]==words[part]*4 && raw[5+2*part]==words[part]*4;
+            for(unsigned i=0;equal && i<words[part];++i)equal=raw[starts[part]+i]==raw[starts[part]+words[part]+i];
+            if(equal)raw[12]|=4U<<part;
+        }
+        raw[13]=admissionStage;raw[30]=admitted?1U:0U;
+        vfFlightRecord(34,entry.flightGroup,gpu,raw,arrsize(raw));
+        SYSLOG("ngreen","V395: resource admission ticket=%u role=%u stage=%u pair-flags=%x atomic=0",
+            ticket+1,role,admissionStage,raw[12]);
         uint64_t offset=admitted?before.offset+(gpu-before.gpu):0,done=0;
         uint32_t pages=0,reason=admitted?0U:1U;
         const auto emit=[&](uint32_t phase,uint64_t physical,uint64_t sampledBytes,uint32_t flags) {
@@ -7212,7 +7261,10 @@ static void vfObserveChecksumPreparedResources(VfMediaSubmission& entry,
             };
             const auto sample=NGFlightTrace::observePreparedPhysicalCache(before.descriptor,offset+done,
                 gVfPreparedPhysicalCacheAuthority,read,stable);
-            if(sample.flags!=15U || !sample.bytes){reason=2;break;}
+            if(sample.flags!=15U || !sample.bytes){
+                SYSLOG("ngreen","V395: prepared CPU page refused ticket=%u role=%u reason=%s",
+                    ticket+1,role,sample.reason);reason=2;break;
+            }
             uint64_t step=sample.bytes;
             const uint64_t gpuPage=4096U-((gpu+done)&4095U);
             if(step>gpuPage)step=gpuPage;if(step>bytes-done)step=bytes-done;

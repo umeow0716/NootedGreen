@@ -37,7 +37,8 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          25: 'native_render_surface_output', 26: 'native_pool_allocation_metadata',
          27: 'native_pool_allocation_chunk',28: 'native_rect_input_metadata',
          29: 'native_rect_input_chunk', 30: 'native_leased_ssh_cpu_pair', 31: 'native_leased_ssh_page_chunk',
-         32: 'prepared_resource_cpu_page', 33: 'prepared_resource_task_leaf'}
+         32: 'prepared_resource_cpu_page', 33: 'prepared_resource_task_leaf',
+         34: 'prepared_resource_admission_prefix_pair'}
 RESOURCE_SLOTS = {
     1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
     2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
@@ -45,6 +46,27 @@ RESOURCE_SLOTS = {
 
 
 def validate_leaf(kind, words):
+    if kind == 34:
+        if (len(words)!=660 or words[:1]!=[1] or words[1] not in (1,2) or words[2]>=6 or
+                words[3]!=2640 or words[12]&~63 or words[13]>17 or any(words[14:16]) or
+                words[30] not in (0,1) or bool(words[30])!=(words[13]==0) or words[31] or
+                words[27] or not 0<words[26]<=4*1024*1024):
+            raise ValueError('invalid prepared-resource admission prefix envelope')
+        expected=0
+        for index,(start,count) in enumerate(((32,36),(104,74),(252,102),(456,102))):
+            for part in (0,1):
+                copied=words[4+index*2+part];raw=struct.pack('<%dI'%count,*words[start+part*count:start+(part+1)*count])
+                if copied>count*4 or any(raw[copied:]):raise ValueError('invalid admission prefix extent/padding')
+            if words[4+index*2:6+index*2]==[count*4]*2 and words[start:start+count]==words[start+count:start+2*count]:
+                expected|=4<<index
+        if words[12]&60!=expected:raise ValueError('invalid admission prefix pair flags')
+        for at in (16,18,20,22):
+            address=words[at]|words[at+1]<<32
+            if address>>47!=0x1ffff or address&7:raise ValueError('invalid admission scope identity')
+        if words[13]!=1:
+            resource=words[24]|words[25]<<32
+            if resource>>47!=0x1ffff or resource&7:raise ValueError('invalid admitted resource identity')
+        return
     if kind == 33:
         if (len(words)!=16 or words[0]!=1 or words[1] not in (1,2) or words[2]>=6 or
                 words[3]>=1024 or words[5] or words[4]>=4*1024*1024 or words[7]>=4096 or
@@ -594,6 +616,47 @@ def prepared_resource_coverage(rows, leaf_rows=()):
         'atomic_snapshot':False,'native_object_lease_proven':False,'iova_mapping_proven':False,'gpu_execution_proof':False}
 
 
+def prepared_resource_admission(rows):
+    stages=('accepted','scope-addresses','resource-map','resource-backing','map-class','map-accelerator',
+        'map-task','map-memory-association','GPU-address-mode','rotated-map','memory-class','memory-accelerator',
+        'memory-descriptor','backing-bytes','GPU-lower-bound','descriptor-offset','extent','owner-live')
+    output=[];seen=set()
+    for group,metadata,payload in rows:
+        if len(output)>=12 or len(payload)!=2640:raise ValueError('admission snapshot budget/extent')
+        w=list(struct.unpack('<660I',payload));validate_leaf(34,w)
+        key=(group,w[1],w[2])
+        if key in seen or not group or not metadata.get('thread'):raise ValueError('admission snapshot duplicate/owner')
+        seen.add(key)
+        q=lambda at:w[at]|w[at+1]<<32
+        if int(metadata.get('identity','0'),16)!=q(28):raise ValueError('admission GPU identity mismatch')
+        parts=[]
+        for part in (0,1):
+            def field(start,copied,offset,size=8):
+                if copied<offset+size:return None
+                raw=struct.pack('<%dI'%((offset+size+3)//4),*w[start:start+(offset+size+3)//4])
+                return int.from_bytes(raw[offset:offset+size],'little')
+            r,m,a,b=32+part*36,104+part*74,252+part*102,456+part*102
+            counts=[w[4+part],w[6+part],w[8+part],w[10+part]]
+            parts.append({'resource_map':field(r,counts[0],0x40),'resource_backing80':field(r,counts[0],0x80),
+                'resource_backing88':field(r,counts[0],0x88),'map_class':field(m,counts[1],0),
+                'map_memory':field(m,counts[1],0x18),'map_offset':field(m,counts[1],0x20),
+                'map_owner':field(m,counts[1],0x88),'map_task':field(m,counts[1],0x90),
+                'map_gpu':field(m,counts[1],0x98),'map_flags':field(m,counts[1],0x10,4),
+                'map_rotated':field(m,counts[1],0x11c,1),
+                'backing_class':field(a,counts[2],0),'backing_owner':field(a,counts[2],0x28),
+                'backing_bytes':field(a,counts[2],0x40),'backing_descriptor':field(a,counts[2],0xd0),
+                'map_memory_class':field(b,counts[3],0),'map_memory_owner':field(b,counts[3],0x28),
+                'map_memory_bytes':field(b,counts[3],0x40),'map_memory_descriptor':field(b,counts[3],0xd0)})
+        expected={'map_class':q(16),'backing_class':q(18),'map_owner':q(20),'backing_owner':q(20),'map_task':q(22)}
+        comparisons={name:(None if parts[0][name] is None else parts[0][name]==value) for name,value in expected.items()}
+        output.append({'group':group,'ticket':w[1],'role':w[2],'thread':metadata['thread'],
+            'resource':q(24),'gpu':q(28),'requested_bytes':q(26),'copied_prefix_bytes':w[4:12],
+            'pair_flags':w[12],'admitted':bool(w[30]),'stage':stages[w[13]],'stage_id':w[13],
+            'expected':expected,'expected_matches_before':comparisons,'before':parts[0],'after':parts[1]})
+    return {'captures':len(output),'resources':output,'atomic_snapshot':False,
+        'native_object_lease_proven':False,'gpu_execution_proof':False}
+
+
 class DiskSink:
     """Disk-backed ID uniqueness/index; no growing seen-ID set or inode flood."""
     def __init__(self, directory):
@@ -781,6 +844,12 @@ class DiskSink:
                              json.dumps(metadata, separators=(',', ':')), raw))
         except sqlite3.IntegrityError as exc:
             raise ValueError('duplicate completed flight record ID') from exc
+
+    def prepared_admission_report(self):
+        rows=self.db.execute('SELECT group_id,metadata,payload FROM records WHERE kind=34 ORDER BY id LIMIT 13')
+        try:return prepared_resource_admission((group,json.loads(metadata),payload) for group,metadata,payload in rows)
+        except (ValueError,KeyError,TypeError,struct.error) as exc:
+            return {'scope_error':str(exc),'captures':0,'gpu_execution_proof':False}
 
     def prepared_resource_report(self):
         rows=self.db.execute('SELECT group_id,metadata,payload FROM records WHERE kind=32 ORDER BY id LIMIT 12313')
@@ -1401,6 +1470,7 @@ if __name__ == '__main__':
         resource_report = sink.resource_report()
         map_list_report = sink.map_list_report()
         prepared_resource_report = sink.prepared_resource_report()
+        prepared_admission_report = sink.prepared_admission_report()
         scope_report = sink.scope_coverage_report()
         try:
             sink.close()
@@ -1411,6 +1481,7 @@ if __name__ == '__main__':
         report['source_file_complete']=source_complete
         report['source_sha256']=hashed_source.digest.hexdigest() if source_complete else None
         report['prepared_resource_cpu_pages'] = prepared_resource_report
+        report['prepared_resource_admission'] = prepared_admission_report
         report['rings'] = ring_report
         report['backings'] = backing_report
         report['cpu_alias_backings'] = cpu_alias_report

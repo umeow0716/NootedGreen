@@ -139,7 +139,10 @@ struct PreparedResourceView {
 // supplies no lifetime lease, and cannot identify an IOVA as physical RAM.
 template<class Read,class Live>
 inline bool capturePreparedResource(uint64_t resource,uint64_t gpu,uint64_t bytes,
-    const PreparedResourceAuthority& authority,PreparedResourceView& view,Read&& read,Live&& live) {
+    const PreparedResourceAuthority& authority,PreparedResourceView& view,Read&& read,Live&& live,
+    uint32_t *diagnosticStage=nullptr) {
+    const auto stage=[&](uint32_t n){if(diagnosticStage)*diagnosticStage=n;};
+    stage(1);
     if(!canonicalKernelObject(resource) || resource>UINT64_MAX-0x90U || !bytes ||
        bytes>4U*1024U*1024U || !gpu || gpu>UINT64_C(0x0000ffffffffffff)-bytes ||
        !canonicalKernelObject(authority.mapTable) || !canonicalKernelObject(authority.memoryTable) ||
@@ -149,24 +152,28 @@ inline bool capturePreparedResource(uint64_t resource,uint64_t gpu,uint64_t byte
     };
     uint64_t backing=0,table=0,owner=0,task=0,mapMemory=0,memoryOwner=0;
     uint32_t flags=0;uint8_t rotated=0;
-    if(!get(resource+0x40,&view.map,8) || !canonicalKernelObject(view.map) || view.map>UINT64_MAX-0x120 ||
-       !get(resource+0x88,&backing,8) || (!backing && !get(resource+0x80,&backing,8)) ||
-       !canonicalKernelObject(backing) || backing>UINT64_MAX-0xd8 ||
-       !get(view.map,&table,8) || table!=authority.mapTable ||
-       !get(view.map+0x88,&owner,8) || owner!=authority.accelerator ||
-       !get(view.map+0x90,&task,8) || task!=authority.task ||
-       !get(view.map+0x18,&mapMemory,8) || mapMemory!=backing ||
-       !get(view.map+0x10,&flags,4) || (flags&0x40U) ||
-       !get(view.map+0x11c,&rotated,1) || rotated ||
-       !get(backing,&table,8) || table!=authority.memoryTable ||
-       !get(backing+0x28,&memoryOwner,8) || memoryOwner!=authority.accelerator ||
-       !get(backing+0xd0,&view.descriptor,8) || !canonicalKernelObject(view.descriptor) ||
-       !get(backing+0x40,&view.bytes,8) || !view.bytes || view.bytes>4U*1024U*1024U ||
-       !get(view.map+0x98,&view.gpu,8) || !view.gpu || gpu<view.gpu ||
-       !get(view.map+0x20,&view.offset,8) || view.offset>view.bytes ||
-       gpu-view.gpu>view.bytes-view.offset || bytes>view.bytes-view.offset-(gpu-view.gpu))return false;
+    stage(2);
+    if(!get(resource+0x40,&view.map,8) || !canonicalKernelObject(view.map) || view.map>UINT64_MAX-0x120)return false;
+    stage(3);
+    if(!get(resource+0x88,&backing,8) || (!backing && !get(resource+0x80,&backing,8)) ||
+       !canonicalKernelObject(backing) || backing>UINT64_MAX-0xd8)return false;
+    stage(4);if(!get(view.map,&table,8) || table!=authority.mapTable)return false;
+    stage(5);if(!get(view.map+0x88,&owner,8) || owner!=authority.accelerator)return false;
+    stage(6);if(!get(view.map+0x90,&task,8) || task!=authority.task)return false;
+    stage(7);if(!get(view.map+0x18,&mapMemory,8) || mapMemory!=backing)return false;
+    stage(8);if(!get(view.map+0x10,&flags,4) || (flags&0x40U))return false;
+    stage(9);if(!get(view.map+0x11c,&rotated,1) || rotated)return false;
+    stage(10);if(!get(backing,&table,8) || table!=authority.memoryTable)return false;
+    stage(11);if(!get(backing+0x28,&memoryOwner,8) || memoryOwner!=authority.accelerator)return false;
+    stage(12);if(!get(backing+0xd0,&view.descriptor,8) || !canonicalKernelObject(view.descriptor))return false;
+    stage(13);if(!get(backing+0x40,&view.bytes,8) || !view.bytes || view.bytes>4U*1024U*1024U)return false;
+    stage(14);if(!get(view.map+0x98,&view.gpu,8) || !view.gpu || gpu<view.gpu)return false;
+    stage(15);if(!get(view.map+0x20,&view.offset,8) || view.offset>view.bytes)return false;
+    stage(16);if(gpu-view.gpu>view.bytes-view.offset || bytes>view.bytes-view.offset-(gpu-view.gpu))return false;
+    stage(17);if(!live())return false;
+    stage(0);
     view.memory=backing;
-    return live();
+    return true;
 }
 // CPU snapshot walker only: callbacks must use the bound native nofault copy,
 // not virtual getters or retain. Equality does NOT exclude reuse/ABA and never

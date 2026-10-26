@@ -716,6 +716,8 @@ template<class T>void set(uint64_t at,T value){assert(at>=base && at-base<=memor
 struct VfMediaSubmission {void*accelerator=reinterpret_cast<void*>(base+0xb0000);void*context;
  uint32_t flightGroup=4;NgreenChecksumGen12::NativeHeapBindings checksumHeaps{};NgreenChecksumGen12::NativeSurfaceBindings checksumSurfaces{};};
 std::vector<std::array<uint32_t,16>> records,pteRecords;
+std::vector<std::array<uint32_t,660>> snapshots;
+uint32_t gVfChecksumResourceSnapshots[2][6][660];
 int lockObject=0,lockDepth=0;int*gVfPageTableUpdateLock=&lockObject;
 void IORecursiveLockLock(int*){assert(!lockDepth);++lockDepth;}
 void IORecursiveLockUnlock(int*){assert(lockDepth==1);--lockDepth;}
@@ -729,12 +731,13 @@ bool readLeaf(const void*,uint64_t address,uint64_t&physical,uint64_t&flags){
  return true;
 }
 void vfFlightRecord(uint32_t kind,uint32_t group,uint64_t,const volatile uint32_t*p,uint32_t n){
+ if(kind==34){assert(!lockDepth && group==4 && n==660);std::array<uint32_t,660> r{};for(unsigned i=0;i<660;++i)r[i]=p[i];snapshots.push_back(r);return;}
  assert(!lockDepth && (kind==32 || kind==33) && group==4 && n==16);std::array<uint32_t,16> r{};for(unsigned i=0;i<16;++i)r[i]=p[i];(kind==32?records:pteRecords).push_back(r);
 }
 template<class T,unsigned long N>constexpr unsigned arrsize(const T(&)[N]){return N;}
 __ACTUAL__
 int main(){for(unsigned mode=0;mode<25;++mode){
- std::fill(memory.begin(),memory.end(),0);records.clear();pteRecords.clear();
+ std::fill(memory.begin(),memory.end(),0);records.clear();pteRecords.clear();snapshots.clear();
  gVfPageTableUpdateLock=mode==20?nullptr:&lockObject;nativeRead=mode!=23;changeTable=mode==24;
  gVfLeafObservationReader=reinterpret_cast<uintptr_t>(&readLeaf);
  set(gpuTask+0x260,base+0xf0000);set(base+0xf0000,gVfRootObservationVtable+(mode==21?8:0));
@@ -783,13 +786,16 @@ int main(){for(unsigned mode=0;mode<25;++mode){
  for(unsigned i=0;i<1024;++i)pair.after[i]=pair.before[i];
  gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&copy);if(mode==4)set(shared+0x80,task+8);
  vfObserveChecksumPreparedResources(entry,pair,0,[&](){return mode!=2;});
- if(mode==2 || mode==4){assert(records.empty());continue;}
+ if(mode==2 || mode==4){assert(records.empty() && snapshots.empty());continue;}
  unsigned begins=0,ends=0,pages=0;uint64_t covered[6]{};
  for(const auto&r:records){if(r[3]==0)++begins;else if(r[3]==2){++ends;assert((r[15]==0)==(mode==0 || mode>=20 || mode!=3 && r[2]!=3));}else{++pages;covered[r[2]]+=r[11];}
   std::printf("CPU32 %u",mode);for(auto w:r)std::printf(" %u",w);std::puts("");}
  assert(begins==6 && ends==6);if(mode==0){assert(pages==769);for(unsigned i=0;i<6;++i)assert(covered[i]==sizes[i]);}
  if(mode==1)assert(!covered[3]);if(mode==3)assert(!pages);
  assert(!lockDepth && pteRecords.size()==pages);
+ assert(snapshots.size()==6);
+ const unsigned expectedStage[]={0,8,0,0,0,4,10,3,7,5,6,9,11,12,13,14,15,0,0,0,0,0,0,0,0};
+ for(const auto&r:snapshots){assert(r[13]==(r[2]==3?expectedStage[mode]:0));std::printf("SNAP34 %u",mode);for(auto w:r)std::printf(" %u",w);std::puts("");}
  for(const auto&r:pteRecords){std::printf("PTE33 %u",mode);for(auto w:r)std::printf(" %u",w);std::puts("");}
  }std::puts("Actual six-resource prepared CPU runtime: full coverage/foreign mode/missing descriptor/owner roots PASS; no native invocation");}
 '''.replace('__ACTUAL__',body)
@@ -800,12 +806,16 @@ int main(){for(unsigned mode=0;mode<25;++mode){
     import importlib.util
     spec=importlib.util.spec_from_file_location('ngreen_prepared_decode',ROOT/'tools/media_adapter/decode_kdebug_recorder.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-    rows_by_mode={};leaves_by_mode={}
+    rows_by_mode={};leaves_by_mode={};snapshots_by_mode={}
     for line in output.splitlines():
         if line.startswith('CPU32 '):
             mode,*words=[int(n) for n in line.split()[1:]]
             module.validate_leaf(32,words)
             rows_by_mode.setdefault(mode,[]).append((4,{'thread':77,'identity':f'{0x40000000+words[2]*0x400000:016x}'},struct.pack('<16I',*words)))
+        elif line.startswith('SNAP34 '):
+            mode,*words=[int(n) for n in line.split()[1:]]
+            module.validate_leaf(34,words)
+            snapshots_by_mode.setdefault(mode,[]).append((4,{'thread':77,'identity':f'{0x40000000+words[2]*0x400000:016x}'},struct.pack('<660I',*words)))
         elif line.startswith('PTE33 '):
             mode,*words=[int(n) for n in line.split()[1:]]
             module.validate_leaf(33,words)
@@ -816,6 +826,25 @@ int main(){for(unsigned mode=0;mode<25;++mode){
         else:assert report['stable_native_task_leaf_reads']==report['task_leaf_pages']
         assert report['resources']==6 and report['complete_cpu_page_coverage']==(6 if mode==0 or mode>=20 else 0 if mode==3 else 5)
         assert not report['iova_mapping_proven'] and not report['gpu_execution_proof']
+    for mode,snapshots in snapshots_by_mode.items():
+        admission=module.prepared_resource_admission(snapshots)
+        assert admission['captures']==6 and not admission['gpu_execution_proof']
+        for item in admission['resources']:
+            if mode==0:assert item['admitted'] and item['pair_flags']==63 and all(item['expected_matches_before'].values())
+        if mode==10:assert admission['resources'][3]['stage']=='map-task' and admission['resources'][3]['expected_matches_before']['map_task'] is False
+        if mode==8:assert admission['resources'][3]['stage']=='map-memory-association' and admission['resources'][3]['before']['map_memory_descriptor'] is None
+    good=snapshots_by_mode[0][0];bad_snapshots=[]
+    for field,value in ((0,2),(2,6),(3,2636),(4,145),(12,3),(13,18),(14,1),(17,0),(30,0),(31,1)):
+        words=list(struct.unpack('<660I',good[2]));words[field]=value
+        bad_snapshots.append((good[0],good[1],struct.pack('<660I',*words)))
+    partial=snapshots_by_mode[5][3];words=list(struct.unpack('<660I',partial[2]));words[106]=1
+    bad_snapshots.append((partial[0],partial[1],struct.pack('<660I',*words)))
+    bad_snapshots.append((good[0],good[1],good[2][:-4]))
+    bad_snapshots.append((good[0],{'thread':77,'identity':'0000000000000001'},good[2]))
+    for bad in bad_snapshots:
+        try:module.prepared_resource_admission([bad])
+        except ValueError:pass
+        else:raise AssertionError('corrupt admission prefix accepted')
     rows=rows_by_mode[0]
     negatives=[rows[1:],rows[:-1],rows[:2]+[rows[1]]+rows[2:],[rows[1],rows[0]]+rows[2:],
         [row for row in rows if struct.unpack('<16I',row[2])[2]!=5],
