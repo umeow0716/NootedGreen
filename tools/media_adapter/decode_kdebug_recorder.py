@@ -37,7 +37,7 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          25: 'native_render_surface_output', 26: 'native_pool_allocation_metadata',
          27: 'native_pool_allocation_chunk',28: 'native_rect_input_metadata',
          29: 'native_rect_input_chunk', 30: 'native_leased_ssh_cpu_pair', 31: 'native_leased_ssh_page_chunk',
-         32: 'prepared_resource_cpu_page'}
+         32: 'prepared_resource_cpu_page', 33: 'prepared_resource_task_leaf'}
 RESOURCE_SLOTS = {
     1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
     2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
@@ -45,6 +45,14 @@ RESOURCE_SLOTS = {
 
 
 def validate_leaf(kind, words):
+    if kind == 33:
+        if (len(words)!=16 or words[0]!=1 or words[1] not in (1,2) or words[2]>=6 or
+                words[3]>=1024 or words[5] or words[4]>=4*1024*1024 or words[7]>=4096 or
+                not (words[6]|words[7]) or words[12]&~15 or not 0<words[13]<=4096 or any(words[14:]) or
+                words[12]&14 and not words[12]&1 or words[12]&4 and words[12]&3!=3 or
+                not words[12]&4 and any(words[8:12])):
+            raise ValueError('invalid prepared-resource task leaf')
+        return
     if kind == 32:
         if (len(words)!=16 or words[0]!=1 or words[1] not in (1,2) or words[2]>=6 or
                 words[3]>2 or words[4]>1024 or words[6] or not 0<words[5]<=4*1024*1024 or
@@ -533,9 +541,9 @@ class Decoder:
                 'upstream_complete': False, 'gpu_execution_proof': False}
 
 
-def prepared_resource_coverage(rows):
+def prepared_resource_coverage(rows, leaf_rows=()):
     """Strict CPU scope correlation. Never an IOVA/lifetime/completion grant."""
-    scopes={};tickets={};total=0
+    scopes={};tickets={};total=0;pages={}
     for group,metadata,payload in rows:
         total+=1
         if total>12312 or len(payload)!=64:raise ValueError('prepared-resource record budget/extent')
@@ -557,6 +565,8 @@ def prepared_resource_coverage(rows):
                 raise ValueError('prepared-resource extent/ordinal/offset discontinuity')
             if phase==1:
                 if words[11]>state['extent']-state['bytes']:raise ValueError('prepared-resource page overflow')
+                pages[(*key,state['pages'])]=(metadata['thread'],metadata['identity'],state['bytes'],
+                    words[9]|words[10]<<32,words[11])
                 state['bytes']+=words[11];state['pages']+=1
             else:
                 if words[11]!=state['bytes']:raise ValueError('prepared-resource end byte mismatch')
@@ -564,7 +574,21 @@ def prepared_resource_coverage(rows):
     if any(not state['ended'] for state in scopes.values()):raise ValueError('prepared-resource missing end')
     missing={str(ticket):sorted(set(range(6))-{key[2] for key in scopes if key[1]==ticket}) for ticket in tickets}
     if any(missing.values()):raise ValueError('prepared-resource missing resource role')
-    return {'resources':len(scopes),'complete_cpu_page_coverage':sum(state['reason']==0 for state in scopes.values()),
+    leaves={};observed=0
+    for group,metadata,payload in leaf_rows:
+        if len(leaves)>=12288 or len(payload)!=64:raise ValueError('prepared-resource leaf budget/extent')
+        words=list(struct.unpack('<16I',payload));validate_leaf(33,words)
+        key=(group,words[1],words[2],words[3])
+        if key not in pages or key in leaves:raise ValueError('prepared-resource orphan/duplicate task leaf')
+        expected=pages[key]
+        actual=(metadata.get('thread'),metadata.get('identity'),words[4],words[6]|words[7]<<32,words[13])
+        if actual!=expected:raise ValueError('prepared-resource foreign/discontinuous task leaf')
+        leaves[key]=words[12]
+        observed+=words[12]==15
+    if len(leaves)!=len(pages):raise ValueError('prepared-resource missing task leaf')
+    return {'resources':len(scopes),'task_leaf_pages':len(leaves),'stable_native_task_leaf_reads':observed,
+        'task_leaf_refused_or_unstable':len(leaves)-observed,
+        'complete_cpu_page_coverage':sum(state['reason']==0 for state in scopes.values()),
         'refused_resources':sum(state['reason']!=0 for state in scopes.values()),
         'reason_by_resource':{f'{key[0]}:{key[1]}:{key[2]}':state['reason'] for key,state in scopes.items()},
         'atomic_snapshot':False,'native_object_lease_proven':False,'iova_mapping_proven':False,'gpu_execution_proof':False}
@@ -761,7 +785,9 @@ class DiskSink:
     def prepared_resource_report(self):
         rows=self.db.execute('SELECT group_id,metadata,payload FROM records WHERE kind=32 ORDER BY id LIMIT 12313')
         try:
-            result=prepared_resource_coverage((group,json.loads(metadata),payload) for group,metadata,payload in rows)
+            leaves=self.db.execute('SELECT group_id,metadata,payload FROM records WHERE kind=33 ORDER BY id LIMIT 12289')
+            result=prepared_resource_coverage(((group,json.loads(metadata),payload) for group,metadata,payload in rows),
+                ((group,json.loads(metadata),payload) for group,metadata,payload in leaves))
             result['scope_error']=None
             return result
         except (ValueError,KeyError,TypeError,struct.error) as exc:

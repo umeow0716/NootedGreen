@@ -3766,9 +3766,21 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                         gVfChecksumSshUnmapCaller && gVfChecksumMapAddressGetter && gVfChecksumMapLengthGetter &&
                         gVfBatchCpuCopy && gVfCpuKernelPmapSlot && *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore &&
                         !checkKernelArgument("-ngreencaptureonly")?1U:0U);
-
-
-
+                if(checkKernelArgument("-ngreenchecksumcapture")) {
+                    const bool preparedChecksumBindings=gVfIdentity==VfIdentity::Virtual &&
+                        gVfChecksumPublicationRouteReady && gVfChecksumNativeBindingsQualified &&
+                        gVfChecksumSurfaceBindCaller && gVfCaptureStreamResetBound &&
+                        gVfChecksumSshUnmapCaller && gVfChecksumMapAddressGetter && gVfChecksumMapLengthGetter &&
+                        gVfBatchCpuCopy && gVfCpuKernelPmapSlot && *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore &&
+                        gVfCpuSystemMapperSlot && gVfPreparedPhysicalCacheAuthority.exactLayout &&
+                        gVfPreparedPhysicalCacheAuthority.physicalMethod && gVfPreparedPhysicalCacheAuthority.dmaMethod &&
+                        gVfNativeObjectLayoutBound && gVfMediaMapOffsetLayoutVerified &&
+                        gVfNativeBatchMapVtable && gVfMediaSysMemoryVtable &&
+                        gVfLeafObservationReader && gVfRootObservationVtable && !checkKernelArgument("-ngreencaptureonly");
+                    const bool preparedChecksumLock=preparedChecksumBindings && vfEnsurePageTableUpdateLock();
+                    SYSLOG("ngreen","V394: checksum prepared CPU backing and task leaves armed=%u",
+                        preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
+                }
 				const auto batchSubmit=patcher.solveSymbol(index,
 					"__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb",address,size);
 				const auto fifoSubmit=patcher.solveSymbol(index,
@@ -7205,7 +7217,37 @@ static void vfObserveChecksumPreparedResources(VfMediaSubmission& entry,
             const uint64_t gpuPage=4096U-((gpu+done)&4095U);
             if(step>gpuPage)step=gpuPage;if(step>bytes-done)step=bytes-done;
             if(!stable()){reason=3;break;}
-            emit(1,sample.physical,step,sample.flags);done+=step;++pages;
+            NGFlightTrace::ResourceLeafSample leaf{};
+            uint32_t observed=0;
+            if(gVfPageTableUpdateLock && gVfLeafObservationReader && gVfRootObservationVtable) {
+                // Original accelerator owner -> existing PT lock; no CTB or
+                // logging until unlock. The bound walker only reads CPU PTEs.
+                IORecursiveLockLock(gVfPageTableUpdateLock);
+                observed=1;
+                uint64_t table=0,tableClass=0,method=0,afterTable=0;
+                const bool beforeLive=stable();
+                leaf.exact=beforeLive && gpuTask<=UINT64_MAX-0x268U &&
+                    read(gpuTask+0x260,&table,8) && NGFlightTrace::canonicalKernelObject(table) &&
+                    read(table,&tableClass,8) && tableClass==gVfRootObservationVtable &&
+                    tableClass<=UINT64_MAX-0x148U && read(tableClass+0x140,&method,8) && method==gVfLeafObservationReader;
+                using Reader=bool (*)(const void *,uint64_t,uint64_t &,uint64_t &);
+                if(leaf.exact) {
+                    observed|=2;
+                    leaf.read=reinterpret_cast<Reader>(gVfLeafObservationReader)(
+                        reinterpret_cast<const void*>(table),gpu+done,leaf.physical,leaf.flags);
+                    if(leaf.read)observed|=4;
+                    else {leaf.physical=0;leaf.flags=0;}
+                }
+                if(beforeLive && read(gpuTask+0x260,&afterTable,8) && afterTable==table && stable())observed|=8;
+                IORecursiveLockUnlock(gVfPageTableUpdateLock);
+            }
+            if(!stable()){reason=3;break;}
+            emit(1,sample.physical,step,sample.flags);
+            const uint32_t pte[]={1,ticket+1,role,pages,uint32_t(done),uint32_t(done>>32),
+                uint32_t(sample.physical),uint32_t(sample.physical>>32),uint32_t(leaf.physical),uint32_t(leaf.physical>>32),
+                uint32_t(leaf.flags),uint32_t(leaf.flags>>32),observed,uint32_t(step),0,0};
+            vfFlightRecord(33,entry.flightGroup,gpu,pte,arrsize(pte));
+            done+=step;++pages;
         }
         if(!reason && done!=bytes)reason=4;
         NGFlightTrace::PreparedResourceView after{};
