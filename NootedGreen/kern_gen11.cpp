@@ -3831,6 +3831,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
                     SYSLOG("ngreen","V398: qualified native descriptor graph and task leaves armed=%u",
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
+                    SYSLOG("ngreen","V399: checksum CPU candidate and unchanged cancellation armed=%u",
+                        preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
                 }
 				const auto batchSubmit=patcher.solveSymbol(index,
 					"__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb",address,size);
@@ -7447,21 +7449,75 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
             entry->checksumSurfaces.count,entry->checksumSurfaces.failed?1U:0U);
         refuse("surface-native-bindings");return;
     }
-    // Diagnostic opt-in cancels this checksum ONLY. Earlier native BCS/RCS/
-    // VCS work may already exist. No checksum stamp, END or queue operation
-    // runs and the outer submission returns its existing real error path.
-    if(checkKernelArgument("-ngreenchecksumcapture")) {
-        SYSLOG("ngreen","V392: checksum-only capture cancelled before native end checksum-queued=0 stamp-advanced=0 completion=NOT_EVALUATED");
-        // Reuse the existing generic pre-end receipt schema, not a hardware ACK.
-        SYSLOG("ngreen","V386: capture-only publication cancelled before native end queued=0 native-called=0 stamp-advanced=0 completion=NOT_EVALUATED");
-        refuse("checksum-capture-only");return;
-    }
     uintptr_t surfaceResources[3];uint64_t surfaceGpu[3];
     uint32_t surfacePitch[3],surfaceIds[3],surfaceWrite[3];
     for(unsigned i=0;i<3;++i) {
         surfaceResources[i]=entry->checksumSurfaces.resources[i];surfaceGpu[i]=entry->checksumSurfaces.gpu[i];
         surfacePitch[i]=entry->checksumSurfaces.pitch[i];surfaceIds[i]=entry->checksumSurfaces.identifier[i];
         surfaceWrite[i]=entry->checksumSurfaces.writeUse[i];
+    }
+    // Diagnostic opt-in cancels this checksum ONLY. Earlier native BCS/RCS/
+    // VCS work may already exist. No checksum stamp, END or queue operation
+    // runs and the outer submission returns its existing real error path.
+    if(checkKernelArgument("-ngreenchecksumcapture")) {
+        static volatile UInt32 candidateRecords=0;
+        const UInt32 ticket=candidateRecords;
+        if(vfFlightEnabled() && ticket<2 && entry->flightGroup && entry->scratch && gVfBatchCpuCopy &&
+           gVfCpuKernelPmapSlot && *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore &&
+           OSCompareAndSwap(ticket,ticket+1,&candidateRecords)) {
+            auto* const scratch=entry->scratch;
+            const uint32_t group=entry->flightGroup;
+            const auto unchanged=[&]() {
+                VfMediaMappedSpan current{};NgreenChecksumGen12::HeapAddresses observed{};
+                const bool stable=entry->flightGroup==group && entry->scratch==scratch && !entry->failed && !entry->translating && !entry->captureCancelled &&
+                    entry->thread==current_thread() && entry->context==that && entry->accelerator==gVfAccelerator &&
+                    getMember<mach_vm_address_t>(that,0)==gVfChecksumMainVtable &&
+                    vfCaptureMediaMappedSpan(*entry,stream,current) &&
+                    current.resource==span.resource && current.mapped==span.mapped && current.map==span.map &&
+                    current.descriptor==span.descriptor && current.gpuMap==span.gpuMap && current.gpuBase==span.gpuBase &&
+                    current.backingBytes==span.backingBytes && current.commands==span.commands && current.bytes==span.bytes &&
+                    current.offset==span.offset && current.used==span.used && current.availableWords==span.availableWords &&
+                    current.reservedWords==span.reservedWords && current.count==span.count &&
+                    current.mapLength==span.mapLength && current.classes==span.classes && current.recordFlags==span.recordFlags &&
+                    current.type==span.type && current.mapFlags==span.mapFlags && current.resourceBytes==span.resourceBytes &&
+                    getMember<volatile uint32_t>(stream,0x34)==span.count && entry->checksumSurfaces.admitted() &&
+                    entry->checksumHeaps.copyObservedHeaps(reinterpret_cast<uintptr_t>(entry->task),
+                        reinterpret_cast<uintptr_t>(entry->shared),observed) &&
+                    observed.surface==heaps.surface && observed.dynamic==heaps.dynamic &&
+                    observed.instruction==heaps.instruction && observed.kernelSlot==heaps.kernelSlot;
+                if(!stable)return false;
+                for(unsigned i=0;i<3;++i)if(entry->checksumSurfaces.resources[i]!=surfaceResources[i] ||
+                    entry->checksumSurfaces.gpu[i]!=surfaceGpu[i] || entry->checksumSurfaces.pitch[i]!=surfacePitch[i] ||
+                    entry->checksumSurfaces.identifier[i]!=surfaceIds[i] || entry->checksumSurfaces.writeUse[i]!=surfaceWrite[i])return false;
+                return true;
+            };
+            using CpuRead=uint64_t (*)(uint64_t,uint64_t,uint64_t);
+            const auto read=[&](unsigned index,uint32_t& word) {
+                return index<NgreenChecksumGen12::reservedStreamWords &&
+                    reinterpret_cast<CpuRead>(gVfBatchCpuCopy)(reinterpret_cast<uint64_t>(span.commands)+uint64_t(index)*4U,
+                        reinterpret_cast<uint64_t>(&word),4)==4;
+            };
+            const auto candidate=NgreenChecksumGen12::observeCandidate(span.commands,span.availableWords,
+                span.reservedWords,span.count,heaps,*scratch,read,unchanged);
+            SYSLOG("ngreen","V399: checksum CPU candidate ticket=%u flags=%x reason=%s native-writes=0 native-end=0 stamp-advanced=0",
+                ticket+1,candidate.flags,candidate.reason);
+            if((candidate.flags==31 || candidate.flags==15) && unchanged()) {
+                // Kind35 is a CPU candidate, NEVER native publication or GPU ACK.
+                uint32_t packet[176]{};
+                packet[0]=1;packet[1]=candidate.flags;packet[2]=ticket+1;packet[3]=packet[5]=80;
+                packet[4]=candidate.flags==31?80U:0U;packet[15]=candidate.flags==31?0U:1U;
+                packet[6]=static_cast<uint32_t>(span.availableWords);packet[7]=static_cast<uint32_t>(span.reservedWords);
+                packet[8]=uint32_t(heaps.surface);packet[9]=uint32_t(heaps.surface>>32);
+                packet[10]=uint32_t(heaps.dynamic);packet[11]=uint32_t(heaps.dynamic>>32);
+                packet[12]=uint32_t(heaps.instruction);packet[13]=uint32_t(heaps.instruction>>32);packet[14]=heaps.kernelSlot;
+                for(unsigned i=0;i<80;++i){packet[16+i]=scratch->source[i];if(candidate.flags==31)packet[96+i]=scratch->produced[i];}
+                if(unchanged())vfFlightRecord(35,group,span.gpuBase+span.offset,packet,arrsize(packet));
+            }
+        }
+        SYSLOG("ngreen","V392: checksum-only capture cancelled before native end checksum-queued=0 stamp-advanced=0 completion=NOT_EVALUATED");
+        // Reuse the existing generic pre-end receipt schema, not a hardware ACK.
+        SYSLOG("ngreen","V386: capture-only publication cancelled before native end queued=0 native-called=0 stamp-advanced=0 completion=NOT_EVALUATED");
+        refuse("checksum-capture-only");return;
     }
     // Native end subtracts two, and FIFO appends END/NOOP only in mode one.
     // Descriptor identity and mode must remain stable through publication.

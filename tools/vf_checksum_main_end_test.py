@@ -184,6 +184,7 @@ def test_end(root):
     struct VfMediaSubmission {
      void*thread;void*context;void*accelerator;void*task;void*shared;void*gpuTask;NgreenAvcGen12::PublishScratch*scratch;
      NgreenChecksumGen12::NativeHeapBindings checksumHeaps;NgreenChecksumGen12::NativeSurfaceBindings checksumSurfaces;bool translating,failed,captureCancelled;
+     static constexpr uint32_t flightGroup=4;
     } entry;
     bool present=true;
     struct VfMediaSubmissionScope {
@@ -214,7 +215,22 @@ def test_end(root):
      if(mode==19 && captureCalls>=2)out.resource=reinterpret_cast<void*>(0x8000);
      return true;
     }
-    unsigned nativeCalls=0;
+    unsigned nativeCalls=0,candidateRecordsSeen=0,candidateRejected=0;uint32_t candidatePacket[176]{},rejectedPacket[176]{};
+    bool vfFlightEnabled(){return true;}
+    uint64_t cpuCopy(uint64_t from,uint64_t to,uint64_t bytes){assert(bytes==4);memcpy(reinterpret_cast<void*>(to),reinterpret_cast<void*>(from),4);return 4;}
+    uintptr_t gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&cpuCopy),cpuPmap=1,*gVfCpuKernelPmapSlot=&cpuPmap,gVfCpuKernelPmapStore=1;
+    bool OSCompareAndSwap(UInt32 old,UInt32 value,volatile UInt32* at){if(*at!=old)return false;*at=value;return true;}
+    template<class T,size_t N>constexpr size_t arrsize(T(&)[N]){return N;}
+    void vfFlightRecord(uint32_t kind,uint32_t group,uint64_t identity,const volatile uint32_t* packet,size_t count){
+     assert(kind==35 && group==4 && identity==0x60000080 && count==176 && packet[0]==1);
+     assert(packet[3]==80 && packet[5]==80 && packet[96]==0);
+     if(packet[1]==31){assert(packet[4]==80 && packet[106]==0x61010014);
+      for(unsigned i=0;i<176;++i)candidatePacket[i]=packet[i];}
+     else {assert(packet[1]==15 && packet[4]==0 && packet[15]==1);++candidateRejected;
+      for(unsigned i=96;i<176;++i)assert(!packet[i]);
+      for(unsigned i=0;i<176;++i)rejectedPacket[i]=packet[i];}
+     ++candidateRecordsSeen;
+    }
     void nativeImpl(void*that,void*stream){assert(that==context && stream==context+0x650);++nativeCalls;}
     #define FunctionCast(fn,addr) nativeImpl
     void OSSynchronizeIO(){if(mode==21)commands[0]^=1;}
@@ -241,7 +257,7 @@ def test_end(root):
      checksumCapture=false;present=mapping=args=true;gVfChecksumPublicationRouteReady=gVfChecksumNativeBindingsQualified=gVfCaptureStreamResetBound=gVfMediaPublicationAbiVerified=true;
      gVfIdentity=VfIdentity::Virtual;gVfAccelerator=accel;fakeCaller=123;captureCalls=nativeCalls=0;
     }
-    int main(){setbuf(stdout,nullptr);for(mode=0;mode<56;++mode){setup();void*s=context+0x650;
+    int main(){setbuf(stdout,nullptr);for(mode=0;mode<57;++mode){setup();void*s=context+0x650;
      switch(mode){
      case 1:gVfChecksumPublicationRouteReady=false;break;
      case 2:gVfIdentity=VfIdentity::Physical;break;
@@ -288,6 +304,7 @@ def test_end(root):
      case 47:entry.checksumSurfaces.gpu[0]=UINT64_C(0x1000000000000);break;
      case 54:checksumCapture=true;break;
      case 55:checksumCapture=true;entry.checksumSurfaces.gpu[0]+=32;break;
+     case 56:checksumCapture=true;commands[75]^=1;break;
      case 48:entry.checksumSurfaces.gpu[2]+=4;break; // buffer is element-, not tile-aligned
 
      }
@@ -301,12 +318,42 @@ def test_end(root):
      else if(!panic && !forwarded){assert(entry.failed);assert(!entry.captureCancelled && !entry.translating);assert(getMember<uint32_t>(s,0x34)==0 && getMember<uint8_t>(s,0x3c)==0);assert(memcmp(before.data(),commands,sizeof(commands))==0);}
      else if(mode!=20 && mode!=21)assert(memcmp(before.data(),commands,sizeof(commands))==0);
      }
-     puts("Actual MainEnd body: 56 forward/publication/cancel/authority-loss cases PASS; native once/no submission on refusal");
+     assert(candidateRecordsSeen==2 && candidateRejected==1);
+     FILE* output=std::fopen("__CANDIDATE_PATH__","wb");assert(output);
+     assert(std::fwrite(candidatePacket,4,176,output)==176);assert(!std::fclose(output));
+     output=std::fopen("__CANDIDATE_PATH__.rejected","wb");assert(output);
+     assert(std::fwrite(rejectedPacket,4,176,output)==176);assert(!std::fclose(output));
+     puts("Actual MainEnd body: 57 cases plus candidate/source-only capture; native once/unchanged commands/no submission on refusal");
     }
     '''
-    p=root/'checksum_end_actual.cpp';p.write_text(prefix+body+post)
+    packet_path=root/'checksum-candidate.bin'
+    p=root/'checksum_end_actual.cpp';p.write_text(prefix+body+post.replace('__CANDIDATE_PATH__',str(packet_path)))
     subprocess.run([*CXX,'-std=c++14','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(ROOT),str(p),'-o',str(root/'checksum_end_actual')],check=True)
     subprocess.run([str(root/'checksum_end_actual')],check=True)
+    sys.path.insert(0,str(ROOT/'tools/media_adapter'))
+    from decode_kdebug_recorder import validate_leaf,checksum_candidate_coverage
+    payload=packet_path.read_bytes();words=list(struct.unpack('<176I',payload));validate_leaf(35,words)
+    metadata={'group':4,'thread':0x4000,'identity':'0000000060000080','kind':35,'word_count':176}
+    row=(4,metadata,payload)
+    assert checksum_candidate_coverage([row])['complete_candidates']==1
+    refused_payload=Path(str(packet_path)+'.rejected').read_bytes()
+    validate_leaf(35,list(struct.unpack('<176I',refused_payload)))
+    refused=checksum_candidate_coverage([(4,metadata,refused_payload)])
+    assert refused['complete_candidates']==0 and refused['captures'][0]['candidate_words']==0
+    rejected=0
+    for index in range(176):
+        if index in (6,7,94,95):continue # bounded capacities and unsubmitted END reserve are variable.
+        bad=words.copy();bad[index]^=1
+        try:validate_leaf(35,bad)
+        except ValueError:rejected+=1
+        else:raise AssertionError(('candidate mutation accepted',index))
+    for rows in [[row,row],[(0,metadata,payload)],[(4,{**metadata,'group':5},payload)],
+        [(4,{**metadata,'identity':'0000000060000081'},payload)],[(4,metadata,payload[:-4])]]:
+        try:checksum_candidate_coverage(rows)
+        except ValueError:rejected+=1
+        else:raise AssertionError('malformed candidate scope accepted')
+    assert rejected==177
+    print('Actual compiled candidate packet: strict decoder/172 word mutations/5 scope negatives PASS; no native publication')
 
 def test_surface_bind_returns(root):
     source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()

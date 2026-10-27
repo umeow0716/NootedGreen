@@ -609,6 +609,25 @@ def contract(source, path="<source>"):
         assert token in media_map, f"{path}: missing native AVC mapped-span proof: {token}"
     assert 'getKernelData(' not in media_map and 'map(' not in media_map
     media_end=function_body(source,'void Gen11::vfMediaEnd(')
+    checksum_end=function_body(source,'void Gen11::vfChecksumEnd(')
+    candidate=function_body(checksum_end,'if(checkKernelArgument("-ngreenchecksumcapture"))')
+    for token in ('entry->flightGroup==group','entry->scratch==scratch','entry->context==that',
+                  'entry->thread==current_thread()', 'current.resource==span.resource',
+                  'current.mapped==span.mapped','current.map==span.map','current.descriptor==span.descriptor',
+                  'current.gpuMap==span.gpuMap','current.gpuBase==span.gpuBase',
+                  'current.backingBytes==span.backingBytes','current.used==span.used',
+                  'current.commands==span.commands','current.count==span.count',
+                  'current.mapLength==span.mapLength','current.mapFlags==span.mapFlags',
+                  'observed.surface==heaps.surface','observed.dynamic==heaps.dynamic',
+                  'observed.instruction==heaps.instruction','entry->checksumSurfaces.resources[i]!=surfaceResources[i]',
+                  'OSCompareAndSwap(ticket,ticket+1,&candidateRecords)', 'ticket<2',
+                  'NgreenChecksumGen12::observeCandidate(', 'read,unchanged)',
+                  'candidate.flags==31 || candidate.flags==15','uint32_t packet[176]{}',
+                  'if(candidate.flags==31)packet[96+i]=scratch->produced[i]',
+                  'vfFlightRecord(35,group,span.gpuBase+span.offset,packet,arrsize(packet))'):
+        assert token in candidate, f'{path}: missing protected CPU candidate proof: {token}'
+    assert 'NgreenChecksumGen12::publish(' not in candidate and 'FunctionCast(' not in candidate
+    assert candidate.index('observeCandidate(')<candidate.index('vfFlightRecord(35,')<candidate.index('refuse("checksum-capture-only")')
     for token in ('__builtin_return_address(0)',
                   'VfMediaSubmissionScope::bindLocked(*entry,stream,caller)',
                   'span.availableWords,span.reservedWords',

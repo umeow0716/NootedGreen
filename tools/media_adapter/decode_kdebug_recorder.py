@@ -38,7 +38,38 @@ KINDS = {1: 'scope_begin', 2: 'source_post_relocation', 3: 'published_commands',
          27: 'native_pool_allocation_chunk',28: 'native_rect_input_metadata',
          29: 'native_rect_input_chunk', 30: 'native_leased_ssh_cpu_pair', 31: 'native_leased_ssh_page_chunk',
          32: 'prepared_resource_cpu_page', 33: 'prepared_resource_task_leaf',
-         34: 'prepared_resource_admission_prefix_pair'}
+         34: 'prepared_resource_admission_prefix_pair',35: 'checksum_cpu_candidate_pair'}
+CHECKSUM_NATIVE_SHAPE=(
+    0x11000001,0,0x80000040,0x7a000004,0x001010a0,0,0,0,0,0x69041301,
+    0x6101000e,1,0,0,1,0,1,0,1,0,1,0,1,0x1001,1,0x1001,
+    0x70000007,0,0,0x01bf1000,0,0x007c0002,0,0,0,
+    0x70010002,0,0x40,0x400,0x70020002,0,0x40,0,
+    0x7103000f,0,0,0,0,0,0,0x07ff07ff,0x00020044,0,0,
+    0x00010000,1,0x00020044,0,0x44,0x00020000,
+    0x7a000004,0x001010a0,0,0,0,0,0x7a000004,0x0000089c,0,0,0,0)
+
+
+def checksum_candidate_expected(words):
+    if (len(words)!=176 or words[0]!=1 or words[1] not in (15,31) or words[2] not in (1,2) or
+        words[3]!=80 or words[5]!=80 or not 80<=words[7]<=words[6]<=16384 or words[14]!=1 or
+        (words[4],words[15])!=((80,0) if words[1]==31 else (0,1))):
+        raise ValueError('checksum candidate header')
+    heaps=[words[i]|words[i+1]<<32 for i in (8,10,12)]
+    if len(set(heaps))!=3 or any(not v or v>0xfffffffff000 or v&4095 for v in heaps):
+        raise ValueError('checksum candidate heap identity')
+    if words[1]==15:
+        if any(words[96:]):raise ValueError('rejected checksum candidate data')
+        return heaps # A complete pre-build source pair, NOT a valid candidate.
+    source=list(CHECKSUM_NATIVE_SHAPE)
+    for at,value in zip((14,16,20),heaps):source[at]=value&0xffffffff|1;source[at+1]=value>>32
+    if words[16:88]!=source or words[88:94]!=[0x4e474352,1,72,78,1,1576]:
+        raise ValueError('checksum candidate native source/reservation')
+    expected=source[:26]+[0]*6+source[26:]+[0,0]
+    expected[:3]=[0,0,0];expected[10]=0x61010014;expected[11]|=6<<4
+    for at in (14,16,18,20):expected[at]|=6<<4
+    expected[13]=0x6c000;expected[35]|=0x40;expected[48]=0x40
+    if words[96:]!=expected:raise ValueError('checksum candidate producer mismatch')
+    return heaps
 RESOURCE_SLOTS = {
     1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
     2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
@@ -46,6 +77,9 @@ RESOURCE_SLOTS = {
 
 
 def validate_leaf(kind, words):
+    if kind==35:
+        checksum_candidate_expected(words)
+        return
     if kind == 34:
         if (len(words)!=660 or words[0] not in (1,2) or words[1] not in (1,2) or words[2]>=6 or
                 words[3]!=2640 or words[12]&~63 or words[13]>17 or any(words[14:16]) or
@@ -616,6 +650,27 @@ def prepared_resource_coverage(rows, leaf_rows=()):
         'atomic_snapshot':False,'native_object_lease_proven':False,'iova_mapping_proven':False,'gpu_execution_proof':False}
 
 
+def checksum_candidate_coverage(rows):
+    captures=[];seen=set()
+    for group,metadata,payload in rows:
+        if len(captures)>=2 or len(payload)!=704:raise ValueError('checksum candidate record budget/extent')
+        words=list(struct.unpack('<176I',payload));heaps=checksum_candidate_expected(words)
+        key=(group,words[2])
+        identity=metadata.get('identity','')
+        if (key in seen or type(group) is not int or group<=0 or type(metadata.get('thread')) is not int or
+            metadata['thread']<=0 or metadata.get('group')!=group or metadata.get('kind')!=35 or
+            metadata.get('word_count')!=176 or not re.fullmatch('[0-9a-f]{16}',identity) or
+            not 0<int(identity,16)<(1<<48) or int(identity,16)&3):raise ValueError('checksum candidate scope/duplicate')
+        seen.add(key)
+        captures.append({'group':group,'ticket':words[2],'thread':metadata['thread'],'identity':identity,
+            'source_words':80,'candidate_words':words[4],'heaps':[f'{v:x}' for v in heaps],
+            'source_scope':'TASK_BOUND_PRE_BUILD_CPU_SOURCE_PAIR',
+            'candidate_scope':'OWNED_SCRATCH_ONLY' if words[1]==31 else 'UNAVAILABLE_NOT_VALIDATED'})
+    return {'captures':captures,'complete_candidates':sum(c['candidate_words']==80 for c in captures),'scope_error':None,
+        'native_command_writes':0,'native_end_called':False,'atomic_snapshot':False,
+        'actual_publication_proven':False,'gpu_execution_proof':False}
+
+
 def prepared_resource_admission(rows):
     stages=('accepted','scope-addresses','resource-map','resource-backing','map-class','map-accelerator',
         'map-task','map-memory-association','GPU-address-mode','rotated-map','memory-class','memory-accelerator',
@@ -865,6 +920,12 @@ class DiskSink:
             return result
         except (ValueError,KeyError,TypeError,struct.error) as exc:
             return {'scope_error':str(exc),'complete_cpu_page_coverage':0,'gpu_execution_proof':False}
+
+    def checksum_candidate_report(self):
+        rows=self.db.execute('SELECT group_id,metadata,payload FROM records WHERE kind=35 ORDER BY id LIMIT 3')
+        try:return checksum_candidate_coverage((group,json.loads(metadata),payload) for group,metadata,payload in rows)
+        except (ValueError,KeyError,TypeError,struct.error) as exc:
+            return {'scope_error':str(exc),'complete_candidates':0,'actual_publication_proven':False,'gpu_execution_proof':False}
 
     def backing_report(self, cpu_alias=False):
         table = 'cpu_backings' if cpu_alias else 'backings'
@@ -1475,6 +1536,7 @@ if __name__ == '__main__':
         map_list_report = sink.map_list_report()
         prepared_resource_report = sink.prepared_resource_report()
         prepared_admission_report = sink.prepared_admission_report()
+        checksum_candidate_report = sink.checksum_candidate_report()
         scope_report = sink.scope_coverage_report()
         try:
             sink.close()
@@ -1486,6 +1548,7 @@ if __name__ == '__main__':
         report['source_sha256']=hashed_source.digest.hexdigest() if source_complete else None
         report['prepared_resource_cpu_pages'] = prepared_resource_report
         report['prepared_resource_admission'] = prepared_admission_report
+        report['checksum_cpu_candidates'] = checksum_candidate_report
         report['rings'] = ring_report
         report['backings'] = backing_report
         report['cpu_alias_backings'] = cpu_alias_report
