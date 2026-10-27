@@ -3834,7 +3834,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
                     SYSLOG("ngreen","V398: qualified native descriptor graph and task leaves armed=%u",
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
-                    SYSLOG("ngreen","V400: qualified checksum cache ordering and unchanged cancellation armed=%u",
+                    SYSLOG("ngreen","V401: qualified checksum pipeline and SBA ordering armed=%u",
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
                 }
 				const auto batchSubmit=patcher.solveSymbol(index,
@@ -7509,7 +7509,7 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
             if((candidate.flags==31 || candidate.flags==15) && unchanged()) {
                 // Kind35 is a CPU candidate, NEVER native publication or GPU ACK.
                 uint32_t packet[16+2*NgreenChecksumGen12::reservedStreamWords]{};
-                packet[0]=2;packet[1]=candidate.flags;packet[2]=ticket+1;
+                packet[0]=3;packet[1]=candidate.flags;packet[2]=ticket+1;
                 packet[3]=packet[5]=NgreenChecksumGen12::reservedStreamWords;
                 packet[4]=candidate.flags==31?NgreenChecksumGen12::reservedStreamWords:0U;packet[15]=candidate.flags==31?0U:1U;
                 packet[6]=static_cast<uint32_t>(span.availableWords);packet[7]=static_cast<uint32_t>(span.reservedWords);

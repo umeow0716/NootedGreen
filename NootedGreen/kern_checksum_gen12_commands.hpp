@@ -9,10 +9,10 @@
 // Exact captured 1080p FrameChecksum shape only; other auxiliary kernels and
 // walker geometries are not silently accepted.
 namespace NgreenChecksumGen12 {
-constexpr uint32_t profile=2,nativeBodyWords=72,producedBodyWords=84,nativeEndReserveWords=2;
+constexpr uint32_t profile=3,nativeBodyWords=72,producedBodyWords=90,nativeEndReserveWords=2;
 constexpr uint32_t legacyStreamWords=nativeBodyWords+nativeEndReserveWords;
 constexpr uint32_t reservedStreamWords=producedBodyWords+nativeEndReserveWords;
-constexpr uint32_t shaderBytes=1576,reservationWords=12;
+constexpr uint32_t shaderBytes=1576,reservationWords=18;
 // Reviewed Gen12 PIPE_CONTROL fields, not a mapping/submission authority.
 // The caller must qualify its platform/WA mode; unknown modes fail closed.
 enum class ReadInvalidateMode : uint32_t {Unqualified,Gen12Default,Gen12HdcConstantWa};
@@ -309,28 +309,29 @@ inline Result build1080Batch(const uint32_t* source,size_t words,const HeapAddre
     }
     if(heap.cacheMode!=ReadInvalidateMode::Gen12Default)return {false,"cache-platform"};
     uint32_t candidate[producedBodyWords];
-    for(size_t i=0;i<26;++i)candidate[i]=source[i];
-    for(size_t i=26;i<32;++i)candidate[i]=0;
-    if(!writePostSbaReadInvalidate(candidate+32,6,heap.cacheMode))return {false,"cache-barrier"};
-    for(size_t i=26;i<size_t(72);++i)candidate[i+12]=source[i];
-    // 1c1b emits an unbound register-zero LRI. Gen12's qualified media
-    // PIPELINE_SELECT follows the PIPE_CONTROL; no legacy LRI is retained.
-    candidate[0]=candidate[1]=candidate[2]=0; // MI_NOOP, preserves SBA word offset 10.
-    candidate[10]=0x61010014; // Gen12 22-DW SBA; bindless fields remain disabled.
+    for(size_t i=0;i<9;++i)candidate[i]=source[i];
+    // The previous pipeline is not inferred from CPU receipts. Intel's Gen12
+    // PIPELINE_SELECT ordering requires a stalling write flush, then a second
+    // read invalidate BEFORE selecting a different pipeline. Retain RT/DC/CS
+    // and add the documented depth flush; no post-sync address is introduced.
+    candidate[4]|=1U;
+    if(!writePostSbaReadInvalidate(candidate+9,6,heap.cacheMode))return {false,"pipeline-cache-barrier"};
+    for(size_t i=9;i<26;++i)candidate[i+6]=source[i];
+    for(size_t i=32;i<38;++i)candidate[i]=0;
+    if(!writePostSbaReadInvalidate(candidate+38,6,heap.cacheMode))return {false,"cache-barrier"};
+    for(size_t i=26;i<size_t(72);++i)candidate[i+18]=source[i];
+    // Remove only the legacy unbound LRI; preserve the native media select.
+    // TGL PRM's GPGPU sequence explicitly permits the media pipeline here.
+    candidate[0]=candidate[1]=candidate[2]=0;
+    candidate[16]=0x61010014; // Gen12 22-DW SBA; bindless fields remain disabled.
     uint32_t cache=0;
     if(!NgreenAvcGen12::linuxGen12CacheControl(0,cache))return {false,"cache-profile"};
-    candidate[11]|=(cache&0x7fU)<<4;
-    for(unsigned i=14;i<=20;i+=2)candidate[i]|=(cache&0x7fU)<<4;
-    // Intel Gen12 constructor's two single-GPU restrictions, plus translated
-    // stateless MOCS. Source addresses/lengths and all walker/curbe data survive.
-    candidate[13]=0xc000U|((cache&0x7fU)<<16);
-    // Gen9 reserved bit 6 becomes Gen12 FusedEuDispatch. Intel's Gen12
-    // legacy/non-fused mode is ONE, not the source packet's reserved zero.
-    candidate[41]|=0x40U;
-    // Native2c566 appends code and descriptors, rather than replacing code
-    // that a GPU could already have fetched. Its descriptor stride is 64B.
-    // Load the appended slot into hardware ID0; the walker stays at ID0.
-    candidate[54]=0x40U;
+    candidate[17]|=(cache&0x7fU)<<4;
+    for(unsigned i=20;i<=26;i+=2)candidate[i]|=(cache&0x7fU)<<4;
+    candidate[19]=0xc000U|((cache&0x7fU)<<16);
+    // Gen12 FusedEuDispatch and appended descriptor slot retain their fixes.
+    candidate[47]|=0x40U;
+    candidate[60]=0x40U;
     for(size_t i=0;i<producedBodyWords;++i)output[i]=candidate[i];
     return {true,"produced"};
 }

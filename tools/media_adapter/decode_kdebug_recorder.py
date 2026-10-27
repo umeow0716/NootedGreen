@@ -50,8 +50,8 @@ CHECKSUM_NATIVE_SHAPE=(
 
 
 def checksum_candidate_expected(words):
-    if len(words)<16 or words[0] not in (1,2):raise ValueError('checksum candidate version')
-    version=words[0];count=80 if version==1 else 86;body=count-2;start=16+count
+    if len(words)<16 or words[0] not in (1,2,3):raise ValueError('checksum candidate version')
+    version=words[0];count={1:80,2:86,3:92}[version];body=count-2;start=16+count
     if (len(words)!=16+2*count or words[1] not in (15,31) or words[2] not in (1,2) or
         words[3]!=count or words[5]!=count or not count<=words[7]<=words[6]<=16384 or words[14]!=1 or
         (words[4],words[15])!=((count,0) if words[1]==31 else (0,1))):
@@ -68,10 +68,14 @@ def checksum_candidate_expected(words):
     if words[16:88]!=source or words[88:start-2]!=marker:
         raise ValueError('checksum candidate native source/reservation')
     invalidate=[] if version==1 else [0x7a000004,0x00101cbc,0,0,0,0]
-    expected=source[:26]+[0]*6+invalidate+source[26:]+[0,0]
-    expected[:3]=[0,0,0];expected[10]=0x61010014;expected[11]|=6<<4
-    for at in (14,16,18,20):expected[at]|=6<<4
-    expected[13]=0x6c000;expected[35+len(invalidate)]|=0x40;expected[48+len(invalidate)]=0x40
+    prefix=invalidate if version==3 else []
+    expected=source[:9]+prefix+source[9:26]+[0]*6+invalidate+source[26:]+[0,0]
+    shift=len(prefix);extra=len(prefix)+len(invalidate)
+    expected[:3]=[0,0,0]
+    if version==3:expected[4]|=1
+    expected[10+shift]=0x61010014;expected[11+shift]|=6<<4
+    for at in (14,16,18,20):expected[at+shift]|=6<<4
+    expected[13+shift]=0x6c000;expected[35+extra]|=0x40;expected[48+extra]=0x40
     if words[start:]!=expected:raise ValueError('checksum candidate producer mismatch')
     return heaps
 
@@ -658,7 +662,7 @@ def prepared_resource_coverage(rows, leaf_rows=()):
 def checksum_candidate_coverage(rows):
     captures=[];seen=set()
     for group,metadata,payload in rows:
-        if len(captures)>=2 or len(payload) not in (704,752):raise ValueError('checksum candidate record budget/extent')
+        if len(captures)>=2 or len(payload) not in (704,752,800):raise ValueError('checksum candidate record budget/extent')
         words=list(struct.unpack('<'+str(len(payload)//4)+'I',payload));heaps=checksum_candidate_expected(words)
         key=(group,words[2])
         identity=metadata.get('identity','')

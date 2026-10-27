@@ -232,6 +232,7 @@ def checksum_source_profile(data):
     # These are pre-KMD native bodies plus an owned reservation, never publication.
     if len(data)==312:profile,body,tail=1,78,[0x4e474352,1,72,78,1,1576]
     elif len(data)==336:profile,body,tail=2,84,[0x4e474352,2,72,84,1,1576]+[0]*6
+    elif len(data)==360:profile,body,tail=3,90,[0x4e474352,3,72,90,1,1576]+[0]*12
     else:raise ValueError('checksum source profile extent')
     if list(struct.unpack('<'+str(body-72)+'I',data[288:]))!=tail:
         raise ValueError('checksum source profile marker')
@@ -268,7 +269,7 @@ def decode_heap_lines(lines):
             if not g['begin'] or g['end'] is not None:raise ValueError('heap data outside source interval')
             _,role,copy,offset,count,total,encoded=data.groups()
             role,copy,offset,count,total=map(int,(role,copy,offset,count,total))
-            if role==4 and total in (312,336):
+            if role==4 and total in (312,336,360):
                 if any(k[0]==4 for k in g['blocks']) and g['totals'][4]!=total:raise ValueError('mixed command profile extent')
                 g['totals'][4]=total
             if (total!=g['totals'][role] or offset%128 or offset>=total or
@@ -302,7 +303,8 @@ def heap_decoder_self_test():
             data=bytes((i+role)&255 for i in range(total))
             if role==4:
                 marker=([0x4e474352,1,72,78,1,1576] if total==312 else
-                        [0x4e474352,2,72,84,1,1576]+[0]*6)
+                        [0x4e474352,2,72,84,1,1576]+[0]*6 if total==336 else
+                        [0x4e474352,3,72,90,1,1576]+[0]*12)
                 data=data[:288]+struct.pack('<'+str(len(marker))+'I',*marker)
             for copy in (0,1):
                 for offset in range(0,total,128):
@@ -311,7 +313,7 @@ def heap_decoder_self_test():
         lines.append(prefix+'NGRN_CHECKSUM_HEAPS_END seq=1 status=0 atomic=0 source_only=1')
         return lines
     lines=fixture(312)
-    for total,version in ((312,1),(336,2)):
+    for total,version in ((312,1),(336,2),(360,3)):
         captured=decode_heap_lines(fixture(total))[0][3][4]
         assert checksum_source_profile(captured)==version
         for at in range(288,total):
@@ -525,7 +527,8 @@ def audit_heap_log(path,output,kernel_records=None):
                   'curbe':list(struct.unpack_from('<16I',heaps[1],1024))}
             command_words=list(struct.unpack('<'+str(len(heaps[4])//4)+'I',heaps[4]))
             marker=([0x4e474352,1,72,78,1,1576] if len(command_words)==78 else
-                    [0x4e474352,2,72,84,1,1576]+[0]*6)
+                    [0x4e474352,2,72,84,1,1576]+[0]*6 if len(command_words)==84 else
+                    [0x4e474352,3,72,90,1,1576]+[0]*12)
             item['command_capture']={
                 'scope':'NATIVE_PRE_KMD_SOURCE_NOT_ACTUAL_GEN12_PUBLICATION',
                 'captured_words':len(command_words),'native_body_words':72,

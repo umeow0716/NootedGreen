@@ -19922,7 +19922,7 @@ static void testChecksumCapability() {
     Checksum::Reply ready{};
     ready.abiVersion=Checksum::version;ready.bytes=sizeof(ready);ready.registryId=19;
     ready.flags=Checksum::routeReady;ready.commandProfile=Checksum::profile;
-    ready.inputLimit=72;ready.outputLimit=84;
+    ready.inputLimit=72;ready.outputLimit=90;
     std::memcpy(ready.familyUuid,NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid,16);
     assert(Checksum::ready(ready,19) && !Checksum::ready(ready,20));
     for(size_t byte=0;byte<sizeof(ready);++byte)for(unsigned bit=0;bit<8;++bit) {
@@ -19931,8 +19931,8 @@ static void testChecksumCapability() {
     }
     auto unavailable=ready;unavailable.flags=0;assert(!Checksum::ready(unavailable,19));
     unavailable=ready;unavailable.commandProfile=1;assert(!Checksum::ready(unavailable,19)); // Old checksum profile cannot negotiate a larger batch.
-    unavailable=ready;unavailable.commandProfile=NGVfAvcPublication::profile;
-    assert(!Checksum::ready(unavailable,19)); // AVC readiness is not checksum readiness.
+    unavailable=ready;unavailable.commandProfile=2;
+    assert(!Checksum::ready(unavailable,19)); // Previous checksum profile cannot negotiate this command extent.
     struct Args {
         uint64_t version=7,selector=Checksum::selector,asyncWakePort=0,asyncReference=0,asyncReferenceCount=0;
         uint64_t scalarInputCount=0,scalarOutputCount=0,structureInputSize=0,structureInputDescriptor=0;
@@ -19968,7 +19968,7 @@ static void testChecksumCapability() {
             auto& reply=*static_cast<Checksum::Reply*>(output);reply={};
             reply.abiVersion=Checksum::version;reply.bytes=sizeof(reply);reply.registryId=19;
             reply.flags=Checksum::routeReady;reply.commandProfile=Checksum::profile;
-            reply.inputLimit=72;reply.outputLimit=84;
+            reply.inputLimit=72;reply.outputLimit=90;
             std::memcpy(reply.familyUuid,NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid,16);return 0;
         }};
     Checksum::Reply output{};
@@ -20456,7 +20456,7 @@ struct ChecksumCallbackFixture {
             },&writeable,[]() noexcept {return true;});
         assert(input && cf.holds==1);
         const auto t=p+0x48,b=ptr(commands.data()),s=ptr(side.data());
-        put(t+0x08,uintptr_t(19));put(t+0x10,b);put(t+0x18,b+sizeof(commands));put(t+0x20,b+84*4);
+        put(t+0x08,uintptr_t(19));put(t+0x10,b);put(t+0x18,b+sizeof(commands));put(t+0x20,b+90*4);
         put(t+0x60,s+39*4);put(t+0x68,s+sizeof(side));put(t+0x70,b);put(t+0x78,s);
     }
     ~ChecksumCallbackFixture(){active=nullptr;}
@@ -20525,12 +20525,12 @@ void testOwnedChecksumCallbacks() {
             case 16:Fixture::put(context+0x174,uint32_t(2));break;case 17:Fixture::put(context+0x178,uint32_t(1));break;
             case 18:Fixture::put(context+0x138,uint32_t(1919));break;
             case 19:actualToken+=8;break;case 20:Fixture::put(token+0x20,Fixture::ptr(f->commands.data())+77*4);break;
-            case 21:Fixture::put(token+0x18,Fixture::ptr(f->commands.data())+84*4);break;
+            case 21:Fixture::put(token+0x18,Fixture::ptr(f->commands.data())+90*4);break;
             case 22:Fixture::put(token+0x60,Fixture::ptr(f->side.data())+38*4);break;
             case 23:Fixture::put(token+0x78,Fixture::ptr(f->commands.data()));break;
             case 26:f->commitAllowed=false;break;
             case 36:Fixture::put(token+0x78,token);Fixture::put(token+0x60,token+39*4);break;
-            case 37:Fixture::put(token+0x70,token);Fixture::put(token+0x20,token+84*4);Fixture::put(token+0x10,token);break;
+            case 37:Fixture::put(token+0x70,token);Fixture::put(token+0x20,token+90*4);Fixture::put(token+0x10,token);break;
             case 38:f->prepared=false;break;
             case 40:Fixture::put(context+0x13c,uint32_t(1088));break;
             case 41:f->readAllowed=false;break;
@@ -20561,9 +20561,9 @@ void testOwnedChecksumCallbacks() {
         if(sized) {
             assert(!phase.callbacksComplete() && !phase.builderStarted() && f->builderCalls==0 && f->commits==0);
             assert(!phase.nativeReturnRequiresStop(int(sized)) && phase.nativeReturnRequiresStop(0));
-            assert(f->commands[72]==0xcccccccc && f->commands[84]==0xcccccccc);continue;
+            assert(f->commands[72]==0xcccccccc && f->commands[90]==0xcccccccc);continue;
         }
-        assert(f->used==84 && f->capacity==36);
+        assert(f->used==90 && f->capacity==36);
         assert(!phase.builderStarted() && phase.nativeReturnRequiresStop(7)); // Native begin can leak before builder.
         uint32_t inner=0;assert(Fixture::read(context+0x130,&inner,4) && inner==69);
         if(mode==29)f->quiescent=false;
@@ -20578,7 +20578,7 @@ void testOwnedChecksumCallbacks() {
         if(mode==0 || mode==31 || mode==32 || mode==44) {
             assert(result==0 && phase.callbacksComplete() && f->sizeCalls==1 && f->builderCalls==1 && f->commits==1);
             assert(!phase.nativeReturnRequiresStop(0) && phase.nativeReturnRequiresStop(7));
-            assert(NgreenChecksumGen12::reservationMatches(f->commands.data(),86));
+            assert(NgreenChecksumGen12::reservationMatches(f->commands.data(),92));
             assert(f->ssh[17]==0x04000000 && f->ssh[33]==0x04000000 && f->ssh[49]==0x06000000);
             for(unsigned i=0;i<72;++i)assert(f->commands[i]==0xf0000000U+i);
             if(mode==0) {
@@ -20593,7 +20593,7 @@ void testOwnedChecksumCallbacks() {
                 unsigned emitted=0;const auto emit=[&](unsigned role,unsigned copy,const uint8_t* data,size_t bytes) {
                     assert(role>=1 && role<=5 && copy<2);++emitted;
                     if(role==2)assert(bytes==4096 && !std::memcmp(data+1536,NgreenFrameChecksumGen12::isa.data(),1576));
-                    if(role==4)assert(bytes==336 && !std::memcmp(data,f->commands.data(),336));
+                    if(role==4)assert(bytes==360 && !std::memcmp(data,f->commands.data(),360));
                     if(role==5)assert(bytes==144 && !std::memcmp(data,f->side.data(),144));
                 };
                 assert(phase.observePreparedHeaps(token,emit)==0 && emitted==10);
@@ -20604,7 +20604,7 @@ void testOwnedChecksumCallbacks() {
             if(mode==32)assert(checksumBuilderCpuResult(context,request,token,builder)==5 && f->builderCalls==1);
         } else assert(result!=0 && !phase.callbacksComplete());
         assert(f->sizeCalls==1 && f->builderCalls<=1);
-        assert(f->commands[84]==0xcccccccc && f->commands[85]==0xcccccccc); // Native END reserve untouched.
+        assert(f->commands[90]==0xcccccccc && f->commands[91]==0xcccccccc); // Native END reserve untouched.
     }
     for(int mode=0;mode<4;++mode) {
         const pid_t child=fork();assert(child>=0);
@@ -20747,10 +20747,17 @@ int main() {
         {
             // Independent Gen12 DW1 bitfields from pinned Intel MHW header.
             struct Flags {
-                uint32_t reserved0:2,state:1,constant:1,vf:1,dc:1,reserved6:1,flush:1,
+                uint32_t depth:1,scoreboard:1,state:1,constant:1,vf:1,dc:1,reserved6:1,flush:1,
                     reserved8:2,texture:1,instruction:1,render:1,reserved13:7,cs:1,reserved21:11;
             };
             static_assert(sizeof(Flags)==4,"Gen12 PIPE_CONTROL flags extent");
+            Flags write{};write.depth=write.dc=write.flush=write.render=write.cs=1;
+            uint32_t writeRaw=0;std::memcpy(&writeRaw,&write,4);
+            assert(writeRaw==0x001010a1);
+            struct Pipeline {uint32_t selection:2,reserved2:2,sampler:1,reserved5:3,mask:8,header:16;};
+            Pipeline select{};const uint32_t nativeSelect=input[9];std::memcpy(&select,&nativeSelect,4);
+            assert(select.selection==1 && select.mask==0x13 && !select.sampler);
+
             Flags expected{};expected.state=expected.constant=expected.vf=expected.dc=expected.flush=1;
             expected.texture=expected.instruction=expected.render=expected.cs=1;
             uint32_t raw=0;std::memcpy(&raw,&expected,4);
@@ -20768,41 +20775,44 @@ int main() {
             assert(!NgreenChecksumGen12::writePostSbaReadInvalidate(packet.data(),5,Mode::Gen12Default) && packet==saved);
             assert(!NgreenChecksumGen12::writePostSbaReadInvalidate(nullptr,6,Mode::Gen12Default));
         }
-        std::array<uint32_t,84> output{};
+        std::array<uint32_t,90> output{};
         assert(build1080Batch(input,heap,output).ok);
-        assert(!output[0] && !output[1] && !output[2] && output[10]==0x61010014);
-        assert(output[13]==0x6c000 && output[14]==0x40a6e061 && output[41]==0x01bf1040);
-        for(size_t i=26;i<32;++i)assert(!output[i]);
+        assert(!output[0] && !output[1] && !output[2] && output[16]==0x61010014);
+        assert(output[19]==0x6c000 && output[20]==0x40a6e061 && output[47]==0x01bf1040);
+        for(size_t i=32;i<38;++i)assert(!output[i]);
         for(size_t i=26;i<input.size();++i)
-            assert(output[i+12]==(i==29?input[i]|0x40U:i==42?0x40U:input[i]));
+            assert(output[i+18]==(i==29?input[i]|0x40U:i==42?0x40U:input[i]));
         const auto before=output;
-        assert(output[32]==0x7a000004 && output[33]==0x00101cbc);
-        for(unsigned i=34;i<38;++i)assert(output[i]==0);
+        assert(output[38]==0x7a000004 && output[39]==0x00101cbc);
+        for(unsigned i=40;i<44;++i)assert(output[i]==0);
+        assert(output[9]==0x7a000004 && output[10]==0x00101cbc && output[15]==input[9]);
+        assert(output[4]==0x001010a1);
+        for(unsigned i=11;i<15;++i)assert(output[i]==0);
         assert(NgreenChecksumGen12::readInvalidateModeForDevice(0xa7a8)==heap.cacheMode);
         for(uint32_t device:{0U,0xa7a9U,0xffffU})
             assert(NgreenChecksumGen12::readInvalidateModeForDevice(device)==NgreenChecksumGen12::ReadInvalidateMode::Unqualified);
         auto deniedHeap=heap;deniedHeap.cacheMode=NgreenChecksumGen12::ReadInvalidateMode::Unqualified;
         assert(!build1080Batch(input,deniedHeap,output).ok && output==before);
 
-        assert(!NgreenChecksumGen12::build1080Batch(nullptr,72,heap,output.data(),84).ok && output==before);
-        assert(!NgreenChecksumGen12::build1080Batch(input.data(),71,heap,output.data(),84).ok && output==before);
-        assert(!NgreenChecksumGen12::build1080Batch(input.data(),72,heap,output.data(),83).ok && output==before);
-        std::array<uint32_t,84> alias{};
+        assert(!NgreenChecksumGen12::build1080Batch(nullptr,72,heap,output.data(),90).ok && output==before);
+        assert(!NgreenChecksumGen12::build1080Batch(input.data(),71,heap,output.data(),90).ok && output==before);
+        assert(!NgreenChecksumGen12::build1080Batch(input.data(),72,heap,output.data(),89).ok && output==before);
+        std::array<uint32_t,90> alias{};
         std::copy(input.begin(),input.end(),alias.begin());const auto aliasBefore=alias;
-        assert(!NgreenChecksumGen12::build1080Batch(alias.data(),72,heap,alias.data(),84).ok && alias==aliasBefore);
-        std::array<uint32_t,86> guarded;guarded.fill(0xdeadbeef);
+        assert(!NgreenChecksumGen12::build1080Batch(alias.data(),72,heap,alias.data(),90).ok && alias==aliasBefore);
+        std::array<uint32_t,92> guarded;guarded.fill(0xdeadbeef);
         assert(NgreenChecksumGen12::build1080Batch(input.data(),72,heap,guarded.data(),guarded.size()).ok);
-        assert(guarded[84]==0xdeadbeef && guarded[85]==0xdeadbeef);
+        assert(guarded[90]==0xdeadbeef && guarded[91]==0xdeadbeef);
         for(unsigned i=0;i<72;++i)for(unsigned bit=0;bit<32;++bit) {
             auto bad=input;bad[i]^=1U<<bit;
             assert(!build1080Batch(bad,heap,output).ok && output==before);
         }
         static_assert(NgreenChecksumGen12::legacyStreamWords==74 &&
-            NgreenChecksumGen12::reservedStreamWords==86,"body excludes native END pair");
+            NgreenChecksumGen12::reservedStreamWords==92,"body excludes native END pair");
         for(unsigned mode=0;mode<15;++mode) {
-            std::array<uint32_t,90> native;native.fill(0xabadf00d);
+            std::array<uint32_t,96> native;native.fill(0xabadf00d);
             std::copy(input.begin(),input.end(),native.begin());
-            assert(NgreenChecksumGen12::writeReservationTrailer(native.data(),84));
+            assert(NgreenChecksumGen12::writeReservationTrailer(native.data(),90));
             if(mode==10)native[75]^=1;
             if(mode==11)native[0]^=1;
             const auto saved=native;
@@ -20810,46 +20820,46 @@ int main() {
             if(mode==12)heaps.instruction+=4096;
             if(mode==14)heaps.kernelSlot=0;
             unsigned reads=0,checks=0;
-            const uint32_t count=mode==1?85:86;
+            const uint32_t count=mode==1?91:92;
             const auto read=[&](unsigned index,uint32_t& word) {
-                assert(index<86);const unsigned call=reads++;
+                assert(index<92);const unsigned call=reads++;
                 if(mode==6 && call==8)return false;
                 word=native[index];
-                if((mode==7 && call==87) || (mode==8 && call==173))word^=1;
+                if((mode==7 && call==93) || (mode==8 && call==185))word^=1;
                 return true;
             };
             const auto same=[&]() {return mode!=5 && !(mode==9 && ++checks==4);};
             const auto result=NgreenChecksumGen12::observeCandidate(mode==13?owned.source:native.data(),
-                mode==2?16385:90,mode==3?85:mode==4?91:86,count,heaps,owned,read,same);
-            assert((result.flags==31)==(mode==0) && native==saved && count==(mode==1?85U:86U));
+                mode==2?16385:96,mode==3?91:mode==4?97:92,count,heaps,owned,read,same);
+            assert((result.flags==31)==(mode==0) && native==saved && count==(mode==1?91U:92U));
             if(!mode) {
-                assert(reads==258);
-                for(unsigned i=0;i<84;++i)assert(owned.produced[i]==output[i]);
-                assert(!owned.produced[84] && !owned.produced[85]);
+                assert(reads==276);
+                for(unsigned i=0;i<90;++i)assert(owned.produced[i]==output[i]);
+                assert(!owned.produced[90] && !owned.produced[91]);
             }
         }
         for(unsigned mode=0;mode<17;++mode) {
-            std::array<uint32_t,90> commands;commands.fill(0xabadf00d);
+            std::array<uint32_t,96> commands;commands.fill(0xabadf00d);
             std::copy(input.begin(),input.end(),commands.begin());
             if(!mode) {
                 const auto beforeTrailer=commands;
-                assert(!NgreenChecksumGen12::writeReservationTrailer(commands.data(),86) && commands==beforeTrailer);
-                assert(!NgreenChecksumGen12::writeReservationTrailer(nullptr,84));
+                assert(!NgreenChecksumGen12::writeReservationTrailer(commands.data(),92) && commands==beforeTrailer);
+                assert(!NgreenChecksumGen12::writeReservationTrailer(nullptr,90));
             }
-            assert(NgreenChecksumGen12::writeReservationTrailer(commands.data(),84));
-            assert(commands[84]==0xabadf00d && commands[85]==0xabadf00d);
-            NgreenAvcGen12::PublishScratch scratch{};uint32_t count=mode==12?74:86;
+            assert(NgreenChecksumGen12::writeReservationTrailer(commands.data(),90));
+            assert(commands[90]==0xabadf00d && commands[91]==0xabadf00d);
+            NgreenAvcGen12::PublishScratch scratch{};uint32_t count=mode==12?74:92;
             if(mode==11)commands[75]^=1;
-            if(mode==13)commands[85]=86;
+            if(mode==13)commands[91]=92;
             const auto saved=commands;
-            if(mode==14)std::copy(commands.begin(),commands.begin()+86,scratch.source);
+            if(mode==14)std::copy(commands.begin(),commands.begin()+92,scratch.source);
             auto observedHeap=heap;if(mode==10)observedHeap.instruction+=4096;
             bool fault=false;unsigned newHeaderChecks=0;
             auto same=[&]() noexcept {
                 if(mode==1)return false;
-                if(mode==4 && commands[10]==0x61010014)return false;
-                if(mode==15 && commands[10]==0x61010014 && ++newHeaderChecks>=3)return false;
-                if((mode==5 || mode==16) && !fault && commands[10]==0x61010014){commands[20]^=1;fault=true;}
+                if(mode==4 && commands[16]==0x61010014)return false;
+                if(mode==15 && commands[16]==0x61010014 && ++newHeaderChecks>=3)return false;
+                if((mode==5 || mode==16) && !fault && commands[16]==0x61010014){commands[20]^=1;fault=true;}
                 if(mode==16 && fault && commands[10]==0x6101000e)commands[30]^=1;
                 if(mode==7 && !fault && commands[10]==0x6101000e && scratch.source[10]==0x6101000e)
                     {commands[0]^=1;fault=true;}
@@ -20857,23 +20867,23 @@ int main() {
             };
             auto live=[&](uint32_t expected) noexcept {
                 if(mode==2)return false;
-                if(mode==6 && !fault && commands[10]==0x61010014){count=85;fault=true;}
+                if(mode==6 && !fault && commands[16]==0x61010014){count=91;fault=true;}
                 return count==expected;
             };
             if(mode==3)commands[0]^=1;
             const auto prior=commands;
-            volatile uint32_t& counter=mode==13?commands[85]:count;
+            volatile uint32_t& counter=mode==13?commands[91]:count;
             auto published=NgreenChecksumGen12::publish(mode==14?scratch.source:commands.data(),
-                mode==8?85:86,mode==9?85:86,counter,observedHeap,scratch,live,same);
+                mode==8?91:92,mode==9?91:92,counter,observedHeap,scratch,live,same);
             assert(published.published==(mode==0));
             if(!mode) {
-                for(unsigned i=0;i<84;++i)assert(commands[i]==output[i]);
-                assert(count==86 && !commands[84] && !commands[85]);
+                for(unsigned i=0;i<90;++i)assert(commands[i]==output[i]);
+                assert(count==92 && !commands[90] && !commands[91]);
             } else if(mode==4 || mode==6 || mode==15 || mode==16)assert(published.mustStop && !published.restored);
             else if(mode==5)assert(published.restored && !published.mustStop && commands==saved);
             else if(mode!=7)assert(commands==prior);
-            for(unsigned i=86;i<90;++i)assert(commands[i]==0xabadf00d);
-            if(mode==14)for(unsigned i=0;i<86;++i)assert(scratch.source[i]==saved[i]);
+            for(unsigned i=92;i<96;++i)assert(commands[i]==0xabadf00d);
+            if(mode==14)for(unsigned i=0;i<92;++i)assert(scratch.source[i]==saved[i]);
         }
         heap.surface=heap.dynamic;
         assert(!build1080Batch(input,heap,output).ok && output==before);

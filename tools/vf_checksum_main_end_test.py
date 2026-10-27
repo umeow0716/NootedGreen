@@ -219,20 +219,20 @@ def test_end(root):
      if(mode==19 && captureCalls>=2)out.resource=reinterpret_cast<void*>(0x8000);
      return true;
     }
-    unsigned nativeCalls=0,candidateRecordsSeen=0,candidateRejected=0;uint32_t candidatePacket[188]{},rejectedPacket[188]{};
+    unsigned nativeCalls=0,candidateRecordsSeen=0,candidateRejected=0;uint32_t candidatePacket[200]{},rejectedPacket[200]{};
     bool vfFlightEnabled(){return true;}
     uint64_t cpuCopy(uint64_t from,uint64_t to,uint64_t bytes){assert(bytes==4);memcpy(reinterpret_cast<void*>(to),reinterpret_cast<void*>(from),4);return 4;}
     uintptr_t gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&cpuCopy),cpuPmap=1,*gVfCpuKernelPmapSlot=&cpuPmap,gVfCpuKernelPmapStore=1;
     bool OSCompareAndSwap(UInt32 old,UInt32 value,volatile UInt32* at){if(*at!=old)return false;*at=value;return true;}
     template<class T,size_t N>constexpr size_t arrsize(T(&)[N]){return N;}
     void vfFlightRecord(uint32_t kind,uint32_t group,uint64_t identity,const volatile uint32_t* packet,size_t count){
-     assert(kind==35 && group==4 && identity==0x60000080 && count==188 && packet[0]==2);
-     assert(packet[3]==86 && packet[5]==86 && packet[102]==0);
-     if(packet[1]==31){assert(packet[4]==86 && packet[112]==0x61010014);
-      for(unsigned i=0;i<188;++i)candidatePacket[i]=packet[i];}
+     assert(kind==35 && group==4 && identity==0x60000080 && count==200 && packet[0]==3);
+     assert(packet[3]==92 && packet[5]==92 && packet[108]==0);
+     if(packet[1]==31){assert(packet[4]==92 && packet[124]==0x61010014);
+      for(unsigned i=0;i<200;++i)candidatePacket[i]=packet[i];}
      else {assert(packet[1]==15 && packet[4]==0 && packet[15]==1);++candidateRejected;
-      for(unsigned i=102;i<188;++i)assert(!packet[i]);
-      for(unsigned i=0;i<188;++i)rejectedPacket[i]=packet[i];}
+      for(unsigned i=108;i<200;++i)assert(!packet[i]);
+      for(unsigned i=0;i<200;++i)rejectedPacket[i]=packet[i];}
      ++candidateRecordsSeen;
     }
     void nativeImpl(void*that,void*stream){assert(that==context && stream==context+0x650);++nativeCalls;}
@@ -246,7 +246,7 @@ def test_end(root):
     void setup(){
      memset(context,0,sizeof(context));memset(shared,0,sizeof(shared));memset(descriptor,0,sizeof(descriptor));
      entry={current_thread(),context,accel,task,shared,gpuTask,&scratch,{},{},false,false,false};entry.checksumHeaps.reset();
-     memcpy(commands,captured,sizeof(captured));assert(NgreenChecksumGen12::writeReservationTrailer(commands,84));commands[84]=0x1234;commands[85]=0x5678;
+     memcpy(commands,captured,sizeof(captured));assert(NgreenChecksumGen12::writeReservationTrailer(commands,90));commands[90]=0x1234;commands[91]=0x5678;
      uint64_t gpu[]={uint64_t(captured[16]&~1U)|(uint64_t(captured[17])<<32),uint64_t(captured[20]&~1U)|(uint64_t(captured[21])<<32),uint64_t(captured[14]&~1U)|(uint64_t(captured[15])<<32)};
      for(unsigned i=0;i<3;++i)assert(entry.checksumHeaps.record(i,true,0x10000+i*4096,gpu[i],4096,false,reinterpret_cast<uintptr_t>(task),reinterpret_cast<uintptr_t>(shared)));
      for(unsigned i=0;i<3;++i)assert(entry.checksumSurfaces.record(true,0x50000+i*4096,0x70000000+i*4096,1920,10+i,false));
@@ -256,7 +256,7 @@ def test_end(root):
      getMember<void*>(context,0x618)=descriptor;getMember<uint8_t>(descriptor,0x68)=1;
      getMember<uint32_t>(context,0x660)=4096;getMember<uint32_t>(context,0x6f4)=1024;
      getMember<uint32_t>(context,0x6dc)=1;getMember<void*>(context,0xfe0)=commands;getMember<void*>(context,0x708)=commands;
-     void*s=context+0x650;getMember<uint32_t>(s,0x30)=128;getMember<uint32_t>(s,0x34)=86;
+     void*s=context+0x650;getMember<uint32_t>(s,0x30)=128;getMember<uint32_t>(s,0x34)=92;
      getMember<uint32_t>(s,0x38)=36;getMember<uint8_t>(s,0x3c)=1;
      checksumCapture=false;present=mapping=args=true;gVfChecksumPublicationRouteReady=gVfChecksumNativeBindingsQualified=gVfCaptureStreamResetBound=gVfMediaPublicationAbiVerified=true;
      gVfIdentity=VfIdentity::Virtual;gVfAccelerator=accel;fakeCaller=123;captureCalls=nativeCalls=0;
@@ -283,7 +283,7 @@ def test_end(root):
      case 22:entry.failed=true;getMember<uint32_t>(s,0x34)=0;break;
      case 23:entry.checksumHeaps.reset();getMember<uint32_t>(s,0x34)=0;break;
      case 24:getMember<uint8_t>(s,0x3c)=0;break;
-     case 25:mapping=false;getMember<uint32_t>(context,0x6f4)=100;break;
+     case 25:mapping=false;getMember<uint32_t>(context,0x6f4)=106;break;
      case 26:getMember<uint32_t>(s,0x34)=2000;break;
      case 27:entry.translating=true;break;
      case 28:mapping=false;getMember<uint32_t>(context,0x660)=0;break;
@@ -318,15 +318,15 @@ def test_end(root):
      assert(panic==expectedPanic);
      bool forwarded=mode==0 || mode==48 || (mode>=1 && mode<=4) || mode==8 || mode==23;
      if(nativeCalls!=unsigned(forwarded))std::fprintf(stderr,"mode=%d calls=%u expected=%u\n",mode,nativeCalls,unsigned(forwarded));assert(nativeCalls==unsigned(forwarded));
-     if(mode==0 || mode==48){assert(commands[0]==0 && commands[10]==0x61010014);assert(commands[84]==0 && commands[85]==0);assert(!entry.failed && !entry.translating && entry.checksumHeaps.seen==0);}
+     if(mode==0 || mode==48){assert(commands[0]==0 && commands[16]==0x61010014);assert(commands[90]==0 && commands[91]==0);assert(!entry.failed && !entry.translating && entry.checksumHeaps.seen==0);}
      else if(!panic && !forwarded){assert(entry.failed);assert(!entry.captureCancelled && !entry.translating);assert(getMember<uint32_t>(s,0x34)==0 && getMember<uint8_t>(s,0x3c)==0);assert(memcmp(before.data(),commands,sizeof(commands))==0);}
      else if(mode!=20 && mode!=21)assert(memcmp(before.data(),commands,sizeof(commands))==0);
      }
      assert(candidateRecordsSeen==2 && candidateRejected==1);
      FILE* output=std::fopen("__CANDIDATE_PATH__","wb");assert(output);
-     assert(std::fwrite(candidatePacket,4,188,output)==188);assert(!std::fclose(output));
+     assert(std::fwrite(candidatePacket,4,200,output)==200);assert(!std::fclose(output));
      output=std::fopen("__CANDIDATE_PATH__.rejected","wb");assert(output);
-     assert(std::fwrite(rejectedPacket,4,188,output)==188);assert(!std::fclose(output));
+     assert(std::fwrite(rejectedPacket,4,200,output)==200);assert(!std::fclose(output));
      puts("Actual MainEnd body: 57 cases plus candidate/source-only capture; native once/unchanged commands/no submission on refusal");
     }
     '''
@@ -336,8 +336,8 @@ def test_end(root):
     subprocess.run([str(root/'checksum_end_actual')],check=True)
     sys.path.insert(0,str(ROOT/'tools/media_adapter'))
     from decode_kdebug_recorder import validate_leaf,checksum_candidate_coverage
-    payload=packet_path.read_bytes();words=list(struct.unpack('<188I',payload));validate_leaf(35,words)
-    metadata={'group':4,'thread':0x4000,'identity':'0000000060000080','kind':35,'word_count':188}
+    payload=packet_path.read_bytes();words=list(struct.unpack('<200I',payload));validate_leaf(35,words)
+    metadata={'group':4,'thread':0x4000,'identity':'0000000060000080','kind':35,'word_count':200}
     row=(4,metadata,payload)
     assert checksum_candidate_coverage([row])['complete_candidates']==1
     # Preserve exact V399/v1 decoding; cross-version headers and extents fail closed.
@@ -355,12 +355,12 @@ def test_end(root):
         except ValueError:pass
         else:raise AssertionError('cross-version extent accepted')
     refused_payload=Path(str(packet_path)+'.rejected').read_bytes()
-    validate_leaf(35,list(struct.unpack('<188I',refused_payload)))
+    validate_leaf(35,list(struct.unpack('<200I',refused_payload)))
     refused=checksum_candidate_coverage([(4,metadata,refused_payload)])
     assert refused['complete_candidates']==0 and refused['captures'][0]['candidate_words']==0
     rejected=0
-    for index in range(188):
-        if index in (6,7,100,101):continue # bounded capacities and unsubmitted END reserve are variable.
+    for index in range(200):
+        if index in (6,7,106,107):continue # bounded capacities and unsubmitted END reserve are variable.
         bad=words.copy();bad[index]^=1
         try:validate_leaf(35,bad)
         except ValueError:rejected+=1
@@ -370,8 +370,8 @@ def test_end(root):
         try:checksum_candidate_coverage(rows)
         except ValueError:rejected+=1
         else:raise AssertionError('malformed candidate scope accepted')
-    assert rejected==189
-    print('Actual compiled candidate packet: strict decoder/184 word mutations/5 scope negatives PASS; no native publication')
+    assert rejected==201
+    print('Actual compiled candidate packet: strict decoder/196 word mutations/5 scope negatives PASS; no native publication')
 
 def test_surface_bind_returns(root):
     source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()

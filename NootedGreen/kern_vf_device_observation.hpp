@@ -123,10 +123,10 @@ template<class Call> bool query(uint64_t registryId,Call call,Reply& output) noe
 }
 }
 namespace NGVfChecksumPublication {
-constexpr uint32_t selector=0x4E470004U,version=1,profile=2;
-constexpr uint32_t routeReady=1,maxInputWords=72,maxOutputWords=84;
-// Separate checksum ABI: exact native72 -> Gen12 84 BODY DWORDs, excluding
-// the native two-DWORD END reserve (stream counts74 ->86), with appended
+constexpr uint32_t selector=0x4E470004U,version=1,profile=3;
+constexpr uint32_t routeReady=1,maxInputWords=72,maxOutputWords=90;
+// Separate checksum ABI: exact native72 -> Gen12 90 BODY DWORDs, excluding
+// the native two-DWORD END reserve (stream counts74 ->92), with appended
 // kernel slot1, a 64-byte descriptor stride and the pinned Gen12 shader.
 // AVC profile3 alone never authorizes this auxiliary renderer path. A kernel
 // only advertises readiness after the post-relocation producer is installed.
