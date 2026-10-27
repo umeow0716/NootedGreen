@@ -309,6 +309,53 @@ inline Result build1080Batch(const uint32_t* source,size_t words,const HeapAddre
     for(size_t i=0;i<78;++i)output[i]=candidate[i];
     return {true,"produced"};
 }
+struct CandidateObservation {
+    uint32_t flags=0;
+    const char* reason="extent";
+};
+// Observe the task-bound native CPU span and build ONLY in owned scratch.
+// Never publish, change native count, invoke native End or grant a lifetime.
+template<class Scratch,class Read,class Same>
+inline CandidateObservation observeCandidate(const volatile uint32_t* commands,size_t capacity,
+    size_t reserved,uint32_t count,const HeapAddresses& heaps,Scratch& scratch,Read&& read,Same&& same) noexcept {
+    CandidateObservation result{};
+    static_assert(sizeof(scratch.source)/4>=reservedStreamWords && sizeof(scratch.produced)/4>=reservedStreamWords,
+        "candidate scratch extent");
+    if(!commands || count!=reservedStreamWords || capacity>16384 || reserved>capacity ||
+       reserved<reservedStreamWords)return result;
+    const uintptr_t native=reinterpret_cast<uintptr_t>(commands),work=reinterpret_cast<uintptr_t>(&scratch);
+    if((native&3U) || native>UINTPTR_MAX-reservedStreamWords*4 || work>UINTPTR_MAX-sizeof(scratch) ||
+       !(native+reservedStreamWords*4<=work || work+sizeof(scratch)<=native)) {result.reason="alias";return result;}
+    result.flags=1;result.reason="owner-before-read";
+    if(!same())return result;
+    result.reason="source-read";
+    for(unsigned i=0;i<reservedStreamWords;++i)if(!read(i,scratch.source[i]))return result;
+    result.flags|=2;result.reason="owner-after-read";
+    if(!same())return result;
+    result.reason="source-pair";
+    for(unsigned i=0;i<reservedStreamWords;++i) {
+        uint32_t word=0;
+        if(!read(i,word) || word!=scratch.source[i])return result;
+    }
+    result.flags|=4;result.reason="owner-after-pair";
+    if(!same())return result;
+    result.flags|=8;result.reason="reservation";
+    if(!reservationMatches(scratch.source,reservedStreamWords))return result;
+    const auto candidate=build1080Batch(scratch.source,nativeBodyWords,heaps,scratch.produced,producedBodyWords);
+    if(!candidate.ok){result.reason=candidate.reason;return result;}
+    scratch.produced[producedBodyWords]=scratch.produced[producedBodyWords+1]=0;
+    result.reason="owner-after-candidate";
+    if(!same())return result;
+    // Final source comparison covers changes during pure candidate building.
+    result.reason="source-final";
+    for(unsigned i=0;i<reservedStreamWords;++i) {
+        uint32_t word=0;
+        if(!read(i,word) || word!=scratch.source[i])return result;
+    }
+    result.reason="owner-final";
+    if(!same())return result;
+    result.flags|=16;result.reason="candidate-cpu-only";return result;
+}
 // CPU publication only; never a GPU completion or native submit ACK. The
 // caller independently holds the mapped span/task/physical/native-IOLock
 // authority, plus the observed heap identities AND native append-END mode.

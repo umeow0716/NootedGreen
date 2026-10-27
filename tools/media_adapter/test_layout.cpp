@@ -20766,6 +20766,35 @@ int main() {
         }
         static_assert(NgreenChecksumGen12::legacyStreamWords==74 &&
             NgreenChecksumGen12::reservedStreamWords==80,"body excludes native END pair");
+        for(unsigned mode=0;mode<15;++mode) {
+            std::array<uint32_t,84> native;native.fill(0xabadf00d);
+            std::copy(input.begin(),input.end(),native.begin());
+            assert(NgreenChecksumGen12::writeReservationTrailer(native.data(),78));
+            if(mode==10)native[75]^=1;
+            if(mode==11)native[0]^=1;
+            const auto saved=native;
+            NgreenAvcGen12::PublishScratch owned{};auto heaps=heap;
+            if(mode==12)heaps.instruction+=4096;
+            if(mode==14)heaps.kernelSlot=0;
+            unsigned reads=0,checks=0;
+            const uint32_t count=mode==1?79:80;
+            const auto read=[&](unsigned index,uint32_t& word) {
+                assert(index<80);const unsigned call=reads++;
+                if(mode==6 && call==8)return false;
+                word=native[index];
+                if((mode==7 && call==81) || (mode==8 && call==161))word^=1;
+                return true;
+            };
+            const auto same=[&]() {return mode!=5 && !(mode==9 && ++checks==4);};
+            const auto result=NgreenChecksumGen12::observeCandidate(mode==13?owned.source:native.data(),
+                mode==2?16385:84,mode==3?79:mode==4?85:80,count,heaps,owned,read,same);
+            assert((result.flags==31)==(mode==0) && native==saved && count==(mode==1?79U:80U));
+            if(!mode) {
+                assert(reads==240);
+                for(unsigned i=0;i<78;++i)assert(owned.produced[i]==output[i]);
+                assert(!owned.produced[78] && !owned.produced[79]);
+            }
+        }
         for(unsigned mode=0;mode<17;++mode) {
             std::array<uint32_t,84> commands;commands.fill(0xabadf00d);
             std::copy(input.begin(),input.end(),commands.begin());
