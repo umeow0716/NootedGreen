@@ -223,6 +223,7 @@ def self_test():
     else:
         raise ValueError('unknown semantic instruction option ignored')
     heap_decoder_self_test()
+    prepared_physical_self_test()
     print('CHECKSUM_ISA_FOOTPRINT_OK native-Gen11 old-loop-limit=0 fixed=240 '
           '5-legacy/20-independent-negatives no-GPU-proof')
 
@@ -398,6 +399,84 @@ def relocation_difference(source,actual):
             'scope':'STATIC_NATIVE_MAIN_STORE_SET_ONLY_NOT_BACKING_PROOF'}
 
 
+def prepared_physical_rows(rows,leaves):
+    from decode_kdebug_recorder import prepared_resource_coverage
+    samples=[]
+    def observed():
+        for group,metadata,payload in leaves:
+            if len(payload)!=64:raise ValueError('prepared physical leaf extent')
+            w=struct.unpack('<16I',payload)
+            if len(samples)>=12288:raise ValueError('prepared physical leaf budget')
+            samples.append((group,w[1],w[2],w[3],w[6]|w[7]<<32,w[8]|w[9]<<32,w[10]|w[11]<<32,w[12]))
+            yield group,metadata,payload
+    coverage=prepared_resource_coverage(rows,observed())
+    roles={}
+    for group,ticket,role,page,ram,leaf,flags,status in samples:
+        key=f'{group}:{ticket}:{role}'
+        entry=roles.setdefault(key,{'pages':0,'physical_mismatches':0,'unavailable_leaf_pages':0,'pte_flags':set()})
+        entry['pages']+=1;entry['unavailable_leaf_pages']+=status!=15
+        if status==15:
+            entry['physical_mismatches']+=ram!=leaf;entry['pte_flags'].add(f'{flags:x}')
+    for entry in roles.values():entry['pte_flags']=sorted(entry['pte_flags'])
+    return {'coverage':coverage,'roles':roles,
+        'all_captured_pages_match':bool(samples) and coverage['refused_resources']==0 and
+            coverage['task_leaf_refused_or_unstable']==0 and all(not v['physical_mismatches'] for v in roles.values()),
+        'scope':'PAIRED_CPU_RAM_AND_NATIVE_TASK_LEAF_ONLY','atomic':False,
+        'iova_mapping_proven':False,'native_object_lease_proven':False,'gpu_execution_proof':False}
+
+
+def prepared_physical_self_test():
+    rows=[];leaves=[]
+    for role in range(6):
+        meta={'thread':42,'identity':f'{0x40000000+role*4096:016x}'}
+        physical=0x100000+role*4096
+        for phase in range(3):
+            w=[1,1,role,phase,int(phase==2),4096,0,4096 if phase==2 else 0,0,
+                physical if phase==1 else 0,0,4096 if phase else 0,0,15 if phase==1 else 1,0,0]
+            rows.append((4,dict(meta),struct.pack('<16I',*w)))
+        w=[1,1,role,0,0,0,physical,0,physical,0,0x8b,0,15,4096,0,0]
+        leaves.append((4,dict(meta),struct.pack('<16I',*w)))
+    report=prepared_physical_rows(rows,leaves)
+    assert report['all_captured_pages_match'] and report['coverage']['task_leaf_pages']==6
+    changed=list(leaves);w=list(struct.unpack('<16I',changed[0][2]));w[8]+=4096
+    changed[0]=(4,dict(changed[0][1]),struct.pack('<16I',*w))
+    mismatch=prepared_physical_rows(rows,changed)
+    assert not mismatch['all_captured_pages_match'] and mismatch['roles']['4:1:0']['physical_mismatches']==1
+    foreign=list(leaves);foreign[0]=(4,{'thread':43,'identity':leaves[0][1]['identity']},leaves[0][2])
+    for bad_rows,bad_leaves in [(rows,leaves[:-1]),(rows,leaves+[leaves[0]]),(rows,foreign),
+        (rows[1:],leaves),(rows[:-1],leaves),(rows+[rows[0]],leaves),
+        (rows,[(4,leaves[0][1],b'')]+leaves[1:])]:
+        try:prepared_physical_rows(bad_rows,bad_leaves)
+        except ValueError:pass
+        else:raise AssertionError('malformed prepared physical association accepted')
+    assert not prepared_physical_rows([],[])['all_captured_pages_match']
+    print('CHECKSUM_PREPARED_PHYSICAL_CPU_OK mismatch-reported/7-malformed-rejected/no-IOVA-or-GPU-proof')
+
+
+def kernel_prepared_physical(path):
+    if not path.is_file() or path.stat().st_size>64*1024*1024:raise ValueError('kernel CPU database bound')
+    connection=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)
+    def rows(kind,limit):
+        count=0
+        for encoded,meta_bytes,payload,payload_bytes in connection.execute(
+            'SELECT substr(metadata,1,4097),length(metadata),substr(payload,1,65),length(payload) '
+            'FROM records WHERE kind=? ORDER BY id LIMIT ?',(kind,limit+1)):
+            count+=1
+            if count>limit or not isinstance(encoded,str) or not isinstance(payload,bytes) or meta_bytes>4096 or payload_bytes!=64:
+                raise ValueError('prepared physical database extent/budget')
+            metadata=json.loads(encoded)
+            if (not isinstance(metadata,dict) or metadata.get('kind')!=kind or metadata.get('word_count')!=16 or
+                type(metadata.get('group')) is not int or metadata['group']<=0 or
+                type(metadata.get('thread')) is not int or metadata['thread']<=0 or
+                not re.fullmatch('[0-9a-f]{16}',metadata.get('identity',''))):raise ValueError('prepared physical scope metadata')
+            yield metadata['group'],metadata,payload
+    try:
+        return prepared_physical_rows(rows(32,12312),rows(33,12288))
+    except (sqlite3.Error,json.JSONDecodeError) as error:
+        raise ValueError('prepared physical database shape') from error
+    finally:connection.close()
+
+
 def audit_heap_log(path,output,kernel_records=None):
     output.mkdir(mode=0o700)
     try:
@@ -411,12 +490,22 @@ def audit_heap_log(path,output,kernel_records=None):
                   'idd0':list(struct.unpack_from('<8I',heaps[1],0)),
                   'idd1':list(struct.unpack_from('<8I',heaps[1],64)),
                   'curbe':list(struct.unpack_from('<16I',heaps[1],1024))}
+            command_words=list(struct.unpack('<78I',heaps[4]))
+            item['command_capture']={
+                'scope':'NATIVE_PRE_KMD_SOURCE_NOT_ACTUAL_GEN12_PUBLICATION',
+                'captured_words':len(command_words),'native_body_words':72,
+                'reservation_words':command_words[72:],
+                'exact_reservation':command_words[72:]==[0x4e474352,1,72,78,1,1576],
+                'native_sba_header':f'{command_words[10]:08x}',
+                'initial_pipe_control_flags':f'{command_words[4]:08x}',
+                'actual_post_relocation_commands_proven':False}
             for role,data in heaps.items():
                 name=f'pid{pid}-thread{thread}-seq{seq}-role{role}.bin'
                 (output/name).write_bytes(data);(output/name).chmod(0o400)
                 item['heaps'][str(role)]={'file':name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
             report['groups'].append(item)
         if kernel_records:
+            report['prepared_cpu_physical']=kernel_prepared_physical(kernel_records)
             report['kernel_ssh_pages']=[]
             for page in kernel_ssh_pages(kernel_records):
                 data=page.pop('data');name=f"kernel-group{page['group']}-ticket{page['ticket']}-ssh.bin"
