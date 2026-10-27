@@ -56,7 +56,7 @@ struct Media12Engine {
 // OTHER class and arbitrary 32-bit engine-mask instances are not real engines.
 constexpr Media12Engine media12Engines[] = {
     {0, 0, 0, 0}, // RCS0
-    {5, 0, 0, 1}, // CCS0 (runs on RCS0, see mapEngineClass)
+    {5, 0, 4, 1}, // CCS0
     {3, 0, 3, 2}, // BCS0
     {1, 0, 1, 3}, // VCS0
     {1, 2, 1, 4}, // VCS2
@@ -87,11 +87,8 @@ inline bool validPersistentLow(uint32_t low)
 inline uint8_t mapEngineClass(uint32_t rawClass)
 {
     // Intel engine classes {RCS,VCS,VECS,BCS,OTHER,CCS} map to the GuC
-    // classes {0,1,2,3,5,4}, except that Xe-LP has no CCS: the donor's CCS
-    // channel is the companion stream of each render queue and executes on
-    // RCS, so it is registered as a render context. GuC never schedules a
-    // compute-class context on this part.
-    constexpr uint8_t map[] = {0, 1, 2, 3, 5, 0};
+    // classes {0,1,2,3,5,4}; Tahoe's native AttachContext uses this table too.
+    constexpr uint8_t map[] = {0, 1, 2, 3, 5, 4};
     return rawClass < sizeof(map) ? map[rawClass] : 0xFFU;
 }
 
