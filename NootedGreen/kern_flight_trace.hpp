@@ -151,6 +151,92 @@ inline PreparedPhysicalCacheSample observePreparedPhysicalCache(uint64_t descrip
     result.flags=15U;result.reason="prepared-cpu-page";
     return result; // Pair equality is not atomicity, IOVA or GPU-fetch proof.
 }
+// Qualified native wrapper layouts only. No virtual method is invoked.
+struct PreparedDescriptorGraphAuthority {
+    PreparedPhysicalCacheAuthority general{};
+    uint64_t multiMethod=0,subMethod=0,lengthMethod=0;
+    bool exactLayout=false;
+};
+struct PreparedDescriptorNode {
+    uint64_t descriptor=0,table=0,method=0,length=0,link=0,base=0,child=0,childOffset=0;
+    uint32_t count=0;
+    bool same(const PreparedDescriptorNode& b) const {
+        return descriptor==b.descriptor && table==b.table && method==b.method && length==b.length &&
+            link==b.link && base==b.base && child==b.child && childOffset==b.childOffset && count==b.count;
+    }
+};
+template<class Read,class Live>
+inline PreparedPhysicalCacheSample observePreparedDescriptorCache(uint64_t descriptor,uint64_t offset,
+    const PreparedDescriptorGraphAuthority& authority,Read&& read,Live&& live) {
+    PreparedPhysicalCacheSample result{};result.reason="graph-authority";
+    if(!authority.exactLayout || !authority.general.exactLayout ||
+       !canonicalKernelObject(authority.multiMethod) || !canonicalKernelObject(authority.subMethod) ||
+       !canonicalKernelObject(authority.lengthMethod) || !live())return result;
+    const auto fetch=[&](uint64_t at,void* out,uint32_t bytes) {
+        return at && bytes && at<=UINT64_MAX-bytes && live() && read(at,out,bytes) && live();
+    };
+    const auto length=[&](uint64_t object,uint64_t& table,uint64_t& bytes) {
+        uint64_t getter=0;
+        return canonicalKernelObject(object) && object<=UINT64_MAX-0x70U && fetch(object,&table,8) &&
+            canonicalKernelObject(table) && table<=UINT64_MAX-0x1d0U && fetch(table+0x1c8U,&getter,8) &&
+            getter==authority.lengthMethod && fetch(object+0x50U,&bytes,8) && bytes && bytes<=UINT64_C(4)*1024*1024;
+    };
+    const auto capture=[&](uint64_t object,uint64_t at,PreparedDescriptorNode& node) {
+        node.descriptor=object;result.reason="graph-length";
+        if(!length(object,node.table,node.length) || at>=node.length)return false;
+        result.reason="graph-method";
+        if(!fetch(node.table+0x138U,&node.method,8))return false;
+        if(node.method==authority.general.physicalMethod)return true;
+        if(node.method!=authority.multiMethod && node.method!=authority.subMethod)return false;
+        result.reason="graph-link";
+        if(!fetch(object+0x60U,&node.link,8) || !canonicalKernelObject(node.link))return false;
+        if(node.method==authority.subMethod) {
+            uint64_t parentTable=0,parentBytes=0;
+            result.reason="graph-subrange";
+            if(!fetch(object+0x68U,&node.base,8) || !length(node.link,parentTable,parentBytes) ||
+               node.base>parentBytes || node.length>parentBytes-node.base)return false;
+            node.child=node.link;node.childOffset=node.base+at;return true;
+        }
+        result.reason="graph-child-count";
+        if(!fetch(object+0x68U,&node.count,4) || !node.count || node.count>64U ||
+           node.link>UINT64_MAX-uint64_t(node.count)*8U)return false;
+        uint64_t total=0;
+        result.reason="graph-child-layout";
+        for(uint32_t i=0;i<node.count;++i) {
+            uint64_t child=0,table=0,bytes=0;
+            if(!fetch(node.link+uint64_t(i)*8U,&child,8) || child==object || !length(child,table,bytes) ||
+               bytes>node.length || total>node.length-bytes)return false;
+            if(at>=total && at-total<bytes){node.child=child;node.childOffset=at-total;}
+            total+=bytes;
+        }
+        return total==node.length && node.child;
+    };
+    PreparedDescriptorNode path[4]{};uint64_t offsets[4]{};
+    uint64_t current=descriptor,at=offset,remaining=UINT64_MAX;uint32_t count=0;
+    while(count<4U) {
+        result.reason="graph-cycle";
+        for(uint32_t i=0;i<count;++i)if(path[i].descriptor==current)return result;
+        auto& node=path[count];offsets[count]=at;
+        if(!capture(current,at,node))return result;
+        if(remaining>node.length-at)remaining=node.length-at;
+        ++count;
+        if(node.method==authority.general.physicalMethod) {
+            result=observePreparedPhysicalCache(current,at,authority.general,read,live);
+            if(result.flags!=15U)return result;
+            // Exact selected path/effective offsets are compared, not a hash
+            // of unrelated children; this remains a non-atomic CPU sample.
+            for(uint32_t i=0;i<count;++i) {
+                PreparedDescriptorNode after{};
+                if(!capture(path[i].descriptor,offsets[i],after)) {result.flags=0;result.bytes=0;return result;}
+                if(!path[i].same(after)){result.flags=0;result.bytes=0;result.reason="graph-unstable";return result;}
+            }
+            if(result.bytes>remaining)result.bytes=remaining;
+            result.reason="prepared-graph-page";return result;
+        }
+        current=node.child;at=node.childOffset;
+    }
+    result.reason="graph-depth";return result;
+}
 struct PreparedResourceAuthority {
     uint64_t mapTable=0,memoryTable=0,accelerator=0,task=0;
 };

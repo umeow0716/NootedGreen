@@ -647,6 +647,62 @@ int main() {
     }
     r=a.run(8192);assert(r.flags==0 && std::strcmp(r.reason,"descriptor-offset")==0 && rejected==16);
     r=a.run();assert(r.options==0x10 && r.wired==1 && r.descriptorBytes==8192 && r.cacheBytes==120 && r.pages==4 && r.blocks==1);
+    const uint64_t root=Image::d+0x200,table=Image::v+0x200,list=Image::e+0x200;
+    const uint64_t multi=0xffff800000900200ULL,sub=0xffff800000900300ULL,getLength=0xffff800000900400ULL;
+    PreparedDescriptorGraphAuthority graph{a.authority,multi,sub,getLength,true};
+    const auto setup=[&](Image& image,bool isSub) {
+        image.set(Image::v+0x1c8,getLength);image.set(table+0x1c8,getLength);
+        image.set(root,table);image.set(table+0x138,isSub?sub:multi);
+        image.set(root+0x50,uint64_t(isSub?4096:8192));
+        image.set(root+0x60,isSub?Image::d:list);
+        if(isSub)image.set(root+0x68,uint64_t(4096));
+        else {image.set(root+0x68,uint32_t(1));image.set(list,Image::d);}
+    };
+    const auto runGraph=[&](Image& image,uint64_t at=0) {
+        return observePreparedDescriptorCache(root,at,graph,
+            [&](uint64_t address,void* out,uint32_t bytes){return image.read(address,out,bytes);},
+            [&](){return image.alive;});
+    };
+    Image m;setup(m,false);r=runGraph(m,37);assert(r.flags==15 && r.physical==0x12345025 && r.bytes==4059);
+    Image s;setup(s,true);r=runGraph(s);assert(r.flags==15 && r.physical==0x12346000 && r.bytes==4096);
+    Image siblings;setup(siblings,false);siblings.set(root+0x50,uint64_t(16384));
+    siblings.set(root+0x68,uint32_t(2));siblings.set(list+8,Image::d);
+    r=runGraph(siblings,8192);assert(r.flags==15 && r.physical==0x12345000);
+    Image nested;setup(nested,true);nested.set(root+0x68,uint64_t(0));
+    for(unsigned i=1;i<=3;++i) {
+        const uint64_t at=root+uint64_t(i)*0x100;
+        nested.set(at,table);nested.set(at+0x50,uint64_t(4096));nested.set(at+0x68,uint64_t(0));
+        nested.set(at+0x60,Image::d);
+    }
+    nested.set(root+0x60,root+0x100);nested.set(root+0x100+0x60,root+0x200);
+    r=runGraph(nested);assert(r.flags==15);
+    nested.set(root+0x200+0x60,root+0x300);
+    r=runGraph(nested);assert(r.flags==0 && std::strcmp(r.reason,"graph-depth")==0);
+    Image partial;setup(partial,true);partial.set(root+0x50,uint64_t(17));
+    r=runGraph(partial,3);assert(r.flags==15 && r.bytes==14 && r.physical==0x12346003);
+    for(unsigned test=0;test<10;++test) {
+        Image bad;setup(bad,false);
+        switch(test) {
+        case 0:bad.set(table+0x138,uint64_t(0xffff800000999000ULL));break;
+        case 1:bad.set(table+0x1c8,uint64_t(0));break;
+        case 2:bad.set(root+0x68,uint32_t(65));break;
+        case 3:bad.set(root+0x68,uint32_t(0));break;
+        case 4:bad.set(list,uint64_t(0));break;
+        case 5:bad.set(root+0x50,uint64_t(4096));break;
+        case 6:bad.set(list,root);break;
+        case 7:setup(bad,true);bad.set(root+0x68,UINT64_MAX);break;
+        case 8:setup(bad,true);bad.set(root+0x60,root);break;
+        case 9:bad.set(Image::v+0x1c8,uint64_t(0));break;
+        }
+        assert(runGraph(bad).flags==0);
+    }
+    Image unstable;setup(unstable,true);bool changed=false;
+    r=observePreparedDescriptorCache(root,0,graph,[&](uint64_t address,void* out,uint32_t bytes) {
+        const bool ok=unstable.read(address,out,bytes);
+        if(address==Image::p+56 && !changed){unstable.set(root+0x68,uint64_t(0));changed=true;}
+        return ok;
+    },[&](){return unstable.alive;});
+    assert(changed && r.flags==0 && r.bytes==0 && std::strcmp(r.reason,"graph-unstable")==0);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='ngreen-prepared-physical-cache-') as directory:
@@ -655,4 +711,4 @@ with tempfile.TemporaryDirectory(prefix='ngreen-prepared-physical-cache-') as di
     subprocess.run(['clang++','-std=c++14','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
                     '-I',str(root),str(task/'test.cpp'),'-o',str(task/'test')],check=True,capture_output=True,timeout=30)
     subprocess.run([str(task/'test')],check=True,capture_output=True,timeout=10)
-print('PASS actual prepared physical-cache reader: internal/multiple/external blocks, partial-page and17 refusal cases; owned CPU fixtures only')
+print('PASS actual prepared physical-cache reader plus exact-length Multi/Sub selected-path graph: nested/sibling/partial/depth/cycle/foreign/overflow/unstable tests; owned CPU fixtures only')
