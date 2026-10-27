@@ -20743,6 +20743,30 @@ int main() {
             0x7a000004,0x001010a0,0,0,0,0,0x7a000004,0x0000089c,0,0,0,0
         }};
         HeapAddresses heap{0x40a6e000,0x40a6c000,0x40a6d000,1};
+        {
+            // Independent Gen12 DW1 bitfields from pinned Intel MHW header.
+            struct Flags {
+                uint32_t reserved0:2,state:1,constant:1,vf:1,dc:1,reserved6:1,flush:1,
+                    reserved8:2,texture:1,instruction:1,render:1,reserved13:7,cs:1,reserved21:11;
+            };
+            static_assert(sizeof(Flags)==4,"Gen12 PIPE_CONTROL flags extent");
+            Flags expected{};expected.state=expected.constant=expected.vf=expected.dc=expected.flush=1;
+            expected.texture=expected.instruction=expected.render=expected.cs=1;
+            uint32_t raw=0;std::memcpy(&raw,&expected,4);
+            std::array<uint32_t,6> packet{};
+            using Mode=NgreenChecksumGen12::ReadInvalidateMode;
+            assert(NgreenChecksumGen12::writePostSbaReadInvalidate(packet.data(),packet.size(),Mode::Gen12Default));
+            assert(packet[0]==0x7a000004 && packet[1]==raw && !(packet[1]&0xc000U));
+            for(unsigned i=2;i<6;++i)assert(!packet[i]);
+            expected.constant=0;std::memcpy(&raw,&expected,4);
+            assert(NgreenChecksumGen12::writePostSbaReadInvalidate(packet.data(),6,Mode::Gen12HdcConstantWa));
+            assert(packet[0]==0x7a000204 && packet[1]==raw);
+            const auto saved=packet;
+            for(auto mode:{Mode::Unqualified,static_cast<Mode>(255)})
+                assert(!NgreenChecksumGen12::writePostSbaReadInvalidate(packet.data(),6,mode) && packet==saved);
+            assert(!NgreenChecksumGen12::writePostSbaReadInvalidate(packet.data(),5,Mode::Gen12Default) && packet==saved);
+            assert(!NgreenChecksumGen12::writePostSbaReadInvalidate(nullptr,6,Mode::Gen12Default));
+        }
         std::array<uint32_t,78> output{};
         assert(build1080Batch(input,heap,output).ok);
         assert(!output[0] && !output[1] && !output[2] && output[10]==0x61010014);

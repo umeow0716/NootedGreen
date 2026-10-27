@@ -13,6 +13,23 @@ constexpr uint32_t profile=1,nativeBodyWords=72,producedBodyWords=78,nativeEndRe
 constexpr uint32_t legacyStreamWords=nativeBodyWords+nativeEndReserveWords;
 constexpr uint32_t reservedStreamWords=producedBodyWords+nativeEndReserveWords;
 constexpr uint32_t shaderBytes=1576,reservationWords=6;
+// Reviewed Gen12 PIPE_CONTROL fields, not a mapping/submission authority.
+// The caller must qualify its platform/WA mode; unknown modes fail closed.
+enum class ReadInvalidateMode : uint32_t {Unqualified,Gen12Default,Gen12HdcConstantWa};
+inline bool writePostSbaReadInvalidate(volatile uint32_t* output,size_t words,ReadInvalidateMode mode) noexcept {
+    if(!output || words!=6 || (reinterpret_cast<uintptr_t>(output)&3U) ||
+       reinterpret_cast<uintptr_t>(output)>UINTPTR_MAX-24 ||
+       (mode!=ReadInvalidateMode::Gen12Default && mode!=ReadInvalidateMode::Gen12HdcConstantWa))return false;
+    // Preserve the native write-flush/CS-stall companion bits; add read-cache
+    // invalidation after SBA. No post-sync write/address is programmed.
+    constexpr uint32_t nativeWriteFlush=0x001010a0U;
+    constexpr uint32_t state=1U<<2,constant=1U<<3,vf=1U<<4,texture=1U<<10,instruction=1U<<11;
+    const bool hdc=mode==ReadInvalidateMode::Gen12HdcConstantWa;
+    output[0]=0x7a000004U|(hdc?1U<<9:0U);
+    output[1]=nativeWriteFlush|state|vf|texture|instruction|(hdc?0U:constant);
+    for(unsigned i=2;i<6;++i)output[i]=0;
+    return true;
+}
 // Nativeae2e's three64-byte surface states begin at SSH+40/+80/+c0.
 // Gen9 and Gen12 SURFACE_STATE DW1 retain MOCS bits24..30. Native writes
 // Apple input encoded4e(index39=WB/WB) and output2a(index21=UC/UC);
