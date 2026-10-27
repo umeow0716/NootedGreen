@@ -525,7 +525,7 @@ public:
         if(stage_!=Stage::Done || !callbacksComplete() || !live() || !geometry() || !capture(token,buffer,true) ||
            !preparedSide_ || preparedSide_>UINTPTR_MAX-144 || buffer.side!=preparedSide_+144 ||
            !outsideInputs(preparedSide_,144))return 1;
-        std::array<uint8_t,312> bodyA{},bodyB{};std::array<uint8_t,144> sideA{},sideB{};
+        std::array<uint8_t,NgreenChecksumGen12::producedBodyWords*4> bodyA{},bodyB{};std::array<uint8_t,144> sideA{},sideB{};
         if(!read_(buffer.body,bodyA.data(),bodyA.size()) || !read_(preparedSide_,sideA.data(),sideA.size()) || !live())return 8;
         const auto result=observePreparedHeapBytes(identity_.context,read_,[&]() noexcept {
             return stage_==Stage::Done && live() && geometry();

@@ -223,6 +223,7 @@ static bool gVfMediaPublicationRouteReady = false;
 // Set only by the completed checksum post-relocation/end integration. The
 // AVC route alone must not advertise this independent auxiliary capability.
 static bool gVfChecksumPublicationRouteReady = false;
+static NgreenChecksumGen12::ReadInvalidateMode gVfChecksumReadInvalidateMode = NgreenChecksumGen12::ReadInvalidateMode::Unqualified;
 static bool gVfChecksumNativeBindingsQualified = false;
 static mach_vm_address_t gVfChecksumMainVtable = 0;
 static mach_vm_address_t gVfChecksumBindCallers[3] {};
@@ -3553,6 +3554,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			patcher.clearError();
 		}
 		const uint32_t gpuDevice = NGreen::callback->getOriginalDeviceId();
+        gVfChecksumReadInvalidateMode=NgreenChecksumGen12::readInvalidateModeForDevice(gpuDevice);
 		gVfUsesMemoryIrq = vfActive &&
 			NGGpuCapabilities::hasIovMemoryIrq(gpuDevice);
 		const bool tglGeneration = NGGpuCapabilities::isTigerLake(gpuDevice);
@@ -3795,7 +3797,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                 // independent selector4 client still prepares its owned program,
                 // paired callbacks and retained input before dispatch. Every
                 // submitted stream is requalified by vfChecksumEnd below.
-                gVfChecksumPublicationRouteReady=checksumEndQualified && gVfChecksumNativeBindingsQualified &&
+                gVfChecksumPublicationRouteReady=gVfChecksumReadInvalidateMode==NgreenChecksumGen12::ReadInvalidateMode::Gen12Default &&
+                    checksumEndQualified && gVfChecksumNativeBindingsQualified &&
                     gVfChecksumMainVtable==mainTable+16 && this->oVfChecksumEnd==videoEnd;
                 OSSynchronizeIO();
                 SYSLOG("ngreen","Checksum Main end route bound=%u ready=%u",checksumEndQualified?1U:0U,
@@ -3831,7 +3834,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
                     SYSLOG("ngreen","V398: qualified native descriptor graph and task leaves armed=%u",
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
-                    SYSLOG("ngreen","V399: checksum CPU candidate and unchanged cancellation armed=%u",
+                    SYSLOG("ngreen","V400: qualified checksum cache ordering and unchanged cancellation armed=%u",
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
                 }
 				const auto batchSubmit=patcher.solveSymbol(index,
@@ -7444,6 +7447,7 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
     NgreenChecksumGen12::HeapAddresses heaps{};
     if(!entry->checksumHeaps.copyObservedHeaps(reinterpret_cast<uintptr_t>(entry->task),
         reinterpret_cast<uintptr_t>(entry->shared),heaps)) {refuse("heap-receipt");return;}
+    heaps.cacheMode=gVfChecksumReadInvalidateMode;
     if(!entry->checksumSurfaces.admitted()) {
         SYSLOG("ngreen","V392: checksum surface admission refused count=%u failed=%u queued=0 stamp-advanced=0",
             entry->checksumSurfaces.count,entry->checksumSurfaces.failed?1U:0U);
@@ -7484,7 +7488,8 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
                     entry->checksumHeaps.copyObservedHeaps(reinterpret_cast<uintptr_t>(entry->task),
                         reinterpret_cast<uintptr_t>(entry->shared),observed) &&
                     observed.surface==heaps.surface && observed.dynamic==heaps.dynamic &&
-                    observed.instruction==heaps.instruction && observed.kernelSlot==heaps.kernelSlot;
+                    observed.instruction==heaps.instruction && observed.kernelSlot==heaps.kernelSlot &&
+                    gVfChecksumReadInvalidateMode==heaps.cacheMode;
                 if(!stable)return false;
                 for(unsigned i=0;i<3;++i)if(entry->checksumSurfaces.resources[i]!=surfaceResources[i] ||
                     entry->checksumSurfaces.gpu[i]!=surfaceGpu[i] || entry->checksumSurfaces.pitch[i]!=surfacePitch[i] ||
@@ -7503,14 +7508,16 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
                 ticket+1,candidate.flags,candidate.reason);
             if((candidate.flags==31 || candidate.flags==15) && unchanged()) {
                 // Kind35 is a CPU candidate, NEVER native publication or GPU ACK.
-                uint32_t packet[176]{};
-                packet[0]=1;packet[1]=candidate.flags;packet[2]=ticket+1;packet[3]=packet[5]=80;
-                packet[4]=candidate.flags==31?80U:0U;packet[15]=candidate.flags==31?0U:1U;
+                uint32_t packet[16+2*NgreenChecksumGen12::reservedStreamWords]{};
+                packet[0]=2;packet[1]=candidate.flags;packet[2]=ticket+1;
+                packet[3]=packet[5]=NgreenChecksumGen12::reservedStreamWords;
+                packet[4]=candidate.flags==31?NgreenChecksumGen12::reservedStreamWords:0U;packet[15]=candidate.flags==31?0U:1U;
                 packet[6]=static_cast<uint32_t>(span.availableWords);packet[7]=static_cast<uint32_t>(span.reservedWords);
                 packet[8]=uint32_t(heaps.surface);packet[9]=uint32_t(heaps.surface>>32);
                 packet[10]=uint32_t(heaps.dynamic);packet[11]=uint32_t(heaps.dynamic>>32);
                 packet[12]=uint32_t(heaps.instruction);packet[13]=uint32_t(heaps.instruction>>32);packet[14]=heaps.kernelSlot;
-                for(unsigned i=0;i<80;++i){packet[16+i]=scratch->source[i];if(candidate.flags==31)packet[96+i]=scratch->produced[i];}
+                for(unsigned i=0;i<NgreenChecksumGen12::reservedStreamWords;++i){packet[16+i]=scratch->source[i];
+                    if(candidate.flags==31)packet[16+NgreenChecksumGen12::reservedStreamWords+i]=scratch->produced[i];}
                 if(unchanged())vfFlightRecord(35,group,span.gpuBase+span.offset,packet,arrsize(packet));
             }
         }
@@ -7544,7 +7551,7 @@ void Gen11::vfChecksumEnd(void *that,void *stream)
             !entry->checksumHeaps.copyObservedHeaps(reinterpret_cast<uintptr_t>(entry->task),
                 reinterpret_cast<uintptr_t>(entry->shared),observed) ||
             observed.surface!=heaps.surface || observed.dynamic!=heaps.dynamic || observed.instruction!=heaps.instruction ||
-            observed.kernelSlot!=heaps.kernelSlot)return false;
+            observed.kernelSlot!=heaps.kernelSlot || gVfChecksumReadInvalidateMode!=heaps.cacheMode)return false;
         if(!entry->checksumSurfaces.admitted())return false;
         for(unsigned i=0;i<3;++i)
             if(entry->checksumSurfaces.resources[i]!=surfaceResources[i] || entry->checksumSurfaces.gpu[i]!=surfaceGpu[i] ||

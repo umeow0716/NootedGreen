@@ -246,7 +246,7 @@ def decode_heap_lines(lines):
         key=(pid,thread,(begin or data or end).group(1))
         if key not in groups:
             if len(groups)>=8:raise ValueError('heap group budget')
-            groups[key]={'begin':False,'end':None,'blocks':{}}
+            groups[key]={'begin':False,'end':None,'blocks':{},'totals':dict(totals)}
         g=groups[key]
         if begin:
             if g['begin'] or g['blocks'] or g['end'] is not None:raise ValueError('duplicate/late heap begin')
@@ -258,7 +258,10 @@ def decode_heap_lines(lines):
             if not g['begin'] or g['end'] is not None:raise ValueError('heap data outside source interval')
             _,role,copy,offset,count,total,encoded=data.groups()
             role,copy,offset,count,total=map(int,(role,copy,offset,count,total))
-            if (total!=totals[role] or offset%128 or offset>=total or
+            if role==4 and total in (312,336):
+                if any(k[0]==4 for k in g['blocks']) and g['totals'][4]!=total:raise ValueError('mixed command profile extent')
+                g['totals'][4]=total
+            if (total!=g['totals'][role] or offset%128 or offset>=total or
                     count!=min(128,total-offset) or len(encoded)!=count*2):raise ValueError('heap block extent')
             slot=(role,copy,offset)
             if slot in g['blocks']:raise ValueError('duplicate heap block')
@@ -268,7 +271,7 @@ def decode_heap_lines(lines):
     for (pid,thread,sequence),g in groups.items():
         if not g['begin'] or g['end']!=0:raise ValueError('heap group incomplete/refused')
         heaps={}
-        for role,total in totals.items():
+        for role,total in g['totals'].items():
             copies=[]
             for copy in (0,1):
                 chunks=[g['blocks'].get((role,copy,offset)) for offset in range(0,total,128)]
@@ -490,12 +493,14 @@ def audit_heap_log(path,output,kernel_records=None):
                   'idd0':list(struct.unpack_from('<8I',heaps[1],0)),
                   'idd1':list(struct.unpack_from('<8I',heaps[1],64)),
                   'curbe':list(struct.unpack_from('<16I',heaps[1],1024))}
-            command_words=list(struct.unpack('<78I',heaps[4]))
+            command_words=list(struct.unpack('<'+str(len(heaps[4])//4)+'I',heaps[4]))
+            marker=([0x4e474352,1,72,78,1,1576] if len(command_words)==78 else
+                    [0x4e474352,2,72,84,1,1576]+[0]*6)
             item['command_capture']={
                 'scope':'NATIVE_PRE_KMD_SOURCE_NOT_ACTUAL_GEN12_PUBLICATION',
                 'captured_words':len(command_words),'native_body_words':72,
                 'reservation_words':command_words[72:],
-                'exact_reservation':command_words[72:]==[0x4e474352,1,72,78,1,1576],
+                'exact_reservation':command_words[72:]==marker,
                 'native_sba_header':f'{command_words[10]:08x}',
                 'initial_pipe_control_flags':f'{command_words[4]:08x}',
                 'actual_post_relocation_commands_proven':False}

@@ -9,13 +9,18 @@
 // Exact captured 1080p FrameChecksum shape only; other auxiliary kernels and
 // walker geometries are not silently accepted.
 namespace NgreenChecksumGen12 {
-constexpr uint32_t profile=1,nativeBodyWords=72,producedBodyWords=78,nativeEndReserveWords=2;
+constexpr uint32_t profile=2,nativeBodyWords=72,producedBodyWords=84,nativeEndReserveWords=2;
 constexpr uint32_t legacyStreamWords=nativeBodyWords+nativeEndReserveWords;
 constexpr uint32_t reservedStreamWords=producedBodyWords+nativeEndReserveWords;
-constexpr uint32_t shaderBytes=1576,reservationWords=6;
+constexpr uint32_t shaderBytes=1576,reservationWords=12;
 // Reviewed Gen12 PIPE_CONTROL fields, not a mapping/submission authority.
 // The caller must qualify its platform/WA mode; unknown modes fail closed.
 enum class ReadInvalidateMode : uint32_t {Unqualified,Gen12Default,Gen12HdcConstantWa};
+inline ReadInvalidateMode readInvalidateModeForDevice(uint32_t device) noexcept {
+    // Pinned i915 A7A8 -> RPL-P/adl_p_info and reviewed Intel ADL-P/TGL WA
+    // initialization. Other devices need a separately reviewed qualification.
+    return device==0xa7a8U?ReadInvalidateMode::Gen12Default:ReadInvalidateMode::Unqualified;
+}
 inline bool writePostSbaReadInvalidate(volatile uint32_t* output,size_t words,ReadInvalidateMode mode) noexcept {
     if(!output || words!=6 || (reinterpret_cast<uintptr_t>(output)&3U) ||
        reinterpret_cast<uintptr_t>(output)>UINTPTR_MAX-24 ||
@@ -153,6 +158,7 @@ static_assert(sizeof(NativeSshMapPair)==296U*4U && sizeof(NativeSshMapPagePair)=
 struct HeapAddresses {
     uint64_t surface=0,dynamic=0,instruction=0;
     uint32_t kernelSlot=0;
+    ReadInvalidateMode cacheMode=ReadInvalidateMode::Unqualified;
 };
 // Opaque scalars copied from the THREE original bind_resource returns.
 // This is not a resource retain, lock, epoch proof or permission to dereference
@@ -267,12 +273,12 @@ inline bool checksumObservedSurfaceRanges(const NativeSshMapPagePair& pair,
 struct Result {bool ok=false;const char* reason="shape";};
 inline Result build1080Batch(const uint32_t* source,size_t words,const HeapAddresses& heap,
     volatile uint32_t* output,size_t capacity) noexcept {
-    if(!source || !output || words!=72 || capacity<78)return {false,"extent"};
+    if(!source || !output || words!=nativeBodyWords || capacity<producedBodyWords)return {false,"extent"};
     const uintptr_t inputAddress=reinterpret_cast<uintptr_t>(source);
     const uintptr_t outputAddress=reinterpret_cast<uintptr_t>(output);
     if((inputAddress&3U) || (outputAddress&3U) || inputAddress>UINTPTR_MAX-288 ||
-        outputAddress>UINTPTR_MAX-312 ||
-        !(inputAddress+288<=outputAddress || outputAddress+312<=inputAddress))return {false,"alias"};
+        outputAddress>UINTPTR_MAX-producedBodyWords*4 ||
+        !(inputAddress+288<=outputAddress || outputAddress+producedBodyWords*4<=inputAddress))return {false,"alias"};
     // Exact 1080p native FrameChecksum schema. Other dispatch shapes are not
     // silently generalized from a single observed media-walker grid.
     static constexpr uint32_t shape[72]={
@@ -301,10 +307,12 @@ inline Result build1080Batch(const uint32_t* source,size_t words,const HeapAddre
         if(i==21)expected=uint32_t(heap.instruction>>32);
         if(source[i]!=expected)return {false,"native-batch-shape"};
     }
-    uint32_t candidate[78];
+    if(heap.cacheMode!=ReadInvalidateMode::Gen12Default)return {false,"cache-platform"};
+    uint32_t candidate[producedBodyWords];
     for(size_t i=0;i<26;++i)candidate[i]=source[i];
     for(size_t i=26;i<32;++i)candidate[i]=0;
-    for(size_t i=26;i<size_t(72);++i)candidate[i+6]=source[i];
+    if(!writePostSbaReadInvalidate(candidate+32,6,heap.cacheMode))return {false,"cache-barrier"};
+    for(size_t i=26;i<size_t(72);++i)candidate[i+12]=source[i];
     // 1c1b emits an unbound register-zero LRI. Gen12's qualified media
     // PIPELINE_SELECT follows the PIPE_CONTROL; no legacy LRI is retained.
     candidate[0]=candidate[1]=candidate[2]=0; // MI_NOOP, preserves SBA word offset 10.
@@ -318,12 +326,12 @@ inline Result build1080Batch(const uint32_t* source,size_t words,const HeapAddre
     candidate[13]=0xc000U|((cache&0x7fU)<<16);
     // Gen9 reserved bit 6 becomes Gen12 FusedEuDispatch. Intel's Gen12
     // legacy/non-fused mode is ONE, not the source packet's reserved zero.
-    candidate[35]|=0x40U;
+    candidate[41]|=0x40U;
     // Native2c566 appends code and descriptors, rather than replacing code
     // that a GPU could already have fetched. Its descriptor stride is 64B.
     // Load the appended slot into hardware ID0; the walker stays at ID0.
-    candidate[48]=0x40U;
-    for(size_t i=0;i<78;++i)output[i]=candidate[i];
+    candidate[54]=0x40U;
+    for(size_t i=0;i<producedBodyWords;++i)output[i]=candidate[i];
     return {true,"produced"};
 }
 struct CandidateObservation {

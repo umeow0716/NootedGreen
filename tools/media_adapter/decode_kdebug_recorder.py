@@ -50,26 +50,31 @@ CHECKSUM_NATIVE_SHAPE=(
 
 
 def checksum_candidate_expected(words):
-    if (len(words)!=176 or words[0]!=1 or words[1] not in (15,31) or words[2] not in (1,2) or
-        words[3]!=80 or words[5]!=80 or not 80<=words[7]<=words[6]<=16384 or words[14]!=1 or
-        (words[4],words[15])!=((80,0) if words[1]==31 else (0,1))):
+    if len(words)<16 or words[0] not in (1,2):raise ValueError('checksum candidate version')
+    version=words[0];count=80 if version==1 else 86;body=count-2;start=16+count
+    if (len(words)!=16+2*count or words[1] not in (15,31) or words[2] not in (1,2) or
+        words[3]!=count or words[5]!=count or not count<=words[7]<=words[6]<=16384 or words[14]!=1 or
+        (words[4],words[15])!=((count,0) if words[1]==31 else (0,1))):
         raise ValueError('checksum candidate header')
     heaps=[words[i]|words[i+1]<<32 for i in (8,10,12)]
     if len(set(heaps))!=3 or any(not v or v>0xfffffffff000 or v&4095 for v in heaps):
         raise ValueError('checksum candidate heap identity')
     if words[1]==15:
-        if any(words[96:]):raise ValueError('rejected checksum candidate data')
-        return heaps # A complete pre-build source pair, NOT a valid candidate.
+        if any(words[start:]):raise ValueError('rejected checksum candidate data')
+        return heaps # Stable source only; never validate an absent candidate.
     source=list(CHECKSUM_NATIVE_SHAPE)
     for at,value in zip((14,16,20),heaps):source[at]=value&0xffffffff|1;source[at+1]=value>>32
-    if words[16:88]!=source or words[88:94]!=[0x4e474352,1,72,78,1,1576]:
+    marker=[0x4e474352,version,72,body,1,1576]+[0]*(count-80)
+    if words[16:88]!=source or words[88:start-2]!=marker:
         raise ValueError('checksum candidate native source/reservation')
-    expected=source[:26]+[0]*6+source[26:]+[0,0]
+    invalidate=[] if version==1 else [0x7a000004,0x00101cbc,0,0,0,0]
+    expected=source[:26]+[0]*6+invalidate+source[26:]+[0,0]
     expected[:3]=[0,0,0];expected[10]=0x61010014;expected[11]|=6<<4
     for at in (14,16,18,20):expected[at]|=6<<4
-    expected[13]=0x6c000;expected[35]|=0x40;expected[48]=0x40
-    if words[96:]!=expected:raise ValueError('checksum candidate producer mismatch')
+    expected[13]=0x6c000;expected[35+len(invalidate)]|=0x40;expected[48+len(invalidate)]=0x40
+    if words[start:]!=expected:raise ValueError('checksum candidate producer mismatch')
     return heaps
+
 RESOURCE_SLOTS = {
     1: (1, 4, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 52, 55, 58, 62, 65, 68),
     2: (1, 4, 7, 10, 13, 16, 52, 55, 58, 62, 65)+tuple(range(19, 50, 2)),
@@ -653,20 +658,20 @@ def prepared_resource_coverage(rows, leaf_rows=()):
 def checksum_candidate_coverage(rows):
     captures=[];seen=set()
     for group,metadata,payload in rows:
-        if len(captures)>=2 or len(payload)!=704:raise ValueError('checksum candidate record budget/extent')
-        words=list(struct.unpack('<176I',payload));heaps=checksum_candidate_expected(words)
+        if len(captures)>=2 or len(payload) not in (704,752):raise ValueError('checksum candidate record budget/extent')
+        words=list(struct.unpack('<'+str(len(payload)//4)+'I',payload));heaps=checksum_candidate_expected(words)
         key=(group,words[2])
         identity=metadata.get('identity','')
         if (key in seen or type(group) is not int or group<=0 or type(metadata.get('thread')) is not int or
             metadata['thread']<=0 or metadata.get('group')!=group or metadata.get('kind')!=35 or
-            metadata.get('word_count')!=176 or not re.fullmatch('[0-9a-f]{16}',identity) or
+            metadata.get('word_count')!=len(words) or not re.fullmatch('[0-9a-f]{16}',identity) or
             not 0<int(identity,16)<(1<<48) or int(identity,16)&3):raise ValueError('checksum candidate scope/duplicate')
         seen.add(key)
         captures.append({'group':group,'ticket':words[2],'thread':metadata['thread'],'identity':identity,
-            'source_words':80,'candidate_words':words[4],'heaps':[f'{v:x}' for v in heaps],
+            'source_words':words[3],'candidate_words':words[4],'heaps':[f'{v:x}' for v in heaps],
             'source_scope':'TASK_BOUND_PRE_BUILD_CPU_SOURCE_PAIR',
             'candidate_scope':'OWNED_SCRATCH_ONLY' if words[1]==31 else 'UNAVAILABLE_NOT_VALIDATED'})
-    return {'captures':captures,'complete_candidates':sum(c['candidate_words']==80 for c in captures),'scope_error':None,
+    return {'captures':captures,'complete_candidates':sum(c['candidate_words']==c['source_words'] for c in captures),'scope_error':None,
         'native_command_writes':0,'native_end_called':False,'atomic_snapshot':False,
         'actual_publication_proven':False,'gpu_execution_proof':False}
 

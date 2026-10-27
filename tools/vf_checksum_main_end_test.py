@@ -92,7 +92,7 @@ def test_qualification(root):
 
 def test_readiness(root):
     source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
-    start=source.index('gVfChecksumPublicationRouteReady=checksumEndQualified')
+    start=source.index('gVfChecksumPublicationRouteReady=gVfChecksumReadInvalidateMode')
     install=source[start:source.index(';',start)+1].replace('this->','owner.')
     start=source.index('static IOReturn vfReadOwnedChecksumPublication(')
     start=source.index('\tif (gVfIdentity==VfIdentity::Virtual',start)
@@ -103,6 +103,8 @@ def test_readiness(root):
 #include <cstring>
 #include <cstdio>
 #include "NootedGreen/kern_vf_device_observation.hpp"
+#include "NootedGreen/kern_checksum_gen12_commands.hpp"
+NgreenChecksumGen12::ReadInvalidateMode gVfChecksumReadInvalidateMode=NgreenChecksumGen12::ReadInvalidateMode::Gen12Default;
 using UInt32=uint32_t;
 enum class VfIdentity {Virtual,Physical};
 bool checksumEndQualified=true,gVfChecksumPublicationRouteReady=true,gVfChecksumNativeBindingsQualified=true;
@@ -122,7 +124,8 @@ bool installed(){
 return reply.flags==NGVfChecksumPublication::routeReady;
 }
 int main(){
- for(unsigned mode=0;mode<8;++mode){
+ for(unsigned mode=0;mode<9;++mode){
+  gVfChecksumReadInvalidateMode=mode==8?NgreenChecksumGen12::ReadInvalidateMode::Unqualified:NgreenChecksumGen12::ReadInvalidateMode::Gen12Default;
   checksumEndQualified=gVfChecksumNativeBindingsQualified=true;gVfChecksumMainVtable=mainTable+16;owner.oVfChecksumEnd=videoEnd;
   if(mode==1)checksumEndQualified=false;if(mode==2)gVfChecksumNativeBindingsQualified=false;
   if(mode==3)gVfChecksumMainVtable=0;if(mode==4)gVfChecksumMainVtable=mainTable+8;
@@ -186,6 +189,7 @@ def test_end(root):
      NgreenChecksumGen12::NativeHeapBindings checksumHeaps;NgreenChecksumGen12::NativeSurfaceBindings checksumSurfaces;bool translating,failed,captureCancelled;
      static constexpr uint32_t flightGroup=4;
     } entry;
+    NgreenChecksumGen12::ReadInvalidateMode gVfChecksumReadInvalidateMode=NgreenChecksumGen12::ReadInvalidateMode::Gen12Default;
     bool present=true;
     struct VfMediaSubmissionScope {
     '''
@@ -215,20 +219,20 @@ def test_end(root):
      if(mode==19 && captureCalls>=2)out.resource=reinterpret_cast<void*>(0x8000);
      return true;
     }
-    unsigned nativeCalls=0,candidateRecordsSeen=0,candidateRejected=0;uint32_t candidatePacket[176]{},rejectedPacket[176]{};
+    unsigned nativeCalls=0,candidateRecordsSeen=0,candidateRejected=0;uint32_t candidatePacket[188]{},rejectedPacket[188]{};
     bool vfFlightEnabled(){return true;}
     uint64_t cpuCopy(uint64_t from,uint64_t to,uint64_t bytes){assert(bytes==4);memcpy(reinterpret_cast<void*>(to),reinterpret_cast<void*>(from),4);return 4;}
     uintptr_t gVfBatchCpuCopy=reinterpret_cast<uintptr_t>(&cpuCopy),cpuPmap=1,*gVfCpuKernelPmapSlot=&cpuPmap,gVfCpuKernelPmapStore=1;
     bool OSCompareAndSwap(UInt32 old,UInt32 value,volatile UInt32* at){if(*at!=old)return false;*at=value;return true;}
     template<class T,size_t N>constexpr size_t arrsize(T(&)[N]){return N;}
     void vfFlightRecord(uint32_t kind,uint32_t group,uint64_t identity,const volatile uint32_t* packet,size_t count){
-     assert(kind==35 && group==4 && identity==0x60000080 && count==176 && packet[0]==1);
-     assert(packet[3]==80 && packet[5]==80 && packet[96]==0);
-     if(packet[1]==31){assert(packet[4]==80 && packet[106]==0x61010014);
-      for(unsigned i=0;i<176;++i)candidatePacket[i]=packet[i];}
+     assert(kind==35 && group==4 && identity==0x60000080 && count==188 && packet[0]==2);
+     assert(packet[3]==86 && packet[5]==86 && packet[102]==0);
+     if(packet[1]==31){assert(packet[4]==86 && packet[112]==0x61010014);
+      for(unsigned i=0;i<188;++i)candidatePacket[i]=packet[i];}
      else {assert(packet[1]==15 && packet[4]==0 && packet[15]==1);++candidateRejected;
-      for(unsigned i=96;i<176;++i)assert(!packet[i]);
-      for(unsigned i=0;i<176;++i)rejectedPacket[i]=packet[i];}
+      for(unsigned i=102;i<188;++i)assert(!packet[i]);
+      for(unsigned i=0;i<188;++i)rejectedPacket[i]=packet[i];}
      ++candidateRecordsSeen;
     }
     void nativeImpl(void*that,void*stream){assert(that==context && stream==context+0x650);++nativeCalls;}
@@ -242,7 +246,7 @@ def test_end(root):
     void setup(){
      memset(context,0,sizeof(context));memset(shared,0,sizeof(shared));memset(descriptor,0,sizeof(descriptor));
      entry={current_thread(),context,accel,task,shared,gpuTask,&scratch,{},{},false,false,false};entry.checksumHeaps.reset();
-     memcpy(commands,captured,sizeof(captured));assert(NgreenChecksumGen12::writeReservationTrailer(commands,78));commands[78]=0x1234;commands[79]=0x5678;
+     memcpy(commands,captured,sizeof(captured));assert(NgreenChecksumGen12::writeReservationTrailer(commands,84));commands[84]=0x1234;commands[85]=0x5678;
      uint64_t gpu[]={uint64_t(captured[16]&~1U)|(uint64_t(captured[17])<<32),uint64_t(captured[20]&~1U)|(uint64_t(captured[21])<<32),uint64_t(captured[14]&~1U)|(uint64_t(captured[15])<<32)};
      for(unsigned i=0;i<3;++i)assert(entry.checksumHeaps.record(i,true,0x10000+i*4096,gpu[i],4096,false,reinterpret_cast<uintptr_t>(task),reinterpret_cast<uintptr_t>(shared)));
      for(unsigned i=0;i<3;++i)assert(entry.checksumSurfaces.record(true,0x50000+i*4096,0x70000000+i*4096,1920,10+i,false));
@@ -252,7 +256,7 @@ def test_end(root):
      getMember<void*>(context,0x618)=descriptor;getMember<uint8_t>(descriptor,0x68)=1;
      getMember<uint32_t>(context,0x660)=4096;getMember<uint32_t>(context,0x6f4)=1024;
      getMember<uint32_t>(context,0x6dc)=1;getMember<void*>(context,0xfe0)=commands;getMember<void*>(context,0x708)=commands;
-     void*s=context+0x650;getMember<uint32_t>(s,0x30)=128;getMember<uint32_t>(s,0x34)=80;
+     void*s=context+0x650;getMember<uint32_t>(s,0x30)=128;getMember<uint32_t>(s,0x34)=86;
      getMember<uint32_t>(s,0x38)=36;getMember<uint8_t>(s,0x3c)=1;
      checksumCapture=false;present=mapping=args=true;gVfChecksumPublicationRouteReady=gVfChecksumNativeBindingsQualified=gVfCaptureStreamResetBound=gVfMediaPublicationAbiVerified=true;
      gVfIdentity=VfIdentity::Virtual;gVfAccelerator=accel;fakeCaller=123;captureCalls=nativeCalls=0;
@@ -314,15 +318,15 @@ def test_end(root):
      assert(panic==expectedPanic);
      bool forwarded=mode==0 || mode==48 || (mode>=1 && mode<=4) || mode==8 || mode==23;
      if(nativeCalls!=unsigned(forwarded))std::fprintf(stderr,"mode=%d calls=%u expected=%u\n",mode,nativeCalls,unsigned(forwarded));assert(nativeCalls==unsigned(forwarded));
-     if(mode==0 || mode==48){assert(commands[0]==0 && commands[10]==0x61010014);assert(commands[78]==0 && commands[79]==0);assert(!entry.failed && !entry.translating && entry.checksumHeaps.seen==0);}
+     if(mode==0 || mode==48){assert(commands[0]==0 && commands[10]==0x61010014);assert(commands[84]==0 && commands[85]==0);assert(!entry.failed && !entry.translating && entry.checksumHeaps.seen==0);}
      else if(!panic && !forwarded){assert(entry.failed);assert(!entry.captureCancelled && !entry.translating);assert(getMember<uint32_t>(s,0x34)==0 && getMember<uint8_t>(s,0x3c)==0);assert(memcmp(before.data(),commands,sizeof(commands))==0);}
      else if(mode!=20 && mode!=21)assert(memcmp(before.data(),commands,sizeof(commands))==0);
      }
      assert(candidateRecordsSeen==2 && candidateRejected==1);
      FILE* output=std::fopen("__CANDIDATE_PATH__","wb");assert(output);
-     assert(std::fwrite(candidatePacket,4,176,output)==176);assert(!std::fclose(output));
+     assert(std::fwrite(candidatePacket,4,188,output)==188);assert(!std::fclose(output));
      output=std::fopen("__CANDIDATE_PATH__.rejected","wb");assert(output);
-     assert(std::fwrite(rejectedPacket,4,176,output)==176);assert(!std::fclose(output));
+     assert(std::fwrite(rejectedPacket,4,188,output)==188);assert(!std::fclose(output));
      puts("Actual MainEnd body: 57 cases plus candidate/source-only capture; native once/unchanged commands/no submission on refusal");
     }
     '''
@@ -332,17 +336,31 @@ def test_end(root):
     subprocess.run([str(root/'checksum_end_actual')],check=True)
     sys.path.insert(0,str(ROOT/'tools/media_adapter'))
     from decode_kdebug_recorder import validate_leaf,checksum_candidate_coverage
-    payload=packet_path.read_bytes();words=list(struct.unpack('<176I',payload));validate_leaf(35,words)
-    metadata={'group':4,'thread':0x4000,'identity':'0000000060000080','kind':35,'word_count':176}
+    payload=packet_path.read_bytes();words=list(struct.unpack('<188I',payload));validate_leaf(35,words)
+    metadata={'group':4,'thread':0x4000,'identity':'0000000060000080','kind':35,'word_count':188}
     row=(4,metadata,payload)
     assert checksum_candidate_coverage([row])['complete_candidates']==1
+    # Preserve exact V399/v1 decoding; cross-version headers and extents fail closed.
+    from decode_kdebug_recorder import CHECKSUM_NATIVE_SHAPE
+    old_source=words[16:88]+[0x4e474352,1,72,78,1,1576]+[0,0]
+    old_body=old_source[:26]+[0]*6+old_source[26:72]+[0,0]
+    old_body[:3]=[0,0,0];old_body[10]=0x61010014;old_body[11]|=6<<4
+    for at in (14,16,18,20):old_body[at]|=6<<4
+    old_body[13]=0x6c000;old_body[35]|=0x40;old_body[48]=0x40
+    old_header=words[:16];old_header[0]=1;old_header[3]=old_header[4]=old_header[5]=80
+    legacy=old_header+old_source+old_body
+    validate_leaf(35,legacy)
+    for bad in (legacy[:0]+[2]+legacy[1:],words[:0]+[1]+words[1:]):
+        try:validate_leaf(35,bad)
+        except ValueError:pass
+        else:raise AssertionError('cross-version extent accepted')
     refused_payload=Path(str(packet_path)+'.rejected').read_bytes()
-    validate_leaf(35,list(struct.unpack('<176I',refused_payload)))
+    validate_leaf(35,list(struct.unpack('<188I',refused_payload)))
     refused=checksum_candidate_coverage([(4,metadata,refused_payload)])
     assert refused['complete_candidates']==0 and refused['captures'][0]['candidate_words']==0
     rejected=0
-    for index in range(176):
-        if index in (6,7,94,95):continue # bounded capacities and unsubmitted END reserve are variable.
+    for index in range(188):
+        if index in (6,7,100,101):continue # bounded capacities and unsubmitted END reserve are variable.
         bad=words.copy();bad[index]^=1
         try:validate_leaf(35,bad)
         except ValueError:rejected+=1
@@ -352,8 +370,8 @@ def test_end(root):
         try:checksum_candidate_coverage(rows)
         except ValueError:rejected+=1
         else:raise AssertionError('malformed candidate scope accepted')
-    assert rejected==177
-    print('Actual compiled candidate packet: strict decoder/172 word mutations/5 scope negatives PASS; no native publication')
+    assert rejected==189
+    print('Actual compiled candidate packet: strict decoder/184 word mutations/5 scope negatives PASS; no native publication')
 
 def test_surface_bind_returns(root):
     source=(ROOT/'NootedGreen/kern_gen11.cpp').read_text()
@@ -904,7 +922,7 @@ int main(){for(unsigned mode=0;mode<28;++mode){
     rows=rows_by_mode[0]
     negatives=[rows[1:],rows[:-1],rows[:2]+[rows[1]]+rows[2:],[rows[1],rows[0]]+rows[2:],
         [row for row in rows if struct.unpack('<16I',row[2])[2]!=5],
-        [rows[0],(4,{'thread':78,'identity':rows[1][1]['identity']},rows[1][2])]+rows[2:]]
+        [rows[0],(4,{'thread':84,'identity':rows[1][1]['identity']},rows[1][2])]+rows[2:]]
     for index,field,value in ((1,4,7),(1,7,1),(1,11,4097),(2,11,4095),(2,15,0),(0,0,2)):
         bad=list(rows);words=list(struct.unpack('<16I',bad[index][2]));words[field]=value
         if bad[index][2]==struct.pack('<16I',*words):continue
@@ -914,7 +932,7 @@ int main(){for(unsigned mode=0;mode<28;++mode){
         except ValueError:pass
         else:raise AssertionError('prepared resource corrupt scope accepted')
     leaves=leaves_by_mode[0]
-    bad_leaf_sets=[leaves[1:],leaves+[leaves[0]],[(4,{'thread':78,'identity':leaves[0][1]['identity']},leaves[0][2])]+leaves[1:]]
+    bad_leaf_sets=[leaves[1:],leaves+[leaves[0]],[(4,{'thread':84,'identity':leaves[0][1]['identity']},leaves[0][2])]+leaves[1:]]
     for field,value in ((3,1024),(4,1),(6,0),(12,4),(13,0),(15,1)):
         bad=list(leaves);words=list(struct.unpack('<16I',bad[0][2]));words[field]=value
         bad[0]=(bad[0][0],bad[0][1],struct.pack('<16I',*words));bad_leaf_sets.append(bad)

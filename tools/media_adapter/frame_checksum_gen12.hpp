@@ -65,12 +65,12 @@ static_assert(byteSize==NgreenChecksumGen12::shaderBytes,"checksum program/capab
 
 // Pure CPU producer, NOT a writable-span/owner/relocation authorization.
 // The runtime must separately hold the native checksum builder/heap leases,
-// qualify the PF cache ABI, reserve 78 words before the native builder runs,
+// qualify the PF cache ABI, reserve 84 words before the native builder runs,
 // and normalize SBA cache bits AGAIN after native KMD address relocation.
 using HeapAddresses=NgreenChecksumGen12::HeapAddresses;
 using BatchResult=NgreenChecksumGen12::Result;
 inline BatchResult build1080Batch(const std::array<uint32_t,72>& source,
-    const HeapAddresses& heap,std::array<uint32_t,78>& output) noexcept {
+    const HeapAddresses& heap,std::array<uint32_t,NgreenChecksumGen12::producedBodyWords>& output) noexcept {
     return NgreenChecksumGen12::build1080Batch(source.data(),source.size(),heap,output.data(),output.size());
 }
 // Caller must hold the original context's exclusive owner/physical epoch
