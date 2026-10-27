@@ -727,6 +727,7 @@ void decode(const char* text,std::vector<uint8_t>& out) {
 }
 struct KernelPatcher{static constexpr int KernelID=0;};
 int absent=0;bool preparedLayout=true;int observation=-1;
+const uint64_t preparedPhysical=1,preparedDma=1;
 struct Patcher {
  uintptr_t solveSymbol(int,const char* name) {
   if(std::strstr(name,"IOMulti"))return absent==1?0:reinterpret_cast<uintptr_t>(multi.data());

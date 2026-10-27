@@ -222,7 +222,10 @@ inline PreparedPhysicalCacheSample observePreparedDescriptorCache(uint64_t descr
         if(remaining>node.length-at)remaining=node.length-at;
         ++count;
         if(node.method==authority.general.physicalMethod) {
-            result=observePreparedPhysicalCache(current,at,authority.general,read,live);
+            const auto leaf=observePreparedPhysicalCache(current,at,authority.general,read,live);
+            result.physical=leaf.physical;result.bytes=leaf.bytes;result.flags=leaf.flags;
+            result.options=leaf.options;result.wired=leaf.wired;result.pages=leaf.pages;result.blocks=leaf.blocks;
+            result.descriptorBytes=leaf.descriptorBytes;result.cacheBytes=leaf.cacheBytes;result.reason=leaf.reason;
             result.graphKind=path[0].method==authority.multiMethod?2U:path[0].method==authority.subMethod?3U:1U;
             result.graphDepth=count;
             if(result.flags!=15U)return result;

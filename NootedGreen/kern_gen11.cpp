@@ -3008,7 +3008,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			gVfCpuBackingLookup=0;gVfCpuKernelPmapSlot=nullptr;
 			gVfCpuKernelPmapStore=nullptr;gVfCpuSystemMapperSlot=nullptr;
 			gVfPreparedPhysicalCacheAuthority={};
-			gVfPreparedDescriptorGraphAuthority={};
+			gVfPreparedDescriptorGraphAuthority.general.physicalMethod=0;
+			gVfPreparedDescriptorGraphAuthority.general.dmaMethod=0;
+			gVfPreparedDescriptorGraphAuthority.general.exactLayout=false;
+			gVfPreparedDescriptorGraphAuthority.multiMethod=0;
+			gVfPreparedDescriptorGraphAuthority.subMethod=0;
+			gVfPreparedDescriptorGraphAuthority.lengthMethod=0;
+			gVfPreparedDescriptorGraphAuthority.exactLayout=false;
 			gVfMediaMapAddress = gVfMediaMapLength = gVfMediaMapDescriptor = gVfMediaMapOptions = 0;
 			const auto process = patcher.solveSymbol(index,
 				"__ZN15IOAccelContext218processDataBuffersEj", address, size);
@@ -3066,8 +3072,15 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(preparedMulti),166)==UINT64_C(0xab19bbe9c756f064) &&
 				NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(preparedSub),122)==UINT64_C(0xb540de64de405942) &&
 				anchorMatches(descriptorLength,descriptorLengthBody,sizeof(descriptorLengthBody));
-			if(preparedGraphLayout)gVfPreparedDescriptorGraphAuthority={gVfPreparedPhysicalCacheAuthority,
-				preparedMulti,preparedSub,descriptorLength,true};
+			if(preparedGraphLayout) {
+				gVfPreparedDescriptorGraphAuthority.general.physicalMethod=preparedPhysical;
+				gVfPreparedDescriptorGraphAuthority.general.dmaMethod=preparedDma;
+				gVfPreparedDescriptorGraphAuthority.general.exactLayout=true;
+				gVfPreparedDescriptorGraphAuthority.multiMethod=preparedMulti;
+				gVfPreparedDescriptorGraphAuthority.subMethod=preparedSub;
+				gVfPreparedDescriptorGraphAuthority.lengthMethod=descriptorLength;
+				gVfPreparedDescriptorGraphAuthority.exactLayout=true;
+			}
 			SYSLOG("ngreen","V398: native CPU descriptor graph layout bound=%u",preparedGraphLayout?1U:0U);
 			const auto cpuLookup=patcher.solveSymbol(KernelPatcher::KernelID,"_pmap_find_phys_nofault");
 			const auto cpuFindPa=patcher.solveSymbol(KernelPatcher::KernelID,"_pmap_find_pa");
