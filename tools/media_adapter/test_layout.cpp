@@ -19148,9 +19148,12 @@ static void testRetainedVeboxFrames() {
         expectedProperty=0x15f96;
         assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Set,nativeProperty)==31 && propertyCalls==1);
         expectedProperty=0x161c3;
-        assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Query,nativeProperty)==31 && propertyCalls==2);
+        const char* propertyAdmission="unset";
+        assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Query,nativeProperty,&propertyAdmission)==31 && propertyCalls==2);
+        assert(std::strcmp(propertyAdmission,"property-invoke")==0);
         propertyQueryAnchor[16]^=1;
-        assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Query,nativeProperty)==5 && propertyCalls==2);
+        assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Query,nativeProperty,&propertyAdmission)==5 && propertyCalls==2);
+        assert(std::strcmp(propertyAdmission,"property-anchor")==0);
         propertyQueryAnchor[16]^=1;
         assert(callbacks.physicalProperties(success.ticket,0x8000,input,static_cast<PropertyOperation>(99),nativeProperty)==5 && propertyCalls==2);
         assert(callbacks.allocateBacking(success.ticket,0x8000,input,typedAllocate)==31);
@@ -20716,6 +20719,37 @@ void testPreparedChecksumHeapObservation() {
 }
 
 int main() {
+    {
+        // Actual observer: no payload reads, no partial keys on unstable input.
+        for(unsigned fault=0;fault<8;++fault) {
+            TglPhysicalPropertyObservation view;
+            std::array<uint64_t,2> header{2,0x2000};unsigned calls=0;
+            auto read=[&](uintptr_t at,void* out,size_t bytes) noexcept {
+                ++calls;
+                if(fault==1)return false;
+                if(at==0x1000 && bytes==16) {
+                    auto value=header;
+                    if(fault==2)value[0]=9;
+                    if(fault==3)value[1]=0;
+                    if(fault==4)value[1]=UINTPTR_MAX-15;
+                    if(fault==5 && calls>1)value[0]=1;
+                    std::memcpy(out,value.data(),16);return true;
+                }
+                if((at==0x2000 || at==0x2010) && bytes==4) {
+                    uint32_t key=at==0x2000?2:12;
+                    if(fault==6 && calls>=4)++key;
+                    if(fault==7)return false;
+                    std::memcpy(out,&key,4);return true;
+                }
+                assert(false && "property payload or out-of-range read");return false;
+            };
+            view.capture(0x1000,read);
+            assert(view.stable==(fault==0));
+            if(!fault)assert(view.count==2 && view.keys[0]==2 && view.keys[1]==12);
+            else for(auto key:view.keys)assert(key==0);
+            view.capture(0,read);assert(!view.stable && view.count==0);
+        }
+    }
     testPreparedChecksumHeapObservation();
     testNativeChecksumSshMapLease();
     testChecksumSurfaceLayout();

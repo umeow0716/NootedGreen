@@ -29970,6 +29970,25 @@ public:
     }
 };
 
+// CPU-only metadata observation of the exact161c3 count/+8 record vector.
+// Never follows record+8 payload pointers; failure cannot admit a native call.
+struct TglPhysicalPropertyObservation {
+    uint32_t count=0;bool stable=false;
+    std::array<uint32_t,8> keys{};
+    template<class Read> void capture(uintptr_t input,Read read) noexcept {
+        count=0;stable=false;keys.fill(0);
+        std::array<uint64_t,2> header{},after{};
+        if(!input || input>UINTPTR_MAX-16 || !read(input,header.data(),16))return;
+        count=static_cast<uint32_t>(header[0]);
+        if(count>keys.size() || (count && (!header[1] || header[1]>UINTPTR_MAX-16*count)))return;
+        auto first=keys,second=keys;
+        for(uint32_t i=0;i<count;++i)if(!read(header[1]+16*i,&first[i],4))return;
+        for(uint32_t i=0;i<count;++i)if(!read(header[1]+16*i,&second[i],4))return;
+        if(!read(input,after.data(),16) || header!=after || first!=second)return;
+        keys=first;stable=true;
+    }
+};
+
 // Callback ABI coordinator, not adapter publication. No substitute native
 // output/input and no speculative cleanup after a partial/unknown init. The
 // caller qualifies this exact image and original callback table separately.
@@ -30363,19 +30382,22 @@ public:
     enum class PropertyOperation { Set,Query };
     template<class Native=TglNativeBackingAllocateInvoker> int physicalProperties(
         typename Registry::Ticket ticket,uintptr_t physical,const void* input,
-        PropertyOperation operation,Native native=Native{}) noexcept {
+        PropertyOperation operation,Native native=Native{},const char** admission=nullptr) noexcept {
+        if(admission)*admission="property-input";
         if(!input || (operation!=PropertyOperation::Set && operation!=PropertyOperation::Query)) return 5;
         const bool query=operation==PropertyOperation::Query;
         const uintptr_t offset=query?0x161c3:0x15f96;
         const std::array<uint8_t,20> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
             0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,static_cast<uint8_t>(query?0x98:0x88),0x01,0,0};
         return withScopedBackingMutation(ticket,physical,[&](auto& scope) noexcept -> int {
+            if(admission)*admission="property-anchor";
             std::array<uint8_t,20> actual{};
             if(binding_.image>UINTPTR_MAX-offset-anchor.size() ||
                 !executable_(binding_.image+offset,anchor.size()) ||
                 !read_(binding_.image+offset,actual.data(),actual.size()) || actual!=anchor) return 5;
+            if(admission)*admission="property-invoke";
             return tglInvokeScopedPhysicalMutation(native,binding_.image+offset,physical,input,scope);
-        });
+        },admission);
     }
     // Context creation13e43 is a batch registry MUTATOR, not merely allocation:
     // 14e88..14ef5 writes physical+78 entries and updates physical+70 before

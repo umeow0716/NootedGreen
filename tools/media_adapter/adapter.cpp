@@ -4477,10 +4477,22 @@ struct NativePhysicalBackend {
     }
     static int queryProperties(void* physical,const void* input) noexcept {
         const auto address=reinterpret_cast<uintptr_t>(physical);
-        return withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
+        static std::atomic<unsigned> observations{0};
+        const bool observe=observations.fetch_add(1,std::memory_order_relaxed)<8;
+        TglPhysicalPropertyObservation request;
+        if(observe)request.capture(reinterpret_cast<uintptr_t>(input),&readMemory);
+        const char* admission="coordinator";
+        const int result=withCoordinator(address,[&](auto& callbacks,auto ticket) noexcept -> int {
             return callbacks.physicalProperties(ticket,address,input,NativePhysicalCallbacks::PropertyOperation::Query,
-                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation});
+                NativeBackingMutationGuard{image_.load(std::memory_order_acquire),address,ticket.generation,&admission},&admission);
         });
+        if(observe) {
+            os_log_info(OS_LOG_DEFAULT,"NGRN_PHYSICAL_PROPERTY_QUERY admission=%{public}s result=%{public}d stable=%{public}d count=%{public}u",
+                admission,result,int(request.stable),request.count);
+            if(request.stable)for(uint32_t i=0;i<request.count;++i)
+                os_log_info(OS_LOG_DEFAULT,"NGRN_PHYSICAL_PROPERTY_KEY index=%{public}u key=%{public}u",i,request.keys[i]);
+        }
+        return result;
     }
     template<class Admit>
     static int captureExpectedFence(void* physical,typename NativePhysicalRegistry::FrameTicket frame,
