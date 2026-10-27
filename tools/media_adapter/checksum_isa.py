@@ -228,6 +228,16 @@ def self_test():
           '5-legacy/20-independent-negatives no-GPU-proof')
 
 
+def checksum_source_profile(data):
+    # These are pre-KMD native bodies plus an owned reservation, never publication.
+    if len(data)==312:profile,body,tail=1,78,[0x4e474352,1,72,78,1,1576]
+    elif len(data)==336:profile,body,tail=2,84,[0x4e474352,2,72,84,1,1576]+[0]*6
+    else:raise ValueError('checksum source profile extent')
+    if list(struct.unpack('<'+str(body-72)+'I',data[288:]))!=tail:
+        raise ValueError('checksum source profile marker')
+    return profile
+
+
 def decode_heap_lines(lines):
     """Strict owned CPU-source pairs; never GPU/completion attestation."""
     totals={1:4096,2:4096,3:4096,4:312,5:144};groups={}
@@ -279,20 +289,40 @@ def decode_heap_lines(lines):
                 copies.append(b''.join(chunks))
             if copies[0]!=copies[1]:raise ValueError('unstable heap pair')
             heaps[role]=copies[0]
+        checksum_source_profile(heaps[4])
         result.append((pid,thread,int(sequence),heaps))
     return result
 
 
 def heap_decoder_self_test():
     prefix='VTEncoderXPCService[111:abc] (OwnedFixture) '
-    lines=[prefix+'NGRN_CHECKSUM_HEAPS_BEGIN seq=1 schema=1']
-    for role,total in {1:4096,2:4096,3:4096,4:312,5:144}.items():
-        data=bytes((i+role)&255 for i in range(total))
-        for copy in (0,1):
-            for offset in range(0,total,128):
-                block=data[offset:offset+128]
-                lines.append(prefix+f'NGRN_CHECKSUM_HEAP_CPU seq=1 role={role} copy={copy} offset={offset} bytes={len(block)} total={total} hex={block.hex()}')
-    lines.append(prefix+'NGRN_CHECKSUM_HEAPS_END seq=1 status=0 atomic=0 source_only=1')
+    def fixture(body_bytes):
+        lines=[prefix+'NGRN_CHECKSUM_HEAPS_BEGIN seq=1 schema=1']
+        for role,total in {1:4096,2:4096,3:4096,4:body_bytes,5:144}.items():
+            data=bytes((i+role)&255 for i in range(total))
+            if role==4:
+                marker=([0x4e474352,1,72,78,1,1576] if total==312 else
+                        [0x4e474352,2,72,84,1,1576]+[0]*6)
+                data=data[:288]+struct.pack('<'+str(len(marker))+'I',*marker)
+            for copy in (0,1):
+                for offset in range(0,total,128):
+                    block=data[offset:offset+128]
+                    lines.append(prefix+f'NGRN_CHECKSUM_HEAP_CPU seq=1 role={role} copy={copy} offset={offset} bytes={len(block)} total={total} hex={block.hex()}')
+        lines.append(prefix+'NGRN_CHECKSUM_HEAPS_END seq=1 status=0 atomic=0 source_only=1')
+        return lines
+    lines=fixture(312)
+    for total,version in ((312,1),(336,2)):
+        captured=decode_heap_lines(fixture(total))[0][3][4]
+        assert checksum_source_profile(captured)==version
+        for at in range(288,total):
+            bad=bytearray(captured);bad[at]^=1
+            try:checksum_source_profile(bad)
+            except ValueError:pass
+            else:raise ValueError('checksum source changed profile/padding accepted')
+        for bad in (captured[:-4],captured+b'\0'*4):
+            try:checksum_source_profile(bad)
+            except ValueError:pass
+            else:raise ValueError('checksum source resized profile accepted')
     groups=decode_heap_lines(lines)
     if len(groups)!=1 or len(groups[0][3])!=5:raise ValueError('heap fixture lost domains')
     cases=[lines[1:],lines[:-1],lines[:2]+lines[1:],lines[:-1]+[lines[-1].replace('status=0','status=5')],
