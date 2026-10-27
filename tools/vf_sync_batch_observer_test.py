@@ -294,7 +294,7 @@ with tempfile.TemporaryDirectory(prefix='ngreen-bindings-') as directory:
 # Compile the production layout-binding statements, independently refusing each
 # symbol, each code chunk, and the actual RIP-relative mapper target.
 prepared_begin=source.index('const auto preparedPhysical=patcher.solveSymbol(')
-prepared_end=source.index('const auto cpuLookup=patcher.solveSymbol(',prepared_begin)
+prepared_end=source.index('const auto preparedMulti=patcher.solveSymbol(',prepared_begin)
 prepared_fixture=r'''
 #include <cstdint>
 #include <cstring>
@@ -663,8 +663,8 @@ int main() {
             [&](uint64_t address,void* out,uint32_t bytes){return image.read(address,out,bytes);},
             [&](){return image.alive;});
     };
-    Image m;setup(m,false);r=runGraph(m,37);assert(r.flags==15 && r.physical==0x12345025 && r.bytes==4059);
-    Image s;setup(s,true);r=runGraph(s);assert(r.flags==15 && r.physical==0x12346000 && r.bytes==4096);
+    Image m;setup(m,false);r=runGraph(m,37);assert(r.flags==15 && r.physical==0x12345025 && r.bytes==4059 && r.graphKind==2 && r.graphDepth==2);
+    Image s;setup(s,true);r=runGraph(s);assert(r.flags==15 && r.physical==0x12346000 && r.bytes==4096 && r.graphKind==3 && r.graphDepth==2);
     Image siblings;setup(siblings,false);siblings.set(root+0x50,uint64_t(16384));
     siblings.set(root+0x68,uint32_t(2));siblings.set(list+8,Image::d);
     r=runGraph(siblings,8192);assert(r.flags==15 && r.physical==0x12345000);
@@ -712,3 +712,42 @@ with tempfile.TemporaryDirectory(prefix='ngreen-prepared-physical-cache-') as di
                     '-I',str(root),str(task/'test.cpp'),'-o',str(task/'test')],check=True,capture_output=True,timeout=30)
     subprocess.run([str(task/'test')],check=True,capture_output=True,timeout=10)
 print('PASS actual prepared physical-cache reader plus exact-length Multi/Sub selected-path graph: nested/sibling/partial/depth/cycle/foreign/overflow/unstable tests; owned CPU fixtures only')
+
+# Compile the actual production binding with exact reviewed native bytes.
+graph_binding = source[source.index('const auto preparedMulti='):source.index('const auto cpuLookup=', source.index('const auto preparedMulti='))]
+graph_fixture = r'''
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+#include "NootedGreen/kern_flight_trace.hpp"
+std::vector<uint8_t> multi,sub,length;
+void decode(const char* text,std::vector<uint8_t>& out) {
+ for(unsigned i=0;text[i];i+=2){unsigned v=0;for(unsigned j=0;j<2;++j){char c=text[i+j];v=v*16+(c<='9'?c-'0':c-'a'+10);}out.push_back(uint8_t(v));}
+}
+struct KernelPatcher{static constexpr int KernelID=0;};
+int absent=0;bool preparedLayout=true;int observation=-1;
+struct Patcher {
+ uintptr_t solveSymbol(int,const char* name) {
+  if(std::strstr(name,"IOMulti"))return absent==1?0:reinterpret_cast<uintptr_t>(multi.data());
+  if(std::strstr(name,"IOSub"))return absent==2?0:reinterpret_cast<uintptr_t>(sub.data());
+  assert(std::strstr(name,"getLength"));return absent==3?0:reinterpret_cast<uintptr_t>(length.data());
+ }
+}patcher;
+NGFlightTrace::PreparedPhysicalCacheAuthority gVfPreparedPhysicalCacheAuthority{1,1,true};
+NGFlightTrace::PreparedDescriptorGraphAuthority gVfPreparedDescriptorGraphAuthority{};
+bool anchorMatches(uintptr_t at,const uint8_t* bytes,unsigned n){return !std::memcmp(reinterpret_cast<void*>(at),bytes,n);}
+#define SYSLOG(module,format,value) observation=(value)
+void check(){gVfPreparedDescriptorGraphAuthority={}; __PRODUCTION__ }
+int main(){decode("__MULTI__",multi);decode("__SUB__",sub);decode("554889e5488b47505dc3",length);
+ check();assert(observation==1 && gVfPreparedDescriptorGraphAuthority.exactLayout);
+ for(auto* bytes:{&multi,&sub,&length})for(unsigned i=0;i<bytes->size();++i){(*bytes)[i]^=1;check();assert(!observation && !gVfPreparedDescriptorGraphAuthority.exactLayout);(*bytes)[i]^=1;}
+ for(absent=1;absent<=3;++absent){check();assert(!observation);}absent=0;
+ preparedLayout=false;check();assert(!observation);preparedLayout=true;check();assert(observation==1);
+}
+'''.replace('__PRODUCTION__',graph_binding).replace('__MULTI__','554889e5415741564155415453504889d3837f680074524189ce4989f74989fc4531ed666666662e0f1f840000000000498b4424604a8b3ce8488b07ff90c8010000498b4c24604a8b3ce9488b0f4939c77233ff91c80100004929c749ffc5418b4424684939c572c74885db740748c7030000000031c04883c4085b415c415d415e415f5dc3488b81380100004c89fe4889da4489f14883c4085b415c415d415e415f5dffe0').replace('__SUB__','554889e54157415653504889d34885d2740748c70300000000483b7750734e48c745e000000000488b47604989ff4c8b47684989f64901f04c8b08488d55e04889c74c89c641ff91380100004885db741e4885c07419498b4f504c29f1488b55e04839d1480f43ca48890beb0231c04883c4085b415e415f5dc3')
+with tempfile.TemporaryDirectory(prefix='ngreen-descriptor-graph-binding-') as directory:
+    task=Path(directory);(task/'test.cpp').write_text(graph_fixture)
+    subprocess.run(['clang++','-std=c++14','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I',str(root),str(task/'test.cpp'),'-o',str(task/'test')],check=True,capture_output=True,timeout=30)
+    subprocess.run([str(task/'test')],check=True,capture_output=True,timeout=10)
+print('PASS actual native descriptor graph binding: all298 native-byte mutations and missing symbols/base-layout refusals; owned CPU only')

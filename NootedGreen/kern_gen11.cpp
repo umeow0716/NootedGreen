@@ -193,6 +193,7 @@ static void **gVfCpuKernelPmapSlot = nullptr;
 static void *gVfCpuKernelPmapStore = nullptr;
 static void **gVfCpuSystemMapperSlot = nullptr;
 static NGFlightTrace::PreparedPhysicalCacheAuthority gVfPreparedPhysicalCacheAuthority{};
+static NGFlightTrace::PreparedDescriptorGraphAuthority gVfPreparedDescriptorGraphAuthority{};
 static bool gVfPreparedGpuSpanLayoutBound=false;
 static mach_vm_address_t gVfBatchCpuCopy = 0;
 static mach_vm_address_t gVfBatchCaller = 0;
@@ -3007,6 +3008,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			gVfCpuBackingLookup=0;gVfCpuKernelPmapSlot=nullptr;
 			gVfCpuKernelPmapStore=nullptr;gVfCpuSystemMapperSlot=nullptr;
 			gVfPreparedPhysicalCacheAuthority={};
+			gVfPreparedDescriptorGraphAuthority={};
 			gVfMediaMapAddress = gVfMediaMapLength = gVfMediaMapDescriptor = gVfMediaMapOptions = 0;
 			const auto process = patcher.solveSymbol(index,
 				"__ZN15IOAccelContext218processDataBuffersEj", address, size);
@@ -3053,6 +3055,20 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				gVfPreparedPhysicalCacheAuthority.exactLayout=true;
 			}
 			SYSLOG("ngreen","V394: prepared CPU cache layout bound=%u",preparedLayout?1U:0U);
+			const auto preparedMulti=patcher.solveSymbol(KernelPatcher::KernelID,
+				"__ZN23IOMultiMemoryDescriptor18getPhysicalSegmentEyPyj");
+			const auto preparedSub=patcher.solveSymbol(KernelPatcher::KernelID,
+				"__ZN21IOSubMemoryDescriptor18getPhysicalSegmentEyPyj");
+			const auto descriptorLength=patcher.solveSymbol(KernelPatcher::KernelID,
+				"__ZNK18IOMemoryDescriptor9getLengthEv");
+			constexpr uint8_t descriptorLengthBody[]={0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x50,0x5d,0xc3};
+			const bool preparedGraphLayout=preparedLayout && preparedMulti && preparedSub && descriptorLength &&
+				NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(preparedMulti),166)==UINT64_C(0xab19bbe9c756f064) &&
+				NGFlightTrace::boundedCodeHash(reinterpret_cast<const volatile uint8_t *>(preparedSub),122)==UINT64_C(0xb540de64de405942) &&
+				anchorMatches(descriptorLength,descriptorLengthBody,sizeof(descriptorLengthBody));
+			if(preparedGraphLayout)gVfPreparedDescriptorGraphAuthority={gVfPreparedPhysicalCacheAuthority,
+				preparedMulti,preparedSub,descriptorLength,true};
+			SYSLOG("ngreen","V398: native CPU descriptor graph layout bound=%u",preparedGraphLayout?1U:0U);
 			const auto cpuLookup=patcher.solveSymbol(KernelPatcher::KernelID,"_pmap_find_phys_nofault");
 			const auto cpuFindPa=patcher.solveSymbol(KernelPatcher::KernelID,"_pmap_find_pa");
 			const auto kernelPmap=patcher.solveSymbol(KernelPatcher::KernelID,"_kernel_pmap");
@@ -3789,6 +3805,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                         gVfBatchCpuCopy && gVfCpuKernelPmapSlot && *gVfCpuKernelPmapSlot==gVfCpuKernelPmapStore &&
                         gVfCpuSystemMapperSlot && gVfPreparedPhysicalCacheAuthority.exactLayout &&
                         gVfPreparedPhysicalCacheAuthority.physicalMethod && gVfPreparedPhysicalCacheAuthority.dmaMethod &&
+                        gVfPreparedDescriptorGraphAuthority.exactLayout &&
                         gVfNativeObjectLayoutBound && gVfPreparedGpuSpanLayoutBound && gVfMediaMapOffsetLayoutVerified &&
                         gVfNativeBatchMapVtable && gVfMediaSysMemoryVtable &&
                         gVfLeafObservationReader && gVfRootObservationVtable && !checkKernelArgument("-ngreencaptureonly");
@@ -3798,6 +3815,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
                     SYSLOG("ngreen","V395: checksum resource admission prefix pairs armed=%u",
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
                     SYSLOG("ngreen","V396: typed native checksum backing and task leaves armed=%u",
+                        preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
+                    SYSLOG("ngreen","V398: qualified native descriptor graph and task leaves armed=%u",
                         preparedChecksumLock && gVfPageTableUpdateLock?1U:0U);
                 }
 				const auto batchSubmit=patcher.solveSymbol(index,
@@ -7165,7 +7184,7 @@ template<class Live>
 static void vfObserveChecksumPreparedResources(VfMediaSubmission& entry,
     const NgreenChecksumGen12::NativeSshMapPagePair& pair,uint32_t ticket,Live&& ownerLive)
 {
-    if(ticket>=2 || !gVfPreparedPhysicalCacheAuthority.exactLayout || !gVfBatchCpuCopy ||
+    if(ticket>=2 || !gVfPreparedPhysicalCacheAuthority.exactLayout || !gVfPreparedDescriptorGraphAuthority.exactLayout || !gVfBatchCpuCopy ||
        !gVfNativeObjectLayoutBound || !gVfPreparedGpuSpanLayoutBound || !gVfMediaMapOffsetLayoutVerified ||
        !gVfNativeBatchMapVtable || !gVfMediaSysMemoryVtable || !gVfCpuSystemMapperSlot)return;
     uint64_t surfaceBytes[3]{};
@@ -7273,8 +7292,10 @@ static void vfObserveChecksumPreparedResources(VfMediaSubmission& entry,
                 NGFlightTrace::PreparedResourceView current{};
                 return live() && NGFlightTrace::capturePreparedResource(resource,gpu,bytes,authority,current,read,live) && before.same(current);
             };
-            const auto sample=NGFlightTrace::observePreparedPhysicalCache(before.descriptor,offset+done,
-                gVfPreparedPhysicalCacheAuthority,read,stable);
+            const auto sample=NGFlightTrace::observePreparedDescriptorCache(before.descriptor,offset+done,
+                gVfPreparedDescriptorGraphAuthority,read,stable);
+            if(!pages)SYSLOG("ngreen","V398: prepared descriptor path ticket=%u role=%u root-kind=%u depth=%u flags=%x reason=%s atomic=0",
+                ticket+1,role,sample.graphKind,sample.graphDepth,sample.flags,sample.reason);
             if(sample.flags!=15U || !sample.bytes){
                 SYSLOG("ngreen","V397: prepared CPU page refused ticket=%u role=%u reason=%s options=%x wired=%u bytes=%llx cache-bytes=%llx pages=%u blocks=%u atomic=0",
                     ticket+1,role,sample.reason,sample.options,sample.wired,sample.descriptorBytes,

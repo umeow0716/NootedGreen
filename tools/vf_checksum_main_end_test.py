@@ -656,6 +656,7 @@ uintptr_t pmap=1,gVfCpuKernelPmapStore=1,*gVfCpuKernelPmapSlot=&pmap;
 uintptr_t mapper=0,*gVfCpuSystemMapperSlot=&mapper;
 uintptr_t gVfNativeBatchMapVtable=1,gVfMediaSysMemoryVtable=1,gVfLeafObservationReader=1,gVfRootObservationVtable=1;
 NGFlightTrace::PreparedPhysicalCacheAuthority gVfPreparedPhysicalCacheAuthority{1,1,true};
+NGFlightTrace::PreparedDescriptorGraphAuthority gVfPreparedDescriptorGraphAuthority{gVfPreparedPhysicalCacheAuthority,1,1,1,true};
 int lock=0,*gVfPageTableUpdateLock=nullptr,observed=-1;unsigned initializers=0;
 bool vfEnsurePageTableUpdateLock(){++initializers;if(lockAllowed && publishLock)gVfPageTableUpdateLock=&lock;return lockAllowed;}
 bool checkKernelArgument(const char*s){return !strcmp(s,"-ngreenchecksumcapture")?enabled:early;}
@@ -663,7 +664,8 @@ bool checkKernelArgument(const char*s){return !strcmp(s,"-ngreenchecksumcapture"
 void check(){observed=-1;initializers=0;gVfPageTableUpdateLock=nullptr;__ACTUAL__}
 int main(){check();assert(observed==1 && initializers==1);
  for(bool*value:{&gVfChecksumPublicationRouteReady,&gVfChecksumNativeBindingsQualified,&gVfCaptureStreamResetBound,
- &gVfNativeObjectLayoutBound,&gVfPreparedGpuSpanLayoutBound,&gVfMediaMapOffsetLayoutVerified,&gVfPreparedPhysicalCacheAuthority.exactLayout}){
+ &gVfNativeObjectLayoutBound,&gVfPreparedGpuSpanLayoutBound,&gVfMediaMapOffsetLayoutVerified,&gVfPreparedPhysicalCacheAuthority.exactLayout,
+ &gVfPreparedDescriptorGraphAuthority.exactLayout}){
   *value=false;check();assert(observed==0 && !initializers);*value=true;}
  for(uintptr_t*value:{&gVfChecksumSurfaceBindCaller,&gVfChecksumSshUnmapCaller,&gVfChecksumMapAddressGetter,
  &gVfChecksumMapLengthGetter,&gVfBatchCpuCopy,&gVfNativeBatchMapVtable,&gVfMediaSysMemoryVtable,
@@ -706,6 +708,7 @@ std::vector<uint8_t> memory(1024*1024);
 const uint64_t shared=base+0x90000,task=base+0xa0000,gpuTask=base+0xc0000;
 uintptr_t gVfNativeBatchMapVtable=base+0xe0000,gVfMediaSysMemoryVtable=base+0xe1000;
 NGFlightTrace::PreparedPhysicalCacheAuthority gVfPreparedPhysicalCacheAuthority{base+0xd0000,base+0xd0100,true};
+NGFlightTrace::PreparedDescriptorGraphAuthority gVfPreparedDescriptorGraphAuthority{gVfPreparedPhysicalCacheAuthority,base+0xd0200,base+0xd0300,base+0xd0400,true};
 bool gVfNativeObjectLayoutBound=true,gVfPreparedGpuSpanLayoutBound=true,gVfMediaMapOffsetLayoutVerified=true;
 void* mapper=nullptr;void**gVfCpuSystemMapperSlot=&mapper;
 uintptr_t gVfBatchCpuCopy;
@@ -748,6 +751,7 @@ int main(){for(unsigned mode=0;mode<28;++mode){
  set(shared+0x78,reinterpret_cast<uint64_t>(entry.accelerator));set(shared+0x80,task);set(shared+0x88,gpuTask);
  const uint64_t descriptorTable=base+0xe2000;
  set(descriptorTable+0x130,gVfPreparedPhysicalCacheAuthority.dmaMethod);set(descriptorTable+0x138,gVfPreparedPhysicalCacheAuthority.physicalMethod);
+ set(descriptorTable+0x1c8,gVfPreparedDescriptorGraphAuthority.lengthMethod);
  NgreenChecksumGen12::NativeSshMapPagePair pair{};pair.first=pair.second=4096;pair.flags=15;
  for(unsigned i=0;i<16;++i)pair.before[i]=i<8?64+i*64:0;
  const uint64_t sizes[]={4096,4096,4096,2088960,1044480,4096};

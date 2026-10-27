@@ -31,6 +31,7 @@ struct PreparedPhysicalCacheSample {
     uint64_t physical=0,bytes=0;
     uint32_t flags=0;
     uint32_t options=0,wired=0,pages=0,blocks=0;
+    uint32_t graphKind=0,graphDepth=0;
     uint64_t descriptorBytes=0,cacheBytes=0;
     const char *reason="admission";
 };
@@ -222,6 +223,8 @@ inline PreparedPhysicalCacheSample observePreparedDescriptorCache(uint64_t descr
         ++count;
         if(node.method==authority.general.physicalMethod) {
             result=observePreparedPhysicalCache(current,at,authority.general,read,live);
+            result.graphKind=path[0].method==authority.multiMethod?2U:path[0].method==authority.subMethod?3U:1U;
+            result.graphDepth=count;
             if(result.flags!=15U)return result;
             // Exact selected path/effective offsets are compared, not a hash
             // of unrelated children; this remains a non-atomic CPU sample.
