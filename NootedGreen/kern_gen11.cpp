@@ -2073,6 +2073,10 @@ uint64_t vfConsumeMemoryInterrupts()
 		auto *status = statusBase + irqOffset * NGVfMemIrq::statusStride;
 		status[0] = 0;
 		pending |= 1ULL << route.callbackBit;
+		// CCS-channel contexts execute on RCS0 (mapEngineClass), so their
+		// completions arrive as render interrupts.
+		if (irqOffset == 0)
+			pending |= 1ULL << 1;
 	};
 
 	// irq_offset values are the Gen11+ logical engine interrupt offsets used by

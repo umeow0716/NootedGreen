@@ -61,7 +61,7 @@ int main() {
 	}
 	assert(!NGContextDescriptor::validPersistentLow(0x309U));
 
-	const uint8_t expectedClassMap[] = {0, 1, 2, 3, 5, 4};
+	const uint8_t expectedClassMap[] = {0, 1, 2, 3, 5, 0};
 	for (uint32_t rawClass = 0; rawClass < 8; ++rawClass) {
 		assert(NGContextDescriptor::mapEngineClass(rawClass) ==
 			(rawClass < 6 ? expectedClassMap[rawClass] : 0xFFU));
