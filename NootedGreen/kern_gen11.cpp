@@ -12318,6 +12318,19 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 		else if ((regs[i] & 0xFFF) == 0x140 && (regs[i] >> 12)) bb |= regs[i + 1];
 		else if ((regs[i] & 0xFFF) == 0x168 && (regs[i] >> 12)) bb |= static_cast<uint64_t>(regs[i + 1] & 0xFFFF) << 32;
 	}
+	// GuC does not save a reset context, so BB_ADDR is usually stale: take the
+	// first batch the ring starts instead and dump its first page.
+	static uint32_t batchDumps = 0;
+	const bool fromRing = !(bb & ~3ULL);
+	for (uint32_t i = 0; fromRing && ring && i + 2 < (tail & 0x3FFFC) / 4; i++)
+		if (ring[i] == 0x18800101) {
+			bb = ring[i + 1] | (static_cast<uint64_t>(ring[i + 2] & 0xFFFF) << 32);
+			break;
+		}
+	if (batchDumps >= 2)
+		bb = 0;
+	else if (bb & ~3ULL)
+		batchDumps++;
 	uint64_t table = (bb & ~3ULL) ? (root & 0x7FFFFFF000ULL) : 0;
 	for (uint32_t level = 0; table && level < 5; level++) {
 		auto *desc = IOMemoryDescriptor::withPhysicalAddress(table, PAGE_SIZE, kIODirectionIn);
@@ -12325,8 +12338,11 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 		if (map) {
 			auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
 			if (level == 4) {
-				const uint32_t at = (bb & 0xFFC) / 4, from = at >= 16 ? at - 16 : 0, to = from + 32 <= 1024 ? from + 32 : 1024;
+				const uint32_t at = (bb & 0xFFC) / 4;
+				const uint32_t from = fromRing ? at : (at >= 16 ? at - 16 : 0);
+				const uint32_t to = fromRing ? 1024 : (from + 32 <= 1024 ? from + 32 : 1024);
 				for (uint32_t i = from; i + 8 <= to; i += 8)
+					if (page[i] | page[i + 1] | page[i + 2] | page[i + 3] | page[i + 4] | page[i + 5] | page[i + 6] | page[i + 7])
 					SYSLOG("ngreen", "V276: id=%u bb=%llx +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", id,
 					       static_cast<unsigned long long>(bb), i * 4, page[i], page[i + 1], page[i + 2], page[i + 3],
 					       page[i + 4], page[i + 5], page[i + 6], page[i + 7]);
