@@ -12170,8 +12170,9 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	const auto event = NGVfGuCEvent::inspect(hxg, length);
 	const uint32_t action = hxg & 0xFFFFU;
 	if (!event.valid()) {
-		SYSLOG("ngreen", "V238: unsupported or malformed GuC event action=0x%04x len=%u hxg=0x%08x",
-		       action, length, hxg);
+		SYSLOG("ngreen", "V238: unsupported or malformed GuC event action=0x%04x len=%u hxg=0x%08x payload=%08x:%08x:%08x",
+		       action, length, hxg, length > 1 ? message[2] : 0, length > 2 ? message[3] : 0,
+		       length > 3 ? message[4] : 0);
 		vfMarkProtocolFault("unsupported or malformed GuC G2H event");
 		return false;
 	}
