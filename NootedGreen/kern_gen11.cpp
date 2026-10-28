@@ -12168,6 +12168,38 @@ void Gen11::vfBaseInvalidateTLB(const void *that) {
 		"ngreen", "Required IGGuC VF TLB invalidation did not complete");
 }
 
+// After a GuC context reset the image holds the saved state: log where the
+// ring stopped and which batch it was in.
+static void vfDumpResetContext(uint32_t id) {
+	if (!gVfContexts || id >= gVfContextCapacity || !callback ||
+	    !callback->vfSharedMappedBufferGetVirtualAddress)
+		return;
+	using Getter = uint8_t *(*)(void *);
+	auto getter = reinterpret_cast<Getter>(callback->vfSharedMappedBufferGetVirtualAddress);
+	const auto &entry = gVfContexts[id];
+	auto *image = entry.contextBacking ? getter(entry.contextBacking) : nullptr;
+	auto *ring = entry.ringBacking ? reinterpret_cast<volatile uint32_t *>(getter(entry.ringBacking)) : nullptr;
+	if (!image)
+		return;
+	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
+	const uint32_t head = regs[5], tail = regs[7];
+	SYSLOG("ngreen", "V270: reset id=%u head=0x%x tail=0x%x", id, head, tail);
+	// Saved register pairs: BB address/state and the active head (MMIO offsets
+	// relative to the engine base, so match the low 12 bits).
+	for (uint32_t i = 0; i + 1 < 0x400 / 4; i++) {
+		const uint32_t r = regs[i] & 0xFFF;
+		if ((regs[i] >> 12) && (r == 0x140 || r == 0x168 || r == 0x110 || r == 0x11C || r == 0x1C0 || r == 0x1C4))
+			SYSLOG("ngreen", "V270: reg %05x = %08x", regs[i], regs[i + 1]);
+	}
+	if (ring && (head & ~7U) < 0x4000) {
+		const uint32_t at = (head & 0x3FFFC) / 4;
+		const uint32_t from = at >= 8 ? at - 8 : 0;
+		for (uint32_t i = from; i < from + 16; i += 8)
+			SYSLOG("ngreen", "V270: ring +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", i * 4,
+			       ring[i], ring[i + 1], ring[i + 2], ring[i + 3], ring[i + 4], ring[i + 5], ring[i + 6], ring[i + 7]);
+	}
+}
+
 bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	if (!that || !message || !vfCtbConsumerReady(false))
 		return false;
@@ -12290,6 +12322,8 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		const uint32_t payload2 = length >= 4 ? message[4] : 0;
 		SYSLOG("ngreen", "V234: GuC failure event action=0x%04x len=%u payload=%08x:%08x:%08x",
 		       action, length, payload0, payload1, payload2);
+		if (event.kind == NGVfGuCEvent::Kind::ContextReset)
+			vfDumpResetContext(payload0);
 		vfMarkProtocolFault(event.kind == NGVfGuCEvent::Kind::ContextReset ?
 		                         "GuC context reset notification" :
 		                         "GuC engine failure notification");
