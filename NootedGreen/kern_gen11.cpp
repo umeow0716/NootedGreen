@@ -12735,6 +12735,10 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		       action, length, payload0, payload1, payload2);
 		if (event.kind == NGVfGuCEvent::Kind::ContextReset)
 			vfDumpResetContext(payload0, callback->vfSharedMappedBufferGetVirtualAddress);
+		// -ngresetcontinue: GuC already reset the engine and dropped only
+		// the hung context; keep the other contexts running.
+		if (event.kind == NGVfGuCEvent::Kind::ContextReset && checkKernelArgument("-ngresetcontinue"))
+			return true;
 		vfMarkProtocolFault(event.kind == NGVfGuCEvent::Kind::ContextReset ?
 		                         "GuC context reset notification" :
 		                         "GuC engine failure notification");
