@@ -318,23 +318,22 @@ bool XeRender::processKext(KernelPatcher &p, size_t index, mach_vm_address_t add
     }
     report("NGXePTBROff", ptbr);
 
-    // The kernel's own shared SKU table still enables POSH (bit 0) and PTBR
-    // (bit 1), so the first render context gets a position-only (POCS) context
-    // chained through POSH_LRCA (0x21B0). GuC never schedules POCS for a VF and
-    // that render context never starts. orb $3,(%rdi) -> andb $0xfc,(%rdi).
-    const uint8_t poshFind[] {0x80, 0x0F, 0x03, 0x5D, 0xC3};
-    const uint8_t poshReplace[] {0x80, 0x27, 0xFC, 0x5D, 0xC3};
-    bool posh = p.solveSymbol<mach_vm_address_t>(index,
-        "__Z33intelPopulateSharedDeviceSettingsP31IntelSharedSkuFeatureTableExRecP13IOAccelConfig",
-        address, size) == address + 0x75A96 && bytesAt(address, 0x75A9A, poshFind, sizeof(poshFind));
-    p.clearError();
-    if (posh && checkKernelArgument("-ngnoposh")) {
+    // Metal command queues create their render contexts with
+    // g_cInitGfxHwCtxParamsForGraphics, whose flag byte 0x1c includes 0x10 =
+    // POSH: the context gets a position-only (POCS) context chained through
+    // POSH_LRCA (0x21B0) and CTX_CTRL bit 4. GuC never schedules POCS for a VF,
+    // so that render context never starts. Use 0x0c like the GL/compute params.
+    const uint8_t poshFind[] {0x00, 0x00, 0x1C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    const uint8_t poshReplace[] {0x00, 0x00, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    const uint32_t poshSites[] {0xB09A4, 0xB0BC0};
+    bool posh = checkKernelArgument("-ngnoposh");
+    for (size_t n = 0; posh && n < arrsize(poshSites); ++n)
+        posh = bytesAt(address, poshSites[n], poshFind, sizeof(poshFind));
+    for (size_t n = 0; posh && n < arrsize(poshSites); ++n) {
         KernelPatcher::LookupPatch patch {&tgl, poshFind, poshReplace, sizeof(poshFind), 1};
-        p.applyLookupPatch(&patch, reinterpret_cast<uint8_t *>(address + 0x75A9A), sizeof(poshFind) + 1);
+        p.applyLookupPatch(&patch, reinterpret_cast<uint8_t *>(address + poshSites[n]), sizeof(poshFind) + 1);
         posh = p.getError() == KernelPatcher::Error::NoError;
         p.clearError();
-    } else {
-        posh = false;
     }
     report("NGXePOSHOff", posh);
 
