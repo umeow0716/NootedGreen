@@ -100,7 +100,6 @@ CPUAddress sharedCPU;
 GPUAddress mappedGPU;
 mach_vm_address_t restoreCaller;
 mach_vm_address_t tglAddress;
-uint32_t ctxPointer;
 
 using ContextInit = bool (*)(void *, void *, const void *, uint8_t);
 using ContextRestore = bool (*)(void *);
@@ -133,7 +132,6 @@ void prepareCtxBatch(void *owner) {
     buildCtxBatch(reinterpret_cast<uint32_t *>(cpu));
     for (unsigned i = 0; i < 4096; i += 64) asm volatile("clflush (%0)" :: "r"(cpu + i) : "memory");
     asm volatile("mfence" ::: "memory");
-    ctxPointer = static_cast<uint32_t>(gpu) | 5;
     slot = buffer; // the donor's engine stop releases it
     SYSLOG("ngxe", "per-context batch at gpu 0x%llx", gpu);
 }
@@ -152,14 +150,17 @@ bool wrapContextInit(void *context, void *task, const void *params, uint8_t prio
 bool wrapContextRestore(void *context) {
     const auto caller = reinterpret_cast<mach_vm_address_t>(__builtin_return_address(0));
     const bool result = orgContextRestore(context);
-    if (!result || caller != restoreCaller || !ctxPointer) return result;
+    if (!result || caller != restoreCaller) return result;
     auto c = static_cast<uint8_t *>(context);
     auto o = *reinterpret_cast<uint8_t **>(c + 0x50);
     auto image = *reinterpret_cast<void **>(c + 0x98);
-    if (c[0x6C] || !o || !image || !*reinterpret_cast<void **>(o + 0x13F8)) return result;
+    if (c[0x6C] || !o || !image) return result;
+    // The owner's own batch: another owner's may already be freed.
+    auto batch = *reinterpret_cast<void **>(o + 0x13F8);
+    const auto gpu = batch ? mappedGPU(batch) : 0;
     auto cpu = sharedCPU(image);
-    if (cpu && *reinterpret_cast<uint32_t *>(cpu + 0x1048) == 0x21C0) {
-        *reinterpret_cast<uint32_t *>(cpu + 0x104C) = ctxPointer;
+    if (gpu && cpu && *reinterpret_cast<uint32_t *>(cpu + 0x1048) == 0x21C0) {
+        *reinterpret_cast<uint32_t *>(cpu + 0x104C) = static_cast<uint32_t>(gpu) | 5;
         asm volatile("clflush (%0)" :: "r"(cpu + 0x104C) : "memory");
         asm volatile("mfence" ::: "memory");
     }
