@@ -317,5 +317,26 @@ bool XeRender::processKext(KernelPatcher &p, size_t index, mach_vm_address_t add
         p.clearError();
     }
     report("NGXePTBROff", ptbr);
+
+    // IGScheduler4 (the software scheduler the VF path runs on) serializes every
+    // submission on a channel behind the previous one with an MI_SEMAPHORE_WAIT
+    // on the ring's own stamp. Under GuC the contexts of different processes run
+    // independently and that stamp lives in each process's PPGTT, so a new
+    // context waits forever for a value another process wrote (GuC resets it).
+    // Initialise the scheduler without the serialize flag (0x11 -> 0x01).
+    const uint8_t serialFind[] {0xBA, 0x00, 0x10, 0x00, 0x00, 0xBE, 0x11, 0x00, 0x00, 0x00};
+    const uint8_t serialReplace[] {0xBA, 0x00, 0x10, 0x00, 0x00, 0xBE, 0x01, 0x00, 0x00, 0x00};
+    bool serial = p.solveSymbol<mach_vm_address_t>(index, "__ZN12IGScheduler419initWithAcceleratorEP22IOGraphicsAccelerator2",
+        address, size) == address + 0x1D9D2 && bytesAt(address, 0x1D9E3, serialFind, sizeof(serialFind));
+    p.clearError();
+    if (serial && checkKernelArgument("-ngnoserialize")) {
+        KernelPatcher::LookupPatch patch {&tgl, serialFind, serialReplace, sizeof(serialFind), 1};
+        p.applyLookupPatch(&patch, reinterpret_cast<uint8_t *>(address + 0x1D9E3), sizeof(serialFind) + 1);
+        serial = p.getError() == KernelPatcher::Error::NoError;
+        p.clearError();
+    } else {
+        serial = false;
+    }
+    report("NGXeNoSerialize", serial);
     return true;
 }
