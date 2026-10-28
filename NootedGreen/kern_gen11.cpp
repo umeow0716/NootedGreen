@@ -12321,11 +12321,14 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	// GuC does not save a reset context, so BB_ADDR is usually stale: take the
 	// first batch the ring starts instead and dump its first page.
 	static uint32_t batchDumps = 0;
-	const bool fromRing = !(bb & ~3ULL);
-	for (uint32_t i = 0; fromRing && ring && i + 2 < (tail & 0x3FFFC) / 4; i++)
+	const bool fromRing = true;
+	if (bb & ~3ULL)
+		SYSLOG("ngreen", "V276: id=%u saved bb=%llx", id, static_cast<unsigned long long>(bb));
+	bb = 0;
+	for (uint32_t i = 0; ring && i + 2 < (tail & 0x3FFFC) / 4; i++)
 		if (ring[i] == 0x18800101) {
 			bb = ring[i + 1] | (static_cast<uint64_t>(ring[i + 2] & 0xFFFF) << 32);
-			break;
+			SYSLOG("ngreen", "V276: id=%u ring +%03x starts batch %llx", id, i * 4, static_cast<unsigned long long>(bb));
 		}
 	if (batchDumps >= 2)
 		bb = 0;
