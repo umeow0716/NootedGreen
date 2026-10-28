@@ -11007,6 +11007,20 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		SYSLOG("ngreen", "V230: registered GuC context id=%u LRCA=%08x:%08x class=%u instance=%u",
 		       gucId, descriptorHi, descriptorLo, engineClass, engineInstance);
 	}
+	// V271: register state of the first render contexts, to compare one that
+	// never runs with ones that do.
+	static uint32_t rcsDumps = 0;
+	if (engineClass == 0 && rcsDumps < 3) {
+		rcsDumps++;
+		using Getter = uint8_t *(*)(void *);
+		auto *image = reinterpret_cast<Getter>(callback->vfSharedMappedBufferGetVirtualAddress)(contextBacking);
+		if (image) {
+			auto *r = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
+			for (uint32_t i = 0; i < 0x60; i += 8)
+				SYSLOG("ngreen", "V271: id=%u +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", gucId, i * 4,
+				       r[i], r[i + 1], r[i + 2], r[i + 3], r[i + 4], r[i + 5], r[i + 6], r[i + 7]);
+		}
+	}
 	return true;
 }
 
