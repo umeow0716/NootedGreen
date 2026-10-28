@@ -922,11 +922,12 @@ bool vfSetContextPolicy(void *guc, uint16_t gucId, uint8_t engineClass,
 {
 	// Normal KMD priority and a 1 ms execution quantum like i915. The engines
 	// are shared with the host: a context that does not yield must be reset
-	// by GuC quickly (the PF's VF preempt timeout is 50 ms), not after i915's
+	// by GuC within i915's default 640 ms (render batches are not always
+	// preemptible within 50 ms), not after i915's
 	// 7.5 s render timeout, which stalls the host long enough for a full GT
 	// reset.
 	(void)engineClass;
-	const uint32_t preemptionTimeout = 50000U;
+	const uint32_t preemptionTimeout = 640000U;
 	const uint32_t request[] = {
 		kGucActionUpdateContextPolicies,
 		gucId,

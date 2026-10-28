@@ -31,7 +31,7 @@ int main()
 		0x100B, 12,
 		0x20030001, 2,
 		0x20010001, 1000,
-		0x20020001, 50000,
+		0x20020001, 640000,
 		0x20050001, 0,
 	};
 	const uint32_t schedule[] = {0x1000, 12};
@@ -106,7 +106,7 @@ int main()
 
 	auto badPolicy = std::array<uint32_t, 10>({
 		0x100B, 12, 0x20030001, 2, 0x20010001, 1000,
-		0x20020001, 50000, 0x20050001, 0,
+		0x20020001, 640000, 0x20050001, 0,
 	});
 	for (size_t field : {size_t(2), size_t(4), size_t(6), size_t(8)}) {
 		badPolicy[field] ^= 1U;
@@ -121,7 +121,7 @@ int main()
 	badPolicy[5] = 1000;
 	badPolicy[7] = 0;
 	assert(!inspect(badPolicy.data(), badPolicy.size()).valid);
-	badPolicy[7] = 50000;
+	badPolicy[7] = 640000;
 	badPolicy[9] = 1;
 	assert(!inspect(badPolicy.data(), badPolicy.size()).valid);
 	badPolicy[9] = 0;
