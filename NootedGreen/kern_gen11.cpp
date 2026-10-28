@@ -12388,6 +12388,9 @@ static void vfDumpPsSurfaces(uint32_t id, uint64_t root, volatile uint32_t *page
 			if (!table[e] || !vfPpgttRead(root, surfaceBase + (table[e] & ~0x3FU), ss, 16))
 				continue;
 			dumps++;
+			const uint64_t surface = ss[8] | (static_cast<uint64_t>(ss[9] & 0xFFFF) << 32);
+			SYSLOG("ngreen", "V281: id=%u surface %llx pte=%llx", id, static_cast<unsigned long long>(surface),
+			       static_cast<unsigned long long>(vfPpgttLeaf(root, surface)));
 			SYSLOG("ngreen", "V281: id=%u bt %llx[%u] ss %llx: %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
 			       id, static_cast<unsigned long long>(tableVa), e,
 			       static_cast<unsigned long long>(surfaceBase + (table[e] & ~0x3FU)), ss[0], ss[1], ss[2], ss[3],
@@ -12543,7 +12546,7 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 		}
 	if (!bb)
 		bb = lastBefore;
-	if (batchDumps >= 2)
+	if (batchDumps >= 6)
 		bb = 0;
 	else if (bb)
 		batchDumps++;
@@ -12579,9 +12582,10 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 							else if (!missing++)
 								firstMissing = base + k * 0x1000ULL;
 						}
-						SYSLOG("ngreen", "V278: id=%u %s buffer %llx pitch=%u height=%u pages=%u present=%u missing=%u first-missing=%llx",
+						SYSLOG("ngreen", "V278: id=%u %s buffer %llx pitch=%u height=%u pages=%u present=%u missing=%u first-missing=%llx pte=%llx",
 						       id, stencil ? "stencil" : "depth", static_cast<unsigned long long>(base), pitch, height, pages,
-						       present, missing, static_cast<unsigned long long>(firstMissing));
+						       present, missing, static_cast<unsigned long long>(firstMissing),
+						       static_cast<unsigned long long>(vfPpgttLeaf(root, base)));
 					}
 				for (uint32_t i = pageIndex ? 0 : (bb & 0xFE0) / 4; i + 8 <= 1024; i += 8)
 					if (page[i] | page[i + 1] | page[i + 2] | page[i + 3] | page[i + 4] | page[i + 5] | page[i + 6] | page[i + 7])
