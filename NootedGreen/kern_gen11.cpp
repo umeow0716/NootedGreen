@@ -11007,6 +11007,19 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		SYSLOG("ngreen", "V230: registered GuC context id=%u LRCA=%08x:%08x class=%u instance=%u",
 		       gucId, descriptorHi, descriptorLo, engineClass, engineInstance);
 	}
+	// Experiment: the one render context that never starts is the only one
+	// whose image loads 0x21B0 with a GGTT address.
+	if (engineClass == 0 && checkKernelArgument("-ngno21b0")) {
+		using Getter = uint8_t *(*)(void *);
+		auto *image = reinterpret_cast<Getter>(callback->vfSharedMappedBufferGetVirtualAddress)(contextBacking);
+		auto *r = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
+		for (uint32_t i = 0; r && i + 1 < 0x100; i++)
+			if (r[i] == 0x21B0 && r[i + 1]) {
+				SYSLOG("ngreen", "V272: id=%u cleared 0x21b0=%08x", gucId, r[i + 1]);
+				r[i + 1] = 0;
+				__asm__ volatile("clflush (%0); mfence" :: "r"(&r[i + 1]) : "memory");
+			}
+	}
 	// V271: register state of the first render contexts, to compare one that
 	// never runs with ones that do.
 	static uint32_t rcsDumps = 0;
