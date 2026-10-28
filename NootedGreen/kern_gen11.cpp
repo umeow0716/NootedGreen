@@ -12531,13 +12531,18 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	if (bb & ~3ULL)
 		SYSLOG("ngreen", "V276: id=%u saved bb=%llx", id, static_cast<unsigned long long>(bb));
 	bb = 0;
+	uint64_t lastBefore = 0;
 	for (uint32_t i = 0; ring && i + 2 < (tail & 0x3FFFC) / 4; i++)
 		if (ring[i] == 0x18800101) {
 			const uint64_t start = ring[i + 1] | (static_cast<uint64_t>(ring[i + 2] & 0xFFFF) << 32);
 			SYSLOG("ngreen", "V276: id=%u ring +%03x starts batch %llx", id, i * 4, static_cast<unsigned long long>(start));
 			if (!bb && i * 4 >= (head & 0x3FFFC))
 				bb = start;
+			else if (!bb)
+				lastBefore = start;
 		}
+	if (!bb)
+		bb = lastBefore;
 	if (batchDumps >= 2)
 		bb = 0;
 	else if (bb)
