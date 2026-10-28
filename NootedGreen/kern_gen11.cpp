@@ -12797,7 +12797,8 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		       action, length, payload0, payload1, payload2);
 		if (event.kind == NGVfGuCEvent::Kind::ContextReset)
 			vfDumpResetContext(payload0, callback->vfSharedMappedBufferGetVirtualAddress);
-		// -ngresetcontinue: GuC already reset the engine and dropped only
+		ringDumps++;
+	// -ngresetcontinue: GuC already reset the engine and dropped only
 		// the hung context; keep the other contexts running.
 		if (event.kind == NGVfGuCEvent::Kind::ContextReset && checkKernelArgument("-ngresetcontinue"))
 			return true;
@@ -13372,11 +13373,23 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 			frame.windowFlags,frame.windowBytes};
 		vfFlightRecord(10,0,frame.id,flightTimeout,arrsize(flightTimeout));
 	}
-	for (uint32_t engine=0;engine<NGVfTimeoutObservation::engineCount;++engine) {
+	static uint32_t ringDumps = 0;
+	for (uint32_t engine=0;ringDumps < 4 && engine<NGVfTimeoutObservation::engineCount;++engine) {
 		const auto *w=gVfTimeoutRing[engine];
 		for (uint32_t i=0;i<gVfTimeoutRingWords[engine];i+=8)
 			SYSLOG("ngreen", "V268: ring engine=%u id=%x +%03x: %08x %08x %08x %08x %08x %08x %08x %08x",
 				engine,frames[engine].id,i*4,w[i],w[i+1],w[i+2],w[i+3],w[i+4],w[i+5],w[i+6],w[i+7]);
+	}
+	ringDumps++;
+	// -ngresetcontinue: GuC already reset the hung context, so nothing of it
+	// can still DMA; keep the guest alive and let the channel time out again.
+	if (checkKernelArgument("-ngresetcontinue")) {
+		static uint32_t logs = 0;
+		if (logs++ < 16)
+			SYSLOG("ngreen", "V267: event timeout channel=%d capture=%x T0=" NG_TIMEOUT_FRAME_FORMAT
+				" T2=" NG_TIMEOUT_FRAME_FORMAT "; continuing", channel, capture,
+				NG_TIMEOUT_FRAME_ARGS(frames[0]), NG_TIMEOUT_FRAME_ARGS(frames[2]));
+		return nullptr;
 	}
 	vfMarkProtocolFault("VF native event timeout without verified GPU quiescence");
 	PANIC_COND(true, "ngreen", "V267: refusing VF event timeout recovery channel=%d V364: capture=%x"
