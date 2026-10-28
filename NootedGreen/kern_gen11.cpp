@@ -12304,6 +12304,22 @@ void Gen11::vfBaseInvalidateTLB(const void *that) {
 
 // After a GuC context reset the image holds the saved state: log where the
 // ring stopped and which batch it was in.
+// The leaf PTE of a GPU virtual address in a 4-level PPGTT (0 if unmapped).
+static uint64_t vfPpgttLeaf(uint64_t root, uint64_t va) {
+	uint64_t table = root & 0x7FFFFFF000ULL, entry = 0;
+	for (uint32_t level = 0; table && level < 4; level++) {
+		auto *desc = IOMemoryDescriptor::withPhysicalAddress(table, PAGE_SIZE, kIODirectionIn);
+		auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapReadOnly) : nullptr;
+		entry = map ? reinterpret_cast<volatile uint64_t *>(map->getVirtualAddress())[(va >> (39 - 9 * level)) & 511] : 0;
+		OSSafeReleaseNULL(map);
+		OSSafeReleaseNULL(desc);
+		if (!(entry & 1))
+			return 0;
+		table = level < 3 ? (entry & 0x7FFFFFF000ULL) : 0;
+	}
+	return entry;
+}
+
 static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	if (!gVfContexts || id >= gVfContextCapacity || !getterAddress)
 		return;
@@ -12363,6 +12379,28 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 			}
 			auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
 			if (level == 4) {
+				// V278: is the depth/stencil surface this batch binds fully mapped?
+				for (uint32_t i = 0; i + 5 < 1024; i++)
+					if (page[i] == 0x78060006 || page[i] == 0x78050006) {
+						const bool stencil = page[i] == 0x78060006;
+						const uint64_t base = page[i + 2] | (static_cast<uint64_t>(page[i + 3] & 0xFFFF) << 32);
+						const uint32_t pitch = (page[i + 1] & 0x1FFFF) + 1;
+						const uint32_t height = stencil ? ((page[i + 4] >> 16) & 0x3FFF) + 1 : ((page[i + 4] >> 17) & 0x3FFF) + 1;
+						if (!base)
+							continue;
+						const uint32_t pages = (pitch * height + 0xFFF) / 0x1000;
+						uint32_t present = 0, missing = 0;
+						uint64_t firstMissing = 0;
+						for (uint32_t k = 0; k < pages && k < 256; k++) {
+							if (vfPpgttLeaf(root, base + k * 0x1000ULL))
+								present++;
+							else if (!missing++)
+								firstMissing = base + k * 0x1000ULL;
+						}
+						SYSLOG("ngreen", "V278: id=%u %s buffer %llx pitch=%u height=%u pages=%u present=%u missing=%u first-missing=%llx",
+						       id, stencil ? "stencil" : "depth", static_cast<unsigned long long>(base), pitch, height, pages,
+						       present, missing, static_cast<unsigned long long>(firstMissing));
+					}
 				for (uint32_t i = pageIndex ? 0 : (bb & 0xFE0) / 4; i + 8 <= 1024; i += 8)
 					if (page[i] | page[i + 1] | page[i + 2] | page[i + 3] | page[i + 4] | page[i + 5] | page[i + 6] | page[i + 7])
 						SYSLOG("ngreen", "V276: id=%u va=%llx: %08x %08x %08x %08x %08x %08x %08x %08x", id,
