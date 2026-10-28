@@ -17,6 +17,9 @@
 		F0BB9E562A57A0340081F5FA /* kern_patcherplus.hpp in Headers */ = {isa = PBXBuildFile; fileRef = F0BB9E542A57A0340081F5FA /* kern_patcherplus.hpp */; };
 		A17E1E312DC0000100000001 /* kern_telemetry.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E302DC0000100000001 /* kern_telemetry.cpp */; };
 		A17E1E342DC0000100000001 /* kern_tgl_compat.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E332DC0000100000001 /* kern_tgl_compat.cpp */; };
+		A17E1E512DC0000100000001 /* kern_xe_access.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E502DC0000100000001 /* kern_xe_access.cpp */; };
+		A17E1E542DC0000100000001 /* kern_xe_render.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E532DC0000100000001 /* kern_xe_render.cpp */; };
+		A17E1E572DC0000100000001 /* kern_xe_lv.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E562DC0000100000001 /* kern_xe_lv.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -60,6 +63,13 @@
 		A17E1E322DC0000100000001 /* kern_telemetry.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_telemetry.hpp; sourceTree = "<group>"; };
 		A17E1E332DC0000100000001 /* kern_tgl_compat.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_tgl_compat.cpp; sourceTree = "<group>"; };
 		A17E1E352DC0000100000001 /* kern_tgl_compat.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_tgl_compat.hpp; sourceTree = "<group>"; };
+		A17E1E502DC0000100000001 /* kern_xe_access.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_xe_access.cpp; sourceTree = "<group>"; };
+		A17E1E522DC0000100000001 /* kern_xe_access.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_xe_access.hpp; sourceTree = "<group>"; };
+		A17E1E532DC0000100000001 /* kern_xe_render.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_xe_render.cpp; sourceTree = "<group>"; };
+		A17E1E552DC0000100000001 /* kern_xe_render.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_xe_render.hpp; sourceTree = "<group>"; };
+		A17E1E562DC0000100000001 /* kern_xe_lv.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_xe_lv.cpp; sourceTree = "<group>"; };
+		A17E1E582DC0000100000001 /* kern_xe_lv.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_xe_lv.hpp; sourceTree = "<group>"; };
+		A17E1E592DC0000100000001 /* kern_xe_policy.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_xe_policy.hpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -107,6 +117,13 @@
 				A17E1E322DC0000100000001 /* kern_telemetry.hpp */,
 				A17E1E332DC0000100000001 /* kern_tgl_compat.cpp */,
 				A17E1E352DC0000100000001 /* kern_tgl_compat.hpp */,
+				A17E1E502DC0000100000001 /* kern_xe_access.cpp */,
+				A17E1E522DC0000100000001 /* kern_xe_access.hpp */,
+				A17E1E532DC0000100000001 /* kern_xe_render.cpp */,
+				A17E1E552DC0000100000001 /* kern_xe_render.hpp */,
+				A17E1E562DC0000100000001 /* kern_xe_lv.cpp */,
+				A17E1E582DC0000100000001 /* kern_xe_lv.hpp */,
+				A17E1E592DC0000100000001 /* kern_xe_policy.hpp */,
 				F009B7A029E4EE3C00786AFF /* kern_start.cpp */,
 			);
 			path = NootedGreen;
@@ -233,6 +250,9 @@
 				F0BB9E552A57A0340081F5FA /* kern_patcherplus.cpp in Sources */,
 				A17E1E312DC0000100000001 /* kern_telemetry.cpp in Sources */,
 				A17E1E342DC0000100000001 /* kern_tgl_compat.cpp in Sources */,
+				A17E1E512DC0000100000001 /* kern_xe_access.cpp in Sources */,
+				A17E1E542DC0000100000001 /* kern_xe_render.cpp in Sources */,
+				A17E1E572DC0000100000001 /* kern_xe_lv.cpp in Sources */,
 				F0AF08BB2A0F373F00B63C2B /* kern_gen11.cpp in Sources */,
 				CE405ED91E4A080700AA0B3D /* plugin_start.cpp in Sources */,
 			);

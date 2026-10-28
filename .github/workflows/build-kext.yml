@@ -16,6 +16,7 @@ on:
       - "Lilu.kext/**"
       - "MacKernelSDK/**"
       - "tools/**"
+      - "NGShim/**"
       - "!tools/metal_smoke/**"
       - ".github/workflows/build-kext.yml"
 
@@ -83,6 +84,9 @@ jobs:
             -framework CoreVideo \
             -o "$RUNNER_TEMP/metal-smoke"
 
+      - name: Build NGShim (TGL UMD descriptor shim)
+        run: sh NGShim/build.sh
+
       - name: Stage artifact
         run: |
           KEXT_PATH="$(find "$RUNNER_TEMP/DerivedData/Build/Products/Release" -maxdepth 1 -name NootedGreen.kext -type d -print -quit)"
@@ -93,6 +97,14 @@ jobs:
         with:
           name: NootedGreen-Tahoe-x86_64
           path: ${{ runner.temp }}/NootedGreen-Tahoe-x86_64.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NGShim-Tahoe-x86_64
+          path: |
+            NGShim/build/impostor.dylib
+            NGShim/install.sh
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4

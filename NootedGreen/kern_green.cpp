@@ -6,6 +6,9 @@
 #include "kern_pci_identity.hpp"
 #include "kern_gpu_capabilities.hpp"
 #include "kern_telemetry.hpp"
+#include "kern_xe_access.hpp"
+#include "kern_xe_lv.hpp"
+#include "kern_xe_render.hpp"
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_devinfo.hpp>
 #include <i386/machine_routines.h>
@@ -228,6 +231,10 @@ void NGreen::init() {
     callback = this;
 
 	gen11.init();
+	// WhateverXe-derived Gen12 support; independent of the VF driver state.
+	XeDataAccess::init();
+	XeRender::init();
+	XeLV::init();
     lilu.onPatcherLoadForce(
         [](void *user, KernelPatcher &patcher) { static_cast<NGreen *>(user)->processPatcher(patcher); }, this);
     lilu.onKextLoadForce(
@@ -241,6 +248,9 @@ void NGreen::init() {
 
 
 void NGreen::processPatcher(KernelPatcher &patcher) {
+	XeDataAccess::processKernel(patcher);
+	XeLV::processKernel(patcher);
+
 	auto *devInfo = DeviceInfo::create();
 	PANIC_COND(!devInfo, "ngreen", "Failed to create DeviceInfo");
 	devInfo->processSwitchOff();
@@ -351,11 +361,15 @@ bool NGreen::setRMMIOIfNecessary() {
 }
 
 bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
+	if (XeDataAccess::processKext(patcher, index, address, size) || XeLV::processKext(patcher, index, address, size))
+		return true;
 	if (!this->driverReady)
 		return true;
 	if (gen11.processKext(patcher, index, address, size)) {
 		DBGLOG("ngreen", "Processed Generation 11 configuration");
 	}
+	// After gen11: it patches inside getGPUInfo, which XeRender wraps.
+	XeRender::processKext(patcher, index, address, size);
 	return true;
 }
 

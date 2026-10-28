@@ -1,6 +1,6 @@
 // Copyright (c) 2026 b00t0x. BSD-3-Clause.
-#include "access.hpp"
-#include "policy.hpp"
+#include "kern_xe_access.hpp"
+#include "kern_xe_policy.hpp"
 #include <Headers/kern_api.hpp>
 #include <IOKit/IORegistryEntry.h>
 #include <libkern/OSAtomic.h>

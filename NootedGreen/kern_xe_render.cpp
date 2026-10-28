@@ -1,7 +1,7 @@
 // Gen12 render fixes ported from WhateverXe (Copyright (c) 2026 b00t0x,
 // BSD-3-Clause). Each patch checks the donor bytes first and is skipped
 // (reported in the registry) when they don't match.
-#include "render.hpp"
+#include "kern_xe_render.hpp"
 #include <Headers/kern_api.hpp>
 #include <IOKit/IORegistryEntry.h>
 
