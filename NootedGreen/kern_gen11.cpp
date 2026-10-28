@@ -11985,7 +11985,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
 			ringSize, previousRingTail);
 
-	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngnohz"))
+	if (static_cast<uint32_t>(hwCsType) == 0 && (checkKernelArgument("-ngnohz") || checkKernelArgument("-ngnol3lri")))
 		vfEditRcsBatches(static_cast<uint32_t>(slot), static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
 			ringSize, previousRingTail, ringTail, callback->vfSharedMappedBufferGetVirtualAddress);
@@ -12440,11 +12440,16 @@ static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ring
 	}
 	static uint32_t logs = 0;
 	const uint32_t words = ringSize / 4;
+	// -ngnol3lri: L3ALLOC/0xB138 are global on Gen12, so a VF batch's L3
+	// layout LRI repartitions L3 under every other context (host included).
+	const bool noHz = checkKernelArgument("-ngnohz"), noL3 = checkKernelArgument("-ngnol3lri");
+	uint32_t l3Lris = 0;
 	for (uint32_t r = from / 4 % words, end = to / 4 % words; r != end; r = (r + 1) % words) {
 		if (ring[r] != 0x18800101)
 			continue;
 		const uint64_t bb = ring[(r + 1) % words] | (static_cast<uint64_t>(ring[(r + 2) % words] & 0xFFFF) << 32);
 		uint32_t hzOps = 0, hizClears = 0, nops = 0, skip = 0, pages = 0;
+		l3Lris = 0;
 		bool clearHiz = false, done = false;
 		for (uint64_t va = bb & ~3ULL; !done && pages < 16; pages++) {
 			const uint64_t leaf = vfPpgttLeaf(root, va);
@@ -12489,6 +12494,15 @@ static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ring
 					done = true;
 					break;
 				}
+				if (noL3 && w == 0x11000001 && i + 1 < 1024 && (page[i + 1] == 0xB134 || page[i + 1] == 0xB138)) {
+					l3Lris++;
+					page[i] = 0, nops = 2, dirty = true;
+					continue;
+				}
+				if (!noHz) {
+					skip = length - 1;
+					continue;
+				}
 				if (w == 0x78520003) {
 					hzOps++;
 					page[i] = 0, nops = length - 1, dirty = true;
@@ -12509,10 +12523,10 @@ static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ring
 			OSSafeReleaseNULL(desc);
 			va = (va & ~0xFFFULL) + 0x1000;
 		}
-		if (logs < 40 && (hzOps || hizClears)) {
+		if (logs < 40 && (hzOps || hizClears || l3Lris)) {
 			logs++;
-			SYSLOG("ngreen", "V280: id=%u batch %llx pages=%u hz-ops=%u depth-buffers=%u end=%d", id,
-			       static_cast<unsigned long long>(bb), pages, hzOps, hizClears, done);
+			SYSLOG("ngreen", "V280: id=%u batch %llx pages=%u hz-ops=%u depth-buffers=%u l3-lri=%u end=%d", id,
+			       static_cast<unsigned long long>(bb), pages, hzOps, hizClears, l3Lris, done);
 		}
 	}
 }
