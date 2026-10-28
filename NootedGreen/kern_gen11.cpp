@@ -12461,8 +12461,11 @@ static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ring
 				}
 				const uint32_t w = page[i], client = w >> 29;
 				uint32_t length;
+				const uint32_t op = (w >> 23) & 0x3F;
 				if (client == 0)
-					length = ((w >> 23) & 0x3F) < 0x10 ? 1 : (w & 0xFF) + 2;
+					// MI_STORE_DATA_IMM has a 10-bit length (Apple stores whole
+					// command templates with it); the other MI commands 8 bits.
+					length = op < 0x10 ? 1 : (w & (op == 0x20 ? 0x3FF : 0xFF)) + 2;
 				else if (client == 3)
 					length = (w & 0xFF) + 2;
 				else {
@@ -12473,12 +12476,12 @@ static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ring
 					done = true;
 					break;
 				}
-				if ((w >> 16) == 0x7852) {
+				if (w == 0x78520003) {
 					hzOps++;
 					page[i] = 0, nops = length - 1, dirty = true;
 					continue;
 				}
-				if ((w >> 16) == 0x7805) {
+				if (w == 0x78050006) {
 					hizClears++;
 					clearHiz = true;
 				}
