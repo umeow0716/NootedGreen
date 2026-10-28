@@ -11020,6 +11020,42 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				__asm__ volatile("clflush (%0); mfence" :: "r"(&r[i + 1]) : "memory");
 			}
 	}
+	// V273: what the 0x21B0 value of a render context points at: GGTT PTEs
+	// around it, the first page's contents, and the context's PPGTT root.
+	static uint32_t pointerDumps = 0;
+	if (engineClass == 0 && pointerDumps < 2) {
+		using Getter = uint8_t *(*)(void *);
+		auto *image = reinterpret_cast<Getter>(callback->vfSharedMappedBufferGetVirtualAddress)(contextBacking);
+		auto *r = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
+		auto *pte = vfDirectPteBase(gVfGlobalPageTable);
+		for (uint32_t i = 0; r && pte && i + 1 < 0x100; i++) {
+			if (r[i] == 0x2270 || r[i] == 0x2274)
+				SYSLOG("ngreen", "V273: id=%u pdp0 %04x=%08x", gucId, r[i], r[i + 1]);
+			if (r[i] != 0x21B0 || !r[i + 1] || r[i + 1] >= 0xFFFFF000U)
+				continue;
+			pointerDumps++;
+			const uint32_t target = r[i + 1] & ~0xFFFU;
+			for (int32_t p = -2; p <= 5; p++)
+				SYSLOG("ngreen", "V273: id=%u 0x21b0=%08x pte[%08x]=%016llx", gucId, r[i + 1],
+				       target + p * 0x1000, static_cast<unsigned long long>(pte[(target >> 12) + p]));
+			const uint64_t physical = pte[target >> 12] & 0x7FFFFFF000ULL;
+			auto *desc = IOMemoryDescriptor::withPhysicalAddress(physical, PAGE_SIZE, kIODirectionIn);
+			auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapReadOnly) : nullptr;
+			if (map) {
+				auto *w = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
+				for (uint32_t k = 0; k < 0x400; k += 8) {
+					bool zero = true;
+					for (uint32_t j = 0; j < 8; j++)
+						zero &= w[k + j] == 0;
+					if (!zero)
+						SYSLOG("ngreen", "V273: id=%u +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", gucId, k * 4,
+						       w[k], w[k + 1], w[k + 2], w[k + 3], w[k + 4], w[k + 5], w[k + 6], w[k + 7]);
+				}
+				map->release();
+			}
+			OSSafeReleaseNULL(desc);
+		}
+	}
 	// V271: register state of the first render contexts, to compare one that
 	// never runs with ones that do.
 	static uint32_t rcsDumps = 0;
