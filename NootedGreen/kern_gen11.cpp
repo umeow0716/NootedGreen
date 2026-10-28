@@ -9842,6 +9842,8 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring) {
 }
 
 static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress);
+static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to,
+                             mach_vm_address_t getterAddress);
 
 // V275: GGTT writes in newly submitted ring commands. A GGTT address below the
 // VF's range lands in PF-owned PTEs, i.e. a host-domain DMA write.
@@ -11962,6 +11964,11 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		vfInjectRcsPrologue(static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))));
 
+	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngnohz"))
+		vfEditRcsBatches(static_cast<uint32_t>(slot), static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
+			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
+			ringSize, previousRingTail, ringTail, callback->vfSharedMappedBufferGetVirtualAddress);
+
 	const uint16_t gucId = static_cast<uint16_t>(slot);
 	const uint32_t enableRequest[] = {
 		kGucActionScheduleContextModeSet, gucId, kGucContextEnable,
@@ -12337,6 +12344,100 @@ static uint64_t vfPpgttLeaf(uint64_t root, uint64_t va) {
 		table = level < 3 ? (entry & 0x7FFFFFF000ULL) : 0;
 	}
 	return entry;
+}
+
+// V280 (-ngnohz): diagnostic batch edit. Before an RCS submission reaches the
+// GuC, walk the new user batches through the context PPGTT and drop depth
+// HiZ: NOP every 3DSTATE_WM_HZ_OP and clear Hierarchical Depth Buffer Enable
+// in 3DSTATE_DEPTH_BUFFER.
+static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to,
+                             mach_vm_address_t getterAddress) {
+	if (!gVfContexts || id >= gVfContextCapacity || !ring || !getterAddress || !ringSize || (ringSize & (ringSize - 1)))
+		return;
+	auto *image = gVfContexts[id].contextBacking ?
+		reinterpret_cast<uint8_t *(*)(void *)>(getterAddress)(gVfContexts[id].contextBacking) : nullptr;
+	if (!image)
+		return;
+	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
+	uint64_t root = 0;
+	for (uint32_t i = 0; i + 1 < 0x100; i++) {
+		if (regs[i] == 0x2270) root |= regs[i + 1];
+		else if (regs[i] == 0x2274) root |= static_cast<uint64_t>(regs[i + 1]) << 32;
+	}
+	static uint32_t logs = 0;
+	const uint32_t words = ringSize / 4;
+	for (uint32_t r = from / 4 % words, end = to / 4 % words; r != end; r = (r + 1) % words) {
+		if (ring[r] != 0x18800101)
+			continue;
+		const uint64_t bb = ring[(r + 1) % words] | (static_cast<uint64_t>(ring[(r + 2) % words] & 0xFFFF) << 32);
+		uint32_t hzOps = 0, hizClears = 0, nops = 0, skip = 0, pages = 0;
+		bool clearHiz = false, done = false;
+		for (uint64_t va = bb & ~3ULL; !done && pages < 16; pages++) {
+			const uint64_t leaf = vfPpgttLeaf(root, va);
+			if (!leaf)
+				break;
+			auto *desc = IOMemoryDescriptor::withPhysicalAddress((leaf & 0x7FFFFFF000ULL), PAGE_SIZE, kIODirectionInOut);
+			auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere) : nullptr;
+			if (!map) {
+				OSSafeReleaseNULL(desc);
+				break;
+			}
+			auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
+			bool dirty = false;
+			for (uint32_t i = (va & 0xFFF) / 4; i < 1024; i++) {
+				if (nops) {
+					page[i] = 0, nops--, dirty = true;
+					continue;
+				}
+				if (clearHiz) {
+					page[i] &= ~(1U << 22), clearHiz = false, dirty = true;
+					skip--;
+					continue;
+				}
+				if (skip) {
+					skip--;
+					continue;
+				}
+				const uint32_t w = page[i], client = w >> 29;
+				uint32_t length;
+				if (client == 0)
+					length = ((w >> 23) & 0x3F) < 0x10 ? 1 : (w & 0xFF) + 2;
+				else if (client == 3)
+					length = (w & 0xFF) + 2;
+				else {
+					done = true;
+					break;
+				}
+				if (w == 0x05000000) {
+					done = true;
+					break;
+				}
+				if ((w >> 16) == 0x7852) {
+					hzOps++;
+					page[i] = 0, nops = length - 1, dirty = true;
+					continue;
+				}
+				if ((w >> 16) == 0x7805) {
+					hizClears++;
+					clearHiz = true;
+				}
+				skip = length - 1;
+			}
+			if (dirty) {
+				for (uint32_t k = 0; k < PAGE_SIZE; k += 64)
+					__asm__ volatile("clflush (%0)" :: "r"(reinterpret_cast<volatile uint8_t *>(page) + k) : "memory");
+				__asm__ volatile("mfence" ::: "memory");
+			}
+			map->release();
+			OSSafeReleaseNULL(desc);
+			va = (va & ~0xFFFULL) + 0x1000;
+		}
+		if (logs < 40 && (hzOps || hizClears)) {
+			logs++;
+			SYSLOG("ngreen", "V280: id=%u batch %llx pages=%u hz-ops=%u depth-buffers=%u end=%d", id,
+			       static_cast<unsigned long long>(bb), pages, hzOps, hizClears, done);
+		}
+	}
 }
 
 static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
