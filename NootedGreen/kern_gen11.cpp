@@ -9823,6 +9823,8 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring) {
 	__asm__ volatile("clflush (%0); mfence" :: "r"(ring) : "memory");
 }
 
+static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress);
+
 // V275: GGTT writes in newly submitted ring commands. A GGTT address below the
 // VF's range lands in PF-owned PTEs, i.e. a host-domain DMA write.
 static void vfScanRingGgttWrites(uint32_t id, uint32_t type, volatile uint32_t *ring, uint32_t ringSize,
@@ -12076,6 +12078,17 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			SYSLOG("ngreen", "V274: id=%u type=%u ring +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", gucId,
 			       static_cast<unsigned int>(hwCsType), i * 4, cpuRing[i], cpuRing[i + 1], cpuRing[i + 2],
 			       cpuRing[i + 3], cpuRing[i + 4], cpuRing[i + 5], cpuRing[i + 6], cpuRing[i + 7]);
+	}
+	// V277: loginwindow's first render batch faults or hangs on a VF; dump it
+	// at submission so the fault watcher can still stop the VM immediately.
+	static uint32_t loginDumps = 0;
+	if (hwCsType == 0 && enable && loginDumps < 2) {
+		char name[24] {};
+		proc_selfname(name, sizeof(name));
+		if (!strncmp(name, "loginwindow", sizeof(name))) {
+			loginDumps++;
+			vfDumpResetContext(gucId, callback->vfSharedMappedBufferGetVirtualAddress);
+		}
 	}
 	vfScanRingGgttWrites(gucId, static_cast<uint32_t>(hwCsType),
 		static_cast<volatile uint32_t *>(getVirtualAddress(admittedRingBacking)), ringSize,
