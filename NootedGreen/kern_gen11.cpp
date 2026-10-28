@@ -9805,6 +9805,19 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 		for (auto v : lri) b[n++] = v;
 	}
 	storeL3(1);
+	// TGL object-level 3D preemption corrupts the pipeline (PRM Vol14 UP3
+	// p53, WEX r135/r144). The host enables per-context control (0x20E0
+	// bit 14) and VF contexts start with CS_CHICKEN1 bit 0 set; GuC
+	// preempts VF contexts every quantum. Clear it (masked write).
+	if (!checkKernelArgument("-ngobjpreempt")) {
+		b[n++] = 0x11000001;
+		b[n++] = 0x2580;
+		b[n++] = 0x00010000;
+	}
+	b[n++] = 0x12400002; // MI_STORE_REGISTER_MEM, GGTT: CS_CHICKEN1 readback
+	b[n++] = 0x2580;
+	b[n++] = static_cast<uint32_t>(gpu + 0x808);
+	b[n++] = static_cast<uint32_t>(gpu >> 32);
 	// COMMON_SLICE_CHICKEN3 (Wa_1409142259), FF_MODE2 (Wa_1608008084),
 	// ROW_CHICKEN2 (Wa_1606931601)
 	const uint32_t lri[] {0x11000005, 0x7304, 0x02000200, 0x6604, 0xE0040000, 0xE4F4, 0x40004000};
@@ -12518,7 +12531,8 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	const uint32_t head = regs[5], tail = regs[7];
 	SYSLOG("ngreen", "V270: reset id=%u head=0x%x tail=0x%x", id, head, tail);
 	if (gVfRcsPrologueCpu)
-		SYSLOG("ngreen", "V279: L3ALLOC before prologue %08x after %08x", gVfRcsPrologueCpu[0x200], gVfRcsPrologueCpu[0x201]);
+		SYSLOG("ngreen", "V279: L3ALLOC before prologue %08x after %08x CS_CHICKEN1 %08x", gVfRcsPrologueCpu[0x200],
+		       gVfRcsPrologueCpu[0x201], gVfRcsPrologueCpu[0x202]);
 	for (uint32_t i = 0; i + 1 < 0x400; i++)
 		if (regs[i] == 0xB134 || regs[i] == 0xB138)
 			SYSLOG("ngreen", "V279: id=%u image reg %x = %08x", id, regs[i], regs[i + 1]);
