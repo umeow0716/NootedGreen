@@ -3,6 +3,7 @@
 #include "kern_gen11.hpp"
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOUserClient.h>
+#include <sys/proc.h>
 #include "kern_guc_ring.hpp"
 #include "kern_flight_trace.hpp"
 #include "kern_vf_cpu_range.hpp"
@@ -12055,10 +12056,12 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	vfFlightRecord(7,vfFlightCurrentGroup(),(uint64_t(descriptorHi)<<32)|descriptorLo,flightSubmit,arrsize(flightSubmit));
 	static uint32_t submitLogs = 0;
 	if (submitLogs++ < 64 || !submitted) {
-		SYSLOG("ngreen", "V233: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x old=0x%x channel=%u seq=%u enable=%d ret=%d fence=%u desc-hi=%08x serial=%llx",
+		char process[24] {};
+		proc_selfname(process, sizeof(process));
+		SYSLOG("ngreen", "V233: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x old=0x%x channel=%u seq=%u enable=%d ret=%d fence=%u desc-hi=%08x serial=%llx proc=%s",
 		       gucId, descriptorLo, static_cast<unsigned int>(hwCsType),
 		       ringTail, previousRingTail, channelId, ringSequence, enable,
-		       submitted, transportFence, descriptorHi, submissionToken);
+		       submitted, transportFence, descriptorHi, submissionToken, process);
 	}
 	// V274: the new-work commands of the first submissions on non-render
 	// channels (a blitter context's first submission precedes host DMA write
@@ -12305,6 +12308,42 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 		const uint32_t r = regs[i] & 0xFFF;
 		if ((regs[i] >> 12) && (r == 0x140 || r == 0x168 || r == 0x110 || r == 0x11C || r == 0x1C0 || r == 0x1C4))
 			SYSLOG("ngreen", "V270: reg %05x = %08x", regs[i], regs[i + 1]);
+	}
+	// The batch being executed: translate BB_ADDR through the context's PPGTT
+	// and dump the commands around it.
+	uint64_t root = 0, bb = 0;
+	for (uint32_t i = 0; i + 1 < 0x100; i++) {
+		if (regs[i] == 0x2270) root |= regs[i + 1];
+		else if (regs[i] == 0x2274) root |= static_cast<uint64_t>(regs[i + 1]) << 32;
+		else if ((regs[i] & 0xFFF) == 0x140 && (regs[i] >> 12)) bb |= regs[i + 1];
+		else if ((regs[i] & 0xFFF) == 0x168 && (regs[i] >> 12)) bb |= static_cast<uint64_t>(regs[i + 1] & 0xFFFF) << 32;
+	}
+	uint64_t table = (bb & ~3ULL) ? (root & 0x7FFFFFF000ULL) : 0;
+	for (uint32_t level = 0; table && level < 5; level++) {
+		auto *desc = IOMemoryDescriptor::withPhysicalAddress(table, PAGE_SIZE, kIODirectionIn);
+		auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapReadOnly) : nullptr;
+		if (map) {
+			auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
+			if (level == 4) {
+				const uint32_t at = (bb & 0xFFC) / 4, from = at >= 16 ? at - 16 : 0, to = from + 32 <= 1024 ? from + 32 : 1024;
+				for (uint32_t i = from; i + 8 <= to; i += 8)
+					SYSLOG("ngreen", "V276: id=%u bb=%llx +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", id,
+					       static_cast<unsigned long long>(bb), i * 4, page[i], page[i + 1], page[i + 2], page[i + 3],
+					       page[i + 4], page[i + 5], page[i + 6], page[i + 7]);
+				table = 0;
+			} else {
+				const uint64_t entry = reinterpret_cast<volatile uint64_t *>(page)[(bb >> (39 - 9 * level)) & 511];
+				table = (entry & 1) ? (entry & 0x7FFFFFF000ULL) : 0;
+				if (level > 0 && (entry & 0x80)) table = 0;
+				if (!table)
+					SYSLOG("ngreen", "V276: id=%u bb=%llx L%u entry=%016llx", id, static_cast<unsigned long long>(bb),
+					       level, static_cast<unsigned long long>(entry));
+			}
+			map->release();
+		} else {
+			table = 0;
+		}
+		OSSafeReleaseNULL(desc);
 	}
 	if (ring && (head & ~7U) < 0x4000) {
 		const uint32_t at = (head & 0x3FFFC) / 4;
