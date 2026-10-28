@@ -12346,6 +12346,56 @@ static uint64_t vfPpgttLeaf(uint64_t root, uint64_t va) {
 	return entry;
 }
 
+// Copy dwords at a GPU virtual address of a 4-level PPGTT (false if unmapped).
+static bool vfPpgttRead(uint64_t root, uint64_t va, uint32_t *out, uint32_t count) {
+	for (uint32_t i = 0; i < count;) {
+		const uint64_t leaf = vfPpgttLeaf(root, va + i * 4);
+		if (!leaf)
+			return false;
+		auto *desc = IOMemoryDescriptor::withPhysicalAddress(leaf & 0x7FFFFFF000ULL, PAGE_SIZE, kIODirectionIn);
+		auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapReadOnly) : nullptr;
+		if (!map) {
+			OSSafeReleaseNULL(desc);
+			return false;
+		}
+		auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
+		for (uint32_t k = ((va + i * 4) & 0xFFF) / 4; k < 1024 && i < count; k++)
+			out[i++] = page[k];
+		map->release();
+		OSSafeReleaseNULL(desc);
+	}
+	return true;
+}
+
+// V281: the surface states a hung batch binds to the pixel shader. Takes the
+// surface state base from STATE_BASE_ADDRESS and every PS binding table
+// pointer in the batch page, and dumps the first entries' RENDER_SURFACE_STATE.
+static void vfDumpPsSurfaces(uint32_t id, uint64_t root, volatile uint32_t *page, uint64_t &surfaceBase) {
+	static uint32_t dumps = 0;
+	for (uint32_t i = 0; i + 4 < 1024 && dumps < 48; i++) {
+		if (page[i] == 0x61010014 && (page[i + 4] & 1))
+			surfaceBase = (page[i + 4] & ~0xFFFU) | (static_cast<uint64_t>(page[i + 5] & 0xFFFF) << 32);
+		if (page[i] != 0x782A0000 || !surfaceBase)
+			continue;
+		uint32_t table[4] {};
+		const uint64_t tableVa = surfaceBase + (page[i + 1] & 0xFFFE0);
+		if (!vfPpgttRead(root, tableVa, table, 4)) {
+			SYSLOG("ngreen", "V281: id=%u binding table %llx unmapped", id, static_cast<unsigned long long>(tableVa));
+			continue;
+		}
+		for (uint32_t e = 0; e < 4 && dumps < 48; e++) {
+			uint32_t ss[16] {};
+			if (!table[e] || !vfPpgttRead(root, surfaceBase + (table[e] & ~0x3FU), ss, 16))
+				continue;
+			dumps++;
+			SYSLOG("ngreen", "V281: id=%u bt %llx[%u] ss %llx: %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
+			       id, static_cast<unsigned long long>(tableVa), e,
+			       static_cast<unsigned long long>(surfaceBase + (table[e] & ~0x3FU)), ss[0], ss[1], ss[2], ss[3],
+			       ss[4], ss[5], ss[6], ss[7], ss[8], ss[9], ss[10], ss[11], ss[12], ss[13], ss[14], ss[15]);
+		}
+	}
+}
+
 // V280 (-ngnohz): diagnostic batch edit. Before an RCS submission reaches the
 // GuC, walk the new user batches through the context PPGTT and drop depth
 // HiZ: NOP every 3DSTATE_WM_HZ_OP and clear Hierarchical Depth Buffer Enable
@@ -12492,6 +12542,7 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 		bb = 0;
 	else if (bb)
 		batchDumps++;
+	uint64_t surfaceBase = 0;
 	for (uint32_t pageIndex = 0; bb && pageIndex < 4; pageIndex++) {
 		const uint64_t va = (bb & ~0xFFFULL) + pageIndex * 0x1000ULL;
 		uint64_t table = root & 0x7FFFFFF000ULL;
@@ -12504,6 +12555,7 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 			}
 			auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
 			if (level == 4) {
+				vfDumpPsSurfaces(id, root, page, surfaceBase);
 				// V278: is the depth/stencil surface this batch binds fully mapped?
 				for (uint32_t i = 0; i + 5 < 1024; i++)
 					if (page[i] == 0x78060006 || page[i] == 0x78050006) {
