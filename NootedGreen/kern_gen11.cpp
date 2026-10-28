@@ -9845,7 +9845,8 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 
 // Pixel hashing and the LRI workarounds are not kept across a VF context
 // switch, so every submission (each starts with kRcsRingHead) runs it.
-static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint32_t at) {
+static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint32_t at, uint32_t end) {
+	const bool noArb = checkKernelArgument("-ngnoarb");
 	const uint32_t words = ringSize / 4;
 	if (!gVfRcsPrologueGpu || !ring || !words || (words & (words - 1)))
 		return;
@@ -9857,6 +9858,20 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint
 				SYSLOG("ngreen", "V269: RCS ring +%x %08x %08x differs; no prologue", at, w(0), w(1));
 			return;
 		}
+	// -ngnoarb: the prologue turns arbitration off; turn it back on with the
+	// segment's trailing MI_NOOP pad (after the completion stamp), or a
+	// finished context could never be switched out.
+	if (noArb) {
+		volatile uint32_t &pad = ring[(end / 4 + words - 1) & (words - 1)];
+		if (pad != 0) {
+			static uint32_t padLogs = 0;
+			if (padLogs++ < 16)
+				SYSLOG("ngreen", "V269: RCS ring +%x has no trailing pad (%08x); prologue skipped", end - 4, pad);
+			return;
+		}
+		pad = 0x04000001; // MI_ARB_ON_OFF: enable
+		__asm__ volatile("clflush (%0)" :: "r"(&pad) : "memory");
+	}
 	w(1) = static_cast<uint32_t>(gVfRcsPrologueGpu);
 	w(2) = static_cast<uint32_t>(gVfRcsPrologueGpu >> 32);
 	w(3) = w(4) = w(5) = 0; // MI_NOOP
@@ -11987,7 +12002,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngrcsprologue"))
 		vfInjectRcsPrologue(static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
-			ringSize, previousRingTail);
+			ringSize, previousRingTail, ringTail);
 
 	if (static_cast<uint32_t>(hwCsType) == 0 && (checkKernelArgument("-ngnohz") || checkKernelArgument("-ngnol3lri")))
 		vfEditRcsBatches(static_cast<uint32_t>(slot), static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
