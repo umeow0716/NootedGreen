@@ -72,7 +72,7 @@ inline Attributes inspect(const uint32_t *request, size_t length)
 				request[2] == 0x20030001U && request[3] == 2U &&
 				request[4] == 0x20010001U && request[5] == 1000U &&
 				request[6] == 0x20020001U &&
-				(request[7] == 7500000U || request[7] == 640000U) &&
+				request[7] == 50000U &&
 				request[8] == 0x20050001U && request[9] == 0;
 			break;
 		case scheduleContext:
