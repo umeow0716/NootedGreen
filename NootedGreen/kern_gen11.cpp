@@ -9822,6 +9822,46 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring) {
 	__asm__ volatile("clflush (%0); mfence" :: "r"(ring) : "memory");
 }
 
+// V275: GGTT writes in newly submitted ring commands. A GGTT address below the
+// VF's range lands in PF-owned PTEs, i.e. a host-domain DMA write.
+static void vfScanRingGgttWrites(uint32_t id, uint32_t type, volatile uint32_t *ring, uint32_t ringSize,
+                                 uint32_t from, uint32_t to) {
+	static uint32_t sampled = 0;
+	const uint32_t words = ringSize / 4;
+	if (!ring || !words || (words & (words - 1)))
+		return;
+	for (uint32_t i = from / 4 % words, end = to / 4 % words, guard = 0; i != end && guard < 512; guard++) {
+		const uint32_t w = ring[i], client = w >> 29, op = (w >> 23) & 0x3F;
+		uint32_t length;
+		if (client == 0)
+			length = op < 0x10 ? 1 : (w & 0xFF) + 2;
+		else if (client == 3)
+			length = (w & 0xFF) + 2;
+		else
+			break;
+		auto at = [&](uint32_t k) { return ring[(i + k) & (words - 1)]; };
+		bool write = false, ggtt = false;
+		uint64_t address = 0;
+		if (client == 0 && op == 0x24) { // MI_STORE_REGISTER_MEM
+			write = true, ggtt = w & (1U << 22), address = at(2) | (uint64_t(at(3)) << 32);
+		} else if (client == 0 && op == 0x20) { // MI_STORE_DATA_IMM
+			write = true, ggtt = w & (1U << 22), address = at(1) | (uint64_t(at(2)) << 32);
+		} else if (client == 0 && op == 0x26 && ((w >> 14) & 3)) { // MI_FLUSH_DW post-sync
+			write = true, ggtt = at(1) & 4, address = (at(1) & ~7U) | (uint64_t(at(2)) << 32);
+		} else if (w >> 16 == 0x7A00 && ((at(1) >> 14) & 3)) { // PIPE_CONTROL post-sync
+			write = true, ggtt = at(1) & (1U << 24), address = at(2) | (uint64_t(at(3)) << 32);
+		} else if (client == 0 && op == 0x31) { // MI_BATCH_BUFFER_START
+			ggtt = !(w & (1U << 8)), address = at(1) | (uint64_t(at(2)) << 32);
+		}
+		if (ggtt && (address < 0x10000000ULL || sampled < 24)) {
+			sampled++;
+			SYSLOG("ngreen", "V275: id=%u type=%u ring +%03x %08x %s GGTT 0x%llx", id, type, i * 4, w,
+			       write ? "writes" : "starts batch at", static_cast<unsigned long long>(address));
+		}
+		i = (i + length) & (words - 1);
+	}
+}
+
 uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	if (!that || priority < 0 || priority > 3)
 		return NGContextPool::invalidId;
@@ -12032,6 +12072,9 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			       static_cast<unsigned int>(hwCsType), i * 4, cpuRing[i], cpuRing[i + 1], cpuRing[i + 2],
 			       cpuRing[i + 3], cpuRing[i + 4], cpuRing[i + 5], cpuRing[i + 6], cpuRing[i + 7]);
 	}
+	vfScanRingGgttWrites(gucId, static_cast<uint32_t>(hwCsType),
+		static_cast<volatile uint32_t *>(getVirtualAddress(admittedRingBacking)), ringSize,
+		previousRingTail, ringTail);
 	return submitted;
 }
 
