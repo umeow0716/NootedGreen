@@ -12666,6 +12666,10 @@ struct VfTimeoutContextFrame {
 };
 static_assert(sizeof(VfTimeoutContextFrame) == 304, "six bounded CPU frames with short ring prefix");
 
+// Ring contents of every timed-out engine, logged before the timeout panic.
+static uint32_t gVfTimeoutRing[NGVfTimeoutObservation::engineCount][128];
+static uint32_t gVfTimeoutRingWords[NGVfTimeoutObservation::engineCount];
+
 static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
 	VfTimeoutContextFrame (&frames)[NGVfTimeoutObservation::engineCount], uint32_t prefixEngine) {
 	VfContextOperationGuard operation;
@@ -12710,6 +12714,17 @@ static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
 		frame.reportedHead = *reinterpret_cast<volatile uint32_t *>(image + 0x10);
 		frame.ringHead = *reinterpret_cast<volatile uint32_t *>(image + 0x1014);
 		frame.ringTail = *reinterpret_cast<volatile uint32_t *>(image + 0x101C);
+		gVfTimeoutRingWords[engine] = 0;
+		if (entry.ringBacking) {
+			auto *ring = static_cast<volatile uint32_t *>(reinterpret_cast<Getter>(getter)(entry.ringBacking));
+			const uint64_t length = getMember<uint64_t>(entry.ringBacking, kVfMappedBufferLengthOffset);
+			uint32_t words = frame.ringTail / 4U;
+			if (words > 128) words = 128;
+			if (ring && words * 4ULL <= length) {
+				for (uint32_t i = 0; i < words; ++i) gVfTimeoutRing[engine][i] = ring[i];
+				gVfTimeoutRingWords[engine] = words;
+			}
+		}
 		// V379: select the proven timeout channel, not VCS0 unconditionally.
 		// No MMIO or batch traversal. Saved LRCA head is NOT a live instruction pointer.
 		if (engine == prefixEngine && entry.submissionCoverage.hasMarkerCoverage() && entry.ringBacking) {
@@ -12764,6 +12779,12 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 			frame.expectedHead,frame.reportedHead,frame.ringHead,frame.ringTail,
 			frame.windowFlags,frame.windowBytes};
 		vfFlightRecord(10,0,frame.id,flightTimeout,arrsize(flightTimeout));
+	}
+	for (uint32_t engine=0;engine<NGVfTimeoutObservation::engineCount;++engine) {
+		const auto *w=gVfTimeoutRing[engine];
+		for (uint32_t i=0;i<gVfTimeoutRingWords[engine];i+=8)
+			SYSLOG("ngreen", "V268: ring engine=%u id=%x +%03x: %08x %08x %08x %08x %08x %08x %08x %08x",
+				engine,frames[engine].id,i*4,w[i],w[i+1],w[i+2],w[i+3],w[i+4],w[i+5],w[i+6],w[i+7]);
 	}
 	vfMarkProtocolFault("VF native event timeout without verified GPU quiescence");
 	PANIC_COND(true, "ngreen", "V267: refusing VF event timeout recovery channel=%d V364: capture=%x"
