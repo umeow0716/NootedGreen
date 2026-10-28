@@ -11077,7 +11077,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		}
 		if (root)
 			walkDumps++;
-		const uint64_t va = 0x40000000ULL;
+		for (const uint64_t va : {0x40000000ULL, 0x40008000ULL}) {
 		uint64_t table = root & 0x7FFFFFF000ULL;
 		for (uint32_t level = 0; table && level < 4; level++) {
 			const uint32_t index = (va >> (39 - 9 * level)) & 511;
@@ -11089,10 +11089,11 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				map->release();
 			}
 			OSSafeReleaseNULL(desc);
-			SYSLOG("ngreen", "V273: id=%u class=%u root=%llx va=40000000 L%u[%u] @%llx = %016llx", gucId, engineClass,
-			       static_cast<unsigned long long>(root), level, index,
+			SYSLOG("ngreen", "V273: id=%u class=%u root=%llx va=%llx L%u[%u] @%llx = %016llx", gucId, engineClass,
+			       static_cast<unsigned long long>(root), static_cast<unsigned long long>(va), level, index,
 			       static_cast<unsigned long long>(table), static_cast<unsigned long long>(entry));
 			table = (entry & 1) && !(level > 0 && (entry & 0x80)) ? (entry & 0x7FFFFFF000ULL) : 0;
+		}
 		}
 	}
 	// V271: register state of the first render contexts, to compare one that
