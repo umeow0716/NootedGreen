@@ -338,6 +338,27 @@ bool XeRender::processKext(KernelPatcher &p, size_t index, mach_vm_address_t add
     }
     report("NGXePOSHOff", posh);
 
+    // Gen12 CCS on a VF hangs the render engine (a compressed stencil cleared
+    // with WM_HZ_OP never completes). The UMD sizes each resource's main and
+    // stencil CCS (creation args +0xeb0/+0xeb4) and IGAccelResource::initialize
+    // copies them with the rest of a 0x40-byte block into +0x188; nonzero sizes
+    // make IntelMTLRenderFunctions::execute OR the compression and control
+    // surface bits into the depth/stencil/surface state and map the AUX table.
+    // Copy only the first seven qwords so both sizes stay zero.
+    const uint8_t ccsCopyFind[] {0xB9, 0x08, 0x00, 0x00, 0x00, 0x4C, 0x89, 0xFF, 0xF3, 0x48, 0xA5};
+    const uint8_t ccsCopyReplace[] {0xB9, 0x07, 0x00, 0x00, 0x00, 0x4C, 0x89, 0xFF, 0xF3, 0x48, 0xA5};
+    bool noCcs = checkKernelArgument("-ngnoccs") && p.solveSymbol<mach_vm_address_t>(index,
+        "__ZN15IGAccelResource10initializeEP22IOAccelNewResourceArgsy", address, size) == address + 0x6E8CC &&
+        bytesAt(address, 0x6E951, ccsCopyFind, sizeof(ccsCopyFind));
+    p.clearError();
+    if (noCcs) {
+        KernelPatcher::LookupPatch patch {&tgl, ccsCopyFind, ccsCopyReplace, sizeof(ccsCopyFind), 1};
+        p.applyLookupPatch(&patch, reinterpret_cast<uint8_t *>(address + 0x6E951), sizeof(ccsCopyFind) + 1);
+        noCcs = p.getError() == KernelPatcher::Error::NoError;
+        p.clearError();
+    }
+    report("NGXeNoCCS", noCcs);
+
     // IGScheduler4 (the software scheduler the VF path runs on) serializes every
     // submission on a channel behind the previous one with an MI_SEMAPHORE_WAIT
     // on the ring's own stamp. Under GuC the contexts of different processes run
