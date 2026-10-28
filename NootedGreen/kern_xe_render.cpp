@@ -293,6 +293,7 @@ bool XeRender::processKext(KernelPatcher &p, size_t index, mach_vm_address_t add
     bool flush = p.solveSymbol<mach_vm_address_t>(index, "__ZN24IGHardwareRingBufferMain18commitStampCommandEjb",
         address, size) == address + 0x84DC8;
     p.clearError();
+    flush = flush && !checkKernelArgument("-ngnorcsflush");
     for (size_t n = 0; flush && n < arrsize(flushSites); ++n)
         flush = bytesAt(address, flushSites[n], flushFind[n], sizeof(flushFind[n]));
     for (size_t n = 0; flush && n < arrsize(flushSites); ++n) {
