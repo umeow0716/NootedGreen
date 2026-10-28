@@ -9783,10 +9783,28 @@ void Gen11::vfWorkQueueFree(void *that) {
 static const uint32_t kRcsRingHead[6] {0x7A000004, 0x00144000, 0x40000000, 0, 0, 0};
 static OSObject *gVfRcsPrologue;
 static uint64_t gVfRcsPrologueGpu;
+static volatile uint32_t *gVfRcsPrologueCpu;
 
-static void vfBuildRcsPrologue(uint32_t *b) {
+// The donor programs L3ALLOC/0xB138 through MMIO (IntelTGLMemoryManager::
+// initGTL3Layout), which a VF context never sees. Without it the URB that
+// Apple sizes from the L3 bank count may not exist. The prologue stores the
+// value it found and the value after loading the donor's layout at +0x800.
+static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 	size_t n = 0;
 	for (auto v : kRcsRingHead) b[n++] = v;
+	const bool l3 = !checkKernelArgument("-ngnol3alloc");
+	auto storeL3 = [&](uint32_t slot) {
+		b[n++] = 0x12400002; // MI_STORE_REGISTER_MEM, GGTT
+		b[n++] = 0xB134;
+		b[n++] = static_cast<uint32_t>(gpu + 0x800 + slot * 4);
+		b[n++] = static_cast<uint32_t>(gpu >> 32);
+	};
+	storeL3(0);
+	if (l3) {
+		const uint32_t lri[] {0x11000003, 0xB134, 0xD0000020, 0xB138, 0};
+		for (auto v : lri) b[n++] = v;
+	}
+	storeL3(1);
 	// COMMON_SLICE_CHICKEN3 (Wa_1409142259), FF_MODE2 (Wa_1608008084),
 	// ROW_CHICKEN2 (Wa_1606931601)
 	const uint32_t lri[] {0x11000005, 0x7304, 0x02000200, 0x6604, 0xE0040000, 0xE4F4, 0x40004000};
@@ -9967,12 +9985,13 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		        getMember<uint64_t>(prologue, kVfMappedBufferLengthOffset), PAGE_SIZE, gpu,
 		        gVfGGTTBase, gVfGGTTSize, kGucGgttTop)) {
 			bzero(cpu, PAGE_SIZE);
-			vfBuildRcsPrologue(cpu);
+			vfBuildRcsPrologue(cpu, gpu);
 			for (size_t i = 0; i < PAGE_SIZE; i += 64)
 				__asm__ volatile("clflush (%0)" :: "r"(reinterpret_cast<uint8_t *>(cpu) + i) : "memory");
 			__asm__ volatile("mfence" ::: "memory");
 			gVfRcsPrologue = prologue;
 			gVfRcsPrologueGpu = gpu;
+			gVfRcsPrologueCpu = cpu;
 			SYSLOG("ngreen", "V269: RCS prologue batch at GGTT 0x%llx", static_cast<unsigned long long>(gpu));
 		} else {
 			SYSLOG("ngreen", "V269: no RCS prologue batch");
@@ -12333,6 +12352,11 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
 	const uint32_t head = regs[5], tail = regs[7];
 	SYSLOG("ngreen", "V270: reset id=%u head=0x%x tail=0x%x", id, head, tail);
+	if (gVfRcsPrologueCpu)
+		SYSLOG("ngreen", "V279: L3ALLOC before prologue %08x after %08x", gVfRcsPrologueCpu[0x200], gVfRcsPrologueCpu[0x201]);
+	for (uint32_t i = 0; i + 1 < 0x400; i++)
+		if (regs[i] == 0xB134 || regs[i] == 0xB138)
+			SYSLOG("ngreen", "V279: id=%u image reg %x = %08x", id, regs[i], regs[i + 1]);
 	// Saved register pairs: BB address/state and the active head (MMIO offsets
 	// relative to the engine base, so match the low 12 bits).
 	for (uint32_t i = 0; i + 1 < 0x400 / 4; i++) {
