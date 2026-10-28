@@ -12318,51 +12318,54 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 		else if ((regs[i] & 0xFFF) == 0x140 && (regs[i] >> 12)) bb |= regs[i + 1];
 		else if ((regs[i] & 0xFFF) == 0x168 && (regs[i] >> 12)) bb |= static_cast<uint64_t>(regs[i + 1] & 0xFFFF) << 32;
 	}
-	// GuC does not save a reset context, so BB_ADDR is usually stale: take the
-	// first batch the ring starts instead and dump its first page.
+	// GuC does not save a reset context, so BB_ADDR may be stale. List the
+	// ring's batch starts, take the first one at or after the saved head (the
+	// submission that hung) and dump its first four pages.
 	static uint32_t batchDumps = 0;
-	const bool fromRing = true;
 	if (bb & ~3ULL)
 		SYSLOG("ngreen", "V276: id=%u saved bb=%llx", id, static_cast<unsigned long long>(bb));
 	bb = 0;
 	for (uint32_t i = 0; ring && i + 2 < (tail & 0x3FFFC) / 4; i++)
 		if (ring[i] == 0x18800101) {
-			bb = ring[i + 1] | (static_cast<uint64_t>(ring[i + 2] & 0xFFFF) << 32);
-			SYSLOG("ngreen", "V276: id=%u ring +%03x starts batch %llx", id, i * 4, static_cast<unsigned long long>(bb));
+			const uint64_t start = ring[i + 1] | (static_cast<uint64_t>(ring[i + 2] & 0xFFFF) << 32);
+			SYSLOG("ngreen", "V276: id=%u ring +%03x starts batch %llx", id, i * 4, static_cast<unsigned long long>(start));
+			if (!bb && i * 4 >= (head & 0x3FFFC))
+				bb = start;
 		}
 	if (batchDumps >= 2)
 		bb = 0;
-	else if (bb & ~3ULL)
+	else if (bb)
 		batchDumps++;
-	uint64_t table = (bb & ~3ULL) ? (root & 0x7FFFFFF000ULL) : 0;
-	for (uint32_t level = 0; table && level < 5; level++) {
-		auto *desc = IOMemoryDescriptor::withPhysicalAddress(table, PAGE_SIZE, kIODirectionIn);
-		auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapReadOnly) : nullptr;
-		if (map) {
+	for (uint32_t pageIndex = 0; bb && pageIndex < 4; pageIndex++) {
+		const uint64_t va = (bb & ~0xFFFULL) + pageIndex * 0x1000ULL;
+		uint64_t table = root & 0x7FFFFFF000ULL;
+		for (uint32_t level = 0; table && level < 5; level++) {
+			auto *desc = IOMemoryDescriptor::withPhysicalAddress(table, PAGE_SIZE, kIODirectionIn);
+			auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapReadOnly) : nullptr;
+			if (!map) {
+				OSSafeReleaseNULL(desc);
+				break;
+			}
 			auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
 			if (level == 4) {
-				const uint32_t at = (bb & 0xFFC) / 4;
-				const uint32_t from = fromRing ? at : (at >= 16 ? at - 16 : 0);
-				const uint32_t to = fromRing ? 1024 : (from + 32 <= 1024 ? from + 32 : 1024);
-				for (uint32_t i = from; i + 8 <= to; i += 8)
+				for (uint32_t i = pageIndex ? 0 : (bb & 0xFE0) / 4; i + 8 <= 1024; i += 8)
 					if (page[i] | page[i + 1] | page[i + 2] | page[i + 3] | page[i + 4] | page[i + 5] | page[i + 6] | page[i + 7])
-					SYSLOG("ngreen", "V276: id=%u bb=%llx +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", id,
-					       static_cast<unsigned long long>(bb), i * 4, page[i], page[i + 1], page[i + 2], page[i + 3],
-					       page[i + 4], page[i + 5], page[i + 6], page[i + 7]);
+						SYSLOG("ngreen", "V276: id=%u va=%llx: %08x %08x %08x %08x %08x %08x %08x %08x", id,
+						       static_cast<unsigned long long>(va + i * 4), page[i], page[i + 1], page[i + 2], page[i + 3],
+						       page[i + 4], page[i + 5], page[i + 6], page[i + 7]);
 				table = 0;
 			} else {
-				const uint64_t entry = reinterpret_cast<volatile uint64_t *>(page)[(bb >> (39 - 9 * level)) & 511];
+				const uint64_t entry = reinterpret_cast<volatile uint64_t *>(page)[(va >> (39 - 9 * level)) & 511];
 				table = (entry & 1) ? (entry & 0x7FFFFFF000ULL) : 0;
-				if ((level == 1 || level == 2) && (entry & 0x80)) table = 0;
+				if ((level == 1 || level == 2) && (entry & 0x80))
+					table = 0;
 				if (!table)
-					SYSLOG("ngreen", "V276: id=%u bb=%llx L%u entry=%016llx", id, static_cast<unsigned long long>(bb),
+					SYSLOG("ngreen", "V276: id=%u va=%llx L%u entry=%016llx", id, static_cast<unsigned long long>(va),
 					       level, static_cast<unsigned long long>(entry));
 			}
 			map->release();
-		} else {
-			table = 0;
+			OSSafeReleaseNULL(desc);
 		}
-		OSSafeReleaseNULL(desc);
 	}
 	if (ring && (head & ~7U) < 0x4000) {
 		const uint32_t at = (head & 0x3FFFC) / 4;
