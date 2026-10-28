@@ -9771,6 +9771,57 @@ void Gen11::vfWorkQueueFree(void *that) {
 	reinterpret_cast<BaseFree>(callback->vfOSObjectFree)(that);
 }
 
+// Render-context prologue. A VF context never sees the register state the PF
+// programs through MMIO, and Apple's TGL driver (written for full parts) never
+// programs pixel pipe hashing: with this part's DSS mask 0xf the pipes have
+// 2/2/0 dual subslices and the default hash sends pixels to the missing third
+// pipe. Every new RCS ring starts with the same PIPE_CONTROL; on a context's
+// first submission it is replaced by a jump to this shared GGTT batch, which
+// runs that PIPE_CONTROL, the WhateverXe workaround registers and Mesa's
+// subslice hash table (all context-saved state), then returns to the ring.
+static const uint32_t kRcsRingHead[6] {0x7A000004, 0x00144000, 0x40000000, 0, 0, 0};
+static OSObject *gVfRcsPrologue;
+static uint64_t gVfRcsPrologueGpu;
+
+static void vfBuildRcsPrologue(uint32_t *b) {
+	size_t n = 0;
+	for (auto v : kRcsRingHead) b[n++] = v;
+	// COMMON_SLICE_CHICKEN3 (Wa_1409142259), FF_MODE2 (Wa_1608008084),
+	// ROW_CHICKEN2 (Wa_1606931601)
+	const uint32_t lri[] {0x11000005, 0x7304, 0x02000200, 0x6604, 0xE0040000, 0xE4F4, 0x40004000};
+	for (auto v : lri) b[n++] = v;
+	// 3DSTATE_SUBSLICE_HASH_TABLE, slice 0 on TABLE_0, two- and three-way
+	// tables from intel_compute_pixel_hash_table_3way(8, 16, 2, 2, 0).
+	b[n++] = 0x791F000C;
+	b[n++] = 2;
+	uint32_t *twoWay = b + n, *threeWay = b + n + 4;
+	for (unsigned i = 0; i < 12; i++) b[n + i] = 0;
+	for (unsigned e = 0; e < 128; e++) {
+		const uint32_t pipe = ((e / 16) + (e % 16)) % 2;
+		twoWay[e / 32] |= pipe << (e % 32);
+		threeWay[e / 16] |= pipe << (2 * (e % 16));
+	}
+	n += 12;
+	b[n++] = 0x791E0000; // 3DSTATE_3D_MODE: SubsliceHashingTableEnable
+	b[n++] = 0x00200020;
+	b[n++] = 0x05000000; // MI_BATCH_BUFFER_END
+}
+
+static void vfInjectRcsPrologue(volatile uint32_t *ring) {
+	if (!gVfRcsPrologueGpu || !ring)
+		return;
+	for (size_t i = 0; i < arrsize(kRcsRingHead); i++)
+		if (ring[i] != kRcsRingHead[i]) {
+			SYSLOG("ngreen", "V269: RCS ring head %08x %08x differs; no prologue", ring[0], ring[1]);
+			return;
+		}
+	ring[1] = static_cast<uint32_t>(gVfRcsPrologueGpu);
+	ring[2] = static_cast<uint32_t>(gVfRcsPrologueGpu >> 32);
+	ring[3] = ring[4] = ring[5] = 0; // MI_NOOP
+	ring[0] = 0x18800001; // MI_BATCH_BUFFER_START, GGTT
+	__asm__ volatile("clflush (%0); mfence" :: "r"(ring) : "memory");
+}
+
 uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	if (!that || priority < 0 || priority > 3)
 		return NGContextPool::invalidId;
@@ -9864,6 +9915,27 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	if (traceBootstrap)
 		SYSLOG("ngreen", "V248: mapped first VF proxy process backing GGTT=0x%llx",
 		       static_cast<unsigned long long>(backingGpu));
+	if (!gVfRcsPrologue) {
+		auto *prologue = reinterpret_cast<SharedFactory>(
+			callback->vfSharedMappedBufferWithOptions)(task, PAGE_SIZE, 2, 0);
+		auto *cpu = prologue ? reinterpret_cast<uint32_t *>(getVirtual(prologue)) : nullptr;
+		const uint64_t gpu = prologue ? getGpu(prologue) : 0;
+		if (cpu && NGGgtt::mappedBacking(reinterpret_cast<uint64_t>(cpu),
+		        getMember<uint64_t>(prologue, kVfMappedBufferLengthOffset), PAGE_SIZE, gpu,
+		        gVfGGTTBase, gVfGGTTSize, kGucGgttTop)) {
+			bzero(cpu, PAGE_SIZE);
+			vfBuildRcsPrologue(cpu);
+			for (size_t i = 0; i < PAGE_SIZE; i += 64)
+				__asm__ volatile("clflush (%0)" :: "r"(reinterpret_cast<uint8_t *>(cpu) + i) : "memory");
+			__asm__ volatile("mfence" ::: "memory");
+			gVfRcsPrologue = prologue;
+			gVfRcsPrologueGpu = gpu;
+			SYSLOG("ngreen", "V269: RCS prologue batch at GGTT 0x%llx", static_cast<unsigned long long>(gpu));
+		} else {
+			SYSLOG("ngreen", "V269: no RCS prologue batch");
+			if (prologue) prologue->release();
+		}
+	}
 	auto *memory = reinterpret_cast<GetMemory>(
 		callback->oIGMappedBuffergetMemory)(backing);
 	uint64_t segmentBytes = 0;
@@ -11759,6 +11831,11 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		       lrcaPage, legacyContextId);
 		return false;
 	}
+
+	if (enable && previousState == kVfGucContextRegistered &&
+	    static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngrcsprologue"))
+		vfInjectRcsPrologue(static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
+			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))));
 
 	const uint16_t gucId = static_cast<uint16_t>(slot);
 	const uint32_t enableRequest[] = {
