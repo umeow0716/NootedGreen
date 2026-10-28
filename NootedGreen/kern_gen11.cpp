@@ -11999,6 +11999,20 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		return false;
 	}
 
+	// -ngtlbsubmit (diagnostic): full engine TLB invalidation through GuC
+	// before every RCS submission, when this thread may wait for GuC.
+	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngtlbsubmit") && gVfHardwareGuc) {
+		static uint32_t done = 0, skipped = 0;
+		auto *loop = vfCanUseSleepingLock() ? getMember<IOWorkLoop *>(gVfHardwareGuc, 0xA00) : nullptr;
+		if (loop && !loop->onThread() && !loop->inGate() &&
+		    vfInvalidateTLBSync(gVfHardwareGuc, NGVfGuCRequest::TlbTarget::Engines))
+			done++;
+		else
+			skipped++;
+		if (((done + skipped) & (done + skipped - 1)) == 0)
+			SYSLOG("ngreen", "V282: submit TLB invalidations done=%u skipped=%u", done, skipped);
+	}
+
 	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngrcsprologue"))
 		vfInjectRcsPrologue(static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
