@@ -1,0 +1,37 @@
+name: Build NGXe and NGShim
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/tahoe-sriov-vf
+    paths:
+      - "NGXe/**"
+      - "NGShim/**"
+      - "Lilu.kext/**"
+      - "MacKernelSDK/**"
+      - ".github/workflows/build-ngxe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          sh NGXe/build.sh
+          sh NGShim/build.sh
+          mkdir -p "$RUNNER_TEMP/out"
+          ditto NGXe/build/NGXe.kext "$RUNNER_TEMP/out/NGXe.kext"
+          cp NGShim/build/impostor.dylib NGShim/install.sh "$RUNNER_TEMP/out/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NGXe-Tahoe-x86_64
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
