@@ -12170,12 +12170,11 @@ void Gen11::vfBaseInvalidateTLB(const void *that) {
 
 // After a GuC context reset the image holds the saved state: log where the
 // ring stopped and which batch it was in.
-static void vfDumpResetContext(uint32_t id) {
-	if (!gVfContexts || id >= gVfContextCapacity || !callback ||
-	    !callback->vfSharedMappedBufferGetVirtualAddress)
+static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
+	if (!gVfContexts || id >= gVfContextCapacity || !getterAddress)
 		return;
 	using Getter = uint8_t *(*)(void *);
-	auto getter = reinterpret_cast<Getter>(callback->vfSharedMappedBufferGetVirtualAddress);
+	auto getter = reinterpret_cast<Getter>(getterAddress);
 	const auto &entry = gVfContexts[id];
 	auto *image = entry.contextBacking ? getter(entry.contextBacking) : nullptr;
 	auto *ring = entry.ringBacking ? reinterpret_cast<volatile uint32_t *>(getter(entry.ringBacking)) : nullptr;
@@ -12323,7 +12322,7 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		SYSLOG("ngreen", "V234: GuC failure event action=0x%04x len=%u payload=%08x:%08x:%08x",
 		       action, length, payload0, payload1, payload2);
 		if (event.kind == NGVfGuCEvent::Kind::ContextReset)
-			vfDumpResetContext(payload0);
+			vfDumpResetContext(payload0, callback->vfSharedMappedBufferGetVirtualAddress);
 		vfMarkProtocolFault(event.kind == NGVfGuCEvent::Kind::ContextReset ?
 		                         "GuC context reset notification" :
 		                         "GuC engine failure notification");
