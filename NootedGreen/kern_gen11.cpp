@@ -12055,7 +12055,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		static_cast<uint32_t>(submissionToken),static_cast<uint32_t>(submissionToken>>32)};
 	vfFlightRecord(7,vfFlightCurrentGroup(),(uint64_t(descriptorHi)<<32)|descriptorLo,flightSubmit,arrsize(flightSubmit));
 	static uint32_t submitLogs = 0;
-	if (submitLogs++ < 64 || !submitted) {
+	if (submitLogs++ < 600 || !submitted) {
 		char process[24] {};
 		proc_selfname(process, sizeof(process));
 		SYSLOG("ngreen", "V233: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x old=0x%x channel=%u seq=%u enable=%d ret=%d fence=%u desc-hi=%08x serial=%llx proc=%s",
