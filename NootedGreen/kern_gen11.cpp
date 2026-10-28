@@ -9792,7 +9792,7 @@ static volatile uint32_t *gVfRcsPrologueCpu;
 static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 	size_t n = 0;
 	for (auto v : kRcsRingHead) b[n++] = v;
-	const bool l3 = !checkKernelArgument("-ngnol3alloc");
+	const bool l3 = checkKernelArgument("-ngl3alloc");
 	auto storeL3 = [&](uint32_t slot) {
 		b[n++] = 0x12400002; // MI_STORE_REGISTER_MEM, GGTT
 		b[n++] = 0xB134;
@@ -9826,19 +9826,27 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 	b[n++] = 0x05000000; // MI_BATCH_BUFFER_END
 }
 
-static void vfInjectRcsPrologue(volatile uint32_t *ring) {
-	if (!gVfRcsPrologueGpu || !ring)
+// Pixel hashing and the LRI workarounds are not kept across a VF context
+// switch, so every submission (each starts with kRcsRingHead) runs it.
+static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint32_t at) {
+	const uint32_t words = ringSize / 4;
+	if (!gVfRcsPrologueGpu || !ring || !words || (words & (words - 1)))
 		return;
-	for (size_t i = 0; i < arrsize(kRcsRingHead); i++)
-		if (ring[i] != kRcsRingHead[i]) {
-			SYSLOG("ngreen", "V269: RCS ring head %08x %08x differs; no prologue", ring[0], ring[1]);
+	auto w = [&](uint32_t i) -> volatile uint32_t & { return ring[(at / 4 + i) & (words - 1)]; };
+	for (uint32_t i = 0; i < arrsize(kRcsRingHead); i++)
+		if (w(i) != kRcsRingHead[i]) {
+			static uint32_t logs = 0;
+			if (logs++ < 16)
+				SYSLOG("ngreen", "V269: RCS ring +%x %08x %08x differs; no prologue", at, w(0), w(1));
 			return;
 		}
-	ring[1] = static_cast<uint32_t>(gVfRcsPrologueGpu);
-	ring[2] = static_cast<uint32_t>(gVfRcsPrologueGpu >> 32);
-	ring[3] = ring[4] = ring[5] = 0; // MI_NOOP
-	ring[0] = 0x18800001; // MI_BATCH_BUFFER_START, GGTT
-	__asm__ volatile("clflush (%0); mfence" :: "r"(ring) : "memory");
+	w(1) = static_cast<uint32_t>(gVfRcsPrologueGpu);
+	w(2) = static_cast<uint32_t>(gVfRcsPrologueGpu >> 32);
+	w(3) = w(4) = w(5) = 0; // MI_NOOP
+	w(0) = 0x18800001; // MI_BATCH_BUFFER_START, GGTT
+	for (uint32_t i = 0; i < arrsize(kRcsRingHead); i++)
+		__asm__ volatile("clflush (%0)" :: "r"(&w(i)) : "memory");
+	__asm__ volatile("mfence" ::: "memory");
 }
 
 static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress);
@@ -11959,10 +11967,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		return false;
 	}
 
-	if (enable && previousState == kVfGucContextRegistered &&
-	    static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngrcsprologue"))
+	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngrcsprologue"))
 		vfInjectRcsPrologue(static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
-			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))));
+			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
+			ringSize, previousRingTail);
 
 	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngnohz"))
 		vfEditRcsBatches(static_cast<uint32_t>(slot), static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
