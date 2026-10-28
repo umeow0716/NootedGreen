@@ -11023,7 +11023,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	// V273: how the context's PPGTT translates the ring stamp page at
 	// 0x40000000 (every RCS ring starts with a PIPE_CONTROL write there).
 	static uint32_t walkDumps = 0;
-	if (engineClass == 0 && walkDumps < 16) {
+	if (walkDumps < 16) {
 		using Getter = uint8_t *(*)(void *);
 		auto *image = reinterpret_cast<Getter>(callback->vfSharedMappedBufferGetVirtualAddress)(contextBacking);
 		auto *r = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
@@ -11048,7 +11048,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				map->release();
 			}
 			OSSafeReleaseNULL(desc);
-			SYSLOG("ngreen", "V273: id=%u root=%llx va=40000000 L%u[%u] @%llx = %016llx", gucId,
+			SYSLOG("ngreen", "V273: id=%u class=%u root=%llx va=40000000 L%u[%u] @%llx = %016llx", gucId, engineClass,
 			       static_cast<unsigned long long>(root), level, index,
 			       static_cast<unsigned long long>(table), static_cast<unsigned long long>(entry));
 			table = (entry & 1) && !(level > 0 && (entry & 0x80)) ? (entry & 0x7FFFFFF000ULL) : 0;
@@ -12019,6 +12019,18 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		       gucId, descriptorLo, static_cast<unsigned int>(hwCsType),
 		       ringTail, previousRingTail, channelId, ringSequence, enable,
 		       submitted, transportFence, descriptorHi, submissionToken);
+	}
+	// V274: the new-work commands of the first submissions on non-render
+	// channels (a blitter context's first submission precedes host DMA write
+	// faults at IOVA 0).
+	static uint32_t ringDumps = 0;
+	if (hwCsType != 0 && ringDumps < 6 && ringTail > previousRingTail && ringTail - previousRingTail <= 0x100) {
+		ringDumps++;
+		auto *cpuRing = static_cast<volatile uint32_t *>(getVirtualAddress(admittedRingBacking));
+		for (uint32_t i = previousRingTail / 4; cpuRing && i < ringTail / 4; i += 8)
+			SYSLOG("ngreen", "V274: id=%u type=%u ring +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", gucId,
+			       static_cast<unsigned int>(hwCsType), i * 4, cpuRing[i], cpuRing[i + 1], cpuRing[i + 2],
+			       cpuRing[i + 3], cpuRing[i + 4], cpuRing[i + 5], cpuRing[i + 6], cpuRing[i + 7]);
 	}
 	return submitted;
 }
