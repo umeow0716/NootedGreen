@@ -11077,7 +11077,8 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		}
 		if (root)
 			walkDumps++;
-		for (const uint64_t va : {0x40000000ULL, 0x40008000ULL}) {
+		static const uint64_t walkAddresses[] {0x40000000ULL, 0x40008000ULL};
+		for (const uint64_t va : walkAddresses) {
 		uint64_t table = root & 0x7FFFFFF000ULL;
 		for (uint32_t level = 0; table && level < 4; level++) {
 			const uint32_t index = (va >> (39 - 9 * level)) & 511;
