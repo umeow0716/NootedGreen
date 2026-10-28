@@ -289,7 +289,7 @@ bool XeRender::processKext(KernelPatcher &p, size_t index, mach_vm_address_t add
         {0x48, 0xBB, 0x04, 0x00, 0x00, 0x7A, 0x98, 0x44, 0x10, 0x00},
         {0x48, 0xB8, 0x04, 0x00, 0x00, 0x7A, 0x98, 0x44, 0x10, 0x01},
         {0x48, 0xB8, 0x04, 0x00, 0x00, 0x7A, 0x18, 0x05, 0x00, 0x01}};
-    const uint8_t flushReplace[][10] {
+    uint8_t flushReplace[][10] {
         {0x48, 0xB8, 0x04, 0x02, 0x00, 0x7A, 0x21, 0x70, 0x10, 0x40},
         {0x48, 0xB9, 0x04, 0x02, 0x00, 0x7A, 0x21, 0x70, 0x10, 0x40},
         {0x48, 0xBF, 0x04, 0x02, 0x00, 0x7A, 0x21, 0x72, 0x10, 0x50},
@@ -302,6 +302,9 @@ bool XeRender::processKext(KernelPatcher &p, size_t index, mach_vm_address_t add
     flush = flush && !checkKernelArgument("-ngnorcsflush");
     for (size_t n = 0; flush && n < arrsize(flushSites); ++n)
         flush = bytesAt(address, flushSites[n], flushFind[n], sizeof(flushFind[n]));
+    // -ngnol3fabric: drop L3 Fabric Flush (dw1 bit 30) from these packets.
+    if (checkKernelArgument("-ngnol3fabric"))
+        for (auto &r : flushReplace) r[9] &= ~0x40;
     for (size_t n = 0; flush && n < arrsize(flushSites); ++n) {
         KernelPatcher::LookupPatch patch {&tgl, flushFind[n], flushReplace[n], sizeof(flushFind[n]), 1};
         p.applyLookupPatch(&patch, reinterpret_cast<uint8_t *>(address + flushSites[n]), sizeof(flushFind[n]) + 1);
