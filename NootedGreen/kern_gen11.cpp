@@ -9814,6 +9814,10 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 		b[n++] = 0x2580;
 		b[n++] = 0x00010000;
 	}
+	// -ngnoarb (experiment): no preemption inside the submission. Apple's
+	// WM_HZ_OP sequences may not survive a GuC timeslice preemption.
+	if (checkKernelArgument("-ngnoarb"))
+		b[n++] = 0x04000000; // MI_ARB_ON_OFF: disable
 	b[n++] = 0x12400002; // MI_STORE_REGISTER_MEM, GGTT: CS_CHICKEN1 readback
 	b[n++] = 0x2580;
 	b[n++] = static_cast<uint32_t>(gpu + 0x808);
