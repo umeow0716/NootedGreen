@@ -249,7 +249,9 @@ bool XeRender::processKext(KernelPatcher &p, size_t index, mach_vm_address_t add
     const uint8_t restoreCall[] {0x4C, 0x89, 0xEF, 0xE8, 0x61, 0x02, 0x00, 0x00};
     const uint8_t validFind[] {0x83, 0xC8, 0x01, 0x41, 0x89, 0x87, 0x4C, 0x10};
     const uint8_t validReplace[] {0x83, 0xC8, 0x05, 0x41, 0x89, 0x87, 0x4C, 0x10};
-    bool ctx = p.solveSymbol<mach_vm_address_t>(index, ctxInit, address, size) == address + 0x7B9D4 &&
+    // Opt-in while it is suspected of hanging RCS non-preemptibly (host GT resets).
+    bool ctx = checkKernelArgument("-ngxectxbb") &&
+        p.solveSymbol<mach_vm_address_t>(index, ctxInit, address, size) == address + 0x7B9D4 &&
         p.solveSymbol<mach_vm_address_t>(index, ctxRestore, address, size) == address + 0x7C392 &&
         bytesAt(address, 0x7C129, restoreCall, sizeof(restoreCall)) &&
         bytesAt(address, 0x7C21D, validFind, sizeof(validFind));
