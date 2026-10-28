@@ -9826,6 +9826,18 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 	// ROW_CHICKEN2 (Wa_1606931601)
 	const uint32_t lri[] {0x11000005, 0x7304, 0x02000200, 0x6604, 0xE0040000, 0xE4F4, 0x40004000};
 	for (auto v : lri) b[n++] = v;
+	// 3DSTATE_* only reach the 3D pipeline: a context last left in GPGPU
+	// mode would drop the hash table. Select 3D first (flush + invalidate
+	// before PIPELINE_SELECT, as Mesa does on Gen12); user batches select
+	// their own pipeline afterwards.
+	if (!checkKernelArgument("-ngnopsel")) {
+		const uint32_t sel[] {
+			0x7A000204, 0x00101021, 0, 0, 0, 0, // PIPE_CONTROL: RT/depth/DC/HDC flush, CS stall
+			0x7A000004, 0x00100C0C, 0, 0, 0, 0, // PIPE_CONTROL: state/const/texture/instruction invalidate
+			0x69041310,                         // PIPELINE_SELECT 3D (Apple's encoding)
+		};
+		for (auto v : sel) b[n++] = v;
+	}
 	// 3DSTATE_SUBSLICE_HASH_TABLE, slice 0 on TABLE_0, two- and three-way
 	// tables from intel_compute_pixel_hash_table_3way(8, 16, 2, 2, 0).
 	b[n++] = 0x791F000C;
