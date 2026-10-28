@@ -64,8 +64,33 @@ uint64_t wrapGPUInfo(void *accelerator) {
 //   0x7304 COMMON_SLICE_CHICKEN3 disable CPS-aware color pipe (Wa_1409142259)
 //   0x6604 FF_MODE2 GS224/TDS128 timers (Wa_1608008084)
 //   0xE4F4 ROW_CHICKEN2 disable EU early read (Wa_1606931601)
-const uint32_t ctxBatch[] {0, 0x11000005, 0x7304, 0x02000200, 0x6604, 0xE0040000, 0xE4F4, 0x40004000,
-    0x05000000};
+//
+// It also programs pixel pipe hashing. Gen12 has three pixel pipes of two DSS
+// each; with this part's DSS mask 0xf the pipes have 2/2/0 subslices, and the
+// default hash keeps sending pixels to the empty third pipe (draws produce
+// nothing, then RCS hangs). Like Mesa, use a subslice hash table that
+// alternates between pipes 0 and 1.
+const uint32_t ctxLRI[] {0, 0x11000005, 0x7304, 0x02000200, 0x6604, 0xE0040000, 0xE4F4, 0x40004000};
+
+void buildCtxBatch(uint32_t *b) {
+    size_t n = 0;
+    for (auto v : ctxLRI) b[n++] = v;
+    // 3DSTATE_SUBSLICE_HASH_TABLE: slice 0 uses TABLE_0; 8x16 two-way and
+    // three-way tables from intel_compute_pixel_hash_table_3way(8, 16, 2, 2, 0).
+    b[n++] = 0x791F000C;
+    b[n++] = 2;
+    uint32_t *twoWay = b + n, *threeWay = b + n + 4;
+    for (unsigned e = 0; e < 128; e++) {
+        const uint32_t pipe = ((e / 16) + (e % 16)) % 2;
+        twoWay[e / 32] |= pipe << (e % 32);
+        threeWay[e / 16] |= pipe << (2 * (e % 16));
+    }
+    n += 12;
+    // 3DSTATE_3D_MODE: SubsliceHashingTableEnable (+mask)
+    b[n++] = 0x791E0000;
+    b[n++] = 0x00200020;
+    b[n++] = 0x05000000; // MI_BATCH_BUFFER_END
+}
 
 using Allocate = void *(*)(void *, size_t, unsigned, unsigned);
 using CPUAddress = uint8_t *(*)(void *);
@@ -105,7 +130,7 @@ void prepareCtxBatch(void *owner) {
         return;
     }
     bzero(cpu, 4096);
-    memcpy(cpu, ctxBatch, sizeof(ctxBatch));
+    buildCtxBatch(reinterpret_cast<uint32_t *>(cpu));
     for (unsigned i = 0; i < 4096; i += 64) asm volatile("clflush (%0)" :: "r"(cpu + i) : "memory");
     asm volatile("mfence" ::: "memory");
     ctxPointer = static_cast<uint32_t>(gpu) | 5;
