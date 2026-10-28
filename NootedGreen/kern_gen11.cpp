@@ -12350,7 +12350,7 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 			} else {
 				const uint64_t entry = reinterpret_cast<volatile uint64_t *>(page)[(bb >> (39 - 9 * level)) & 511];
 				table = (entry & 1) ? (entry & 0x7FFFFFF000ULL) : 0;
-				if (level > 0 && (entry & 0x80)) table = 0;
+				if ((level == 1 || level == 2) && (entry & 0x80)) table = 0;
 				if (!table)
 					SYSLOG("ngreen", "V276: id=%u bb=%llx L%u entry=%016llx", id, static_cast<unsigned long long>(bb),
 					       level, static_cast<unsigned long long>(entry));
