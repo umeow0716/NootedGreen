@@ -9921,6 +9921,7 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint
 }
 
 static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress);
+static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to);
 
 // V275: GGTT writes in newly submitted ring commands. A GGTT address below the
 // VF's range lands in PF-owned PTEs, i.e. a host-domain DMA write.
@@ -12042,6 +12043,19 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
 			ringSize, previousRingTail, ringTail);
 
+	if (static_cast<uint32_t>(hwCsType) == 1 && gVfContexts[slot].contextBacking) {
+		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
+		auto *image = getter(gVfContexts[slot].contextBacking);
+		auto *regs = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
+		uint64_t root = 0;
+		for (uint32_t i = 0; regs && i + 1 < 0x100; i++) {
+			if ((regs[i] & 0xFFF) == 0x270 && (regs[i] >> 12)) root |= regs[i + 1];
+			else if ((regs[i] & 0xFFF) == 0x274 && (regs[i] >> 12)) root |= static_cast<uint64_t>(regs[i + 1]) << 32;
+		}
+		vfWakeVideoBatch(root & 0x7FFFFFF000ULL, reinterpret_cast<volatile uint32_t *>(getter(ringBacking)), ringSize,
+		                 previousRingTail, ringTail);
+	}
+
 	const uint16_t gucId = static_cast<uint16_t>(slot);
 	const uint32_t enableRequest[] = {
 		kGucActionScheduleContextModeSet, gucId, kGucContextEnable,
@@ -12438,6 +12452,40 @@ static bool vfPpgttRead(uint64_t root, uint64_t va, uint32_t *out, uint32_t coun
 		OSSafeReleaseNULL(desc);
 	}
 	return true;
+}
+
+// V297: Apple's H.264 PAK batches (VCS) start with an empty MI_FLUSH_DW and no
+// MI_FORCE_WAKEUP; with VDBOX power gating the MFX never takes the state
+// commands. Turn that flush into MI_FORCE_WAKEUP(MFX power well) + MI_NOOPs.
+static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to) {
+	const uint32_t words = ringSize / 4;
+	if (!root || !ring || !words || (words & (words - 1)))
+		return;
+	for (uint32_t i = from / 4 % words, end = to / 4 % words, guard = 0; i != end && guard < 256; i = (i + 1) & (words - 1), guard++) {
+		if (ring[i] != 0x18800101)
+			continue;
+		const uint64_t bb = ring[(i + 1) & (words - 1)] | (static_cast<uint64_t>(ring[(i + 2) & (words - 1)] & 0xFFFF) << 32);
+		const uint64_t leaf = vfPpgttLeaf(root, bb);
+		if (!leaf || (bb & 0xFFF) > 0xFEC)
+			continue;
+		auto *desc = IOMemoryDescriptor::withPhysicalAddress(leaf & 0x7FFFFFF000ULL, PAGE_SIZE, kIODirectionInOut);
+		auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere) : nullptr;
+		if (map) {
+			auto *b = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress() + (bb & 0xFFF));
+			if (b[0] == 0x13000083 && !b[1] && !b[2] && !b[3] && !b[4] && (b[5] >> 23) == 0x20) {
+				b[0] = 0x0E800001; // MI_FORCE_WAKEUP
+				b[1] = 0x00030001; // MFX power well on (mask MFX|HEVC)
+				for (uint32_t k = 0; k < 2; k++)
+					__asm__ volatile("clflush (%0)" :: "r"(&b[k]) : "memory");
+				__asm__ volatile("mfence" ::: "memory");
+				static uint32_t logs = 0;
+				if (logs++ < 4)
+					SYSLOG("ngreen", "V297: force wakeup in video batch %llx", static_cast<unsigned long long>(bb));
+			}
+			map->release();
+		}
+		OSSafeReleaseNULL(desc);
+	}
 }
 
 // V281: the surface states a hung batch binds to the pixel shader. Takes the
