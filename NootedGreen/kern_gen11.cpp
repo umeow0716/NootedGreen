@@ -12026,6 +12026,24 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		return false;
 	}
 
+	// -ngnoinhibit: Apple's new contexts start with ENGINE_CTX_RESTORE_INHIBIT,
+	// i.e. they inherit the 3D state of whatever ran last on RCS. On the PF
+	// that is always another Apple context; on a VF it can be a host (Mesa)
+	// context. Restore the safe image's state instead.
+	if (static_cast<uint32_t>(hwCsType) == 0 && enable && checkKernelArgument("-ngnoinhibit")) {
+		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
+		auto *backing = gVfContexts[slot].contextBacking;
+		auto *image = backing ? getter(backing) : nullptr;
+		auto *regs = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
+		if (regs && regs[1] == 0x2244 && (regs[2] & 1)) {
+			static uint32_t logs = 0;
+			if (logs++ < 8)
+				SYSLOG("ngreen", "V284: id=%d CTX_CONTEXT_CONTROL %08x -> restore", slot, regs[2]);
+			regs[2] = (regs[2] & ~1U) | 0x10000U;
+			__asm__ volatile("clflush (%0); mfence" :: "r"(&regs[2]) : "memory");
+		}
+	}
+
 	// -ngflushlrc: write back CPU caches for the context image (on enable) and
 	// the new ring commands before GuC/RCS read them. The GPU's DMAR unit has
 	// no snoop control, so the guest's cache attributes are what the GPU sees.
