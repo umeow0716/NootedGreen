@@ -21,6 +21,10 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 PLIST
 install -m 755 "$work/ngva" "$bundle/Contents/MacOS/NootedGreenTGLMediaAdapter"
 install -m 755 "$work/driver" "$bundle/Contents/MacOS/AppleIntelTGLGraphicsVADriver"
+if ls kernels/*.gen12 >/dev/null 2>&1; then
+	mkdir -p "$bundle/Contents/Resources"
+	install -m 644 kernels/*.gen12 "$bundle/Contents/Resources/"
+fi
 codesign -f -s - "$bundle/Contents/MacOS/AppleIntelTGLGraphicsVADriver"
 codesign -f -s - "$bundle"
 rm -rf "$work"

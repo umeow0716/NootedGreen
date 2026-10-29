@@ -7,6 +7,8 @@
 //  - GetDriverParameter answers tag 0xe with that description;
 //  - the H.264 SPS passed with each frame has two more dwords before
 //    level_idc (constraint_set4/5), shifting every later field by 8.
+// The driver's own media kernels (TNR, checksum, statistics, scaler...) are
+// Gen11 ISA; Gen12 rebuilds placed in Resources replace them when present.
 // Load the driver, convert its description and SPS, and answer tag 0xe here.
 #include <dlfcn.h>
 #include <malloc/malloc.h>
@@ -14,6 +16,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <cstdio>
 #include <map>
 #include <syslog.h>
 #include <utility>
@@ -137,6 +142,29 @@ int setParameters(void *self, void *raw) {
 	return driverSetParameters(self, raw);
 }
 
+// Tahoe's AppleGVA drives the 0x4000 encoder entry with a newer protocol than
+// this driver implements; offer it as the 0x40/0x80 pair the driver's H.264
+// encoder is requested by.
+void renameEncoders(Description *table) {
+	if (!table || !table->slot) return;
+	for (uint32_t i = 0; i < table->count; i++) {
+		auto *e = table->slot[i];
+		if (!e || *reinterpret_cast<uint32_t *>(e) != 0x20) continue;
+		auto &value = *reinterpret_cast<uint64_t *>(e + 8);
+		if (value == 0x4000) value = 0x40;
+		else if (value == 0x2000) value = 0x80;
+	}
+}
+
+using CreateAccelerators = int (*)(void *self, void *requests);
+CreateAccelerators driverCreateAccelerators;
+
+// The driver matches accelerator requests against its own copy (+0x68).
+int createAccelerators(void *self, void *requests) {
+	renameEncoders(*reinterpret_cast<Description **>(static_cast<uint8_t *>(self) + 0x68));
+	return driverCreateAccelerators(self, requests);
+}
+
 struct Frames { uint32_t count; uint32_t pad; uint8_t **frame; };
 
 int decode(void *self, void *raw, void *out) {
@@ -153,6 +181,49 @@ int decode(void *self, void *raw, void *out) {
 	for (uint32_t i = 0; i < count; i++)
 		if (slot[i]) *slot[i] = saved[i];
 	return result;
+}
+
+// AVD_* media contexts: vtable slot holding the kernel getter (which tail
+// calls the heap loader at +0x2c566 with the Gen11 kernel) -> Gen12 file.
+struct Kernel { uintptr_t slot; const char *name; void *data; uint32_t size; };
+Kernel kernels[] = {
+	{0x7543b8, "tnr"}, {0x754470, "checksum"}, {0x7545b8, "chromadeblock"},
+	{0x754a18, "framestatistics"}, {0x754b60, "noisestatistics"}, {0x7550d8, "rvra1scaler"},
+};
+using LoadKernel = int (*)(void *self, const void *data, uint32_t size);
+
+template <int I> int getKernel(void *self) {
+	return reinterpret_cast<LoadKernel>(driverBase + 0x2c566)(self, kernels[I].data, kernels[I].size);
+}
+using GetKernel = int (*)(void *);
+GetKernel getKernels[] = {getKernel<0>, getKernel<1>, getKernel<2>, getKernel<3>, getKernel<4>, getKernel<5>};
+
+void replaceKernels(const char *bundle) {
+	const long page = getpagesize();
+	for (size_t i = 0; i < sizeof(kernels) / sizeof(*kernels); i++) {
+		char path[1024];
+		snprintf(path, sizeof(path), "%s/Contents/Resources/%s.gen12", bundle, kernels[i].name);
+		FILE *f = fopen(path, "rb");
+		if (!f) continue;
+		fseek(f, 0, SEEK_END);
+		long size = ftell(f);
+		fseek(f, 0, SEEK_SET);
+		void *data = size > 0 ? malloc(size) : nullptr;
+		if (!data || fread(data, 1, size, f) != static_cast<size_t>(size)) {
+			fclose(f);
+			free(data);
+			continue;
+		}
+		fclose(f);
+		kernels[i].data = data;
+		kernels[i].size = static_cast<uint32_t>(size);
+		auto *slot = reinterpret_cast<GetKernel *>(driverBase + kernels[i].slot);
+		auto start = reinterpret_cast<uintptr_t>(slot) & ~(page - 1);
+		if (mprotect(reinterpret_cast<void *>(start), page, PROT_READ | PROT_WRITE)) continue;
+		*slot = getKernels[i];
+		mprotect(reinterpret_cast<void *>(start), page, PROT_READ);
+		syslog(LOG_NOTICE, "ngva: Gen12 %s kernel (%ld bytes)", kernels[i].name, size);
+	}
 }
 
 bool load() {
@@ -175,6 +246,10 @@ bool load() {
 		Dl_info info {};
 		if (driverCreate && dladdr(reinterpret_cast<void *>(driverCreate), &info))
 			driverBase = reinterpret_cast<uintptr_t>(info.dli_fbase);
+		if (driverBase) {
+			if (auto *contents = strstr(path, "/Contents/MacOS/")) *contents = 0;
+			replaceKernels(path);
+		}
 	});
 	return driverCreate && driverDestroy;
 }
@@ -201,6 +276,7 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 	auto *table = static_cast<uint8_t *>(*accelerator);
 	auto *context = *reinterpret_cast<uint8_t **>(table);
 	auto *original = *reinterpret_cast<Description **>(context + 0x30);
+	renameEncoders(original);
 	auto *description = convert(original);
 	if (!description) {
 		syslog(LOG_ERR, "ngva: unexpected accelerator description");
@@ -215,6 +291,9 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 	auto *slot = reinterpret_cast<GetParameter *>(table + 0x80);
 	if (!driverGetParameter) driverGetParameter = *slot;
 	*slot = getParameter;
+	auto *create = reinterpret_cast<CreateAccelerators *>(table + 0x18);
+	if (!driverCreateAccelerators) driverCreateAccelerators = *create;
+	*create = createAccelerators;
 	auto *set = reinterpret_cast<SetParameters *>(table + 0x68);
 	if (!driverSetParameters) driverSetParameters = *set;
 	*set = setParameters;

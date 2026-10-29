@@ -12660,6 +12660,14 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 			}
 		}
 	}
+	// V296: a hung video batch: dump its first commands.
+	static uint32_t videoDumps = 0;
+	if (entry.engineClass == 1 && hungBatch && videoDumps < 2 && vfPpgttRead(root, hungBatch, media, 256)) {
+		videoDumps++;
+		for (uint32_t k = 0; k < 256; k += 8)
+			SYSLOG("ngreen", "V296: id=%u bb+%03x: %08x %08x %08x %08x %08x %08x %08x %08x", id, k * 4, media[k],
+			       media[k + 1], media[k + 2], media[k + 3], media[k + 4], media[k + 5], media[k + 6], media[k + 7]);
+	}
 	if (ring && (head & ~7U) < 0x4000) {
 		const uint32_t at = (head & 0x3FFFC) / 4;
 		const uint32_t from = at >= 8 ? at - 8 : 0;
