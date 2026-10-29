@@ -12062,9 +12062,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		auto *image = backing ? getter(backing) : nullptr;
 		auto *regs = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
 		static uint32_t logs = 0;
-		if (regs && logs < 8) {
+		if (regs && logs < 64) {
 			logs++;
-			SYSLOG("ngreen", "V284: id=%d CTX_CONTEXT_CONTROL %08x %08x %08x", slot, regs[1], regs[2], regs[3]);
+			SYSLOG("ngreen", "V284: id=%d CTX_CONTEXT_CONTROL %08x %08x %08x IA %08x %08x", slot, regs[1], regs[2], regs[3],
+			       regs[0x34C / 4], regs[0x354 / 4]);
 		}
 		if (regs && regs[2] == 0x2244 && (regs[3] & 1)) {
 			regs[3] = (regs[3] & ~1U) | 0x10000U;
@@ -12085,6 +12086,28 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	// memory.
 	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngwbinvd"))
 		__asm__ volatile("wbinvd" ::: "memory");
+
+	// -ngnoinhibit also reports the image after the first run: a context whose
+	// first run did not restore its image saves another context's registers.
+	if (static_cast<uint32_t>(hwCsType) == 0 && !enable && checkKernelArgument("-ngnoinhibit")) {
+		static uint8_t *seen = nullptr;
+		if (!seen && gVfContextCapacity) {
+			seen = static_cast<uint8_t *>(IOMalloc(gVfContextCapacity));
+			if (seen)
+				bzero(seen, gVfContextCapacity);
+		}
+		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
+		auto *backing = gVfContexts[slot].contextBacking;
+		auto *image = backing ? getter(backing) : nullptr;
+		static uint32_t logs = 0;
+		if (seen && image && !seen[slot] && logs < 64) {
+			seen[slot] = 1;
+			logs++;
+			auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
+			SYSLOG("ngreen", "V288: id=%d after first run ctl %08x IA %08x %08x CS_CHICKEN1 %08x head %08x",
+			       slot, regs[3], regs[0x34C / 4], regs[0x354 / 4], regs[0x404 / 4], regs[5]);
+		}
+	}
 
 	// -ngflushlrc: write back CPU caches for the context image (on enable) and
 	// the new ring commands before GuC/RCS read them. The GPU's DMAR unit has
