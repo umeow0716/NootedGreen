@@ -12731,14 +12731,14 @@ static void vfGoldenContextImage(uint32_t slot, bool enable, mach_vm_address_t g
 // register-state dwords that differ from the first such context's image.
 static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 	constexpr uint32_t kWords = 0x2000 / 4;
-	constexpr uint32_t kHashLines = 256;
+	constexpr uint32_t kHashLines = 1024;
 	static uint32_t hashLines[kHashLines][18];
 	static uint32_t hashHead = 0, hashCount = 0;
-	if (hashCount) {
+	for (uint32_t e = 0; e < 3 && hashCount; e++) {
 		const auto &l = hashLines[hashHead];
-		SYSLOG("ngreen", "V285: id=%u c%03x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
-		       l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9], l[10], l[11], l[12], l[13], l[14], l[15],
-		       l[16], l[17]);
+		SYSLOG("ngreen", "V285: id=%u %c%04x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
+		       l[0], l[1] >= 0x10000 ? 'r' : 'c', l[1] & 0xFFFF, l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9], l[10],
+		       l[11], l[12], l[13], l[14], l[15], l[16], l[17]);
 		hashHead = (hashHead + 1) % kHashLines;
 		hashCount--;
 	}
@@ -12783,6 +12783,17 @@ static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 				line[2 + k] = h;
 			}
 		}
+		// Raw dwords of the chunks that separate passing from failing contexts.
+		static const uint32_t ranges[][2] {{0x1300, 0x1700}, {0x2900, 0x2C00}};
+		for (auto &r : ranges)
+			for (uint32_t o = r[0]; o < r[1] && o + 64 <= length && hashCount < kHashLines; o += 64) {
+				auto &line = hashLines[(hashHead + hashCount++) % kHashLines];
+				line[0] = slot;
+				line[1] = 0x10000 | o;
+				auto *w = reinterpret_cast<volatile uint32_t *>(image + o);
+				for (uint32_t k = 0; k < 16; k++)
+					line[2 + k] = w[k];
+			}
 		return;
 	}
 	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
