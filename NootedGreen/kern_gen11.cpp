@@ -12044,6 +12044,9 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		}
 	}
 
+	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngctxdiff"))
+		vfDiffContextImage(static_cast<uint32_t>(slot), callback->vfSharedMappedBufferGetVirtualAddress);
+
 	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngrcsprologue"))
 		vfInjectRcsPrologue(static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
@@ -12593,6 +12596,51 @@ static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ring
 			       static_cast<unsigned long long>(bb), pages, hzOps, hizClears, l3Lris, done);
 		}
 	}
+}
+
+// -ngctxdiff (diagnostic): at an RCS context's third submission, log the
+// register-state dwords that differ from the first such context's image.
+static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
+	constexpr uint32_t kWords = 0x2000 / 4;
+	static uint8_t *counts = nullptr;
+	static uint32_t *reference = nullptr;
+	static uint32_t dumped = 0;
+	if (!gVfContexts || slot >= gVfContextCapacity || !getterAddress || dumped >= 24)
+		return;
+	if (!counts) {
+		counts = static_cast<uint8_t *>(IOMalloc(gVfContextCapacity));
+		reference = static_cast<uint32_t *>(IOMalloc(kWords * 4));
+		if (!counts || !reference)
+			return;
+		bzero(counts, gVfContextCapacity);
+		bzero(reference, kWords * 4);
+	}
+	if (counts[slot] < 255)
+		counts[slot]++;
+	if (counts[slot] != 3)
+		return;
+	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(getterAddress);
+	auto *backing = gVfContexts[slot].contextBacking;
+	auto *image = backing ? getter(backing) : nullptr;
+	if (!image)
+		return;
+	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
+	if (dumped++ == 0) {
+		for (uint32_t i = 0; i < kWords; i++)
+			reference[i] = regs[i];
+		SYSLOG("ngreen", "V283: id=%u is the image reference", slot);
+		return;
+	}
+	uint32_t diffs = 0;
+	for (uint32_t i = 0; i < kWords; i++) {
+		const uint32_t v = regs[i];
+		if (v == reference[i])
+			continue;
+		if (diffs++ < 80)
+			SYSLOG("ngreen", "V283: id=%u +%04x reg %08x ref %08x cur %08x", slot, 0x1000 + i * 4,
+			       i ? regs[i - 1] : 0, reference[i], v);
+	}
+	SYSLOG("ngreen", "V283: id=%u %u dwords differ", slot, diffs);
 }
 
 static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
