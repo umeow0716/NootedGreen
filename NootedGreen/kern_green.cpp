@@ -31,6 +31,7 @@ namespace {
 // LocalOnly anchor is unique in the pinned Tahoe AppleGVA __text and changes
 // only one displacement byte.
 constexpr uint32_t V342AppleGvaSection = 1;
+constexpr uint32_t WsSerialBlitSection = 2;
 
 static const uint8_t v342ScalerCountFind[] = {
 	0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x28, 0x31, 0xD2
@@ -181,6 +182,38 @@ void registerV350AppleGvaEncoderBridge() {
 				pathLength, path);
 		}, nullptr, &v342AppleGvaBinary, 1);
     SYSLOG("ngreen", "V350: armed proven encoder-only Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites");
+}
+
+// CompositorSW renders a large update as up to eight parallel tiles, and the
+// tiles share CoreAnimation's flattened-surface cache: when ScreenCaptureKit
+// redraws a whole display, two tiles push the same cached surface and
+// WindowServer asserts in CA::OGL::Context::push_surface. No display in this
+// VM has an accelerator (the boot framebuffer is not the GPU's, and a
+// CGVirtualDisplay inherits its accelerator only when mirrored), so they are
+// all software composited. Render the tiles serially: SkyLight's
+// "cmp $8, inFlightBlitOps" becomes "cmp $0" (Tahoe 25G229).
+static const uint8_t wsSerialBlitFind[] {
+	0x8B, 0x05, 0xBE, 0x5A, 0x5E, 0x3A, 0x83, 0xF8, 0x08, 0x0F, 0x9C, 0xC0, 0x49, 0x8B, 0x3F};
+static const uint8_t wsSerialBlitReplace[] {
+	0x8B, 0x05, 0xBE, 0x5A, 0x5E, 0x3A, 0x83, 0xF8, 0x00, 0x0F, 0x9C, 0xC0, 0x49, 0x8B, 0x3F};
+static UserPatcher::BinaryModPatch wsSerialBlitPatch[] {
+	{CPU_TYPE_X86_64, UserPatcher::LocalOnly, wsSerialBlitFind, wsSerialBlitReplace,
+	 arrsize(wsSerialBlitFind), 0, 1, UserPatcher::SegmentTextText, WsSerialBlitSection},
+};
+static UserPatcher::BinaryModInfo wsSkyLight {
+	"/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight",
+	wsSerialBlitPatch, arrsize(wsSerialBlitPatch)
+};
+static UserPatcher::ProcInfo wsProcess[] {
+	{"/WindowServer", sizeof("/WindowServer") - 1, WsSerialBlitSection, UserPatcher::ProcInfo::MatchSuffix},
+};
+
+void registerWsSerialBlit() {
+	lilu.onProcLoadForce(wsProcess, arrsize(wsProcess),
+		[](void *, UserPatcher &, vm_map_t, const char *path, size_t) {
+			SYSLOG("ngreen", "V291: WindowServer loaded (%s), serial CompositorSW blits", path);
+		}, nullptr, &wsSkyLight, 1);
+	SYSLOG("ngreen", "V291: armed serial CompositorSW blit patch for WindowServer");
 }
 
 // V347/V348 proved that neither the canonical XPC bundle tail nor either
@@ -338,6 +371,8 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		SYSLOG("ngreen", "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49");
 		registerV350AppleGvaEncoderBridge();
 		registerV349MediaExecObservation();
+		if (checkKernelArgument("-ngwsserialblit"))
+			registerWsSerialBlit();
 	}
 
 	const bool routedRead16 = KernelPatcher::routeVirtual(this->iGPU,
