@@ -16,6 +16,8 @@
 #include <i386/machine_routines.h>
 #include <kern/sched_prim.h>
 #include <sys/kauth.h>
+#include <sys/proc.h>
+#include <sys/sysctl.h>
 
 NGreen *NGreen::callback = nullptr;
 
@@ -31,7 +33,6 @@ namespace {
 // LocalOnly anchor is unique in the pinned Tahoe AppleGVA __text and changes
 // only one displacement byte.
 constexpr uint32_t V342AppleGvaSection = 1;
-constexpr uint32_t WsSerialBlitSection = 2;
 
 static const uint8_t v342ScalerCountFind[] = {
 	0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x28, 0x31, 0xD2
@@ -189,34 +190,58 @@ void registerV350AppleGvaEncoderBridge() {
 // redraws a whole display, two tiles push the same cached surface and
 // WindowServer asserts in CA::OGL::Context::push_surface. No display in this
 // VM has an accelerator (the boot framebuffer is not the GPU's, and a
-// CGVirtualDisplay inherits its accelerator only when mirrored), so they are
-// all software composited. Render the tiles serially: SkyLight's
-// "cmp $8, inFlightBlitOps" becomes "cmp $0" (Tahoe 25G229).
-static const uint8_t wsSerialBlitFind[] {
-	0x8B, 0x05, 0xBE, 0x5A, 0x5E, 0x3A, 0x83, 0xF8, 0x08, 0x0F, 0x9C, 0xC0, 0x49, 0x8B, 0x3F};
-static const uint8_t wsSerialBlitReplace[] {
-	0x8B, 0x05, 0xBE, 0x5A, 0x5E, 0x3A, 0x83, 0xF8, 0x00, 0x0F, 0x9C, 0xC0, 0x49, 0x8B, 0x3F};
-static UserPatcher::BinaryModPatch wsSerialBlitPatch[] {
-	{CPU_TYPE_X86_64, UserPatcher::LocalOnly, wsSerialBlitFind, wsSerialBlitReplace,
-	 arrsize(wsSerialBlitFind), 0, 1, UserPatcher::SegmentTextText, WsSerialBlitSection},
-};
-static UserPatcher::BinaryModInfo wsSkyLight {
-	"/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight",
-	wsSerialBlitPatch, arrsize(wsSerialBlitPatch)
-};
-#define WS_PATH(path) {path, sizeof(path) - 1, WsSerialBlitSection, UserPatcher::ProcInfo::MatchExact}
-static UserPatcher::ProcInfo wsProcess[] {
-	WS_PATH("/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer"),
-	WS_PATH("/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"),
-};
-#undef WS_PATH
+// CGVirtualDisplay inherits one only when mirrored), so all of them are
+// software composited. SkyLight renders the tiles serially once its
+// in-flight counter reaches eight. Tahoe refuses code changes in
+// WindowServer, so the guest helper (ngreen-wsblit) has us raise that
+// counter, a __bss int whose page becomes a private copy, in each new
+// WindowServer: kern.ngwsblit = {pid, address}.
+using VmMapWriteUser = kern_return_t (*)(vm_map_t, const void *, vm_map_address_t, vm_size_t);
+using GetTaskMap = vm_map_t (*)(task_t);
+using ProcTask = task_t (*)(proc_t);
+static VmMapWriteUser wsVmMapWriteUser;
+static GetTaskMap wsGetTaskMap;
+static ProcTask wsProcTask;
 
-void registerWsSerialBlit() {
-	lilu.onProcLoadForce(wsProcess, arrsize(wsProcess),
-		[](void *, UserPatcher &, vm_map_t, const char *path, size_t) {
-			SYSLOG("ngreen", "V291: WindowServer loaded (%s), serial CompositorSW blits", path);
-		}, nullptr, &wsSkyLight, 1);
-	SYSLOG("ngreen", "V291: armed serial CompositorSW blit patch for WindowServer");
+static int wsBlitSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req) {
+	if (!req->newptr)
+		return 0;
+	if (!kauth_cred_issuser(kauth_cred_get()))
+		return EPERM;
+	uint64_t args[2] {};
+	if (req->newlen != sizeof(args))
+		return EINVAL;
+	int error = SYSCTL_IN(req, args, sizeof(args));
+	if (error)
+		return error;
+	char name[MAXCOMLEN + 1] {};
+	proc_name(static_cast<int>(args[0]), name, sizeof(name));
+	if (strcmp(name, "WindowServer"))
+		return ESRCH;
+	proc_t process = proc_find(static_cast<int>(args[0]));
+	if (!process)
+		return ESRCH;
+	vm_map_t map = wsGetTaskMap(wsProcTask(process));
+	const uint32_t value = 0x10000;
+	error = map && wsVmMapWriteUser(map, &value, args[1], sizeof(value)) == KERN_SUCCESS ? 0 : EFAULT;
+	proc_rele(process);
+	SYSLOG("ngreen", "V291: WindowServer %llu blit counter at %llx -> %d", args[0], args[1], error);
+	return error;
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, ngwsblit, CTLTYPE_OPAQUE | CTLFLAG_WR | CTLFLAG_LOCKED, nullptr, 0, wsBlitSysctl, "S", "");
+
+void registerWsBlitSysctl(KernelPatcher &patcher) {
+	wsVmMapWriteUser = patcher.solveSymbol<VmMapWriteUser>(KernelPatcher::KernelID, "_vm_map_write_user");
+	wsGetTaskMap = patcher.solveSymbol<GetTaskMap>(KernelPatcher::KernelID, "_get_task_map");
+	wsProcTask = patcher.solveSymbol<ProcTask>(KernelPatcher::KernelID, "_proc_task");
+	patcher.clearError();
+	if (!wsVmMapWriteUser || !wsGetTaskMap || !wsProcTask) {
+		SYSLOG("ngreen", "V291: WindowServer blit sysctl unavailable");
+		return;
+	}
+	sysctl_register_oid(&sysctl__kern_ngwsblit);
+	SYSLOG("ngreen", "V291: registered kern.ngwsblit");
 }
 
 // V347/V348 proved that neither the canonical XPC bundle tail nor either
@@ -374,8 +399,7 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		SYSLOG("ngreen", "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49");
 		registerV350AppleGvaEncoderBridge();
 		registerV349MediaExecObservation();
-		if (checkKernelArgument("-ngwsserialblit"))
-			registerWsSerialBlit();
+		registerWsBlitSysctl(patcher);
 	}
 
 	const bool routedRead16 = KernelPatcher::routeVirtual(this->iGPU,
