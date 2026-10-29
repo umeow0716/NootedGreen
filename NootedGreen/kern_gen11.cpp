@@ -12521,24 +12521,35 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 		const uint64_t start = ring[i + 1] | (static_cast<uint64_t>(ring[i + 2] & 0xFFFF) << 32);
 		uint32_t reported = 0, scanned = 0;
 		static uint32_t words[1024];
-		for (uint32_t pageIndex = 0; pageIndex < 8 && reported < 16; pageIndex++) {
+		for (uint32_t pageIndex = 0; pageIndex < 8 && reported < 40; pageIndex++) {
 			const uint64_t va = (start & ~0xFFFULL) + pageIndex * 0x1000ULL;
 			if (!vfPpgttRead(root & 0x7FFFFFF000ULL, va, words, 1024))
 				break;
 			scanned++;
-			for (uint32_t k = 0; k + 1 < 1024 && reported < 16; k++) {
+			for (uint32_t k = 0; k + 1 < 1024 && reported < 40; k++) {
 				const uint64_t ref = words[k] | (static_cast<uint64_t>(words[k + 1]) << 32);
 				if ((words[k] >> 28) != 4 || words[k + 1] > 0xFFFF || (words[k] & 0xFFF) > 0x40)
 					continue;
-				if (!vfPpgttLeaf(root & 0x7FFFFFF000ULL, ref & ~0xFFFULL)) {
-					SYSLOG("ngreen", "V293: id=%u batch %llx +%04x references unmapped %llx", id,
-					       static_cast<unsigned long long>(start), pageIndex * 0x1000 + k * 4,
-					       static_cast<unsigned long long>(ref));
-					reported++;
-				}
+				// Walk the buffer forward: how many pages are mapped before the first hole?
+				static uint64_t seen[64];
+				static uint32_t seenCount;
+				bool known = false;
+				for (uint32_t q = 0; q < seenCount; q++)
+					known |= seen[q] == (ref & ~0xFFFULL);
+				if (known)
+					continue;
+				if (seenCount < 64)
+					seen[seenCount++] = ref & ~0xFFFULL;
+				uint32_t mapped = 0;
+				while (mapped < 1024 && vfPpgttLeaf(root & 0x7FFFFFF000ULL, (ref & ~0xFFFULL) + mapped * 0x1000ULL))
+					mapped++;
+				SYSLOG("ngreen", "V293: id=%u batch %llx +%04x buffer %llx: %u pages mapped before a hole", id,
+				       static_cast<unsigned long long>(start), pageIndex * 0x1000 + k * 4,
+				       static_cast<unsigned long long>(ref), mapped);
+				reported++;
 			}
 		}
-		SYSLOG("ngreen", "V293: id=%u batch %llx scanned %u pages, %u unmapped references", id,
+		SYSLOG("ngreen", "V293: id=%u batch %llx scanned %u pages, %u buffers", id,
 		       static_cast<unsigned long long>(start), scanned, reported);
 	}
 	if (entry.engineClass == 1)
