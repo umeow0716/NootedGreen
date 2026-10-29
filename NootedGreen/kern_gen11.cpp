@@ -12543,9 +12543,10 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 				uint32_t mapped = 0;
 				while (mapped < 1024 && vfPpgttLeaf(root & 0x7FFFFFF000ULL, (ref & ~0xFFFULL) + mapped * 0x1000ULL))
 					mapped++;
-				SYSLOG("ngreen", "V293: id=%u batch %llx +%04x buffer %llx: %u pages mapped before a hole", id,
+				SYSLOG("ngreen", "V293: id=%u batch %llx +%04x buffer %llx: %u pages mapped before a hole, pte %llx", id,
 				       static_cast<unsigned long long>(start), pageIndex * 0x1000 + k * 4,
-				       static_cast<unsigned long long>(ref), mapped);
+				       static_cast<unsigned long long>(ref), mapped,
+				       static_cast<unsigned long long>(vfPpgttLeaf(root & 0x7FFFFFF000ULL, ref & ~0xFFFULL)));
 				reported++;
 			}
 		}
