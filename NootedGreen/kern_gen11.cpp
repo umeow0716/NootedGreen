@@ -9818,6 +9818,16 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 	// WM_HZ_OP sequences may not survive a GuC timeslice preemption.
 	if (checkKernelArgument("-ngnoarb"))
 		b[n++] = 0x04000000; // MI_ARB_ON_OFF: disable
+	// CS_DEBUG_MODE2 bit 4 (CONSTANT_BUFFER address offset disable): Mesa sets
+	// it in every context. A VF context whose first run does not restore its
+	// image keeps the host's value, and then reads the UMD's push constant
+	// offsets as absolute addresses: its draws write nothing (or hang) for
+	// the context's whole life. The register is context-saved.
+	if (!checkKernelArgument("-ngnocsdm2")) {
+		b[n++] = 0x11000001;
+		b[n++] = 0x20D8;
+		b[n++] = 0x00100000;
+	}
 	b[n++] = 0x12400002; // MI_STORE_REGISTER_MEM, GGTT: CS_CHICKEN1 readback
 	b[n++] = 0x2580;
 	b[n++] = static_cast<uint32_t>(gpu + 0x808);
