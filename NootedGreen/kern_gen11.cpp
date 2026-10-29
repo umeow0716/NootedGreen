@@ -12488,7 +12488,7 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	// V293: non-render context images (layout differs from RCS): dump the
 	// start of the register state once per context class.
 	static uint32_t xcsImageDumps = 0;
-	if (entry.engineClass && xcsImageDumps++ < 2)
+	if (entry.engineClass == 1 && xcsImageDumps++ < 2)
 		for (uint32_t i = 0; i < 0x60; i += 8)
 			SYSLOG("ngreen", "V293: id=%u class=%u +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", id,
 			       entry.engineClass, i * 4, regs[i], regs[i + 1], regs[i + 2], regs[i + 3], regs[i + 4],
@@ -12512,6 +12512,37 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	// GuC does not save a reset context, so BB_ADDR may be stale. List the
 	// ring's batch starts, take the first one at or after the saved head (the
 	// submission that hung) and dump its first four pages.
+	// V293: video batches: report referenced 0x4xxxxxxx buffers missing from
+	// the context's PPGTT.
+	static uint32_t videoScans = 0;
+	for (uint32_t i = 0; entry.engineClass == 1 && videoScans < 2 && ring && i + 2 < (tail & 0x3FFFC) / 4; i++) {
+		if (ring[i] != 0x18800101)
+			continue;
+		const uint64_t start = ring[i + 1] | (static_cast<uint64_t>(ring[i + 2] & 0xFFFF) << 32);
+		uint32_t reported = 0, scanned = 0;
+		static uint32_t words[1024];
+		for (uint32_t pageIndex = 0; pageIndex < 8 && reported < 16; pageIndex++) {
+			const uint64_t va = (start & ~0xFFFULL) + pageIndex * 0x1000ULL;
+			if (!vfPpgttRead(root & 0x7FFFFFF000ULL, va, words, 1024))
+				break;
+			scanned++;
+			for (uint32_t k = 0; k + 1 < 1024 && reported < 16; k++) {
+				const uint64_t ref = words[k] | (static_cast<uint64_t>(words[k + 1]) << 32);
+				if ((words[k] >> 28) != 4 || words[k + 1] > 0xFFFF || (words[k] & 0xFFF) > 0x40)
+					continue;
+				if (!vfPpgttLeaf(root & 0x7FFFFFF000ULL, ref & ~0xFFFULL)) {
+					SYSLOG("ngreen", "V293: id=%u batch %llx +%04x references unmapped %llx", id,
+					       static_cast<unsigned long long>(start), pageIndex * 0x1000 + k * 4,
+					       static_cast<unsigned long long>(ref));
+					reported++;
+				}
+			}
+		}
+		SYSLOG("ngreen", "V293: id=%u batch %llx scanned %u pages, %u unmapped references", id,
+		       static_cast<unsigned long long>(start), scanned, reported);
+	}
+	if (entry.engineClass == 1)
+		videoScans++;
 	static uint32_t batchDumps = 0;
 	if (bb & ~3ULL)
 		SYSLOG("ngreen", "V276: id=%u saved bb=%llx", id, static_cast<unsigned long long>(bb));
@@ -12546,17 +12577,6 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 			auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
 			if (level == 4) {
 				vfDumpPsSurfaces(id, root, page, surfaceBase);
-				// V293: media batches: report referenced 0x4xxxxxxx buffers
-				// missing from the context's PPGTT.
-				for (uint32_t i = 0, reported = 0; entry.engineClass && i + 1 < 1024 && reported < 12; i++) {
-					const uint64_t va = page[i] | (static_cast<uint64_t>(page[i + 1]) << 32);
-					if ((page[i] >> 28) != 4 || page[i + 1] > 0xFFFF || (page[i] & 0xFFF) > 0x40)
-						continue;
-					if (!vfPpgttLeaf(root, va & ~0xFFFULL)) {
-						SYSLOG("ngreen", "V293: id=%u batch %llx +%03x references unmapped %llx", id,
-						       static_cast<unsigned long long>(va), i * 4, static_cast<unsigned long long>(va));
-						reported++;
-					}
 				}
 				// V278: is the depth/stencil surface this batch binds fully mapped?
 				for (uint32_t i = 0; i + 5 < 1024; i++)
