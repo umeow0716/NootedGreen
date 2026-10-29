@@ -12686,7 +12686,8 @@ static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 			       line[10], line[11], line[12], line[13], line[14], line[15]);
 		}
 		// Raw dwords of the chunks that separated passing from failing contexts.
-		for (uint32_t base : {0x1300U, 0x1800U, 0x2900U}) {
+		static const uint32_t bases[] {0x1300U, 0x1800U, 0x2900U};
+		for (uint32_t base : bases) {
 			for (uint32_t o = base; o < base + 256 && o + 32 <= length; o += 32) {
 				auto *w = reinterpret_cast<volatile uint32_t *>(image + o);
 				SYSLOG("ngreen", "V285: id=%u +%05x: %08x %08x %08x %08x %08x %08x %08x %08x", slot, o,
