@@ -12571,6 +12571,7 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 		}
 	if (!bb)
 		bb = lastBefore;
+	const uint64_t hungBatch = bb;
 	if (batchDumps >= 6)
 		bb = 0;
 	else if (bb)
@@ -12629,6 +12630,34 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 			}
 			map->release();
 			OSSafeReleaseNULL(desc);
+		}
+	}
+	// V295: a hung media walker: dump its interface descriptor and the first
+	// instructions of its kernel (instruction base + kernel start pointer).
+	static uint32_t kernelDumps = 0;
+	uint32_t media[256];
+	if (entry.engineClass == 0 && hungBatch && kernelDumps < 4 && vfPpgttRead(root, hungBatch, media, 256)) {
+		uint64_t dynamicBase = 0, instructionBase = 0;
+		for (uint32_t i = 0; i + 4 < 256; i++) {
+			if ((media[i] & 0xFFFF0000) == 0x61010000 && i + 12 < 256) {
+				dynamicBase = (media[i + 6] | (static_cast<uint64_t>(media[i + 7]) << 32)) & ~0xFFFULL;
+				instructionBase = (media[i + 10] | (static_cast<uint64_t>(media[i + 11]) << 32)) & ~0xFFFULL;
+				SYSLOG("ngreen", "V295: id=%u SBA len=%u dynamic=%llx instruction=%llx", id, media[i] & 0xFF,
+				       static_cast<unsigned long long>(dynamicBase), static_cast<unsigned long long>(instructionBase));
+			} else if (media[i] == 0x70020002 && dynamicBase && instructionBase) {
+				uint32_t idt[8], isa[64];
+				if (!vfPpgttRead(root, dynamicBase + media[i + 3], idt, 8))
+					break;
+				SYSLOG("ngreen", "V295: id=%u IDT %08x %08x %08x %08x %08x %08x %08x %08x", id, idt[0], idt[1], idt[2],
+				       idt[3], idt[4], idt[5], idt[6], idt[7]);
+				if (!vfPpgttRead(root, instructionBase + (idt[0] & ~0x3FU), isa, 64))
+					break;
+				kernelDumps++;
+				for (uint32_t k = 0; k < 64; k += 8)
+					SYSLOG("ngreen", "V295: id=%u isa+%03x: %08x %08x %08x %08x %08x %08x %08x %08x", id, k * 4, isa[k],
+					       isa[k + 1], isa[k + 2], isa[k + 3], isa[k + 4], isa[k + 5], isa[k + 6], isa[k + 7]);
+				break;
+			}
 		}
 	}
 	if (ring && (head & ~7U) < 0x4000) {

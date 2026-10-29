@@ -17,6 +17,11 @@ patches = [
     (0x5ad12, b'\x30', b'\x2c'),
     # Always run the post-submit step at 0x640b0.
     (0x64a15, bytes.fromhex('0f8412000000'), bytes.fromhex('660f1f440000')),
+    # Tahoe requests the H.264 encoder by its 0x20/0x4000 description entry;
+    # create the driver's VDEnc encoder (requested as 0x400 before) for it...
+    (0x14382, bytes.fromhex('483d00040000'), bytes.fromhex('483d00400000')),
+    # ...and route its parameters to it (in place of the unused 0x2000 entry).
+    (0x15e72, bytes.fromhex('4881fa00200000'), bytes.fromhex('4881fa00400000')),
     # Encoder teardown releases a CF object that may never have been created.
     (0x63d15, bytes.fromhex('488b45f0488b40584889c7e85ba31d00488b45f04889c7be48010000e8fafafdff'),
      bytes.fromhex('488b45f0488b78584885ff7405e859a31d00488b7df0be48010000e8fbfafdff90')),
