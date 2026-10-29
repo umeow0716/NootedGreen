@@ -9846,28 +9846,10 @@ void Gen11::vfWorkQueueFree(void *that) {
 static const uint32_t kRcsRingHead[6] {0x7A000004, 0x00144000, 0x40000000, 0, 0, 0};
 static OSObject *gVfRcsPrologue;
 static uint64_t gVfRcsPrologueGpu;
-static volatile uint32_t *gVfRcsPrologueCpu;
 
-// The donor programs L3ALLOC/0xB138 through MMIO (IntelTGLMemoryManager::
-// initGTL3Layout), which a VF context never sees. Without it the URB that
-// Apple sizes from the L3 bank count may not exist. The prologue stores the
-// value it found and the value after loading the donor's layout at +0x800.
-static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
+static void vfBuildRcsPrologue(uint32_t *b) {
 	size_t n = 0;
 	for (auto v : kRcsRingHead) b[n++] = v;
-	const bool l3 = checkKernelArgument("-ngl3alloc");
-	auto storeL3 = [&](uint32_t slot) {
-		b[n++] = 0x12400002; // MI_STORE_REGISTER_MEM, GGTT
-		b[n++] = 0xB134;
-		b[n++] = static_cast<uint32_t>(gpu + 0x800 + slot * 4);
-		b[n++] = static_cast<uint32_t>(gpu >> 32);
-	};
-	storeL3(0);
-	if (l3) {
-		const uint32_t lri[] {0x11000003, 0xB134, 0xD0000020, 0xB138, 0};
-		for (auto v : lri) b[n++] = v;
-	}
-	storeL3(1);
 	// TGL object-level 3D preemption corrupts the pipeline (PRM Vol14 UP3
 	// p53, WEX r135/r144). The host enables per-context control (0x20E0
 	// bit 14) and VF contexts start with CS_CHICKEN1 bit 0 set; GuC
@@ -9877,10 +9859,6 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 		b[n++] = 0x2580;
 		b[n++] = 0x00010000;
 	}
-	// -ngnoarb (experiment): no preemption inside the submission. Apple's
-	// WM_HZ_OP sequences may not survive a GuC timeslice preemption.
-	if (checkKernelArgument("-ngnoarb"))
-		b[n++] = 0x04000000; // MI_ARB_ON_OFF: disable
 	// CS_DEBUG_MODE2 bit 4 (CONSTANT_BUFFER address offset disable): Mesa sets
 	// it in every context. A VF context whose first run does not restore its
 	// image keeps the host's value, and then reads the UMD's push constant
@@ -9891,10 +9869,6 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 		b[n++] = 0x20D8;
 		b[n++] = 0x00100000;
 	}
-	b[n++] = 0x12400002; // MI_STORE_REGISTER_MEM, GGTT: CS_CHICKEN1 readback
-	b[n++] = 0x2580;
-	b[n++] = static_cast<uint32_t>(gpu + 0x808);
-	b[n++] = static_cast<uint32_t>(gpu >> 32);
 	// COMMON_SLICE_CHICKEN3 (Wa_1409142259), FF_MODE2 (Wa_1608008084),
 	// ROW_CHICKEN2 (Wa_1606931601)
 	const uint32_t lri[] {0x11000005, 0x7304, 0x02000200, 0x6604, 0xE0040000, 0xE4F4, 0x40004000};
@@ -9919,32 +9893,10 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 	// dropped; a new context then keeps the host's (Mesa's) value with binding
 	// table alignment BTP_18_8, and every binding table pointer is read 8x too
 	// far: render targets resolve to garbage surface state.
-	auto store = [&](uint32_t reg, uint32_t offset) {
-		b[n++] = 0x12400002; // MI_STORE_REGISTER_MEM, GGTT
-		b[n++] = reg;
-		b[n++] = static_cast<uint32_t>(gpu + offset);
-		b[n++] = static_cast<uint32_t>(gpu >> 32);
-	};
-	store(0x7008, 0x80C);
 	if (!checkKernelArgument("-ngnogtmode")) {
 		b[n++] = 0x11000001;
 		b[n++] = 0x7008;
 		b[n++] = 0xE43F0000;
-	}
-	store(0x7008, 0x810);
-	store(0x7010, 0x814);
-	// 3DSTATE_* only reach the 3D pipeline: a context last left in GPGPU
-	// mode would drop the hash table. Select 3D first (flush + invalidate
-	// before PIPELINE_SELECT, as Mesa does on Gen12); user batches select
-	// their own pipeline afterwards. Opt-in: new contexts hung on their
-	// first batch with it.
-	if (checkKernelArgument("-ngpsel")) {
-		const uint32_t sel[] {
-			0x7A000204, 0x00101021, 0, 0, 0, 0, // PIPE_CONTROL: RT/depth/DC/HDC flush, CS stall
-			0x7A000004, 0x00100C0C, 0, 0, 0, 0, // PIPE_CONTROL: state/const/texture/instruction invalidate
-			0x69041310,                         // PIPELINE_SELECT 3D (Apple's encoding)
-		};
-		for (auto v : sel) b[n++] = v;
 	}
 	// 3DSTATE_SUBSLICE_HASH_TABLE, slice 0 on TABLE_0, two- and three-way
 	// tables from intel_compute_pixel_hash_table_3way(8, 16, 2, 2, 0).
@@ -9976,14 +9928,9 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 // Pixel hashing and the LRI workarounds are not kept across a VF context
 // switch, so every submission (each starts with kRcsRingHead) runs it.
 static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint32_t at, uint32_t end) {
-	const bool noArb = checkKernelArgument("-ngnoarb");
 	const uint32_t words = ringSize / 4;
 	if (!gVfRcsPrologueGpu || !ring || !words || (words & (words - 1)))
 		return;
-	static uint32_t injected = 0;
-	if (gVfRcsPrologueCpu && (injected++ % 128) == 64)
-		SYSLOG("ngreen", "V287: prologue readback GT_MODE %08x -> %08x CSC1 %08x CS_CHICKEN1 %08x",
-		       gVfRcsPrologueCpu[0x203], gVfRcsPrologueCpu[0x204], gVfRcsPrologueCpu[0x205], gVfRcsPrologueCpu[0x202]);
 	auto w = [&](uint32_t i) -> volatile uint32_t & { return ring[(at / 4 + i) & (words - 1)]; };
 	for (uint32_t i = 0; i < arrsize(kRcsRingHead); i++)
 		if (w(i) != kRcsRingHead[i]) {
@@ -9992,20 +9939,6 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint
 				SYSLOG("ngreen", "V269: RCS ring +%x %08x %08x differs; no prologue", at, w(0), w(1));
 			return;
 		}
-	// -ngnoarb: the prologue turns arbitration off; turn it back on with the
-	// segment's trailing MI_NOOP pad (after the completion stamp), or a
-	// finished context could never be switched out.
-	if (noArb) {
-		volatile uint32_t &pad = ring[(end / 4 + words - 1) & (words - 1)];
-		if (pad != 0) {
-			static uint32_t padLogs = 0;
-			if (padLogs++ < 16)
-				SYSLOG("ngreen", "V269: RCS ring +%x has no trailing pad (%08x); prologue skipped", end - 4, pad);
-			return;
-		}
-		pad = 0x04000001; // MI_ARB_ON_OFF: enable
-		__asm__ volatile("clflush (%0)" :: "r"(&pad) : "memory");
-	}
 	w(1) = static_cast<uint32_t>(gVfRcsPrologueGpu);
 	w(2) = static_cast<uint32_t>(gVfRcsPrologueGpu >> 32);
 	w(3) = w(4) = w(5) = 0; // MI_NOOP
@@ -10016,10 +9949,6 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint
 }
 
 static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress);
-static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress);
-static void vfGoldenContextImage(uint32_t slot, bool enable, mach_vm_address_t getterAddress);
-static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to,
-                             mach_vm_address_t getterAddress);
 
 // V275: GGTT writes in newly submitted ring commands. A GGTT address below the
 // VF's range lands in PF-owned PTEs, i.e. a host-domain DMA write.
@@ -10163,13 +10092,12 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		        getMember<uint64_t>(prologue, kVfMappedBufferLengthOffset), PAGE_SIZE, gpu,
 		        gVfGGTTBase, gVfGGTTSize, kGucGgttTop)) {
 			bzero(cpu, PAGE_SIZE);
-			vfBuildRcsPrologue(cpu, gpu);
+			vfBuildRcsPrologue(cpu);
 			for (size_t i = 0; i < PAGE_SIZE; i += 64)
 				__asm__ volatile("clflush (%0)" :: "r"(reinterpret_cast<uint8_t *>(cpu) + i) : "memory");
 			__asm__ volatile("mfence" ::: "memory");
 			gVfRcsPrologue = prologue;
 			gVfRcsPrologueGpu = gpu;
-			gVfRcsPrologueCpu = cpu;
 			SYSLOG("ngreen", "V269: RCS prologue batch at GGTT 0x%llx", static_cast<unsigned long long>(gpu));
 		} else {
 			SYSLOG("ngreen", "V269: no RCS prologue batch");
@@ -12135,116 +12063,12 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		return false;
 	}
 
-	// -ngnoinhibit: Apple's new contexts start with ENGINE_CTX_RESTORE_INHIBIT,
-	// i.e. they inherit the 3D state of whatever ran last on RCS. On the PF
-	// that is always another Apple context; on a VF it can be a host (Mesa)
-	// context. Restore the safe image's state instead.
-	if (static_cast<uint32_t>(hwCsType) == 0 && enable && checkKernelArgument("-ngnoinhibit")) {
-		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
-		auto *backing = gVfContexts[slot].contextBacking;
-		auto *image = backing ? getter(backing) : nullptr;
-		auto *regs = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
-		static uint32_t logs = 0;
-		if (regs && logs < 64) {
-			logs++;
-			SYSLOG("ngreen", "V284: id=%d CTX_CONTEXT_CONTROL %08x %08x %08x IA %08x %08x", slot, regs[1], regs[2], regs[3],
-			       regs[0x35C / 4], regs[0x364 / 4]);
-		}
-		if (regs && regs[2] == 0x2244 && (regs[3] & 1)) {
-			regs[3] = (regs[3] & ~1U) | 0x10000U;
-			__asm__ volatile("clflush (%0); mfence" :: "r"(&regs[3]) : "memory");
-		}
-	}
-
-	// -nggolden: a new RCS context's first run either inherits the previous
-	// context's 3D state (restore inhibit; on a VF possibly a host context) or
-	// restores Apple's never-saved, mostly zero image. Like i915's default
-	// state, seed it from an image a working context has saved instead.
-	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-nggolden"))
-		vfGoldenContextImage(static_cast<uint32_t>(slot), enable, callback->vfSharedMappedBufferGetVirtualAddress);
-
-	// -ngwbinvd (experiment): write back all CPU caches before every RCS
-	// submission. The GPU's DMAR unit has no snoop control; if the UMD's
-	// batches or page tables are still dirty in a CPU cache, RCS reads stale
-	// memory.
-	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngwbinvd"))
-		__asm__ volatile("wbinvd" ::: "memory");
-
-	// -ngnoinhibit also reports the image after the first run: a context whose
-	// first run did not restore its image saves another context's registers.
-	if (static_cast<uint32_t>(hwCsType) == 0 && !enable && checkKernelArgument("-ngnoinhibit")) {
-		static uint8_t *seen = nullptr;
-		if (!seen && gVfContextCapacity) {
-			seen = static_cast<uint8_t *>(IOMalloc(gVfContextCapacity));
-			if (seen)
-				bzero(seen, gVfContextCapacity);
-		}
-		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
-		auto *backing = gVfContexts[slot].contextBacking;
-		auto *image = backing ? getter(backing) : nullptr;
-		static uint32_t logs = 0;
-		if (seen && image && !seen[slot] && logs < 64) {
-			seen[slot] = 1;
-			logs++;
-			auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
-			SYSLOG("ngreen", "V288: id=%d after first run ctl %08x IA %08x %08x CS_CHICKEN1 %08x head %08x",
-			       slot, regs[3], regs[0x35C / 4], regs[0x364 / 4], regs[0x40C / 4], regs[5]);
-		}
-	}
-
-	// -ngflushlrc: write back CPU caches for the context image (on enable) and
-	// the new ring commands before GuC/RCS read them. The GPU's DMAR unit has
-	// no snoop control, so the guest's cache attributes are what the GPU sees.
-	if (checkKernelArgument("-ngflushlrc")) {
-		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
-		auto *backing = gVfContexts[slot].contextBacking;
-		if (enable && backing) {
-			const uint64_t length = getMember<uint64_t>(backing, kVfMappedBufferLengthOffset);
-			auto *image = getter(backing);
-			for (uint64_t off = 0; image && off < length; off += 64)
-				__asm__ volatile("clflush (%0)" :: "r"(image + off) : "memory");
-		}
-		auto *ringCpu = getter(ringBacking);
-		for (uint32_t off = previousRingTail & ~63U; ringCpu && off != (ringTail & ~63U); off = (off + 64) % ringSize)
-			__asm__ volatile("clflush (%0)" :: "r"(ringCpu + off) : "memory");
-		if (ringCpu)
-			__asm__ volatile("clflush (%0)" :: "r"(ringCpu + (ringTail & ~63U)) : "memory");
-		__asm__ volatile("mfence" ::: "memory");
-	}
-
-	// -ngtlbsubmit (diagnostic): queue a full engine TLB invalidation in front
-	// of every RCS schedule request. GuC handles H2G in order; the completion
-	// (seqno with bit 31) is not waited for.
-	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngtlbsubmit")) {
-		static uint32_t asyncSeqno = 0;
-		const uint32_t tlbRequest[] {
-			kGucActionTlbInvalidation,
-			0x80000000U | (OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&asyncSeqno)) & 0x7FFFFFFFU),
-			NGVfGuCRequest::tlbInvalidationControl(NGVfGuCRequest::TlbTarget::Engines),
-		};
-		uint32_t tlbFence = 0;
-		const bool sent = vfSendCtbFastAction(that, tlbRequest, arrsize(tlbRequest), tlbFence, queue.get());
-		static uint32_t logs = 0;
-		if (logs < 8 || !sent) {
-			logs++;
-			SYSLOG("ngreen", "V282: submit TLB invalidation seq=%08x sent=%d", tlbRequest[1], sent);
-		}
-	}
-
-	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngctxdiff"))
-		vfDiffContextImage(static_cast<uint32_t>(slot), callback->vfSharedMappedBufferGetVirtualAddress);
-
 	if (gVfRcsPrologueOn < 0)
 		gVfRcsPrologueOn = !checkKernelArgument("-ngnorcsprologue");
 	if (static_cast<uint32_t>(hwCsType) == 0 && gVfRcsPrologueOn)
 		vfInjectRcsPrologue(static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
 			ringSize, previousRingTail, ringTail);
-
-	if (static_cast<uint32_t>(hwCsType) == 0 && (checkKernelArgument("-ngnohz") || checkKernelArgument("-ngnol3lri")))
-		vfEditRcsBatches(static_cast<uint32_t>(slot), static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
-			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
-			ringSize, previousRingTail, ringTail, callback->vfSharedMappedBufferGetVirtualAddress);
 
 	const uint16_t gucId = static_cast<uint16_t>(slot);
 	const uint32_t enableRequest[] = {
@@ -12676,264 +12500,6 @@ static void vfDumpPsSurfaces(uint32_t id, uint64_t root, volatile uint32_t *page
 	}
 }
 
-// V280 (-ngnohz): diagnostic batch edit. Before an RCS submission reaches the
-// GuC, walk the new user batches through the context PPGTT and drop depth
-// HiZ: NOP every 3DSTATE_WM_HZ_OP and clear Hierarchical Depth Buffer Enable
-// in 3DSTATE_DEPTH_BUFFER.
-static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to,
-                             mach_vm_address_t getterAddress) {
-	if (!gVfContexts || id >= gVfContextCapacity || !ring || !getterAddress || !ringSize || (ringSize & (ringSize - 1)))
-		return;
-	auto *image = gVfContexts[id].contextBacking ?
-		reinterpret_cast<uint8_t *(*)(void *)>(getterAddress)(gVfContexts[id].contextBacking) : nullptr;
-	if (!image)
-		return;
-	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
-	uint64_t root = 0;
-	for (uint32_t i = 0; i + 1 < 0x100; i++) {
-		if (regs[i] == 0x2270) root |= regs[i + 1];
-		else if (regs[i] == 0x2274) root |= static_cast<uint64_t>(regs[i + 1]) << 32;
-	}
-	static uint32_t logs = 0;
-	const uint32_t words = ringSize / 4;
-	// -ngnol3lri: L3ALLOC/0xB138 are global on Gen12, so a VF batch's L3
-	// layout LRI repartitions L3 under every other context (host included).
-	const bool noHz = checkKernelArgument("-ngnohz"), noL3 = checkKernelArgument("-ngnol3lri");
-	uint32_t l3Lris = 0;
-	for (uint32_t r = from / 4 % words, end = to / 4 % words; r != end; r = (r + 1) % words) {
-		if (ring[r] != 0x18800101)
-			continue;
-		const uint64_t bb = ring[(r + 1) % words] | (static_cast<uint64_t>(ring[(r + 2) % words] & 0xFFFF) << 32);
-		uint32_t hzOps = 0, hizClears = 0, nops = 0, skip = 0, pages = 0;
-		l3Lris = 0;
-		bool clearHiz = false, done = false;
-		for (uint64_t va = bb & ~3ULL; !done && pages < 16; pages++) {
-			const uint64_t leaf = vfPpgttLeaf(root, va);
-			if (!leaf)
-				break;
-			auto *desc = IOMemoryDescriptor::withPhysicalAddress((leaf & 0x7FFFFFF000ULL), PAGE_SIZE, kIODirectionInOut);
-			auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere) : nullptr;
-			if (!map) {
-				OSSafeReleaseNULL(desc);
-				break;
-			}
-			auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
-			bool dirty = false;
-			for (uint32_t i = (va & 0xFFF) / 4; i < 1024; i++) {
-				if (nops) {
-					page[i] = 0, nops--, dirty = true;
-					continue;
-				}
-				if (clearHiz) {
-					page[i] &= ~(1U << 22), clearHiz = false, dirty = true;
-					skip--;
-					continue;
-				}
-				if (skip) {
-					skip--;
-					continue;
-				}
-				const uint32_t w = page[i], client = w >> 29;
-				uint32_t length;
-				const uint32_t op = (w >> 23) & 0x3F;
-				if (client == 0)
-					// MI_STORE_DATA_IMM has a 10-bit length (Apple stores whole
-					// command templates with it); the other MI commands 8 bits.
-					length = op < 0x10 ? 1 : (w & (op == 0x20 ? 0x3FF : 0xFF)) + 2;
-				else if (client == 3)
-					length = (w & 0xFF) + 2;
-				else {
-					done = true;
-					break;
-				}
-				if (w == 0x05000000) {
-					done = true;
-					break;
-				}
-				if (noL3 && w == 0x11000001 && i + 1 < 1024 && (page[i + 1] == 0xB134 || page[i + 1] == 0xB138)) {
-					l3Lris++;
-					page[i] = 0, nops = 2, dirty = true;
-					continue;
-				}
-				if (!noHz) {
-					skip = length - 1;
-					continue;
-				}
-				if (w == 0x78520003) {
-					hzOps++;
-					page[i] = 0, nops = length - 1, dirty = true;
-					continue;
-				}
-				if (w == 0x78050006) {
-					hizClears++;
-					clearHiz = true;
-				}
-				skip = length - 1;
-			}
-			if (dirty) {
-				for (uint32_t k = 0; k < PAGE_SIZE; k += 64)
-					__asm__ volatile("clflush (%0)" :: "r"(reinterpret_cast<volatile uint8_t *>(page) + k) : "memory");
-				__asm__ volatile("mfence" ::: "memory");
-			}
-			map->release();
-			OSSafeReleaseNULL(desc);
-			va = (va & ~0xFFFULL) + 0x1000;
-		}
-		if (logs < 40 && (hzOps || hizClears || l3Lris)) {
-			logs++;
-			SYSLOG("ngreen", "V280: id=%u batch %llx pages=%u hz-ops=%u depth-buffers=%u l3-lri=%u end=%d", id,
-			       static_cast<unsigned long long>(bb), pages, hzOps, hizClears, l3Lris, done);
-		}
-	}
-}
-
-// -nggolden: capture a saved RCS image (from 0x1200, past the per-context
-// ring/PDP state) and copy it into every new RCS context before its first run.
-static void vfGoldenContextImage(uint32_t slot, bool enable, mach_vm_address_t getterAddress) {
-	constexpr uint32_t kStart = 0x1200;
-	static uint8_t *counts = nullptr;
-	static uint8_t *golden = nullptr;
-	static uint64_t goldenLength = 0;
-	if (!gVfContexts || slot >= gVfContextCapacity || !getterAddress)
-		return;
-	if (!counts) {
-		counts = static_cast<uint8_t *>(IOMalloc(gVfContextCapacity));
-		if (!counts)
-			return;
-		bzero(counts, gVfContextCapacity);
-	}
-	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(getterAddress);
-	auto *backing = gVfContexts[slot].contextBacking;
-	auto *image = backing ? getter(backing) : nullptr;
-	if (!image)
-		return;
-	const uint64_t length = getMember<uint64_t>(backing, kVfMappedBufferLengthOffset);
-	if (enable) {
-		counts[slot] = 1;
-		auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
-		if (!golden || length < goldenLength || regs[2] != 0x2244)
-			return;
-		memcpy(image + kStart, golden + kStart, static_cast<size_t>(goldenLength - kStart));
-		regs[3] = (regs[3] & ~1U) | 0x10000U;
-		for (uint64_t off = 0x1000; off < goldenLength; off += 64)
-			__asm__ volatile("clflush (%0)" :: "r"(image + off) : "memory");
-		__asm__ volatile("mfence" ::: "memory");
-		static uint32_t logs = 0;
-		if (logs++ < 8)
-			SYSLOG("ngreen", "V286: id=%u seeded from golden image (%llu bytes)", slot,
-			       static_cast<unsigned long long>(goldenLength));
-		return;
-	}
-	if (counts[slot] && counts[slot] < 255)
-		counts[slot]++;
-	// The 6th submission: the context has run and been switched out before.
-	if (golden || counts[slot] != 6 || length <= 0x3000 || length > 0x40000)
-		return;
-	auto *state = reinterpret_cast<volatile uint32_t *>(image + 0x2900);
-	if (!state[2] || !(image[0x1300] | image[0x1304]))
-		return;
-	auto *copy = static_cast<uint8_t *>(IOMalloc(static_cast<size_t>(length)));
-	if (!copy)
-		return;
-	memcpy(copy, image, static_cast<size_t>(length));
-	goldenLength = length;
-	golden = copy;
-	SYSLOG("ngreen", "V286: captured golden RCS image from id=%u (%llu bytes)", slot,
-	       static_cast<unsigned long long>(length));
-}
-
-// -ngctxdiff (diagnostic): at an RCS context's third submission, log the
-// register-state dwords that differ from the first such context's image.
-static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
-	constexpr uint32_t kWords = 0x2000 / 4;
-	constexpr uint32_t kHashLines = 1024;
-	static uint32_t hashLines[kHashLines][18];
-	static uint32_t hashHead = 0, hashCount = 0;
-	for (uint32_t e = 0; e < 3 && hashCount; e++) {
-		const auto &l = hashLines[hashHead];
-		SYSLOG("ngreen", "V285: id=%u %c%04x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
-		       l[0], l[1] >= 0x10000 ? 'r' : 'c', l[1] & 0xFFFF, l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9], l[10],
-		       l[11], l[12], l[13], l[14], l[15], l[16], l[17]);
-		hashHead = (hashHead + 1) % kHashLines;
-		hashCount--;
-	}
-	static uint8_t *counts = nullptr;
-	static uint32_t *reference = nullptr;
-	static uint32_t dumped = 0;
-	if (!gVfContexts || slot >= gVfContextCapacity || !getterAddress || dumped >= 100)
-		return;
-	if (!counts) {
-		counts = static_cast<uint8_t *>(IOMalloc(gVfContextCapacity));
-		reference = static_cast<uint32_t *>(IOMalloc(kWords * 4));
-		if (!counts || !reference)
-			return;
-		bzero(counts, gVfContextCapacity);
-		bzero(reference, kWords * 4);
-	}
-	if (counts[slot] < 255)
-		counts[slot]++;
-	if (counts[slot] != 3)
-		return;
-	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(getterAddress);
-	auto *backing = gVfContexts[slot].contextBacking;
-	auto *image = backing ? getter(backing) : nullptr;
-	if (!image)
-		return;
-	// -ngctxhash: per 256-byte chunk hashes of the whole image instead. A
-	// burst of log lines here stalls submission long enough for GuC to reset
-	// contexts, so they are queued and printed one per later submission.
-	if (checkKernelArgument("-ngctxhash")) {
-		dumped++;
-		const uint64_t length = getMember<uint64_t>(backing, kVfMappedBufferLengthOffset);
-		const uint32_t chunks = static_cast<uint32_t>(length / 256 > 512 ? 512 : length / 256);
-		for (uint32_t c = 0; c < chunks && hashCount < kHashLines; c += 16) {
-			auto &line = hashLines[(hashHead + hashCount++) % kHashLines];
-			line[0] = slot;
-			line[1] = c;
-			for (uint32_t k = 0; k < 16; k++) {
-				uint32_t h = 2166136261U;
-				auto *w = reinterpret_cast<volatile uint32_t *>(image + (c + k) * 256);
-				for (uint32_t j = 0; c + k < chunks && j < 64; j++)
-					h = (h ^ w[j]) * 16777619U;
-				line[2 + k] = h;
-			}
-		}
-		// Raw dwords of the chunks that separate passing from failing contexts.
-		static const uint32_t ranges[][2] {{0x1300, 0x1700}, {0x2900, 0x2C00}};
-		for (auto &r : ranges)
-			for (uint32_t o = r[0]; o < r[1] && o + 64 <= length && hashCount < kHashLines; o += 64) {
-				auto &line = hashLines[(hashHead + hashCount++) % kHashLines];
-				line[0] = slot;
-				line[1] = 0x10000 | o;
-				auto *w = reinterpret_cast<volatile uint32_t *>(image + o);
-				for (uint32_t k = 0; k < 16; k++)
-					line[2 + k] = w[k];
-			}
-		return;
-	}
-	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
-	if (dumped++ == 0) {
-		for (uint32_t i = 0; i < kWords; i++)
-			reference[i] = regs[i];
-		SYSLOG("ngreen", "V283: id=%u is the image reference", slot);
-		for (uint32_t i = 0; i < 0x1000 / 4; i += 8)
-			SYSLOG("ngreen", "V283: ref +%04x: %08x %08x %08x %08x %08x %08x %08x %08x", 0x1000 + i * 4,
-			       reference[i], reference[i + 1], reference[i + 2], reference[i + 3],
-			       reference[i + 4], reference[i + 5], reference[i + 6], reference[i + 7]);
-		return;
-	}
-	uint32_t diffs = 0;
-	for (uint32_t i = 0; i < kWords; i++) {
-		const uint32_t v = regs[i];
-		if (v == reference[i])
-			continue;
-		if (i < 0x1000 / 4 && diffs++ < 400)
-			SYSLOG("ngreen", "V283: id=%u +%04x reg %08x ref %08x cur %08x", slot, 0x1000 + i * 4,
-			       i ? regs[i - 1] : 0, reference[i], v);
-	}
-	SYSLOG("ngreen", "V283: id=%u %u dwords differ", slot, diffs);
-}
-
 static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	if (!gVfContexts || id >= gVfContextCapacity || !getterAddress)
 		return;
@@ -12947,13 +12513,6 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
 	const uint32_t head = regs[5], tail = regs[7];
 	SYSLOG("ngreen", "V270: reset id=%u head=0x%x tail=0x%x", id, head, tail);
-	if (gVfRcsPrologueCpu)
-		SYSLOG("ngreen", "V279: L3ALLOC before prologue %08x after %08x CS_CHICKEN1 %08x GT_MODE %08x -> %08x CSC1 %08x",
-		       gVfRcsPrologueCpu[0x200], gVfRcsPrologueCpu[0x201], gVfRcsPrologueCpu[0x202],
-		       gVfRcsPrologueCpu[0x203], gVfRcsPrologueCpu[0x204], gVfRcsPrologueCpu[0x205]);
-	for (uint32_t i = 0; i + 1 < 0x400; i++)
-		if (regs[i] == 0xB134 || regs[i] == 0xB138)
-			SYSLOG("ngreen", "V279: id=%u image reg %x = %08x", id, regs[i], regs[i + 1]);
 	// Saved register pairs: BB address/state and the active head (MMIO offsets
 	// relative to the engine base, so match the low 12 bits).
 	for (uint32_t i = 0; i + 1 < 0x400 / 4; i++) {
