@@ -12035,12 +12035,14 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		auto *backing = gVfContexts[slot].contextBacking;
 		auto *image = backing ? getter(backing) : nullptr;
 		auto *regs = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
-		if (regs && regs[1] == 0x2244 && (regs[2] & 1)) {
-			static uint32_t logs = 0;
-			if (logs++ < 8)
-				SYSLOG("ngreen", "V284: id=%d CTX_CONTEXT_CONTROL %08x -> restore", slot, regs[2]);
-			regs[2] = (regs[2] & ~1U) | 0x10000U;
-			__asm__ volatile("clflush (%0); mfence" :: "r"(&regs[2]) : "memory");
+		static uint32_t logs = 0;
+		if (regs && logs < 8) {
+			logs++;
+			SYSLOG("ngreen", "V284: id=%d CTX_CONTEXT_CONTROL %08x %08x %08x", slot, regs[1], regs[2], regs[3]);
+		}
+		if (regs && regs[2] == 0x2244 && (regs[3] & 1)) {
+			regs[3] = (regs[3] & ~1U) | 0x10000U;
+			__asm__ volatile("clflush (%0); mfence" :: "r"(&regs[3]) : "memory");
 		}
 	}
 
