@@ -17,6 +17,19 @@ patches = [
     (0x5ad12, b'\x30', b'\x2c'),
     # Always run the post-submit step at 0x640b0.
     (0x64a15, bytes.fromhex('0f8412000000'), bytes.fromhex('660f1f440000')),
+    # Encoder teardown releases a CF object that may never have been created.
+    (0x63d15, bytes.fromhex('488b45f0488b40584889c7e85ba31d00488b45f04889c7be48010000e8fafafdff'),
+     bytes.fromhex('488b45f0488b78584885ff7405e859a31d00488b7df0be48010000e8fbfafdff90')),
+    # H.264 encode: the first two of the three encoder stages at +0x910 are
+    # not created on this hardware; skip their setup call when absent.
+    (0x132818, bytes.fromhex('488b88100900' '00488b75f0488b90c8090000488b394889bd48ffffff4889cf'
+                             '488b8d48ffffffff51108945dc837ddc000f8405000000e959010000'),
+     bytes.fromhex('488b88100900004885c9742f488b75f0488b90c80900004889cf488b09ff5110'
+                   '8945dc85c00f8569010000' + '90' * 16)),
+    (0x13285a, bytes.fromhex('488b88180900' '00488b75f0488b90c8090000488b394889bd40ffffff4889cf'
+                             '488b8d40ffffffff51108945dc837ddc000f8405000000e917010000'),
+     bytes.fromhex('488b88180900004885c9742f488b75f0488b90c80900004889cf488b09ff5110'
+                   '8945dc85c00f8527010000' + '90' * 16)),
 ]
 for off, old, new in patches:
     if data[off:off + len(old)] != old:

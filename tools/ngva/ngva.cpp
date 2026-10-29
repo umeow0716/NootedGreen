@@ -71,16 +71,6 @@ uint8_t *convert(const Description *old) {
 		}
 		*link = nullptr;
 	}
-	// AppleGVA rejects the description with the {0x20, 0x4000, 0x3e9} codec in it.
-	uint32_t kept = 0;
-	for (size_t i = 0; i < slots; i++) {
-		auto *e = slot[i];
-		if (e && *reinterpret_cast<uint32_t *>(e) == 0x20 && *reinterpret_cast<uint64_t *>(e + 8) == 0x4000 &&
-		    *reinterpret_cast<uint32_t *>(e + 0x10) == 0x3e9)
-			continue;
-		slot[kept++] = e;
-	}
-	reinterpret_cast<Description *>(out)->count = kept;
 	return out;
 }
 
