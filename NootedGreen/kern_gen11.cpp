@@ -9826,11 +9826,25 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 	// ROW_CHICKEN2 (Wa_1606931601)
 	const uint32_t lri[] {0x11000005, 0x7304, 0x02000200, 0x6604, 0xE0040000, 0xE4F4, 0x40004000};
 	for (auto v : lri) b[n++] = v;
+	// More of i915's Gen12 RCS workarounds; the host applies them only to
+	// its own contexts:
+	//   ROW_CHICKEN2 push constant deref hold disable (Wa_1409804808)
+	//   ROW_CHICKEN4 disable TDL push (Wa_14010229206)
+	//   CS_DEBUG_MODE1 FF DOP clock gate disable (Wa_1606700617)
+	//   SAMPLER_MODE small PL (Wa_1406941453)
+	//   HIZ_CHICKEN depth test LE/GE optimization off (Wa_1806527549)
+	//   COMMON_SLICE_CHICKEN4 TDC load balancing calc off (Wa_1606376872)
+	if (!checkKernelArgument("-ngnoextrawa")) {
+		const uint32_t wa[] {0x1100000B, 0xE4F4, 0x01000100, 0xE48C, 0x02000200, 0x20EC, 0x00020002,
+		                     0xE18C, 0x80008000, 0x7018, 0x20002000, 0x7300, 0x00400040};
+		for (auto v : wa) b[n++] = v;
+	}
 	// 3DSTATE_* only reach the 3D pipeline: a context last left in GPGPU
 	// mode would drop the hash table. Select 3D first (flush + invalidate
 	// before PIPELINE_SELECT, as Mesa does on Gen12); user batches select
-	// their own pipeline afterwards.
-	if (!checkKernelArgument("-ngnopsel")) {
+	// their own pipeline afterwards. Opt-in: new contexts hung on their
+	// first batch with it.
+	if (checkKernelArgument("-ngpsel")) {
 		const uint32_t sel[] {
 			0x7A000204, 0x00101021, 0, 0, 0, 0, // PIPE_CONTROL: RT/depth/DC/HDC flush, CS stall
 			0x7A000004, 0x00100C0C, 0, 0, 0, 0, // PIPE_CONTROL: state/const/texture/instruction invalidate
