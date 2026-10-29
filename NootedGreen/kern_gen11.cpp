@@ -12577,7 +12577,6 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 			auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
 			if (level == 4) {
 				vfDumpPsSurfaces(id, root, page, surfaceBase);
-				}
 				// V278: is the depth/stencil surface this batch binds fully mapped?
 				for (uint32_t i = 0; i + 5 < 1024; i++)
 					if (page[i] == 0x78060006 || page[i] == 0x78050006) {
