@@ -12667,6 +12667,26 @@ static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 	auto *image = backing ? getter(backing) : nullptr;
 	if (!image)
 		return;
+	// -ngctxhash: per 256-byte chunk hashes of the whole image instead.
+	if (checkKernelArgument("-ngctxhash")) {
+		dumped++;
+		const uint64_t length = getMember<uint64_t>(backing, kVfMappedBufferLengthOffset);
+		const uint32_t chunks = static_cast<uint32_t>(length / 256 > 512 ? 512 : length / 256);
+		uint32_t line[16];
+		for (uint32_t c = 0; c < chunks; c += 16) {
+			for (uint32_t k = 0; k < 16; k++) {
+				uint32_t h = 2166136261U;
+				auto *w = reinterpret_cast<volatile uint32_t *>(image + (c + k) * 256);
+				for (uint32_t j = 0; c + k < chunks && j < 64; j++)
+					h = (h ^ w[j]) * 16777619U;
+				line[k] = h;
+			}
+			SYSLOG("ngreen", "V285: id=%u c%03x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
+			       slot, c, line[0], line[1], line[2], line[3], line[4], line[5], line[6], line[7], line[8], line[9],
+			       line[10], line[11], line[12], line[13], line[14], line[15]);
+		}
+		return;
+	}
 	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
 	if (dumped++ == 0) {
 		for (uint32_t i = 0; i < kWords; i++)
