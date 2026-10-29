@@ -10,6 +10,8 @@
 #include "kern_xe_lv.hpp"
 #include "kern_xe_render.hpp"
 #include <Headers/kern_api.hpp>
+#include <libkern/OSKextLib.h>
+#include <kern/thread.h>
 #include <Headers/kern_devinfo.hpp>
 #include <i386/machine_routines.h>
 #include <kern/sched_prim.h>
@@ -247,6 +249,17 @@ void NGreen::init() {
 }
 
 
+// -ngtglearly: load the TGL accelerator from the kernel as soon as the patcher
+// is up, instead of from a launch daemon. WindowServer picks its compositor
+// once, when IOKit settles at its start: with the accelerator already loaded
+// it composites with Metal, otherwise it stays on the software compositor.
+static void loadTglEarly(void *, wait_result_t) {
+	IOSleep(500);
+	const OSReturn ret = OSKextLoadKextWithIdentifier("com.xxxxx.driver.AppleIntelTGLGraphics");
+	SYSLOG("ngreen", "V289: early TGL accelerator load returned 0x%x", ret);
+	thread_terminate(current_thread());
+}
+
 void NGreen::processPatcher(KernelPatcher &patcher) {
 	XeDataAccess::processKernel(patcher);
 	XeLV::processKernel(patcher);
@@ -260,6 +273,11 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		DeviceInfo::deleter(devInfo);
 		SYSLOG("ngreen", "No built-in PCI GPU; NootedGreen remains inactive");
 		return;
+	}
+	if (checkKernelArgument("-ngtglearly")) {
+		thread_t thread = nullptr;
+		if (kernel_thread_start(loadTglEarly, nullptr, &thread) == KERN_SUCCESS)
+			thread_deallocate(thread);
 	}
 
 	PANIC_COND(!ngResolveKernelTelemetry(patcher), "ngreen",
