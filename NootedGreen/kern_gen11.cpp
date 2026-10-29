@@ -13742,6 +13742,11 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 			SYSLOG("ngreen", "V267: event timeout channel=%d capture=%x T0=" NG_TIMEOUT_FRAME_FORMAT
 				" T2=" NG_TIMEOUT_FRAME_FORMAT "; continuing", channel, capture,
 				NG_TIMEOUT_FRAME_ARGS(frames[0]), NG_TIMEOUT_FRAME_ARGS(frames[2]));
+		// Where the stalled contexts sit: ring around the saved head and the batch.
+		if (logs <= 3 && callback)
+			for (uint32_t engine = 0; engine < NGVfTimeoutObservation::engineCount; ++engine)
+				if ((frames[engine].flags & 8) && !(frames[engine].flags & 16))
+					vfDumpResetContext(frames[engine].id, callback->vfSharedMappedBufferGetVirtualAddress);
 		return nullptr;
 	}
 	vfMarkProtocolFault("VF native event timeout without verified GPU quiescence");
