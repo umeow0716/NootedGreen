@@ -9897,6 +9897,16 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 	n += 12;
 	b[n++] = 0x791E0000; // 3DSTATE_3D_MODE: SubsliceHashingTableEnable
 	b[n++] = 0x00200020;
+	// 3DSTATE_BINDING_TABLE_POOL_ALLOC: disabled. The UMD never programs it
+	// (binding tables are relative to Surface State Base); Mesa enables it in
+	// every context, and a VF context whose first run inherits that reads its
+	// binding tables from a host address.
+	if (!checkKernelArgument("-ngnobtpool")) {
+		b[n++] = 0x79190002;
+		b[n++] = 0;
+		b[n++] = 0;
+		b[n++] = 0;
+	}
 	b[n++] = 0x05000000; // MI_BATCH_BUFFER_END
 }
 
