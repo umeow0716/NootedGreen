@@ -9841,6 +9841,16 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 		                     0xE18C, 0x80008000, 0x7018, 0x20002000, 0x7300, 0x00400040, 0x7010, 0x40004000};
 		for (auto v : wa) b[n++] = v;
 	}
+	// GT_MODE as Apple's batches load it (0xE43F0000). That LRI comes from a
+	// non-privileged batch and 0x7008 is not in the host's whitelist, so it is
+	// dropped; a new context then keeps the host's (Mesa's) value with binding
+	// table alignment BTP_18_8, and every binding table pointer is read 8x too
+	// far: render targets resolve to garbage surface state.
+	if (!checkKernelArgument("-ngnogtmode")) {
+		b[n++] = 0x11000001;
+		b[n++] = 0x7008;
+		b[n++] = 0xE43F0000;
+	}
 	// 3DSTATE_* only reach the 3D pipeline: a context last left in GPGPU
 	// mode would drop the hash table. Select 3D first (flush + invalidate
 	// before PIPELINE_SELECT, as Mesa does on Gen12); user batches select
