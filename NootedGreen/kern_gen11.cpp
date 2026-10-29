@@ -12546,6 +12546,18 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 			auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
 			if (level == 4) {
 				vfDumpPsSurfaces(id, root, page, surfaceBase);
+				// V293: media batches: report referenced 0x4xxxxxxx buffers
+				// missing from the context's PPGTT.
+				for (uint32_t i = 0, reported = 0; entry.engineClass && i + 1 < 1024 && reported < 12; i++) {
+					const uint64_t va = page[i] | (static_cast<uint64_t>(page[i + 1]) << 32);
+					if ((page[i] >> 28) != 4 || page[i + 1] > 0xFFFF || (page[i] & 0xFFF) > 0x40)
+						continue;
+					if (!vfPpgttLeaf(root, va & ~0xFFFULL)) {
+						SYSLOG("ngreen", "V293: id=%u batch %llx +%03x references unmapped %llx", id,
+						       static_cast<unsigned long long>(va), i * 4, static_cast<unsigned long long>(va));
+						reported++;
+					}
+				}
 				// V278: is the depth/stencil surface this batch binds fully mapped?
 				for (uint32_t i = 0; i + 5 < 1024; i++)
 					if (page[i] == 0x78060006 || page[i] == 0x78050006) {
