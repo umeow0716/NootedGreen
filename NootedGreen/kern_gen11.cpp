@@ -12025,18 +12025,23 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		return false;
 	}
 
-	// -ngtlbsubmit (diagnostic): full engine TLB invalidation through GuC
-	// before every RCS submission, when this thread may wait for GuC.
-	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngtlbsubmit") && gVfHardwareGuc) {
-		static uint32_t done = 0, skipped = 0;
-		auto *loop = vfCanUseSleepingLock() ? getMember<IOWorkLoop *>(gVfHardwareGuc, 0xA00) : nullptr;
-		if (loop && !loop->onThread() && !loop->inGate() &&
-		    vfInvalidateTLBSync(gVfHardwareGuc, NGVfGuCRequest::TlbTarget::Engines))
-			done++;
-		else
-			skipped++;
-		if (((done + skipped) & (done + skipped - 1)) == 0)
-			SYSLOG("ngreen", "V282: submit TLB invalidations done=%u skipped=%u", done, skipped);
+	// -ngtlbsubmit (diagnostic): queue a full engine TLB invalidation in front
+	// of every RCS schedule request. GuC handles H2G in order; the completion
+	// (seqno with bit 31) is not waited for.
+	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngtlbsubmit")) {
+		static uint32_t asyncSeqno = 0;
+		const uint32_t tlbRequest[] {
+			kGucActionTlbInvalidation,
+			0x80000000U | (OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&asyncSeqno)) & 0x7FFFFFFFU),
+			NGVfGuCRequest::tlbInvalidationControl(NGVfGuCRequest::TlbTarget::Engines),
+		};
+		uint32_t tlbFence = 0;
+		const bool sent = vfSendCtbFastAction(that, tlbRequest, arrsize(tlbRequest), tlbFence, queue.get());
+		static uint32_t logs = 0;
+		if (logs < 8 || !sent) {
+			logs++;
+			SYSLOG("ngreen", "V282: submit TLB invalidation seq=%08x sent=%d", tlbRequest[1], sent);
+		}
 	}
 
 	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngrcsprologue"))
@@ -12814,7 +12819,9 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	if (event.kind == NGVfGuCEvent::Kind::TlbInvalidationDone) {
 		const uint32_t seqno = message[2];
 		OSSynchronizeIO();
-		if (NGVfGuCEvent::expectedTlbCompletion(
+		if (seqno & 0x80000000U) {
+			// -ngtlbsubmit completions; nobody waits for them.
+		} else if (NGVfGuCEvent::expectedTlbCompletion(
 		        gVfTlbWaitActive != 0, gVfTlbWaitSeqno,
 		        gVfTlbDoneSeqno, seqno) &&
 		    OSCompareAndSwap(seqno - 1U, seqno, &gVfTlbDoneSeqno)) {
