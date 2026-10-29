@@ -8228,32 +8228,6 @@ void ngReleaseTglBusyHold() {
 // Boot-arg cache for the per-submission RCS prologue switch.
 static int gVfRcsPrologueOn = -1;
 
-// CoreDisplay finds a display's accelerator through the framebuffer's
-// IOAccelTypes path (IOAccelFindAccelerator). The accelerator only binds
-// framebuffers on its own PCI device, so the VM's boot framebuffer has none and
-// WindowServer composites every display, virtual ones included, in software.
-// Point the other framebuffers at this accelerator.
-static void ngBindForeignFramebuffers(IOService *accelerator) {
-	char path[512];
-	int length = sizeof(path);
-	if (!accelerator->getPath(path, &length, gIOServicePlane))
-		return;
-	auto *matching = IOService::serviceMatching("IOFramebuffer");
-	auto *iterator = matching ? IOService::getMatchingServices(matching) : nullptr;
-	OSSafeReleaseNULL(matching);
-	if (!iterator)
-		return;
-	while (auto *framebuffer = OSDynamicCast(IOService, iterator->getNextObject())) {
-		if (framebuffer->getProperty("IOAccelTypes"))
-			continue;
-		framebuffer->setProperty("IOAccelTypes", path);
-		framebuffer->setProperty("IOAccelIndex", 0ULL, 32);
-		framebuffer->setProperty("IOAccelRevision", 2ULL, 32);
-		SYSLOG("ngreen", "V290: bound framebuffer %s to %s", framebuffer->getName(), path);
-	}
-	iterator->release();
-}
-
 bool Gen11::start(void *that, void *provider)
 {
 	if (!that || !provider || !callback || !callback->ostart) {
@@ -8416,8 +8390,6 @@ bool Gen11::start(void *that, void *provider)
 	if (vfActive)
 		SYSLOG("ngreen", "V312: exact native IntelAccelerator start returned %d",
 		       result);
-	if (vfActive && result && checkKernelArgument("-ngfbaccel"))
-		ngBindForeignFramebuffers(reinterpret_cast<IOService *>(that));
 	if (!result) {
 		if (vfActive) {
 			// The pinned Tahoe start body normally routes failures after
