@@ -275,6 +275,7 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		return;
 	}
 	if (checkKernelArgument("-ngtglearly")) {
+		ngHoldTglBusy(this->iGPU);
 		thread_t thread = nullptr;
 		if (kernel_thread_start(loadTglEarly, nullptr, &thread) == KERN_SUCCESS)
 			thread_deallocate(thread);

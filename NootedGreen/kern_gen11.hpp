@@ -455,4 +455,7 @@ public:
 	                 mach_vm_address_t address, size_t size);
 };
 
+void ngHoldTglBusy(IOService *service);
+void ngReleaseTglBusyHold();
+
 #endif

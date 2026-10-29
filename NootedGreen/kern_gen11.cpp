@@ -4,6 +4,7 @@
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOUserClient.h>
 #include <sys/proc.h>
+#include <kern/thread.h>
 #include "kern_guc_ring.hpp"
 #include "kern_flight_trace.hpp"
 #include "kern_vf_cpu_range.hpp"
@@ -8194,6 +8195,36 @@ IOReturn Gen11::vfDisplaySleepCallback(void *that, uint32_t command,
 		that, command, argument0, argument1);
 }
 
+
+// -ngtglearly: keep the GPU's IOService busy from patcher setup until the
+// accelerator has started. WindowServer waits for IOKit quiet (IOKitWaitQuiet,
+// 60 s) before it enumerates Metal devices and picks its compositor.
+static IOService *volatile gTglBusyHold;
+
+void ngHoldTglBusy(IOService *service) {
+	if (!service || !OSCompareAndSwapPtr(nullptr, service, reinterpret_cast<void *volatile *>(&gTglBusyHold)))
+		return;
+	service->retain();
+	service->adjustBusy(1);
+	SYSLOG("ngreen", "V289: holding IOKit busy until the accelerator starts");
+	thread_t thread = nullptr;
+	if (kernel_thread_start([](void *, wait_result_t) {
+		    IOSleep(40000);
+		    ngReleaseTglBusyHold();
+		    thread_terminate(current_thread());
+	    }, nullptr, &thread) == KERN_SUCCESS)
+		thread_deallocate(thread);
+}
+
+void ngReleaseTglBusyHold() {
+	IOService *service = gTglBusyHold;
+	if (!service || !OSCompareAndSwapPtr(service, nullptr, reinterpret_cast<void *volatile *>(&gTglBusyHold)))
+		return;
+	service->adjustBusy(-1);
+	service->release();
+	SYSLOG("ngreen", "V289: released IOKit busy hold");
+}
+
 bool Gen11::start(void *that, void *provider)
 {
 	if (!that || !provider || !callback || !callback->ostart) {
@@ -8352,6 +8383,7 @@ bool Gen11::start(void *that, void *provider)
 	if (vfActive)
 		SYSLOG("ngreen", "V312: entering exact native IntelAccelerator start");
 	const auto result = FunctionCast(start, callback->ostart)(that, provider);
+	ngReleaseTglBusyHold();
 	if (vfActive)
 		SYSLOG("ngreen", "V312: exact native IntelAccelerator start returned %d",
 		       result);
