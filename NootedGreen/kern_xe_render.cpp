@@ -71,8 +71,10 @@ uint64_t wrapGPUInfo(void *accelerator) {
 // nothing, then RCS hangs). Like Mesa, use a subslice hash table that
 // alternates between pipes 0 and 1.
 // 0x2580 CS_CHICKEN1 bit 0 off: no 3D object-level preemption (Vol14 UP3 p53).
-const uint32_t ctxLRI[] {0, 0x11000007, 0x7304, 0x02000200, 0x6604, 0xE0040000, 0xE4F4, 0x40004000,
-                         0x2580, 0x00010000};
+// 0x7008 GT_MODE binding table alignment 15_5 (the UMD's value; a host Mesa
+// context leaves 18_8 behind, and the UMD's own LRI is not whitelisted).
+const uint32_t ctxLRI[] {0, 0x11000009, 0x7304, 0x02000200, 0x6604, 0xE0040000, 0xE4F4, 0x40004000,
+                         0x2580, 0x00010000, 0x7008, 0xE43F0000};
 
 void buildCtxBatch(uint32_t *b) {
     size_t n = 0;
