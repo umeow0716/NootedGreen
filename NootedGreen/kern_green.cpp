@@ -204,9 +204,12 @@ static UserPatcher::BinaryModInfo wsSkyLight {
 	"/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight",
 	wsSerialBlitPatch, arrsize(wsSerialBlitPatch)
 };
+#define WS_PATH(path) {path, sizeof(path) - 1, WsSerialBlitSection, UserPatcher::ProcInfo::MatchExact}
 static UserPatcher::ProcInfo wsProcess[] {
-	{"/WindowServer", sizeof("/WindowServer") - 1, WsSerialBlitSection, UserPatcher::ProcInfo::MatchSuffix},
+	WS_PATH("/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer"),
+	WS_PATH("/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"),
 };
+#undef WS_PATH
 
 void registerWsSerialBlit() {
 	lilu.onProcLoadForce(wsProcess, arrsize(wsProcess),
