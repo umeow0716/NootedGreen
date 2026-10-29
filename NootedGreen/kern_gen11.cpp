@@ -12065,7 +12065,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		if (regs && logs < 64) {
 			logs++;
 			SYSLOG("ngreen", "V284: id=%d CTX_CONTEXT_CONTROL %08x %08x %08x IA %08x %08x", slot, regs[1], regs[2], regs[3],
-			       regs[0x34C / 4], regs[0x354 / 4]);
+			       regs[0x35C / 4], regs[0x364 / 4]);
 		}
 		if (regs && regs[2] == 0x2244 && (regs[3] & 1)) {
 			regs[3] = (regs[3] & ~1U) | 0x10000U;
@@ -12105,7 +12105,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			logs++;
 			auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
 			SYSLOG("ngreen", "V288: id=%d after first run ctl %08x IA %08x %08x CS_CHICKEN1 %08x head %08x",
-			       slot, regs[3], regs[0x34C / 4], regs[0x354 / 4], regs[0x404 / 4], regs[5]);
+			       slot, regs[3], regs[0x35C / 4], regs[0x364 / 4], regs[0x40C / 4], regs[5]);
 		}
 	}
 
