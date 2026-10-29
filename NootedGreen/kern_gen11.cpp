@@ -12203,7 +12203,8 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngctxdiff"))
 		vfDiffContextImage(static_cast<uint32_t>(slot), callback->vfSharedMappedBufferGetVirtualAddress);
 
-	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngrcsprologue"))
+	static const bool rcsPrologue = !checkKernelArgument("-ngnorcsprologue");
+	if (static_cast<uint32_t>(hwCsType) == 0 && rcsPrologue)
 		vfInjectRcsPrologue(static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
 			ringSize, previousRingTail, ringTail);
@@ -13151,9 +13152,9 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		       action, length, payload0, payload1, payload2);
 		if (event.kind == NGVfGuCEvent::Kind::ContextReset)
 			vfDumpResetContext(payload0, callback->vfSharedMappedBufferGetVirtualAddress);
-	// -ngresetcontinue: GuC already reset the engine and dropped only
+	// Default (opt out with -ngnoresetcontinue): GuC already reset the engine and dropped only
 		// the hung context; keep the other contexts running.
-		if (event.kind == NGVfGuCEvent::Kind::ContextReset && checkKernelArgument("-ngresetcontinue"))
+		if (event.kind == NGVfGuCEvent::Kind::ContextReset && !checkKernelArgument("-ngnoresetcontinue"))
 			return true;
 		vfMarkProtocolFault(event.kind == NGVfGuCEvent::Kind::ContextReset ?
 		                         "GuC context reset notification" :
@@ -13734,9 +13735,9 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 				engine,frames[engine].id,i*4,w[i],w[i+1],w[i+2],w[i+3],w[i+4],w[i+5],w[i+6],w[i+7]);
 	}
 	ringDumps++;
-	// -ngresetcontinue: GuC already reset the hung context, so nothing of it
+	// Default (opt out with -ngnoresetcontinue): GuC already reset the hung context, so nothing of it
 	// can still DMA; keep the guest alive and let the channel time out again.
-	if (checkKernelArgument("-ngresetcontinue")) {
+	if (!checkKernelArgument("-ngnoresetcontinue")) {
 		static uint32_t logs = 0;
 		if (logs++ < 16)
 			SYSLOG("ngreen", "V267: event timeout channel=%d capture=%x T0=" NG_TIMEOUT_FRAME_FORMAT

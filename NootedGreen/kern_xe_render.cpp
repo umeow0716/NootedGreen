@@ -340,7 +340,7 @@ bool XeRender::processKext(KernelPatcher &p, size_t index, mach_vm_address_t add
     const uint8_t poshFind[] {0x00, 0x00, 0x1C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     const uint8_t poshReplace[] {0x00, 0x00, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     const uint32_t poshSites[] {0xB09A4, 0xB0BC0};
-    bool posh = checkKernelArgument("-ngnoposh");
+    bool posh = !checkKernelArgument("-ngposh");
     for (size_t n = 0; posh && n < arrsize(poshSites); ++n)
         posh = bytesAt(address, poshSites[n], poshFind, sizeof(poshFind));
     for (size_t n = 0; posh && n < arrsize(poshSites); ++n) {
@@ -360,7 +360,7 @@ bool XeRender::processKext(KernelPatcher &p, size_t index, mach_vm_address_t add
     // Copy only the first seven qwords so both sizes stay zero.
     const uint8_t ccsCopyFind[] {0xB9, 0x08, 0x00, 0x00, 0x00, 0x4C, 0x89, 0xFF, 0xF3, 0x48, 0xA5};
     const uint8_t ccsCopyReplace[] {0xB9, 0x07, 0x00, 0x00, 0x00, 0x4C, 0x89, 0xFF, 0xF3, 0x48, 0xA5};
-    bool noCcs = checkKernelArgument("-ngnoccs") && p.solveSymbol<mach_vm_address_t>(index,
+    bool noCcs = !checkKernelArgument("-ngccs") && p.solveSymbol<mach_vm_address_t>(index,
         "__ZN15IGAccelResource10initializeEP22IOAccelNewResourceArgsy", address, size) == address + 0x6E8CC &&
         bytesAt(address, 0x6E951, ccsCopyFind, sizeof(ccsCopyFind));
     p.clearError();
@@ -383,7 +383,7 @@ bool XeRender::processKext(KernelPatcher &p, size_t index, mach_vm_address_t add
     bool serial = p.solveSymbol<mach_vm_address_t>(index, "__ZN12IGScheduler419initWithAcceleratorEP22IOGraphicsAccelerator2",
         address, size) == address + 0x1D9D2 && bytesAt(address, 0x1D9E3, serialFind, sizeof(serialFind));
     p.clearError();
-    if (serial && checkKernelArgument("-ngnoserialize")) {
+    if (serial && !checkKernelArgument("-ngserialize")) {
         KernelPatcher::LookupPatch patch {&tgl, serialFind, serialReplace, sizeof(serialFind), 1};
         p.applyLookupPatch(&patch, reinterpret_cast<uint8_t *>(address + 0x1D9E3), sizeof(serialFind) + 1);
         serial = p.getError() == KernelPatcher::Error::NoError;
