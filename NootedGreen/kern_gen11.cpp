@@ -12485,6 +12485,14 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
 	const uint32_t head = regs[5], tail = regs[7];
 	SYSLOG("ngreen", "V270: reset id=%u head=0x%x tail=0x%x", id, head, tail);
+	// V293: non-render context images (layout differs from RCS): dump the
+	// start of the register state once per context class.
+	static uint32_t xcsImageDumps = 0;
+	if (entry.engineClass && xcsImageDumps++ < 2)
+		for (uint32_t i = 0; i < 0x60; i += 8)
+			SYSLOG("ngreen", "V293: id=%u class=%u +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", id,
+			       entry.engineClass, i * 4, regs[i], regs[i + 1], regs[i + 2], regs[i + 3], regs[i + 4],
+			       regs[i + 5], regs[i + 6], regs[i + 7]);
 	// Saved register pairs: BB address/state and the active head (MMIO offsets
 	// relative to the engine base, so match the low 12 bits).
 	for (uint32_t i = 0; i + 1 < 0x400 / 4; i++) {
@@ -12496,8 +12504,8 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	// and dump the commands around it.
 	uint64_t root = 0, bb = 0;
 	for (uint32_t i = 0; i + 1 < 0x100; i++) {
-		if (regs[i] == 0x2270) root |= regs[i + 1];
-		else if (regs[i] == 0x2274) root |= static_cast<uint64_t>(regs[i + 1]) << 32;
+		if ((regs[i] & 0xFFF) == 0x270 && (regs[i] >> 12)) root |= regs[i + 1];
+		else if ((regs[i] & 0xFFF) == 0x274 && (regs[i] >> 12)) root |= static_cast<uint64_t>(regs[i + 1]) << 32;
 		else if ((regs[i] & 0xFFF) == 0x140 && (regs[i] >> 12)) bb |= regs[i + 1];
 		else if ((regs[i] & 0xFFF) == 0x168 && (regs[i] >> 12)) bb |= static_cast<uint64_t>(regs[i + 1] & 0xFFFF) << 32;
 	}
