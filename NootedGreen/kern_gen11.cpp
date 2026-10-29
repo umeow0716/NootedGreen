@@ -12639,7 +12639,7 @@ static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ring
 	}
 }
 
-// -ngctxdiff (diagnostic): at an RCS context's first submission, log the
+// -ngctxdiff (diagnostic): at an RCS context's third submission, log the
 // register-state dwords that differ from the first such context's image.
 static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 	constexpr uint32_t kWords = 0x2000 / 4;
@@ -12658,7 +12658,7 @@ static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 	}
 	if (counts[slot] < 255)
 		counts[slot]++;
-	if (counts[slot] != 1)
+	if (counts[slot] != 3)
 		return;
 	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(getterAddress);
 	auto *backing = gVfContexts[slot].contextBacking;
@@ -12670,6 +12670,10 @@ static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 		for (uint32_t i = 0; i < kWords; i++)
 			reference[i] = regs[i];
 		SYSLOG("ngreen", "V283: id=%u is the image reference", slot);
+		for (uint32_t i = 0; i < 0x1000 / 4; i += 8)
+			SYSLOG("ngreen", "V283: ref +%04x: %08x %08x %08x %08x %08x %08x %08x %08x", 0x1000 + i * 4,
+			       reference[i], reference[i + 1], reference[i + 2], reference[i + 3],
+			       reference[i + 4], reference[i + 5], reference[i + 6], reference[i + 7]);
 		return;
 	}
 	uint32_t diffs = 0;
@@ -12677,7 +12681,7 @@ static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 		const uint32_t v = regs[i];
 		if (v == reference[i])
 			continue;
-		if (diffs++ < 80)
+		if (i < 0x1000 / 4 && diffs++ < 400)
 			SYSLOG("ngreen", "V283: id=%u +%04x reg %08x ref %08x cur %08x", slot, 0x1000 + i * 4,
 			       i ? regs[i - 1] : 0, reference[i], v);
 	}
