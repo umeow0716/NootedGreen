@@ -12619,14 +12619,14 @@ static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ring
 	}
 }
 
-// -ngctxdiff (diagnostic): at an RCS context's third submission, log the
+// -ngctxdiff (diagnostic): at an RCS context's first submission, log the
 // register-state dwords that differ from the first such context's image.
 static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 	constexpr uint32_t kWords = 0x2000 / 4;
 	static uint8_t *counts = nullptr;
 	static uint32_t *reference = nullptr;
 	static uint32_t dumped = 0;
-	if (!gVfContexts || slot >= gVfContextCapacity || !getterAddress || dumped >= 24)
+	if (!gVfContexts || slot >= gVfContextCapacity || !getterAddress || dumped >= 40)
 		return;
 	if (!counts) {
 		counts = static_cast<uint8_t *>(IOMalloc(gVfContextCapacity));
@@ -12638,7 +12638,7 @@ static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 	}
 	if (counts[slot] < 255)
 		counts[slot]++;
-	if (counts[slot] != 3)
+	if (counts[slot] != 1)
 		return;
 	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(getterAddress);
 	auto *backing = gVfContexts[slot].contextBacking;
