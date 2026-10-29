@@ -9846,11 +9846,20 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 	// dropped; a new context then keeps the host's (Mesa's) value with binding
 	// table alignment BTP_18_8, and every binding table pointer is read 8x too
 	// far: render targets resolve to garbage surface state.
+	auto store = [&](uint32_t reg, uint32_t offset) {
+		b[n++] = 0x12400002; // MI_STORE_REGISTER_MEM, GGTT
+		b[n++] = reg;
+		b[n++] = static_cast<uint32_t>(gpu + offset);
+		b[n++] = static_cast<uint32_t>(gpu >> 32);
+	};
+	store(0x7008, 0x80C);
 	if (!checkKernelArgument("-ngnogtmode")) {
 		b[n++] = 0x11000001;
 		b[n++] = 0x7008;
 		b[n++] = 0xE43F0000;
 	}
+	store(0x7008, 0x810);
+	store(0x7010, 0x814);
 	// 3DSTATE_* only reach the 3D pipeline: a context last left in GPGPU
 	// mode would drop the hash table. Select 3D first (flush + invalidate
 	// before PIPELINE_SELECT, as Mesa does on Gen12); user batches select
@@ -9888,6 +9897,10 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint
 	const uint32_t words = ringSize / 4;
 	if (!gVfRcsPrologueGpu || !ring || !words || (words & (words - 1)))
 		return;
+	static uint32_t injected = 0;
+	if (gVfRcsPrologueCpu && (injected++ % 128) == 64)
+		SYSLOG("ngreen", "V287: prologue readback GT_MODE %08x -> %08x CSC1 %08x CS_CHICKEN1 %08x",
+		       gVfRcsPrologueCpu[0x203], gVfRcsPrologueCpu[0x204], gVfRcsPrologueCpu[0x205], gVfRcsPrologueCpu[0x202]);
 	auto w = [&](uint32_t i) -> volatile uint32_t & { return ring[(at / 4 + i) & (words - 1)]; };
 	for (uint32_t i = 0; i < arrsize(kRcsRingHead); i++)
 		if (w(i) != kRcsRingHead[i]) {
@@ -12806,8 +12819,9 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	const uint32_t head = regs[5], tail = regs[7];
 	SYSLOG("ngreen", "V270: reset id=%u head=0x%x tail=0x%x", id, head, tail);
 	if (gVfRcsPrologueCpu)
-		SYSLOG("ngreen", "V279: L3ALLOC before prologue %08x after %08x CS_CHICKEN1 %08x", gVfRcsPrologueCpu[0x200],
-		       gVfRcsPrologueCpu[0x201], gVfRcsPrologueCpu[0x202]);
+		SYSLOG("ngreen", "V279: L3ALLOC before prologue %08x after %08x CS_CHICKEN1 %08x GT_MODE %08x -> %08x CSC1 %08x",
+		       gVfRcsPrologueCpu[0x200], gVfRcsPrologueCpu[0x201], gVfRcsPrologueCpu[0x202],
+		       gVfRcsPrologueCpu[0x203], gVfRcsPrologueCpu[0x204], gVfRcsPrologueCpu[0x205]);
 	for (uint32_t i = 0; i + 1 < 0x400; i++)
 		if (regs[i] == 0xB134 || regs[i] == 0xB138)
 			SYSLOG("ngreen", "V279: id=%u image reg %x = %08x", id, regs[i], regs[i + 1]);
