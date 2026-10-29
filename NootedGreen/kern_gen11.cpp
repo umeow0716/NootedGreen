@@ -12079,6 +12079,13 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-nggolden"))
 		vfGoldenContextImage(static_cast<uint32_t>(slot), enable, callback->vfSharedMappedBufferGetVirtualAddress);
 
+	// -ngwbinvd (experiment): write back all CPU caches before every RCS
+	// submission. The GPU's DMAR unit has no snoop control; if the UMD's
+	// batches or page tables are still dirty in a CPU cache, RCS reads stale
+	// memory.
+	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngwbinvd"))
+		__asm__ volatile("wbinvd" ::: "memory");
+
 	// -ngflushlrc: write back CPU caches for the context image (on enable) and
 	// the new ring commands before GuC/RCS read them. The GPU's DMAR unit has
 	// no snoop control, so the guest's cache attributes are what the GPU sees.
