@@ -12043,7 +12043,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
 			ringSize, previousRingTail, ringTail);
 
-	if (static_cast<uint32_t>(hwCsType) == 1 && gVfContexts[slot].contextBacking) {
+	if (gVfContexts[slot].engineClass == 1 && gVfContexts[slot].contextBacking) {
 		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
 		auto *image = getter(gVfContexts[slot].contextBacking);
 		auto *regs = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
