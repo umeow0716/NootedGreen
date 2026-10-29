@@ -12026,6 +12026,26 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		return false;
 	}
 
+	// -ngflushlrc: write back CPU caches for the context image (on enable) and
+	// the new ring commands before GuC/RCS read them. The GPU's DMAR unit has
+	// no snoop control, so the guest's cache attributes are what the GPU sees.
+	if (checkKernelArgument("-ngflushlrc")) {
+		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
+		auto *backing = gVfContexts[slot].contextBacking;
+		if (enable && backing) {
+			const uint64_t length = getMember<uint64_t>(backing, kVfMappedBufferLengthOffset);
+			auto *image = getter(backing);
+			for (uint64_t off = 0; image && off < length; off += 64)
+				__asm__ volatile("clflush (%0)" :: "r"(image + off) : "memory");
+		}
+		auto *ringCpu = getter(ringBacking);
+		for (uint32_t off = previousRingTail & ~63U; ringCpu && off != (ringTail & ~63U); off = (off + 64) % ringSize)
+			__asm__ volatile("clflush (%0)" :: "r"(ringCpu + off) : "memory");
+		if (ringCpu)
+			__asm__ volatile("clflush (%0)" :: "r"(ringCpu + (ringTail & ~63U)) : "memory");
+		__asm__ volatile("mfence" ::: "memory");
+	}
+
 	// -ngtlbsubmit (diagnostic): queue a full engine TLB invalidation in front
 	// of every RCS schedule request. GuC handles H2G in order; the completion
 	// (seqno with bit 31) is not waited for.
