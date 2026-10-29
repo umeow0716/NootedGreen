@@ -9921,6 +9921,7 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint
 
 static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress);
 static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress);
+static void vfGoldenContextImage(uint32_t slot, bool enable, mach_vm_address_t getterAddress);
 static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to,
                              mach_vm_address_t getterAddress);
 
@@ -12058,6 +12059,13 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		}
 	}
 
+	// -nggolden: a new RCS context's first run either inherits the previous
+	// context's 3D state (restore inhibit; on a VF possibly a host context) or
+	// restores Apple's never-saved, mostly zero image. Like i915's default
+	// state, seed it from an image a working context has saved instead.
+	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-nggolden"))
+		vfGoldenContextImage(static_cast<uint32_t>(slot), enable, callback->vfSharedMappedBufferGetVirtualAddress);
+
 	// -ngflushlrc: write back CPU caches for the context image (on enable) and
 	// the new ring commands before GuC/RCS read them. The GPU's DMAR unit has
 	// no snoop control, so the guest's cache attributes are what the GPU sees.
@@ -12649,6 +12657,61 @@ static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ring
 			       static_cast<unsigned long long>(bb), pages, hzOps, hizClears, l3Lris, done);
 		}
 	}
+}
+
+// -nggolden: capture a saved RCS image (from 0x1200, past the per-context
+// ring/PDP state) and copy it into every new RCS context before its first run.
+static void vfGoldenContextImage(uint32_t slot, bool enable, mach_vm_address_t getterAddress) {
+	constexpr uint32_t kStart = 0x1200;
+	static uint8_t *counts = nullptr;
+	static uint8_t *golden = nullptr;
+	static uint64_t goldenLength = 0;
+	if (!gVfContexts || slot >= gVfContextCapacity || !getterAddress)
+		return;
+	if (!counts) {
+		counts = static_cast<uint8_t *>(IOMalloc(gVfContextCapacity));
+		if (!counts)
+			return;
+		bzero(counts, gVfContextCapacity);
+	}
+	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(getterAddress);
+	auto *backing = gVfContexts[slot].contextBacking;
+	auto *image = backing ? getter(backing) : nullptr;
+	if (!image)
+		return;
+	const uint64_t length = getMember<uint64_t>(backing, kVfMappedBufferLengthOffset);
+	if (enable) {
+		counts[slot] = 1;
+		auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
+		if (!golden || length < goldenLength || regs[2] != 0x2244)
+			return;
+		memcpy(image + kStart, golden + kStart, static_cast<size_t>(goldenLength - kStart));
+		regs[3] = (regs[3] & ~1U) | 0x10000U;
+		for (uint64_t off = 0x1000; off < goldenLength; off += 64)
+			__asm__ volatile("clflush (%0)" :: "r"(image + off) : "memory");
+		__asm__ volatile("mfence" ::: "memory");
+		static uint32_t logs = 0;
+		if (logs++ < 8)
+			SYSLOG("ngreen", "V286: id=%u seeded from golden image (%llu bytes)", slot,
+			       static_cast<unsigned long long>(goldenLength));
+		return;
+	}
+	if (counts[slot] && counts[slot] < 255)
+		counts[slot]++;
+	// The 6th submission: the context has run and been switched out before.
+	if (golden || counts[slot] != 6 || length <= 0x3000 || length > 0x40000)
+		return;
+	auto *state = reinterpret_cast<volatile uint32_t *>(image + 0x2900);
+	if (!state[2] || !(image[0x1300] | image[0x1304]))
+		return;
+	auto *copy = static_cast<uint8_t *>(IOMalloc(static_cast<size_t>(length)));
+	if (!copy)
+		return;
+	memcpy(copy, image, static_cast<size_t>(length));
+	goldenLength = length;
+	golden = copy;
+	SYSLOG("ngreen", "V286: captured golden RCS image from id=%u (%llu bytes)", slot,
+	       static_cast<unsigned long long>(length));
 }
 
 // -ngctxdiff (diagnostic): at an RCS context's third submission, log the
