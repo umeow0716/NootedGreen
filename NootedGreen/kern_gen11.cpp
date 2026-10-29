@@ -11714,16 +11714,11 @@ static void vfObservePreEndCpuState(const VfMediaSubmission &entry,
 }
 }
 
-static uint64_t vfPpgttLeaf(uint64_t root, uint64_t va);
-
 // Experiment (-ngmfxrow): the TGL VA driver places the MPR and intra row
 // stores in MFX internal storage at cachelines 512 and 1024; Gen12 media
 // drivers use 256 and 512. Move them before a video batch runs.
-static void vfMoveMfxRowStores(uint64_t root, uint64_t va) {
-	const uint64_t leaf = vfPpgttLeaf(root, va & ~0xFFFULL);
-	if (!leaf)
-		return;
-	auto *desc = IOMemoryDescriptor::withPhysicalAddress(leaf & 0x7FFFFFF000ULL, PAGE_SIZE, kIODirectionInOut);
+static void vfMoveMfxRowStores(uint64_t physical, uint64_t va) {
+	auto *desc = IOMemoryDescriptor::withPhysicalAddress(physical & 0x7FFFFFF000ULL, PAGE_SIZE, kIODirectionInOut);
 	auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere) : nullptr;
 	if (map) {
 		auto *page = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
@@ -11749,7 +11744,6 @@ static void vfObserveBatchLeafMapping(void *task, void *pageTable,
 		return;
 	uint32_t words[48] {};
 	bool captured = false;
-	uint64_t videoRoot = 0;
 	using Getter = void *(*)(void *);
 	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	const int32_t slot = vfFindContextLocked(descriptor.low & NGContextDescriptor::addressMask);
@@ -11760,13 +11754,6 @@ static void vfObserveBatchLeafMapping(void *task, void *pageTable,
 		    entry.state != kVfGucContextTombstone && entry.contextBacking && entry.ringBacking &&
 		    getMember<uint64_t>(entry.contextBacking,kVfMappedBufferLengthOffset) >= kVfContextMinimumImageBytes) {
 			auto *image = static_cast<volatile uint8_t *>(reinterpret_cast<Getter>(getter)(entry.contextBacking));
-			if (image && entry.engineClass == 1) {
-				auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
-				for (uint32_t i = 0; i + 1 < 0x100; i++) {
-					if ((regs[i] & 0xFFF) == 0x270 && (regs[i] >> 12)) videoRoot |= regs[i + 1];
-					else if ((regs[i] & 0xFFF) == 0x274 && (regs[i] >> 12)) videoRoot |= static_cast<uint64_t>(regs[i + 1]) << 32;
-				}
-			}
 			if (image) {
 				const uint32_t control = *reinterpret_cast<volatile uint32_t *>(image + 0x102C);
 				const uint32_t head = *reinterpret_cast<volatile uint32_t *>(image + 0x1014);
@@ -11789,9 +11776,6 @@ static void vfObserveBatchLeafMapping(void *task, void *pageTable,
 	if (!targets.complete) return;
 	vfFlightRecord(5,vfFlightCurrentGroup(),(uint64_t(descriptor.high)<<32)|descriptor.low,words,tail/4U);
 	vfObserveNativeBatchProvenance(task,targets);
-	if (videoRoot && checkKernelArgument("-ngmfxrow"))
-		for (uint32_t index = 0; index < targets.count; ++index)
-			vfMoveMfxRowStores(videoRoot & 0x7FFFFFF000ULL, targets.addresses[index]);
 	void *bootstrapTask = getMember<void *>(gVfAccelerator,0x150);
 	void *bootstrapTable = bootstrapTask ? getMember<void *>(bootstrapTask,0x260) : nullptr;
 	using Reader = bool (*)(const void *,uint64_t,uint64_t &,uint64_t &);
@@ -11804,6 +11788,8 @@ static void vfObserveBatchLeafMapping(void *task, void *pageTable,
 			uint64_t physical = 0, flags = 0;
 			const bool read = exact && reinterpret_cast<Reader>(gVfLeafObservationReader)(
 				table,targets.addresses[index],physical,flags);
+			if (read && !role && checkKernelArgument("-ngmfxrow"))
+				vfMoveMfxRowStores(physical, targets.addresses[index]);
 			const uint32_t flightLeaf[]={1U,index,targets.offsets[index],role,exact?1U:0U,read?1U:0U,
 				static_cast<uint32_t>(targets.addresses[index]),static_cast<uint32_t>(targets.addresses[index]>>32),
 				static_cast<uint32_t>(physical),static_cast<uint32_t>(physical>>32),
