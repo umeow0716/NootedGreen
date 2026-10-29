@@ -12731,10 +12731,21 @@ static void vfGoldenContextImage(uint32_t slot, bool enable, mach_vm_address_t g
 // register-state dwords that differ from the first such context's image.
 static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 	constexpr uint32_t kWords = 0x2000 / 4;
+	constexpr uint32_t kHashLines = 256;
+	static uint32_t hashLines[kHashLines][18];
+	static uint32_t hashHead = 0, hashCount = 0;
+	if (hashCount) {
+		const auto &l = hashLines[hashHead];
+		SYSLOG("ngreen", "V285: id=%u c%03x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
+		       l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9], l[10], l[11], l[12], l[13], l[14], l[15],
+		       l[16], l[17]);
+		hashHead = (hashHead + 1) % kHashLines;
+		hashCount--;
+	}
 	static uint8_t *counts = nullptr;
 	static uint32_t *reference = nullptr;
 	static uint32_t dumped = 0;
-	if (!gVfContexts || slot >= gVfContextCapacity || !getterAddress || dumped >= 40)
+	if (!gVfContexts || slot >= gVfContextCapacity || !getterAddress || dumped >= 100)
 		return;
 	if (!counts) {
 		counts = static_cast<uint8_t *>(IOMalloc(gVfContextCapacity));
@@ -12753,31 +12764,23 @@ static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress) {
 	auto *image = backing ? getter(backing) : nullptr;
 	if (!image)
 		return;
-	// -ngctxhash: per 256-byte chunk hashes of the whole image instead.
+	// -ngctxhash: per 256-byte chunk hashes of the whole image instead. A
+	// burst of log lines here stalls submission long enough for GuC to reset
+	// contexts, so they are queued and printed one per later submission.
 	if (checkKernelArgument("-ngctxhash")) {
 		dumped++;
 		const uint64_t length = getMember<uint64_t>(backing, kVfMappedBufferLengthOffset);
 		const uint32_t chunks = static_cast<uint32_t>(length / 256 > 512 ? 512 : length / 256);
-		uint32_t line[16];
-		for (uint32_t c = 0; c < chunks; c += 16) {
+		for (uint32_t c = 0; c < chunks && hashCount < kHashLines; c += 16) {
+			auto &line = hashLines[(hashHead + hashCount++) % kHashLines];
+			line[0] = slot;
+			line[1] = c;
 			for (uint32_t k = 0; k < 16; k++) {
 				uint32_t h = 2166136261U;
 				auto *w = reinterpret_cast<volatile uint32_t *>(image + (c + k) * 256);
 				for (uint32_t j = 0; c + k < chunks && j < 64; j++)
 					h = (h ^ w[j]) * 16777619U;
-				line[k] = h;
-			}
-			SYSLOG("ngreen", "V285: id=%u c%03x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
-			       slot, c, line[0], line[1], line[2], line[3], line[4], line[5], line[6], line[7], line[8], line[9],
-			       line[10], line[11], line[12], line[13], line[14], line[15]);
-		}
-		// Raw dwords of the chunks that separated passing from failing contexts.
-		static const uint32_t bases[] {0x1300U, 0x1800U, 0x2900U};
-		for (uint32_t base : bases) {
-			for (uint32_t o = base; o < base + 256 && o + 32 <= length; o += 32) {
-				auto *w = reinterpret_cast<volatile uint32_t *>(image + o);
-				SYSLOG("ngreen", "V285: id=%u +%05x: %08x %08x %08x %08x %08x %08x %08x %08x", slot, o,
-				       w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+				line[2 + k] = h;
 			}
 		}
 		return;
