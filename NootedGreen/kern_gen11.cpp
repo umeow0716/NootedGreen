@@ -9908,6 +9908,7 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint
 }
 
 static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress);
+static void vfDiffContextImage(uint32_t slot, mach_vm_address_t getterAddress);
 static void vfEditRcsBatches(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to,
                              mach_vm_address_t getterAddress);
 
