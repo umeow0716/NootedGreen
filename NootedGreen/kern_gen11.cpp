@@ -9834,9 +9834,11 @@ static void vfBuildRcsPrologue(uint32_t *b, uint64_t gpu) {
 	//   SAMPLER_MODE small PL (Wa_1406941453)
 	//   HIZ_CHICKEN depth test LE/GE optimization off (Wa_1806527549)
 	//   COMMON_SLICE_CHICKEN4 TDC load balancing calc off (Wa_1606376872)
+	//   COMMON_SLICE_CHICKEN1 RCC RHWO optimization off (Wa_1508744258, RCC hangs;
+	//     Mesa sets it in every render context)
 	if (!checkKernelArgument("-ngnoextrawa")) {
-		const uint32_t wa[] {0x1100000B, 0xE4F4, 0x01000100, 0xE48C, 0x02000200, 0x20EC, 0x00020002,
-		                     0xE18C, 0x80008000, 0x7018, 0x20002000, 0x7300, 0x00400040};
+		const uint32_t wa[] {0x1100000D, 0xE4F4, 0x01000100, 0xE48C, 0x02000200, 0x20EC, 0x00020002,
+		                     0xE18C, 0x80008000, 0x7018, 0x20002000, 0x7300, 0x00400040, 0x7010, 0x40004000};
 		for (auto v : wa) b[n++] = v;
 	}
 	// 3DSTATE_* only reach the 3D pipeline: a context last left in GPGPU
