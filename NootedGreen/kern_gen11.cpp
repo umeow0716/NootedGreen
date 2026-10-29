@@ -8225,6 +8225,9 @@ void ngReleaseTglBusyHold() {
 	SYSLOG("ngreen", "V289: released IOKit busy hold");
 }
 
+// Boot-arg cache for the per-submission RCS prologue switch.
+static int gVfRcsPrologueOn = -1;
+
 // CoreDisplay finds a display's accelerator through the framebuffer's
 // IOAccelTypes path (IOAccelFindAccelerator). The accelerator only binds
 // framebuffers on its own PCI device, so the VM's boot framebuffer has none and
@@ -12231,8 +12234,9 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	if (static_cast<uint32_t>(hwCsType) == 0 && checkKernelArgument("-ngctxdiff"))
 		vfDiffContextImage(static_cast<uint32_t>(slot), callback->vfSharedMappedBufferGetVirtualAddress);
 
-	static const bool rcsPrologue = !checkKernelArgument("-ngnorcsprologue");
-	if (static_cast<uint32_t>(hwCsType) == 0 && rcsPrologue)
+	if (gVfRcsPrologueOn < 0)
+		gVfRcsPrologueOn = !checkKernelArgument("-ngnorcsprologue");
+	if (static_cast<uint32_t>(hwCsType) == 0 && gVfRcsPrologueOn)
 		vfInjectRcsPrologue(static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
 			ringSize, previousRingTail, ringTail);
