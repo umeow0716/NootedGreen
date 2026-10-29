@@ -4,9 +4,12 @@
 //  - the accelerator description returned in metadata+8 uses 0x438-byte codec
 //    entries, with an extra 8-byte field at 0x20 (a copy of the field at 0x18);
 //    the driver builds 0x428-byte entries;
-//  - GetDriverParameter answers tag 0xe with that description.
-// Load the driver, convert its description and answer tag 0xe here.
+//  - GetDriverParameter answers tag 0xe with that description;
+//  - the H.264 SPS passed with each frame has two more dwords before
+//    level_idc (constraint_set4/5), shifting every later field by 8.
+// Load the driver, convert its description and SPS, and answer tag 0xe here.
 #include <dlfcn.h>
+#include <malloc/malloc.h>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -22,12 +25,16 @@ namespace {
 using Create = int (*)(void **accelerator, const void *input, void *metadata);
 using Destroy = int (*)(void *accelerator);
 using GetParameter = int (*)(void *self, void *parameters);
+using Decode = int (*)(void *self, void *frames, void *out);
 
 Create driverCreate;
 Destroy driverDestroy;
 GetParameter driverGetParameter;
+Decode driverDecode;
+uintptr_t driverBase;
 std::mutex lock;
 std::map<void *, void *> descriptions; // accelerator -> converted description
+std::map<void *, uint8_t *> spsCopies; // Tahoe SPS -> driver-layout copy
 
 constexpr size_t slots = 0x23, oldEntry = 0x428, newEntry = 0x438;
 
@@ -111,6 +118,40 @@ int getParameter(void *self, void *raw) {
 	return result;
 }
 
+// Driver SPS: Tahoe's layout without the dwords at 0x1c and 0x20. Each frame
+// points at its picture (+0x20), which points at the SPS (+0x420).
+constexpr size_t picturePointer = 0x20, spsPointer = 0x420, spsGap = 0x1c, spsShift = 8;
+
+uint8_t *driverSps(uint8_t *sps) {
+	const size_t size = malloc_size(sps);
+	if (size < 0x880) return nullptr;
+	std::lock_guard<std::mutex> guard(lock);
+	auto &copy = spsCopies[sps];
+	if (!copy) copy = static_cast<uint8_t *>(calloc(1, size));
+	if (!copy) return nullptr;
+	memcpy(copy, sps, spsGap);
+	memcpy(copy + spsGap, sps + spsGap + spsShift, size - spsGap - spsShift);
+	return copy;
+}
+
+struct Frames { uint32_t count; uint32_t pad; uint8_t **frame; };
+
+int decode(void *self, void *raw, void *out) {
+	auto *frames = static_cast<Frames *>(raw);
+	const uint32_t count = frames && frames->frame ? frames->count : 0;
+	uint8_t **slot[count ? count : 1], *saved[count ? count : 1];
+	for (uint32_t i = 0; i < count; i++) {
+		auto *picture = *reinterpret_cast<uint8_t **>(frames->frame[i] + picturePointer);
+		slot[i] = picture ? reinterpret_cast<uint8_t **>(picture + spsPointer) : nullptr;
+		saved[i] = slot[i] ? *slot[i] : nullptr;
+		if (auto *copy = saved[i] ? driverSps(saved[i]) : nullptr) *slot[i] = copy;
+	}
+	int result = driverDecode(self, raw, out);
+	for (uint32_t i = 0; i < count; i++)
+		if (slot[i]) *slot[i] = saved[i];
+	return result;
+}
+
 bool load() {
 	static std::once_flag once;
 	std::call_once(once, [] {
@@ -128,6 +169,9 @@ bool load() {
 		}
 		driverCreate = reinterpret_cast<Create>(dlsym(driver, "AVD_CreateAVDAccelerator"));
 		driverDestroy = reinterpret_cast<Destroy>(dlsym(driver, "AVD_DestroyAVDAccelerator"));
+		Dl_info info {};
+		if (driverCreate && dladdr(reinterpret_cast<void *>(driverCreate), &info))
+			driverBase = reinterpret_cast<uintptr_t>(info.dli_fbase);
 	});
 	return driverCreate && driverDestroy;
 }
@@ -167,6 +211,14 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 	auto *slot = reinterpret_cast<GetParameter *>(table + 0x80);
 	if (!driverGetParameter) driverGetParameter = *slot;
 	*slot = getParameter;
+	// The H.264 frame decode entry (driver build d265f203...).
+	for (int i = 0; i < 16; i++) {
+		auto *entry = reinterpret_cast<Decode *>(table + 8 + i * 8);
+		if (driverBase && reinterpret_cast<uintptr_t>(*entry) == driverBase + 0x159a4) {
+			driverDecode = *entry;
+			*entry = decode;
+		}
+	}
 #ifdef NGVA_TRACE
 	traceAll(table, std::make_integer_sequence<int, 16>{});
 #endif
