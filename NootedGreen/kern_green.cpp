@@ -232,9 +232,9 @@ static int wsBlitSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req
 SYSCTL_PROC(_kern, OID_AUTO, ngwsblit, CTLTYPE_OPAQUE | CTLFLAG_WR | CTLFLAG_LOCKED, nullptr, 0, wsBlitSysctl, "S", "");
 
 void registerWsBlitSysctl(KernelPatcher &patcher) {
-	wsVmMapWriteUser = patcher.solveSymbol<VmMapWriteUser>(KernelPatcher::KernelID, "_vm_map_write_user");
-	wsGetTaskMap = patcher.solveSymbol<GetTaskMap>(KernelPatcher::KernelID, "_get_task_map");
-	wsProcTask = patcher.solveSymbol<ProcTask>(KernelPatcher::KernelID, "_proc_task");
+	wsVmMapWriteUser = reinterpret_cast<VmMapWriteUser>(patcher.solveSymbol(KernelPatcher::KernelID, "_vm_map_write_user"));
+	wsGetTaskMap = reinterpret_cast<GetTaskMap>(patcher.solveSymbol(KernelPatcher::KernelID, "_get_task_map"));
+	wsProcTask = reinterpret_cast<ProcTask>(patcher.solveSymbol(KernelPatcher::KernelID, "_proc_task"));
 	patcher.clearError();
 	if (!wsVmMapWriteUser || !wsGetTaskMap || !wsProcTask) {
 		SYSLOG("ngreen", "V291: WindowServer blit sysctl unavailable");
