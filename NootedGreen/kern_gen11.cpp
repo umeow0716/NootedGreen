@@ -12712,9 +12712,26 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	static uint32_t videoDumps = 0;
 	if (entry.engineClass == 1 && hungBatch && videoDumps < 2 && vfPpgttRead(root, hungBatch, media, 256)) {
 		videoDumps++;
-		for (uint32_t k = 0; k < 256; k += 8)
+		for (uint32_t k = 0; k < 64; k += 8)
 			SYSLOG("ngreen", "V296: id=%u bb+%03x: %08x %08x %08x %08x %08x %08x %08x %08x", id, k * 4, media[k],
 			       media[k + 1], media[k + 2], media[k + 3], media[k + 4], media[k + 5], media[k + 6], media[k + 7]);
+		// V298: the PAK's chained batches (MB code written by the RCS MbEnc
+		// kernels): what do they hold by the time of the reset?
+		static uint32_t words[1024];
+		uint32_t chained = 0;
+		if (vfPpgttRead(root, hungBatch, words, 1024))
+			for (uint32_t k = 5; k + 2 < 1024 && chained < 3; k++) {
+				if ((words[k] & 0xFF800000) != 0x18800000 || (words[k] & 0xFF) != 1)
+					continue;
+				const uint64_t target = words[k + 1] | (static_cast<uint64_t>(words[k + 2] & 0xFFFF) << 32);
+				uint32_t t[16];
+				if (!vfPpgttRead(root, target, t, 16))
+					continue;
+				chained++;
+				SYSLOG("ngreen", "V298: id=%u bb+%03x %08x -> %llx: %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
+				       id, k * 4, words[k], static_cast<unsigned long long>(target), t[0], t[1], t[2], t[3], t[4], t[5],
+				       t[6], t[7], t[8], t[9], t[10], t[11]);
+			}
 	}
 	if (ring && (head & ~7U) < 0x4000) {
 		const uint32_t at = (head & 0x3FFFC) / 4;
