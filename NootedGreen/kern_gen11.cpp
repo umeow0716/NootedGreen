@@ -12717,9 +12717,13 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	static uint32_t videoDumps = 0;
 	if (entry.engineClass == 1 && hungBatch && videoDumps < 2 && vfPpgttRead(root, hungBatch, media, 256)) {
 		videoDumps++;
-		for (uint32_t k = 0; k < 64; k += 8)
-			SYSLOG("ngreen", "V296: id=%u bb+%03x: %08x %08x %08x %08x %08x %08x %08x %08x", id, k * 4, media[k],
-			       media[k + 1], media[k + 2], media[k + 3], media[k + 4], media[k + 5], media[k + 6], media[k + 7]);
+		static uint32_t page[1024];
+		const bool whole = videoDumps == 1 && vfPpgttRead(root, hungBatch, page, 1024);
+		for (uint32_t k = 0; k < (whole ? 1024U : 64U); k += 8) {
+			const uint32_t *w = whole ? page : media;
+			SYSLOG("ngreen", "V296: id=%u bb+%03x: %08x %08x %08x %08x %08x %08x %08x %08x", id, k * 4, w[k],
+			       w[k + 1], w[k + 2], w[k + 3], w[k + 4], w[k + 5], w[k + 6], w[k + 7]);
+		}
 		// V298: the PAK's chained batches (MB code written by the RCS MbEnc
 		// kernels): what do they hold by the time of the reset?
 		static uint32_t words[1024];
