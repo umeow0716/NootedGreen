@@ -10120,7 +10120,7 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 			uint32_t words = 0;
 			while (words < PAGE_SIZE / 4 && cpu[words] != 0x05000000) words++;
 			const uint64_t poolBytes = kRcsTrampolines * kRcsTrampolineBytes + PAGE_SIZE;
-			auto *pool = !checkKernelArgument("-ngnotrampoline") && words + 3 <= kRcsTrampolineBytes / 4 ?
+			auto *pool = checkKernelArgument("-ngtrampoline") && words + 3 <= kRcsTrampolineBytes / 4 ?
 				reinterpret_cast<SharedFactory>(callback->vfSharedMappedBufferWithOptions)(task, poolBytes, 2, 0) : nullptr;
 			auto *poolCpu = pool ? reinterpret_cast<uint32_t *>(getVirtual(pool)) : nullptr;
 			const uint64_t poolGpu = pool ? getGpu(pool) : 0;
