@@ -9841,7 +9841,7 @@ static void vfBuildRcsPrologue(uint32_t *b) {
 	if (!checkKernelArgument("-ngobjpreempt")) {
 		b[n++] = 0x11000001;
 		b[n++] = 0x2580;
-		b[n++] = checkKernelArgument("-ngmidthread") ? 0x00010000 : 0x00070004;
+		b[n++] = (checkKernelArgument("-ngmidthread") ? 0x00010000 : 0x00070004) | (checkKernelArgument("-ngobj3d") ? 1 : 0);
 	}
 	// CS_DEBUG_MODE2 bit 4 (CONSTANT_BUFFER address offset disable): Mesa sets
 	// it in every context. A VF context whose first run does not restore its
