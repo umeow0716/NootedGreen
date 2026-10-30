@@ -12457,91 +12457,36 @@ static bool vfPpgttRead(uint64_t root, uint64_t va, uint32_t *out, uint32_t coun
 // V297: Apple's H.264 PAK batches (VCS) start with an empty MI_FLUSH_DW and no
 // MI_FORCE_WAKEUP; with VDBOX power gating the MFX never takes the state
 // commands. Turn that flush into MI_FORCE_WAKEUP(MFX power well) + MI_NOOPs.
-// V300: Apple's AVC VDEnc emits Gen9 (KBL) VDENC commands. Gen12 made four of
-// them longer, so rewrite them in place to the Gen12 layout (media-driver
-// mhw_vdbox_vdenc_hwcmd_g12_X), shifting the rest of the batch. Only batches
-// that fit in their page are handled.
+// V300: Apple's AVC VDEnc emits Gen9 (KBL) VDENC commands. Rewrite the batch
+// in place with NgreenAvcGen12::produce (Gen12 lengths, MFX_WAITs, surface
+// formats, MOCS and MFC status registers), when the result fits the page.
 static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
-	uint32_t end = 0, grow = 0;
-	bool vdenc = false;
-	for (uint32_t i = 0; i < room;) {
-		const uint32_t d = b[i];
-		if (d == 0x05000000) { end = i + 1; break; }
-		uint32_t len = 1;
-		if (d >> 29 == 3) {
-			len = (d & 0xFFF) + 2;
-			switch (d) {
-				case 0x70800000: grow += 4; vdenc = true; break;
-				case 0x70830004: grow += 4; break;
-				case 0x70840023: grow += 34; break;
-				case 0x70870002: grow += 26; break;
-			}
-		} else if (d >> 29 == 0 && ((d >> 23) & 0x3F) >= 0x10) {
-			len = (d & 0x3F) + 2;
-		} else if (d >> 29 != 0) {
-			return;
-		}
-		i += len;
+	static uint32_t in[1024], out[1536];
+	uint32_t end = 0, width = 0, height = 0;
+	for (uint32_t i = 0; i < room && i < 1024; i++) {
+		in[i] = b[i];
+		if (in[i] == 0x05000000) { end = i; break; }
 	}
-	if (!vdenc || !end || end + grow > room)
+	for (uint32_t i = 0; i + 2 < end; i++)
+		if (in[i] == 0x70810004) { width = ((in[i + 2] >> 4) & 0x3FFF) + 1; height = (in[i + 2] >> 18) + 1; break; }
+	if (!end || !width)
 		return;
-	static uint32_t out[PAGE_SIZE / 4];
-	uint32_t o = 0, mfxMode = 0, width = 0;
-	for (uint32_t i = 0; i < end;) {
-		const uint32_t d = b[i];
-		uint32_t len = d >> 29 == 3 ? (d & 0xFFF) + 2 : d >> 29 == 0 && ((d >> 23) & 0x3F) >= 0x10 ? (d & 0x3F) + 2 : 1;
-		const uint32_t start = o;
-		switch (d) {
-			case 0x70800000: // VDENC_PIPE_MODE_SELECT 2 -> 6, AVC TLB prefetch defaults
-				out[o++] = 0x70800004; out[o++] = b[i + 1];
-				out[o++] = 0x002B030A; out[o++] = 0x07000303; out[o++] = 0; out[o++] = 0;
-				break;
-			case 0x70830004: // VDENC_DS_REF_SURFACE_STATE 6 -> 10
-				out[o++] = 0x70830008;
-				for (uint32_t k = 1; k < 6; k++) out[o++] = b[i + k];
-				for (uint32_t k = 0; k < 4; k++) out[o++] = 0;
-				break;
-			case 0x70840023: // VDENC_PIPE_BUF_ADDR_STATE 37 -> 71, reserved DS ref at DW10
-				out[o++] = 0x70840045;
-				for (uint32_t k = 1; k < 10; k++) out[o++] = b[i + k];
-				for (uint32_t k = 0; k < 3; k++) out[o++] = 0;
-				for (uint32_t k = 10; k < 37; k++) out[o++] = b[i + k];
-				for (uint32_t k = 40; k < 71; k++) out[o++] = 0;
-				break;
-			case 0x70870002: // VDENC_WALKER_STATE 4 -> 27, after the default VDENC_WEIGHTSOFFSETS_STATE
-				out[o++] = 0x70880001; out[o++] = 0x00010001; out[o++] = 0x00000001;
-				out[o++] = 0x70870019;
-				for (uint32_t k = 1; k < 4; k++) out[o++] = b[i + k];
-				for (uint32_t k = 4; k < 27; k++) out[o++] = k == 5 ? width : k == 14 ? 0x3F400000 : k == 16 ? 0x3F3F3F : 0;
-				break;
-			default:
-				for (uint32_t k = 0; k < len; k++) out[o++] = b[i + k];
-		}
-		// MFX frame statistics stream-out with no destination (Apple's stream-out
-		// buffer is off) writes to address 0.
-		if (d == 0x70000003)
-			mfxMode = start + 1;
-		if (d == 0x70810004)
-			width = (b[i + 2] >> 4) & 0x3FFF; // tile width = frame width - 1
-		if (d == 0x70020042 && mfxMode && !b[i + 10] && !b[i + 11])
-			out[mfxMode] &= ~0x40U;
-		// VDENC surface states: Gen12 widened the format to bits 27-31 (dropping
-		// InterleaveChroma) and wants the source chroma downsample filter.
-		if (d == 0x70810004 || d == 0x70820004 || d == 0x70830004) {
-			const uint32_t s = out[start + 3];
-			out[start + 3] = (s & 0xFFFFF) | (s >> 28) << 27 | (d == 0x70810004 ? 7U << 20 : 0);
-		}
-		i += len;
-	}
-	for (uint32_t k = 0; k < o; k++)
-		b[k] = out[k];
-	for (uint32_t k = 0; k < o; k += 16)
-		__asm__ volatile("clflush (%0)" :: "r"(&b[k]) : "memory");
-	__asm__ volatile("clflush (%0)" :: "r"(&b[o - 1]) : "memory");
-	__asm__ volatile("mfence" ::: "memory");
+	const auto r = NgreenAvcGen12::produce(in, end, width, height, out, 1536);
 	static uint32_t logs = 0;
+	if (!r.ok || r.words + 1 > room) {
+		if (logs++ < 4)
+			SYSLOG("ngreen", "V300: video batch %llx %ux%u not converted: %s", static_cast<unsigned long long>(bb), width, height, r.reason);
+		return;
+	}
+	for (uint32_t k = 0; k < r.words; k++)
+		b[k] = out[k];
+	b[r.words] = 0x05000000;
+	for (uint32_t k = 0; k <= r.words; k += 16)
+		__asm__ volatile("clflush (%0)" :: "r"(&b[k]) : "memory");
+	__asm__ volatile("clflush (%0)" :: "r"(&b[r.words]) : "memory");
+	__asm__ volatile("mfence" ::: "memory");
 	if (logs++ < 4)
-		SYSLOG("ngreen", "V300: video batch %llx VDEnc to Gen12, %u -> %u dwords", static_cast<unsigned long long>(bb), end, o);
+		SYSLOG("ngreen", "V300: video batch %llx %ux%u VDEnc to Gen12, %u -> %u dwords", static_cast<unsigned long long>(bb), width, height, end, static_cast<uint32_t>(r.words));
 }
 
 static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to) {

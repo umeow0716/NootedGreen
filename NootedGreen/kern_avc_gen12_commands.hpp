@@ -316,7 +316,9 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
             const bool downscaled=op==0x70830000U;
             const uint32_t surfaceWidth=downscaled?(width+3)/4:width;
             const uint32_t surfaceHeight=downscaled?((height+15)&~15U)/4:((height+15)&~15U);
-            if(!legacyNv12Surface(input+at,surfaceWidth,surfaceHeight,!MeasureOnly)){
+            // Apple's AVCVDENC pads the 4x surface height to 32 rows (720p: 192).
+            if(!legacyNv12Surface(input+at,surfaceWidth,surfaceHeight,!MeasureOnly) &&
+               !(downscaled && legacyNv12Surface(input+at,surfaceWidth,(surfaceHeight+31)&~31U,!MeasureOnly))){
                 r.reason="surface-profile";return r;}
             if(op==0x70810000U)++srcSurface;
             if(op==0x70820000U)++refSurface;
