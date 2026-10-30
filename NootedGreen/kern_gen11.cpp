@@ -12782,7 +12782,7 @@ static void vfDumpPsSurfaces(uint32_t id, uint64_t root, volatile uint32_t *page
 			uint32_t pages = 0, holes = 0;
 			uint64_t firstHole = 0;
 			for (uint64_t at = surface & ~0xFFFULL; at < surface + bytes && pages < 4096; at += PAGE_SIZE, pages++)
-				if (!vfPpgttLeaf(root, at) && !holes++) firstHole = at;
+				if (!(vfPpgttLeaf(root, at) & 0x7FFFFFF000ULL) && !holes++) firstHole = at; // absent or scratch-at-0
 			SYSLOG("ngreen", "V281: id=%u surface %llx pte=%llx pages=%u unmapped=%u first=%llx", id, static_cast<unsigned long long>(surface),
 			       static_cast<unsigned long long>(vfPpgttLeaf(root, surface)), pages, holes, static_cast<unsigned long long>(firstHole));
 			SYSLOG("ngreen", "V281: id=%u bt %llx[%u] ss %llx: %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
@@ -12985,7 +12985,7 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 						uint32_t pages = 0, holes = 0;
 						uint64_t firstHole = 0;
 						for (uint64_t at = surface & ~0xFFFULL; at < surface + bytes && pages < 4096; at += PAGE_SIZE, pages++)
-							if (!vfPpgttLeaf(root, at) && !holes++) firstHole = at;
+							if (!(vfPpgttLeaf(root, at) & 0x7FFFFFF000ULL) && !holes++) firstHole = at; // absent or scratch-at-0
 						SYSLOG("ngreen", "V308: id=%u bt[%u] ss %08x %08x %08x %08x surface %llx pages=%u unmapped=%u first=%llx", id, e,
 						       ss[0], ss[1], ss[2], ss[3], static_cast<unsigned long long>(surface), pages, holes,
 						       static_cast<unsigned long long>(firstHole));
