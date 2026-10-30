@@ -167,27 +167,61 @@ uint8_t *driverEncodeFrame(uint8_t *t) {
 	return d;
 }
 
-// AppleGVA copies app-owned encoder input into its own surface with a type-2
-// 0x800 (scaler) job. The driver's video processor would use VEBOX, which this
-// device does not have, so do same-size copies on the CPU (after the driver
-// has run the job as a no-op and handed out its completion stamp).
-struct ScaleJob { IOSurfaceRef source; uint64_t pad[2]; double width, height; IOSurfaceRef target; uint64_t pad2[2]; double targetWidth, targetHeight; };
+// AppleGVA's type-2 0x800 (scaler) job copies or scales app-owned frames
+// (encoder input, VTPixelTransferSession). The driver's video processor needs
+// VEBOX, which this device does not have. Let the driver run the job as a
+// same-surface no-op (it still hands out the completion stamp AppleGVA waits
+// on) and do the work on the CPU for 4:2:0 biplanar surfaces.
+struct Rect { double x, y, width, height; };
+struct ScaleJob { IOSurfaceRef source; Rect from; IOSurfaceRef target; Rect to; };
+struct ScaleWork { ScaleJob *job; IOSurfaceRef target; Rect to; };
 
-void copySurface(IOSurfaceRef from, IOSurfaceRef to) {
-	const size_t planes = IOSurfaceGetPlaneCount(from);
-	if (!planes || planes != IOSurfaceGetPlaneCount(to) || IOSurfaceGetPixelFormat(from) != IOSurfaceGetPixelFormat(to)) return;
+bool biplanar420(IOSurfaceRef s) {
+	const OSType f = IOSurfaceGetPixelFormat(s);
+	return IOSurfaceGetPlaneCount(s) == 2 && (f == '420v' || f == '420f');
+}
+
+// Bilinear resample of one plane with `channels` interleaved bytes per pixel.
+void resample(const uint8_t *src, size_t srcPitch, double sx, double sy, double sw, double sh,
+              uint8_t *dst, size_t dstPitch, size_t dx, size_t dy, size_t dw, size_t dh, size_t channels,
+              size_t srcW, size_t srcH) {
+	if (!dw || !dh || !srcW || !srcH) return;
+	const double fx = sw / dw, fy = sh / dh;
+	for (size_t y = 0; y < dh; y++) {
+		const double v = std::max(0.0, sy + (y + 0.5) * fy - 0.5);
+		const size_t y0 = std::min(static_cast<size_t>(v), srcH - 1), y1 = std::min(y0 + 1, srcH - 1);
+		const uint32_t wy = static_cast<uint32_t>((v - y0) * 256);
+		const uint8_t *r0 = src + y0 * srcPitch, *r1 = src + y1 * srcPitch;
+		uint8_t *out = dst + (dy + y) * dstPitch + dx * channels;
+		for (size_t x = 0; x < dw; x++) {
+			const double u = std::max(0.0, sx + (x + 0.5) * fx - 0.5);
+			const size_t x0 = std::min(static_cast<size_t>(u), srcW - 1), x1 = std::min(x0 + 1, srcW - 1);
+			const uint32_t wx = static_cast<uint32_t>((u - x0) * 256);
+			for (size_t c = 0; c < channels; c++) {
+				const uint32_t a = r0[x0 * channels + c] * (256 - wx) + r0[x1 * channels + c] * wx;
+				const uint32_t b = r1[x0 * channels + c] * (256 - wx) + r1[x1 * channels + c] * wx;
+				out[x * channels + c] = static_cast<uint8_t>((a * (256 - wy) + b * wy + 32768) >> 16);
+			}
+		}
+	}
+}
+
+void scaleSurface(IOSurfaceRef from, const Rect &a, IOSurfaceRef to, const Rect &b) {
 	IOSurfaceLock(from, kIOSurfaceLockReadOnly, nullptr);
 	IOSurfaceLock(to, 0, nullptr);
-	for (size_t p = 0; p < planes; p++) {
-		auto *src = static_cast<uint8_t *>(IOSurfaceGetBaseAddressOfPlane(from, p));
+	for (size_t p = 0; p < 2; p++) {
+		auto *src = static_cast<const uint8_t *>(IOSurfaceGetBaseAddressOfPlane(from, p));
 		auto *dst = static_cast<uint8_t *>(IOSurfaceGetBaseAddressOfPlane(to, p));
-		const size_t srcPitch = IOSurfaceGetBytesPerRowOfPlane(from, p), dstPitch = IOSurfaceGetBytesPerRowOfPlane(to, p);
-		const size_t rows = std::min(IOSurfaceGetHeightOfPlane(from, p), IOSurfaceGetHeightOfPlane(to, p));
-		const size_t bytes = std::min(srcPitch, dstPitch);
-		for (size_t y = 0; src && dst && y < rows; y++)
-			memcpy(dst + y * dstPitch, src + y * srcPitch, bytes);
+		if (!src || !dst) continue;
+		const size_t dstPitch = IOSurfaceGetBytesPerRowOfPlane(to, p), dstH = IOSurfaceGetHeightOfPlane(to, p);
+		const double k = p ? 0.5 : 1.0; // chroma plane: half resolution, 2 bytes per sample
+		const size_t dx = static_cast<size_t>(b.x * k), dy = static_cast<size_t>(b.y * k);
+		const size_t dw = std::min(static_cast<size_t>(b.width * k), IOSurfaceGetWidthOfPlane(to, p) - std::min(dx, IOSurfaceGetWidthOfPlane(to, p)));
+		const size_t dh = std::min(static_cast<size_t>(b.height * k), dstH - std::min(dy, dstH));
+		resample(src, IOSurfaceGetBytesPerRowOfPlane(from, p), a.x * k, a.y * k, a.width * k, a.height * k,
+		         dst, dstPitch, dx, dy, dw, dh, p ? 2 : 1, IOSurfaceGetWidthOfPlane(from, p), IOSurfaceGetHeightOfPlane(from, p));
 		// The GPU reads this surface without snooping the CPU caches.
-		for (size_t o = 0; dst && o < rows * dstPitch; o += 64)
+		for (size_t o = 0; o < dstH * dstPitch; o += 64)
 			__builtin_ia32_clflush(dst + o);
 	}
 	__builtin_ia32_mfence();
@@ -195,27 +229,12 @@ void copySurface(IOSurfaceRef from, IOSurfaceRef to) {
 	IOSurfaceUnlock(from, kIOSurfaceLockReadOnly, nullptr);
 }
 
-void copyScaleJobs(Frames *frames) {
-	for (uint32_t i = 0; frames && frames->frame && i < frames->count; i++) {
-		auto *job = frames->frame[i];
-		if (!job || at<uint32_t>(job, 0) != 2 || at<uint64_t>(job, 8) != 0x800) continue;
-		auto *scale = at<ScaleJob *>(job, 0x20);
-		if (!scale || !scale->source || !scale->target) continue;
-		if (scale->width != scale->targetWidth || scale->height != scale->targetHeight) {
-			syslog(LOG_NOTICE, "ngva: scaler job %gx%g -> %gx%g (%zux%zu -> %zux%zu) not copied", scale->width, scale->height,
-			       scale->targetWidth, scale->targetHeight, IOSurfaceGetWidth(scale->source), IOSurfaceGetHeight(scale->source),
-			       IOSurfaceGetWidth(scale->target), IOSurfaceGetHeight(scale->target));
-			continue;
-		}
-		copySurface(scale->source, scale->target);
-	}
-}
-
 int decode(void *self, void *raw, void *out) {
 	auto *frames = static_cast<Frames *>(raw);
 	const uint32_t count = frames && frames->frame ? frames->count : 0;
 	uint8_t **slot[count ? count : 1], *saved[count ? count : 1];
 	for (uint32_t i = 0; i < count; i++) {
+		if (at<uint32_t>(frames->frame[i], 0) != 1) { slot[i] = nullptr; saved[i] = nullptr; continue; }
 		auto *picture = *reinterpret_cast<uint8_t **>(frames->frame[i] + picturePointer);
 		slot[i] = picture ? reinterpret_cast<uint8_t **>(picture + spsPointer) : nullptr;
 		saved[i] = slot[i] ? *slot[i] : nullptr;
@@ -230,8 +249,26 @@ int decode(void *self, void *raw, void *out) {
 			driverEncodeFrame(picture) : nullptr;
 		if (encodeFrame[i]) picture = encodeFrame[i];
 	}
+	ScaleWork scales[count ? count : 1];
+	for (uint32_t i = 0; i < count; i++) {
+		auto *job = frames->frame[i];
+		auto *scale = at<uint32_t>(job, 0) == 2 && at<uint64_t>(job, 8) == 0x800 ? at<ScaleJob *>(job, 0x20) : nullptr;
+		scales[i] = {};
+		if (!scale || !scale->source || !scale->target || !biplanar420(scale->source) || !biplanar420(scale->target)) continue;
+		scales[i] = {scale, scale->target, scale->to};
+		scale->target = scale->source;
+		scale->to = scale->from;
+	}
 	int result = driverDecode(self, raw, out);
-	if (!result) copyScaleJobs(frames);
+	for (uint32_t i = 0; i < count; i++) {
+		auto &w = scales[i];
+		if (!w.job) continue;
+		w.job->target = w.target;
+		w.job->to = w.to;
+		if (!result) scaleSurface(w.job->source, w.job->from, w.target, w.to);
+		else syslog(LOG_ERR, "ngva: scaler no-op failed %d (%gx%g -> %gx%g)", result, w.job->from.width, w.job->from.height,
+		            w.to.width, w.to.height);
+	}
 	for (uint32_t i = 0; i < count; i++) {
 		if (slot[i]) *slot[i] = saved[i];
 		if (encodeFrame[i]) {

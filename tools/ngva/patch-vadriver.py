@@ -37,6 +37,9 @@ patches = [
     # The VEBOX render pass has no VEBOX stage here (+0x910 is NULL); make it
     # a no-op so 1080p encode input goes on to the composite stage.
     (0x131d42, bytes.fromhex('0f85bc000000'), bytes.fromhex('90e9bc000000')),
+    # The video processor cannot render here (no VEBOX); ngva does the
+    # scaler's work on the CPU, so complete the job with its stamp anyway.
+    (0x235e37, bytes.fromhex('0f840c000000'), bytes.fromhex('90e90c000000')),
     # H.264 encode: the first two of the three encoder stages at +0x910 are
     # not created on this hardware; skip their setup call when absent.
     (0x132818, bytes.fromhex('488b88100900' '00488b75f0488b90c8090000488b394889bd48ffffff4889cf'
