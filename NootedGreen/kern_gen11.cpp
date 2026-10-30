@@ -12490,6 +12490,7 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 	for (uint32_t i = 0; i < end;) {
 		const uint32_t d = b[i];
 		uint32_t len = d >> 29 == 3 ? (d & 0xFFF) + 2 : d >> 29 == 0 && ((d >> 23) & 0x3F) >= 0x10 ? (d & 0x3F) + 2 : 1;
+		const uint32_t start = o;
 		switch (d) {
 			case 0x70800000: // VDENC_PIPE_MODE_SELECT 2 -> 6, AVC TLB prefetch defaults
 				out[o++] = 0x70800004; out[o++] = b[i + 1];
@@ -12514,6 +12515,12 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 				break;
 			default:
 				for (uint32_t k = 0; k < len; k++) out[o++] = b[i + k];
+		}
+		// VDENC surface states: Gen12 widened the format to bits 27-31 (dropping
+		// InterleaveChroma) and wants the source chroma downsample filter.
+		if (d == 0x70810004 || d == 0x70820004 || d == 0x70830004) {
+			const uint32_t s = out[start + 3];
+			out[start + 3] = (s & 0xFFFFF) | (s >> 28) << 27 | (d == 0x70810004 ? 7U << 20 : 0);
 		}
 		i += len;
 	}
