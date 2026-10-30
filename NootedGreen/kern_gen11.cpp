@@ -12478,8 +12478,13 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 	}
 	for (uint32_t i = 0; i + 2 < end; i++)
 		if (in[i] == 0x70810004) { width = ((in[i + 2] >> 4) & 0x3FFF) + 1; height = (in[i + 2] >> 18) + 1; break; }
-	if (!end || !width)
+	if (!end || !width) {
+		static uint32_t skips = 0;
+		if (skips++ < 16)
+			SYSLOG("ngreen", "V300: video batch %llx not converted: %s (room %u dwords)", static_cast<unsigned long long>(bb),
+			       end ? "no VDENC_SRC" : "no BB_END in page", room);
 		return;
+	}
 	const auto r = NgreenAvcGen12::produce(in, end, width, height, out, 1536);
 	static uint32_t logs = 0, failures = 0;
 	if (!r.ok || r.words + 1 > room) {
