@@ -9837,6 +9837,7 @@ static OSObject *gVfRcsTrampolines;
 static uint32_t *gVfRcsTrampolineCpu;
 static uint64_t gVfRcsTrampolineGpu;
 static uint32_t gVfRcsPrologueWords; // body length, without MI_BATCH_BUFFER_END
+static constexpr uint32_t kRcsPinnedPrologue = 0x800;
 static volatile uint32_t gVfRcsTrampolineNext;
 
 static void vfBuildRcsPrologue(uint32_t *b) {
@@ -9967,6 +9968,7 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint
 
 static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress);
 static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to);
+static void vfPinMediaWalker(uint64_t root, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to);
 
 // V275: GGTT writes in newly submitted ring commands. A GGTT address below the
 // VF's range lands in PF-owned PTEs, i.e. a host-domain DMA write.
@@ -10111,6 +10113,9 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		        gVfGGTTBase, gVfGGTTSize, kGucGgttTop)) {
 			bzero(cpu, PAGE_SIZE);
 			vfBuildRcsPrologue(cpu);
+			// V314: the media walker variant, arbitration off first (see vfPinMediaWalker).
+			cpu[kRcsPinnedPrologue / 4] = 0x04000000; // MI_ARB_ON_OFF disable
+			vfBuildRcsPrologue(cpu + kRcsPinnedPrologue / 4 + 1);
 			for (size_t i = 0; i < PAGE_SIZE; i += 64)
 				__asm__ volatile("clflush (%0)" :: "r"(reinterpret_cast<uint8_t *>(cpu) + i) : "memory");
 			__asm__ volatile("mfence" ::: "memory");
@@ -12110,7 +12115,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
 			ringSize, previousRingTail, ringTail);
 
-	if (gVfContexts[slot].engineClass == 1 && gVfContexts[slot].contextBacking) {
+	if (gVfContexts[slot].engineClass <= 1 && gVfContexts[slot].contextBacking) {
 		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
 		auto *image = getter(gVfContexts[slot].contextBacking);
 		auto *regs = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
@@ -12119,8 +12124,11 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			if ((regs[i] & 0xFFF) == 0x270 && (regs[i] >> 12)) root |= regs[i + 1];
 			else if ((regs[i] & 0xFFF) == 0x274 && (regs[i] >> 12)) root |= static_cast<uint64_t>(regs[i + 1]) << 32;
 		}
-		vfWakeVideoBatch(root & 0x7FFFFFF000ULL, reinterpret_cast<volatile uint32_t *>(getter(ringBacking)), ringSize,
-		                 previousRingTail, ringTail);
+		auto *ring = reinterpret_cast<volatile uint32_t *>(getter(ringBacking));
+		if (gVfContexts[slot].engineClass == 1)
+			vfWakeVideoBatch(root & 0x7FFFFFF000ULL, ring, ringSize, previousRingTail, ringTail);
+		else
+			vfPinMediaWalker(root & 0x7FFFFFF000ULL, ring, ringSize, previousRingTail, ringTail);
 	}
 
 	const uint16_t gucId = static_cast<uint16_t>(slot);
@@ -12751,6 +12759,41 @@ static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ri
 			map->release();
 		}
 		OSSafeReleaseNULL(desc);
+	}
+}
+
+// V314: Apple's FrameStatistics batches (RCS, media pipeline: one
+// MEDIA_OBJECT_WALKER) sometimes never drain: the batch is parsed to its end,
+// but the final PIPE_CONTROL's post-sync stamp is never written, even with an
+// EOT-only kernel. Suspect: GuC preempting the VF inside the walker. Run these
+// submissions through the prologue variant that disables arbitration first
+// (privileged GGTT batch; the context keeps it, and only ever runs walkers).
+static void vfPinMediaWalker(uint64_t root, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to) {
+	const uint32_t words = ringSize / 4;
+	if (!root || !ring || !gVfRcsPrologueGpu || !words || (words & (words - 1)) || checkKernelArgument("-ngnopinwalker"))
+		return;
+	auto r = [&](uint32_t k) -> volatile uint32_t & { return ring[k & (words - 1)]; };
+	for (uint32_t i = from / 4 % words, end = to / 4 % words, guard = 0; i != end && guard < 256; i = (i + 1) & (words - 1), guard++) {
+		if (ring[i] != 0x18800101 || r(i - 6) != 0x18800001 || r(i - 5) != static_cast<uint32_t>(gVfRcsPrologueGpu))
+			continue;
+		const uint64_t bb = r(i + 1) | (static_cast<uint64_t>(r(i + 2) & 0xFFFF) << 32);
+		uint32_t head[3] {};
+		if (!vfPpgttRead(root, bb, head, 3) || head[0] != 0x11000001 || head[1] != 0)
+			continue;
+		uint32_t page[128] {};
+		const uint32_t count = (PAGE_SIZE - (bb & 0xFFF)) / 4 < 128 ? static_cast<uint32_t>((PAGE_SIZE - (bb & 0xFFF)) / 4) : 128;
+		if (!vfPpgttRead(root, bb, page, count))
+			continue;
+		bool walker = false;
+		for (uint32_t k = 0; k < count && page[k] != 0x05000000; k++)
+			walker |= page[k] == 0x7103000F;
+		if (!walker)
+			continue;
+		r(i - 5) = static_cast<uint32_t>(gVfRcsPrologueGpu + kRcsPinnedPrologue);
+		__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(&r(i - 5)) : "memory");
+		static uint32_t logs = 0;
+		if (logs++ < 4)
+			SYSLOG("ngreen", "V314: media walker batch %llx runs with arbitration off", static_cast<unsigned long long>(bb));
 	}
 }
 
