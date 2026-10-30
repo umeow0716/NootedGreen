@@ -120,6 +120,7 @@ inline size_t packetWords(uint32_t header) noexcept {
     case 0x70080000:n=34;break;
     case 0x71000000:n=21;break;
     case 0x71030000:n=11;break;
+    case 0x71040000:n=10;break; // MFX_AVC_REF_IDX_STATE (P slices), same in Gen9 and Gen12
     case 0x70800000: case 0x77800000:n=2;break;
     case 0x70840000:n=37;break;
     case 0x70850000:n=35;break;
@@ -335,7 +336,8 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
                    (input[at+k]&0xffff8800U)){
                     r.reason="resource-reserved-bits";return r;}
             }}
-        if(op==0x70870000U){++walkers;emitted=27;
+        // Gen12 AVC (super-slice) sends VDENC_WEIGHTSOFFSETS_STATE before each walker.
+        if(op==0x70870000U){++walkers;emitted=27+3;
             if(input[at+1]!=nextRow || input[at+2]<=nextRow ||
                input[at+2]>(height+15)/16 || input[at+3]!=0){r.reason="walker-profile";return r;}
             nextRow=input[at+2];}
@@ -364,6 +366,7 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
     for(size_t at=0;at<count;) {
         const uint32_t op=opcode(input[at]);const size_t n=packetWords(input[at]);
         if(op==0x70000000U)output[out++]=0x68000100U;
+        if(op==0x70870000U){output[out++]=0x70880001U;output[out++]=0x00010001U;output[out++]=0x00000001U;}
         size_t emitted=n;
         if(op==0x70800000U)emitted=6;
         if(op==0x70830000U)emitted=10;
