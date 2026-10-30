@@ -12659,6 +12659,20 @@ static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ri
 				       static_cast<unsigned long long>(bb), b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
 			if (b[0] == 0x13000083 && !b[1] && !b[2] && !b[3] && !b[4]) {
 				vfVdencToGen12(b, (PAGE_SIZE - (bb & 0xFFF)) / 4, bb);
+				// V309: the previous encode's MFC status block (byte count at +0x18), from memory.
+				static uint64_t previousStatus = 0;
+				static uint32_t statusLogs = 0, encodes = 0;
+				if (previousStatus) {
+					uint32_t st[12] {};
+					vfFlushGpuRange(root, previousStatus, 0x30);
+					if (vfPpgttRead(root, previousStatus, st, 12) && (!st[6] || (encodes & 127) == 0) && statusLogs++ < 24)
+						SYSLOG("ngreen", "V309: encode %u status %llx: %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x", encodes,
+						       static_cast<unsigned long long>(previousStatus), st[0], st[1], st[2], st[3], st[4], st[5], st[6], st[7],
+						       st[8], st[9], st[10], st[11]);
+				}
+				encodes++;
+				for (uint32_t i = 0; i + 3 < (PAGE_SIZE - (bb & 0xFFF)) / 4 && b[i] != 0x05000000; i++)
+					if ((b[i] >> 23) == 0x24 && b[i + 1] == 0x8a0) { previousStatus = (b[i + 2] | (static_cast<uint64_t>(b[i + 3] & 0xFFFF) << 32)) - 0x18; break; }
 				b[0] = 0x0E800000; // MI_FORCE_WAKEUP
 				b[1] = 0x03000200; // MFX power well on, HEVC off (masks bits 9, 8), as media-driver G12
 				for (uint32_t k = 0; k < 2; k++)
