@@ -85,8 +85,15 @@ inline bool convert(const uint32_t *in, size_t words, const uint32_t *token, siz
 	address(b0 + 22, reconY, in[b0 + 22] & 0x3f);
 	address(b0 + 25, srcY, in[b0 + 25] & 0x3f);
 	address(b0 + 80, dsY, in[b0 + 80] & 0x3f);
-	for (uint32_t k = 0; k < 16; k++)
-		if (const uint32_t i = field(P, 0xc78 + 4 * k) & 0xfff) { if (i >= entries) bad = true; else { used[i] = true; address(b0 + 37 + 2 * k, i, in[b0 + 37 + 2 * k] & 0x3f); } }
+	// Without a resource the kext clears the address (bits 31:6 of an MFX
+	// reference, the whole VDENC address): never leave the builder's value.
+	auto clear = [&](size_t at, uint32_t mask) { if (at < words && map[at] != 0xffff) o.batch[map[at]] &= mask; };
+	for (uint32_t k = 0; k < 16; k++) {
+		const uint32_t i = field(P, 0xc78 + 4 * k) & 0xfff;
+		if (!i) clear(b0 + 37 + 2 * k, 0x3f);
+		else if (i >= entries) bad = true;
+		else { used[i] = true; address(b0 + 37 + 2 * k, i, in[b0 + 37 + 2 * k] & 0x3f); }
+	}
 	if (field(P, 0xc10)) if (const uint32_t i = idx(0xc68)) address(b0 + 28, i, in[b0 + 28] & 0x3f);
 	if (const uint32_t i = idx(0xc6c)) address(b0 + 31, i, in[b0 + 31] & 0x3f);
 	if (const uint32_t i = idx(0xc74)) address(b0 + 34, i, in[b0 + 34] & 0x3f);
@@ -102,6 +109,7 @@ inline bool convert(const uint32_t *in, size_t words, const uint32_t *token, siz
 	const struct { uint32_t at, offset; } vdenc[] {{19, 0xcc4}, {22, 0xcc8}, {31, 0xc28}, {34, 0xc70}, {40, 0xcb8}, {43, 0xcbc}, {46, 0xcc0}};
 	for (const auto &v : vdenc)
 		if (const uint32_t i = idx(v.offset)) address(b1 + v.at, i, 0);
+		else clear(b1 + v.at, 0), clear(b1 + v.at + 1, 0);
 	address(b1 + 28, srcY, 0);
 	// Status stores.
 	if (const uint32_t s = idx(0xc2c)) {
