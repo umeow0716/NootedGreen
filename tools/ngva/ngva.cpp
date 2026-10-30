@@ -313,7 +313,7 @@ GetKernel getKernels[] = {getKernel<0>, getKernel<1>, getKernel<2>, getKernel<3>
 // (*(enc+0xb60) + index*0x38, index enc+0x6bb4) that the GPU writes without
 // snooping. Write the CPU's zeroing back before the frame, and drop the lines
 // again between the fence wait and the read, so the read sees the GPU's count.
-using EncodeFrame = int (*)(void *, void *);
+using EncodeFrame = long (*)(void *, void *, void *, void *, void *, void *);
 using FinishFence = int (*)(void *, void *, void *, void *, void *, void *);
 EncodeFrame driverEncodeFrameCall;
 FinishFence driverFinishFence;
@@ -325,13 +325,13 @@ void flushStatus(uint8_t *entry) {
 	__builtin_ia32_mfence();
 }
 
-int encodeFrame(void *enc, void *frame) {
+long encodeFrame(void *enc, void *a1, void *a2, void *a3, void *a4, void *a5) {
 	auto *base = at<uint8_t *>(static_cast<uint8_t *>(enc), 0xb60);
 	encodingStatus = base ? base + at<uint32_t>(static_cast<uint8_t *>(enc), 0x6bb4) * 0x38 : nullptr;
 	if (encodingStatus) flushStatus(encodingStatus);
 	static bool once;
 	if (!once) { once = true; syslog(LOG_NOTICE, "ngva: encoder status hook active, entry %p", encodingStatus); }
-	const int result = driverEncodeFrameCall(enc, frame);
+	const long result = driverEncodeFrameCall(enc, a1, a2, a3, a4, a5);
 	encodingStatus = nullptr;
 	return result;
 }
