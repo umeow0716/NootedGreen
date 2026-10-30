@@ -13759,7 +13759,10 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	// Default (opt out with -ngnoresetcontinue): GuC already reset the hung context, so nothing of it
 	// can still DMA; keep the guest alive and let the channel time out again.
 	if (!checkKernelArgument("-ngnoresetcontinue")) {
-		static uint32_t logs = 0;
+		// Log and dump each newly stalled context set, not just the first 16 timeouts of a boot.
+		static uint32_t logs = 0, lastIds = 0;
+		const uint32_t ids = frames[0].id ^ (frames[2].id << 16) ^ (frames[3].id << 8);
+		if (ids != lastIds) { lastIds = ids; if (logs > 3) logs = 0; }
 		if (logs++ < 16)
 			SYSLOG("ngreen", "V267: event timeout channel=%d capture=%x T0=" NG_TIMEOUT_FRAME_FORMAT
 				" T2=" NG_TIMEOUT_FRAME_FORMAT "; continuing", channel, capture,
