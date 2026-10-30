@@ -12486,7 +12486,7 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 	if (!vdenc || !end || end + grow > room)
 		return;
 	static uint32_t out[PAGE_SIZE / 4];
-	uint32_t o = 0;
+	uint32_t o = 0, mfxMode = 0;
 	for (uint32_t i = 0; i < end;) {
 		const uint32_t d = b[i];
 		uint32_t len = d >> 29 == 3 ? (d & 0xFFF) + 2 : d >> 29 == 0 && ((d >> 23) & 0x3F) >= 0x10 ? (d & 0x3F) + 2 : 1;
@@ -12516,6 +12516,12 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 			default:
 				for (uint32_t k = 0; k < len; k++) out[o++] = b[i + k];
 		}
+		// MFX frame statistics stream-out with no destination (Apple's stream-out
+		// buffer is off) writes to address 0.
+		if (d == 0x70000003)
+			mfxMode = start + 1;
+		if (d == 0x70020042 && mfxMode && !b[i + 10] && !b[i + 11])
+			out[mfxMode] &= ~0x40U;
 		// VDENC surface states: Gen12 widened the format to bits 27-31 (dropping
 		// InterleaveChroma) and wants the source chroma downsample filter.
 		if (d == 0x70810004 || d == 0x70820004 || d == 0x70830004) {
