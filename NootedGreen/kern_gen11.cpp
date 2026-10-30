@@ -1631,7 +1631,10 @@ bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target)
 	                                      transportFence);
 	bool completed = false;
 	if (sent) {
-		for (uint32_t waited = 0; waited < kVfContextEventTimeoutMs; waited++) {
+		// GuC answers within microseconds; spin for the first 2 ms before
+		// sleeping, so frequent unmaps (video encode) do not pay a scheduler
+		// tick per invalidation.
+		for (uint32_t spins = 0, waited = 0; waited < kVfContextEventTimeoutMs;) {
 			OSSynchronizeIO();
 			if (gVfTlbDoneSeqno == seqno) {
 				completed = true;
@@ -1639,7 +1642,13 @@ bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target)
 			}
 			if (!Gen11::pollVfGuCToHost(guc))
 				break;
-			IOSleep(1);
+			if (spins < 1000) {
+				spins++;
+				IODelay(2);
+			} else {
+				IOSleep(1);
+				waited++;
+			}
 		}
 	}
 	gVfTlbWaitActive = 0;
