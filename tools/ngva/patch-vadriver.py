@@ -30,6 +30,13 @@ patches = [
     # Encoder teardown releases a CF object that may never have been created.
     (0x63d15, bytes.fromhex('488b45f0488b40584889c7e85ba31d00488b45f04889c7be48010000e8fafafdff'),
      bytes.fromhex('488b45f0488b78584885ff7405e859a31d00488b7df0be48010000e8fbfafdff90')),
+    # 1080p encode goes through the renderer, whose absent VEBOX stage
+    # (+0x910[idx]) is passed to this setter: return when it is NULL.
+    (0x126524, bytes.fromhex('48897df8488975f0488955e8488b45f8488b4de8'),
+     bytes.fromhex('488975f0488955e84889f84889d14885c0745890')),
+    # The VEBOX render pass has no VEBOX stage here (+0x910 is NULL); make it
+    # a no-op so 1080p encode input goes on to the composite stage.
+    (0x131d42, bytes.fromhex('0f85bc000000'), bytes.fromhex('90e9bc000000')),
     # H.264 encode: the first two of the three encoder stages at +0x910 are
     # not created on this hardware; skip their setup call when absent.
     (0x132818, bytes.fromhex('488b88100900' '00488b75f0488b90c8090000488b394889bd48ffffff4889cf'

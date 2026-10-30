@@ -142,29 +142,6 @@ int setParameters(void *self, void *raw) {
 	return driverSetParameters(self, raw);
 }
 
-// Tahoe's AppleGVA drives the 0x4000 encoder entry with a newer protocol than
-// this driver implements; offer it as the 0x40/0x80 pair the driver's H.264
-// encoder is requested by.
-void renameEncoders(Description *table) {
-	if (!table || !table->slot) return;
-	for (uint32_t i = 0; i < table->count; i++) {
-		auto *e = table->slot[i];
-		if (!e || *reinterpret_cast<uint32_t *>(e) != 0x20) continue;
-		auto &value = *reinterpret_cast<uint64_t *>(e + 8);
-		if (value == 0x4000) value = 0x40;
-		else if (value == 0x2000) value = 0x80;
-	}
-}
-
-using CreateAccelerators = int (*)(void *self, void *requests);
-CreateAccelerators driverCreateAccelerators;
-
-// The driver matches accelerator requests against its own copy (+0x68).
-int createAccelerators(void *self, void *requests) {
-	renameEncoders(*reinterpret_cast<Description **>(static_cast<uint8_t *>(self) + 0x68));
-	return driverCreateAccelerators(self, requests);
-}
-
 struct Frames { uint32_t count; uint32_t pad; uint8_t **frame; };
 
 // Tahoe's VDEnc H.264 frame (job type 0x20, value 0x4000) and the layout the
@@ -311,7 +288,6 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 	auto *table = static_cast<uint8_t *>(*accelerator);
 	auto *context = *reinterpret_cast<uint8_t **>(table);
 	auto *original = *reinterpret_cast<Description **>(context + 0x30);
-	renameEncoders(original);
 	auto *description = convert(original);
 	if (!description) {
 		syslog(LOG_ERR, "ngva: unexpected accelerator description");
@@ -326,9 +302,6 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 	auto *slot = reinterpret_cast<GetParameter *>(table + 0x80);
 	if (!driverGetParameter) driverGetParameter = *slot;
 	*slot = getParameter;
-	auto *create = reinterpret_cast<CreateAccelerators *>(table + 0x18);
-	if (!driverCreateAccelerators) driverCreateAccelerators = *create;
-	*create = createAccelerators;
 	auto *set = reinterpret_cast<SetParameters *>(table + 0x68);
 	if (!driverSetParameters) driverSetParameters = *set;
 	*set = setParameters;
