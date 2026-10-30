@@ -11227,6 +11227,26 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				__asm__ volatile("clflush (%0); mfence" :: "r"(&r[i + 1]) : "memory");
 			}
 	}
+	// V313: contexts that never take the RCS prologue (IOSurface blits) keep the
+	// preemption granularity their image restores. If the image restores
+	// CS_CHICKEN1, make it command-level GPGPU / no 3D object level like V310.
+	if (engineClass == 0 && !checkKernelArgument("-ngmidthread")) {
+		using Getter = uint8_t *(*)(void *);
+		auto *image = reinterpret_cast<Getter>(callback->vfSharedMappedBufferGetVirtualAddress)(contextBacking);
+		auto *r = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
+		static uint32_t imageLogs = 0;
+		bool found = false;
+		for (uint32_t i = 0; r && i + 1 < 0x400; i++)
+			if ((r[i] & 0x3FFFFF) == 0x2580 && i && (r[i - 1] >> 23) != 0x22) {
+				if (imageLogs++ < 8)
+					SYSLOG("ngreen", "V313: id=%u image CS_CHICKEN1 at +%x = %08x -> 00070004", gucId, (i + 1) * 4, r[i + 1]);
+				r[i + 1] = 0x00070004;
+				__asm__ volatile("clflush (%0); mfence" :: "r"(&r[i + 1]) : "memory");
+				found = true;
+			}
+		if (!found && imageLogs++ < 8)
+			SYSLOG("ngreen", "V313: id=%u image has no CS_CHICKEN1", gucId);
+	}
 	// V273: how the context's PPGTT translates the ring stamp page at
 	// 0x40000000 (every RCS ring starts with a PIPE_CONTROL write there).
 	static uint32_t walkDumps = 0;
