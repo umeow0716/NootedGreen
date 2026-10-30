@@ -9842,6 +9842,15 @@ static volatile uint32_t gVfRcsTrampolineNext;
 static void vfBuildRcsPrologue(uint32_t *b) {
 	size_t n = 0;
 	for (auto v : kRcsRingHead) b[n++] = v;
+	// V316: the 3DSTATE commands below need the 3D pipeline. Pipeline selection
+	// is context state, and a context whose first run inherits the engine's
+	// state may sit in the media/GPGPU pipeline (FrameStatistics walkers, host
+	// compute); its first batch then hung with only CS and SDE busy. Flush
+	// (RT, depth, DC, CS stall) and select 3D as Apple's batches do.
+	if (!checkKernelArgument("-ngnopipesel")) {
+		const uint32_t select[] {0x7A000004, 0x00101021, 0, 0, 0, 0, 0x69041310};
+		for (auto v : select) b[n++] = v;
+	}
 	// TGL object-level 3D preemption corrupts the pipeline (PRM Vol14 UP3
 	// p53, WEX r135/r144). The host enables per-context control (0x20E0
 	// bit 14) and VF contexts start with CS_CHICKEN1 bit 0 set; GuC
