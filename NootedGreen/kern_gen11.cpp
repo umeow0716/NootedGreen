@@ -12495,6 +12495,12 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 			if (!dw[0] && !dw[1]) { dw[0] = streamIn + offsets[s]; dw[1] = streamInHigh; }
 		}
 	}
+	// As media-driver Gen12 AVC: VDEnc frame statistics stream-out on (into the
+	// same scratch), output range control and the RGB channel defaults set.
+	for (uint32_t k = 0; streamIn && k + 36 < r.words; k++) {
+		if (out[k] == 0x70800004 && out[k + 1] == 0x82) out[k + 1] = 0x012200A2;
+		if (out[k] == 0x70840045 && !out[k + 34] && !out[k + 35]) { out[k + 34] = streamIn + 0x30000; out[k + 35] = streamInHigh; break; }
+	}
 	for (uint32_t k = 0; k < r.words; k++)
 		b[k] = out[k];
 	b[r.words] = 0x05000000;
