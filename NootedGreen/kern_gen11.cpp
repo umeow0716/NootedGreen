@@ -12474,7 +12474,7 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 				case 0x70800000: grow += 4; vdenc = true; break;
 				case 0x70830004: grow += 4; break;
 				case 0x70840023: grow += 34; break;
-				case 0x70870002: grow += 23; break;
+				case 0x70870002: grow += 26; break;
 			}
 		} else if (d >> 29 == 0 && ((d >> 23) & 0x3F) >= 0x10) {
 			len = (d & 0x3F) + 2;
@@ -12486,7 +12486,7 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 	if (!vdenc || !end || end + grow > room)
 		return;
 	static uint32_t out[PAGE_SIZE / 4];
-	uint32_t o = 0, mfxMode = 0;
+	uint32_t o = 0, mfxMode = 0, width = 0;
 	for (uint32_t i = 0; i < end;) {
 		const uint32_t d = b[i];
 		uint32_t len = d >> 29 == 3 ? (d & 0xFFF) + 2 : d >> 29 == 0 && ((d >> 23) & 0x3F) >= 0x10 ? (d & 0x3F) + 2 : 1;
@@ -12508,10 +12508,11 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 				for (uint32_t k = 10; k < 37; k++) out[o++] = b[i + k];
 				for (uint32_t k = 40; k < 71; k++) out[o++] = 0;
 				break;
-			case 0x70870002: // VDENC_WALKER_STATE 4 -> 27
+			case 0x70870002: // VDENC_WALKER_STATE 4 -> 27, after the default VDENC_WEIGHTSOFFSETS_STATE
+				out[o++] = 0x70880001; out[o++] = 0x00010001; out[o++] = 0x00000001;
 				out[o++] = 0x70870019;
 				for (uint32_t k = 1; k < 4; k++) out[o++] = b[i + k];
-				for (uint32_t k = 4; k < 27; k++) out[o++] = k == 14 ? 0x3F400000 : k == 16 ? 0x3F3F3F : 0;
+				for (uint32_t k = 4; k < 27; k++) out[o++] = k == 5 ? width : k == 14 ? 0x3F400000 : k == 16 ? 0x3F3F3F : 0;
 				break;
 			default:
 				for (uint32_t k = 0; k < len; k++) out[o++] = b[i + k];
@@ -12520,6 +12521,8 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 		// buffer is off) writes to address 0.
 		if (d == 0x70000003)
 			mfxMode = start + 1;
+		if (d == 0x70810004)
+			width = (b[i + 2] >> 4) & 0x3FFF; // tile width = frame width - 1
 		if (d == 0x70020042 && mfxMode && !b[i + 10] && !b[i + 11])
 			out[mfxMode] &= ~0x40U;
 		// VDENC surface states: Gen12 widened the format to bits 27-31 (dropping
