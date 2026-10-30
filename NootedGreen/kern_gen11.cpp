@@ -12534,7 +12534,13 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 	// MFX_AVC_IMG_STATE DW4 from Apple has MbaffFrameFlag and ChromaFormatIdc 3
 	// set; media-driver Gen12 programs frame-only 4:2:0 (0x159c for this case).
 	for (uint32_t k = 0; k + 4 < r.words; k++)
-		if (out[k] == 0x71000013) { out[k + 4] = (out[k + 4] & ~0xC02U) | 0x400U; break; }
+		if (out[k] == 0x71000013) {
+			out[k + 4] = (out[k + 4] & ~0xC02U) | 0x400U;
+			// DW6: Apple caps inter MBs at the intra limit (0xa8c bits); media-driver
+			// leaves InterMbMaxSz at 0xfff. Busy inter MBs past the cap fail the frame.
+			out[k + 6] = (out[k + 6] & 0xFFFFU) | 0x0FFF0000U;
+			break;
+		}
 	for (uint32_t k = 0; k < r.words; k++)
 		b[k] = out[k];
 	b[r.words] = 0x05000000;
