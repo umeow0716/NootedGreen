@@ -12557,8 +12557,8 @@ static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ri
 				       static_cast<unsigned long long>(bb), b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
 			if (b[0] == 0x13000083 && !b[1] && !b[2] && !b[3] && !b[4]) {
 				vfVdencToGen12(b, (PAGE_SIZE - (bb & 0xFFF)) / 4, bb);
-				b[0] = 0x0E800001; // MI_FORCE_WAKEUP
-				b[1] = 0x00030001; // MFX power well on (mask MFX|HEVC)
+				b[0] = 0x0E800000; // MI_FORCE_WAKEUP
+				b[1] = 0x03000200; // MFX power well on, HEVC off (masks bits 9, 8), as media-driver G12
 				for (uint32_t k = 0; k < 2; k++)
 					__asm__ volatile("clflush (%0)" :: "r"(&b[k]) : "memory");
 				__asm__ volatile("mfence" ::: "memory");
