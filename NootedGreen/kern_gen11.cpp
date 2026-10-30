@@ -12508,6 +12508,14 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 			if (!dw[0] && !dw[1]) { dw[0] = streamIn + offsets[s]; dw[1] = streamInHigh; }
 		}
 	}
+	// Gen12 VDENC_IMG_STATE takes the frame QP in DW14 (KBL had no such field,
+	// Apple leaves it 0): VDEnc then quantizes at QP 0 and PAK codes mb_qp_delta
+	// back to the slice QP, so rate control never takes effect. Use the first
+	// MFX_AVC_SLICE_STATE's slice QP like media-driver.
+	for (uint32_t k = 0, image = 0; k + 14 < r.words; k++) {
+		if (out[k] == 0x70850021) image = k;
+		if (out[k] == 0x71030009 && image) { out[image + 14] = (out[image + 14] & ~0xFFU) | ((out[k + 3] >> 16) & 0x3F); break; }
+	}
 	// MFX_AVC_IMG_STATE DW4 from Apple has MbaffFrameFlag and ChromaFormatIdc 3
 	// set; media-driver Gen12 programs frame-only 4:2:0 (0x159c for this case).
 	for (uint32_t k = 0; k + 4 < r.words; k++)

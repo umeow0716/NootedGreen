@@ -269,6 +269,19 @@ int decode(void *self, void *raw, void *out) {
 		else syslog(LOG_ERR, "ngva: scaler no-op failed %d (%gx%g -> %gx%g)", result, w.job->from.width, w.job->from.height,
 		            w.to.width, w.to.height);
 	}
+	static const bool trace = access("/tmp/ngva-trace", F_OK) == 0;
+	for (uint32_t i = 0; trace && i < count; i++) {
+		auto *job = frames->frame[i];
+		const auto *scale = at<uint32_t>(job, 0) == 2 && at<uint64_t>(job, 8) == 0x800 ? at<ScaleJob *>(job, 0x20) : nullptr;
+		const auto *size = encodeFrame[i] ? at<uint32_t *>(encodeSaved[i], 0x4a0) : nullptr;
+		char from[5] = "----", to[5] = "----";
+		for (int k = 0; scale && k < 4; k++) {
+			from[k] = static_cast<char>(IOSurfaceGetPixelFormat(scale->source) >> (24 - 8 * k));
+			to[k] = static_cast<char>(IOSurfaceGetPixelFormat(scale->target) >> (24 - 8 * k));
+		}
+		syslog(LOG_NOTICE, "ngva: job %u/%u type %x value %llx result %d coded %u scale %s -> %s", i, count, at<uint32_t>(job, 0),
+		       static_cast<unsigned long long>(at<uint64_t>(job, 8)), result, size ? *size : 0, from, to);
+	}
 	for (uint32_t i = 0; i < count; i++) {
 		if (slot[i]) *slot[i] = saved[i];
 		if (encodeFrame[i]) {
