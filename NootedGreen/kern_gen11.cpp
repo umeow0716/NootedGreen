@@ -12683,8 +12683,15 @@ static void vfDumpPsSurfaces(uint32_t id, uint64_t root, volatile uint32_t *page
 				continue;
 			dumps++;
 			const uint64_t surface = ss[8] | (static_cast<uint64_t>(ss[9] & 0xFFFF) << 32);
-			SYSLOG("ngreen", "V281: id=%u surface %llx pte=%llx", id, static_cast<unsigned long long>(surface),
-			       static_cast<unsigned long long>(vfPpgttLeaf(root, surface)));
+			// V306: every page the surface spans (pitch x height, Y-tiled rows padded to 32).
+			const uint32_t height = ((ss[2] >> 16) & 0x3FFF) + 1, pitch = (ss[3] & 0x3FFFF) + 1;
+			const uint64_t bytes = static_cast<uint64_t>(pitch) * (((ss[0] >> 12) & 3) == 3 ? (height + 31) & ~31U : height);
+			uint32_t pages = 0, holes = 0;
+			uint64_t firstHole = 0;
+			for (uint64_t at = surface & ~0xFFFULL; at < surface + bytes && pages < 4096; at += PAGE_SIZE, pages++)
+				if (!vfPpgttLeaf(root, at) && !holes++) firstHole = at;
+			SYSLOG("ngreen", "V281: id=%u surface %llx pte=%llx pages=%u unmapped=%u first=%llx", id, static_cast<unsigned long long>(surface),
+			       static_cast<unsigned long long>(vfPpgttLeaf(root, surface)), pages, holes, static_cast<unsigned long long>(firstHole));
 			SYSLOG("ngreen", "V281: id=%u bt %llx[%u] ss %llx: %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
 			       id, static_cast<unsigned long long>(tableVa), e,
 			       static_cast<unsigned long long>(surfaceBase + (table[e] & ~0x3FU)), ss[0], ss[1], ss[2], ss[3],
