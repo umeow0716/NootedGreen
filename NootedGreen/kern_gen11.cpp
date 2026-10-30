@@ -12478,6 +12478,12 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 			SYSLOG("ngreen", "V300: video batch %llx %ux%u not converted: %s", static_cast<unsigned long long>(bb), width, height, r.reason);
 		return;
 	}
+	// Apple's VDEnc stream-out is off, so MFX frame statistics (bit6) would be
+	// written to the zero stream-out/MB-status addresses: a page fault at 0.
+	for (uint32_t k = 0, mode = 0; k + 11 < r.words; k++) {
+		if (out[k] == 0x70000003) mode = k + 1;
+		if (out[k] == 0x70020042 && mode && !out[k + 10] && !out[k + 11]) { out[mode] &= ~0x40U; break; }
+	}
 	for (uint32_t k = 0; k < r.words; k++)
 		b[k] = out[k];
 	b[r.words] = 0x05000000;
