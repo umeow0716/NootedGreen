@@ -186,7 +186,11 @@ void copySurface(IOSurfaceRef from, IOSurfaceRef to) {
 		const size_t bytes = std::min(srcPitch, dstPitch);
 		for (size_t y = 0; src && dst && y < rows; y++)
 			memcpy(dst + y * dstPitch, src + y * srcPitch, bytes);
+		// The GPU reads this surface without snooping the CPU caches.
+		for (size_t o = 0; dst && o < rows * dstPitch; o += 64)
+			__builtin_ia32_clflush(dst + o);
 	}
+	__builtin_ia32_mfence();
 	IOSurfaceUnlock(to, 0, nullptr);
 	IOSurfaceUnlock(from, kIOSurfaceLockReadOnly, nullptr);
 }
@@ -196,8 +200,13 @@ void copyScaleJobs(Frames *frames) {
 		auto *job = frames->frame[i];
 		if (!job || at<uint32_t>(job, 0) != 2 || at<uint64_t>(job, 8) != 0x800) continue;
 		auto *scale = at<ScaleJob *>(job, 0x20);
-		if (!scale || !scale->source || !scale->target || scale->width != scale->targetWidth ||
-		    scale->height != scale->targetHeight) continue;
+		if (!scale || !scale->source || !scale->target) continue;
+		if (scale->width != scale->targetWidth || scale->height != scale->targetHeight) {
+			syslog(LOG_NOTICE, "ngva: scaler job %gx%g -> %gx%g (%zux%zu -> %zux%zu) not copied", scale->width, scale->height,
+			       scale->targetWidth, scale->targetHeight, IOSurfaceGetWidth(scale->source), IOSurfaceGetHeight(scale->source),
+			       IOSurfaceGetWidth(scale->target), IOSurfaceGetHeight(scale->target));
+			continue;
+		}
 		copySurface(scale->source, scale->target);
 	}
 }
