@@ -12472,10 +12472,14 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 	if (!end || !width)
 		return;
 	const auto r = NgreenAvcGen12::produce(in, end, width, height, out, 1536);
-	static uint32_t logs = 0;
+	static uint32_t logs = 0, failures = 0;
 	if (!r.ok || r.words + 1 > room) {
-		if (logs++ < 4)
+		if (failures++ < 32)
 			SYSLOG("ngreen", "V300: video batch %llx %ux%u not converted: %s", static_cast<unsigned long long>(bb), width, height, r.reason);
+		// The first rejected batch in full, to extend the profile offline.
+		for (uint32_t i = 0; failures == 1 && i < end; i += 8)
+			SYSLOG("ngreen", "V300: rejected +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", i * 4, in[i], in[i + 1], in[i + 2],
+			       in[i + 3], in[i + 4], in[i + 5], in[i + 6], in[i + 7]);
 		return;
 	}
 	// Apple leaves the MFX stream-out (DW10), MB status (DW52) and slice size
