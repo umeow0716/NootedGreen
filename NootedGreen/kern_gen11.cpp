@@ -9893,6 +9893,15 @@ static void vfBuildRcsPrologue(uint32_t *b) {
 		b[n++] = 0x7008;
 		b[n++] = 0xE43F0000;
 	}
+	// V315: L3 allocation (0xB134/0xB138) and 0x2084 as Apple's batches load them
+	// (0x88000020, 0x40000040, masked 0x0f5e0346). Those LRIs come from
+	// non-privileged batches and are dropped like GT_MODE's; a context whose
+	// first run inherits another L3 partition (host 0xb0000040, default
+	// 0xd0000020) hung its first draw (NotificationCenter, "bad boots").
+	if (!checkKernelArgument("-ngnol3")) {
+		const uint32_t l3[] {0x11000005, 0xB134, 0x88000020, 0xB138, 0x40000040, 0x2084, 0x0F5E0346};
+		for (auto v : l3) b[n++] = v;
+	}
 	// 3DSTATE_SUBSLICE_HASH_TABLE, slice 0 on TABLE_0, two- and three-way
 	// tables from intel_compute_pixel_hash_table_3way(8, 16, 2, 2, 0).
 	b[n++] = 0x791F000C;
