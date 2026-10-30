@@ -329,6 +329,8 @@ int encodeFrame(void *enc, void *frame) {
 	auto *base = at<uint8_t *>(static_cast<uint8_t *>(enc), 0xb60);
 	encodingStatus = base ? base + at<uint32_t>(static_cast<uint8_t *>(enc), 0x6bb4) * 0x38 : nullptr;
 	if (encodingStatus) flushStatus(encodingStatus);
+	static bool once;
+	if (!once) { once = true; syslog(LOG_NOTICE, "ngva: encoder status hook active, entry %p", encodingStatus); }
 	const int result = driverEncodeFrameCall(enc, frame);
 	encodingStatus = nullptr;
 	return result;
