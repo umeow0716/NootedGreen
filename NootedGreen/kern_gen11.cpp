@@ -12508,6 +12508,16 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 			if (!dw[0] && !dw[1]) { dw[0] = streamIn + offsets[s]; dw[1] = streamInHigh; }
 		}
 	}
+	// V304: log PAK-BSE (bitstream output) buffer sizes as they change.
+	for (uint32_t k = 0; k + 25 < r.words; k++) {
+		if (out[k] != 0x70030018) continue;
+		static uint32_t lastSize = 0, sizeLogs = 0;
+		const uint32_t size = out[k + 24] - out[k + 21];
+		if (size != lastSize && sizeLogs++ < 16)
+			SYSLOG("ngreen", "V304: video batch %llx %ux%u PAK-BSE %08x size %x", static_cast<unsigned long long>(bb), width, height, out[k + 21], size);
+		lastSize = size;
+		break;
+	}
 	// Gen12 VDENC_IMG_STATE takes the frame QP in DW14 (KBL had no such field,
 	// Apple leaves it 0): VDEnc then quantizes at QP 0 and PAK codes mb_qp_delta
 	// back to the slice QP, so rate control never takes effect. Use the first
