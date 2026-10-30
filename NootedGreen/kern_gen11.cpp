@@ -9835,10 +9835,13 @@ static void vfBuildRcsPrologue(uint32_t *b) {
 	// p53, WEX r135/r144). The host enables per-context control (0x20E0
 	// bit 14) and VF contexts start with CS_CHICKEN1 bit 0 set; GuC
 	// preempts VF contexts every quantum. Clear it (masked write).
+	// V310: GPGPU/media granularity likewise defaults to mid-thread, which needs a
+	// system routine (STATE_SIP) the VF never has: a media walker preempted
+	// mid-thread (Apple's FrameStatistics kernel) never resumes. Command level.
 	if (!checkKernelArgument("-ngobjpreempt")) {
 		b[n++] = 0x11000001;
 		b[n++] = 0x2580;
-		b[n++] = 0x00010000;
+		b[n++] = checkKernelArgument("-ngmidthread") ? 0x00010000 : 0x00070004;
 	}
 	// CS_DEBUG_MODE2 bit 4 (CONSTANT_BUFFER address offset disable): Mesa sets
 	// it in every context. A VF context whose first run does not restore its
