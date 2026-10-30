@@ -307,6 +307,52 @@ template <int I> int getKernel(void *self) {
 using GetKernel = int (*)(void *);
 GetKernel getKernels[] = {getKernel<0>, getKernel<1>, getKernel<2>, getKernel<3>, getKernel<4>, getKernel<5>};
 
+// H.264 VDEnc status: the encode frame call (vtable 0x754a68 slot +0x28) waits on
+// the frame fence (IOAccelVideoContextFinishFenceEvent, ignoring its result) and
+// reads the MFC byte count from a 0x38-byte entry of a cacheable CPU buffer
+// (*(enc+0xb60) + index*0x38, index enc+0x6bb4) that the GPU writes without
+// snooping. Write the CPU's zeroing back before the frame, and drop the lines
+// again between the fence wait and the read, so the read sees the GPU's count.
+using EncodeFrame = int (*)(void *, void *);
+using FinishFence = int (*)(void *, void *, void *, void *, void *, void *);
+EncodeFrame driverEncodeFrameCall;
+FinishFence driverFinishFence;
+thread_local uint8_t *encodingStatus;
+
+void flushStatus(uint8_t *entry) {
+	for (uintptr_t line = reinterpret_cast<uintptr_t>(entry) & ~63UL; line < reinterpret_cast<uintptr_t>(entry) + 0x38; line += 64)
+		__builtin_ia32_clflush(reinterpret_cast<void *>(line));
+	__builtin_ia32_mfence();
+}
+
+int encodeFrame(void *enc, void *frame) {
+	auto *base = at<uint8_t *>(static_cast<uint8_t *>(enc), 0xb60);
+	encodingStatus = base ? base + at<uint32_t>(static_cast<uint8_t *>(enc), 0x6bb4) * 0x38 : nullptr;
+	if (encodingStatus) flushStatus(encodingStatus);
+	const int result = driverEncodeFrameCall(enc, frame);
+	encodingStatus = nullptr;
+	return result;
+}
+
+int finishFence(void *a, void *b, void *c, void *d, void *e, void *f) {
+	const int result = driverFinishFence(a, b, c, d, e, f);
+	if (encodingStatus) {
+		if (result) syslog(LOG_ERR, "ngva: encode fence wait returned %#x", result);
+		flushStatus(encodingStatus);
+	}
+	return result;
+}
+
+template <typename T> bool replacePointer(uintptr_t offset, T replacement, T &original) {
+	const long page = getpagesize();
+	auto *slot = reinterpret_cast<T *>(driverBase + offset);
+	auto start = reinterpret_cast<uintptr_t>(slot) & ~(page - 1);
+	if (mprotect(reinterpret_cast<void *>(start), page, PROT_READ | PROT_WRITE)) return false;
+	original = *slot;
+	*slot = replacement;
+	return true;
+}
+
 void replaceKernels(const char *bundle) {
 	const long page = getpagesize();
 	for (size_t i = 0; i < sizeof(kernels) / sizeof(*kernels); i++) {
@@ -358,6 +404,9 @@ bool load() {
 		if (driverBase) {
 			if (auto *contents = strstr(path, "/Contents/MacOS/")) *contents = 0;
 			replaceKernels(path);
+			if (!replacePointer<EncodeFrame>(0x754a90, encodeFrame, driverEncodeFrameCall) ||
+			    !replacePointer<FinishFence>(0x7600d0, finishFence, driverFinishFence))
+				syslog(LOG_ERR, "ngva: cannot hook the encoder status read");
 		}
 	});
 	return driverCreate && driverDestroy;
