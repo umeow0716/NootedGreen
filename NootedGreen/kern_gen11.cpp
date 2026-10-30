@@ -12637,7 +12637,12 @@ static void vfFlushDecodeBitstream(uint64_t root, volatile uint32_t *b, uint32_t
 	for (uint32_t i = 0; i + 3 < room; i++) {
 		if (b[i] == 0x05000000)
 			break;
-		if (b[i] == 0x70010004U && (b[i + 3] & 0xF8000000U) == 0x08000000U && i + 5 < room) {
+		if (b[i] == 0x70000003U && (b[i + 1] & 0x40010U) == 0x40000U) {
+			// V312: decoder MFX_PIPE_MODE_SELECT has Extended Stream-Out Enable (bit 18) set
+			// with no stream-out buffer: the MFX writes to GPU address 0 (host DMAR faults).
+			b[i + 1] &= ~0x40000U;
+			__asm__ volatile("clflush (%0)" :: "r"(&b[i + 1]) : "memory");
+		} else if (b[i] == 0x70010004U && (b[i + 3] & 0xF8000000U) == 0x08000000U && i + 5 < room) {
 			// V303: AppleGVA's decoder MFX_SURFACE_STATE has format 0 (YCRCB_NORMAL),
 			// reserved bit 20 and a Y-tiled pitch one short of 128-byte aligned, and no
 			// Cr offset: program NV12 like media-driver (PLANAR_420_8, aligned pitch).
