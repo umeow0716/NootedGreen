@@ -9827,6 +9827,17 @@ void Gen11::vfWorkQueueFree(void *that) {
 static const uint32_t kRcsRingHead[6] {0x7A000004, 0x00144000, 0x40000000, 0, 0, 0};
 static OSObject *gVfRcsPrologue;
 static uint64_t gVfRcsPrologueGpu;
+// V311: submissions that start with a plain MI_BATCH_BUFFER_START (IOSurface
+// blits, VT's copy contexts) never get the prologue and run with whatever the
+// previous context left in the non-restored registers (preemption granularity,
+// GT_MODE, hashing). They jump through a per-submission trampoline instead:
+// the prologue body, then MI_BATCH_BUFFER_START to the original batch.
+static constexpr uint32_t kRcsTrampolineBytes = 512, kRcsTrampolines = 256;
+static OSObject *gVfRcsTrampolines;
+static uint32_t *gVfRcsTrampolineCpu;
+static uint64_t gVfRcsTrampolineGpu;
+static uint32_t gVfRcsPrologueWords; // body length, without MI_BATCH_BUFFER_END
+static volatile uint32_t gVfRcsTrampolineNext;
 
 static void vfBuildRcsPrologue(uint32_t *b) {
 	size_t n = 0;
@@ -9916,6 +9927,27 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint
 	if (!gVfRcsPrologueGpu || !ring || !words || (words & (words - 1)))
 		return;
 	auto w = [&](uint32_t i) -> volatile uint32_t & { return ring[(at / 4 + i) & (words - 1)]; };
+	if (w(0) == 0x18800101 && gVfRcsTrampolineCpu && gVfRcsPrologueWords) {
+		const uint32_t slot = OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&gVfRcsTrampolineNext)) % kRcsTrampolines;
+		uint32_t *t = gVfRcsTrampolineCpu + slot * (kRcsTrampolineBytes / 4);
+		const uint32_t *body = gVfRcsTrampolineCpu + kRcsTrampolines * (kRcsTrampolineBytes / 4);
+		uint32_t n = 0;
+		for (; n < gVfRcsPrologueWords; n++) t[n] = body[n];
+		t[n++] = 0x18800101; // MI_BATCH_BUFFER_START, PPGTT: the submission's batch
+		t[n++] = w(1);
+		t[n++] = w(2);
+		for (uint32_t i = 0; i < n; i += 16)
+			__asm__ volatile("clflush (%0)" :: "r"(&t[i]) : "memory");
+		__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(&t[n - 1]) : "memory");
+		const uint64_t gpu = gVfRcsTrampolineGpu + slot * kRcsTrampolineBytes;
+		w(1) = static_cast<uint32_t>(gpu);
+		w(2) = static_cast<uint32_t>(gpu >> 32);
+		w(0) = 0x18800001; // GGTT
+		for (uint32_t i = 0; i < 3; i++)
+			__asm__ volatile("clflush (%0)" :: "r"(&w(i)) : "memory");
+		__asm__ volatile("mfence" ::: "memory");
+		return;
+	}
 	for (uint32_t i = 0; i < arrsize(kRcsRingHead); i++)
 		if (w(i) != kRcsRingHead[i]) {
 			static uint32_t logs = 0;
@@ -10084,6 +10116,28 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 			gVfRcsPrologue = prologue;
 			gVfRcsPrologueGpu = gpu;
 			SYSLOG("ngreen", "V269: RCS prologue batch at GGTT 0x%llx", static_cast<unsigned long long>(gpu));
+			// V311: trampoline pool; the prologue body (no MI_BATCH_BUFFER_END) sits after the slots.
+			uint32_t words = 0;
+			while (words < PAGE_SIZE / 4 && cpu[words] != 0x05000000) words++;
+			const uint64_t poolBytes = kRcsTrampolines * kRcsTrampolineBytes + PAGE_SIZE;
+			auto *pool = !checkKernelArgument("-ngnotrampoline") && words + 3 <= kRcsTrampolineBytes / 4 ?
+				reinterpret_cast<SharedFactory>(callback->vfSharedMappedBufferWithOptions)(task, poolBytes, 2, 0) : nullptr;
+			auto *poolCpu = pool ? reinterpret_cast<uint32_t *>(getVirtual(pool)) : nullptr;
+			const uint64_t poolGpu = pool ? getGpu(pool) : 0;
+			if (poolCpu && NGGgtt::mappedBacking(reinterpret_cast<uint64_t>(poolCpu),
+			        getMember<uint64_t>(pool, kVfMappedBufferLengthOffset), poolBytes, poolGpu,
+			        gVfGGTTBase, gVfGGTTSize, kGucGgttTop)) {
+				bzero(poolCpu, poolBytes);
+				for (uint32_t i = 0; i < words; i++) poolCpu[kRcsTrampolines * (kRcsTrampolineBytes / 4) + i] = cpu[i];
+				gVfRcsTrampolines = pool;
+				gVfRcsTrampolineGpu = poolGpu;
+				gVfRcsPrologueWords = words;
+				gVfRcsTrampolineCpu = poolCpu;
+				SYSLOG("ngreen", "V311: RCS trampolines at GGTT 0x%llx, prologue %u dwords", static_cast<unsigned long long>(poolGpu), words);
+			} else {
+				SYSLOG("ngreen", "V311: no RCS trampolines");
+				if (pool) pool->release();
+			}
 		} else {
 			SYSLOG("ngreen", "V269: no RCS prologue batch");
 			if (prologue) prologue->release();
