@@ -9933,9 +9933,10 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint
 		const uint32_t *body = gVfRcsTrampolineCpu + kRcsTrampolines * (kRcsTrampolineBytes / 4);
 		uint32_t n = 0;
 		for (; n < gVfRcsPrologueWords; n++) t[n] = body[n];
-		t[n++] = 0x18800101; // MI_BATCH_BUFFER_START, PPGTT: the submission's batch
+		t[n++] = 0x18C00101; // MI_BATCH_BUFFER_START, second level, PPGTT: the submission's batch
 		t[n++] = w(1);
 		t[n++] = w(2);
+		t[n++] = 0x05000000; // back to the ring
 		for (uint32_t i = 0; i < n; i += 16)
 			__asm__ volatile("clflush (%0)" :: "r"(&t[i]) : "memory");
 		__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(&t[n - 1]) : "memory");
@@ -10120,7 +10121,7 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 			uint32_t words = 0;
 			while (words < PAGE_SIZE / 4 && cpu[words] != 0x05000000) words++;
 			const uint64_t poolBytes = kRcsTrampolines * kRcsTrampolineBytes + PAGE_SIZE;
-			auto *pool = checkKernelArgument("-ngtrampoline") && words + 3 <= kRcsTrampolineBytes / 4 ?
+			auto *pool = checkKernelArgument("-ngtrampoline") && words + 4 <= kRcsTrampolineBytes / 4 ?
 				reinterpret_cast<SharedFactory>(callback->vfSharedMappedBufferWithOptions)(task, poolBytes, 2, 0) : nullptr;
 			auto *poolCpu = pool ? reinterpret_cast<uint32_t *>(getVirtual(pool)) : nullptr;
 			const uint64_t poolGpu = pool ? getGpu(pool) : 0;
