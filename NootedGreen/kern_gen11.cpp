@@ -12551,7 +12551,20 @@ static void vfFlushDecodeBitstream(uint64_t root, volatile uint32_t *b, uint32_t
 	for (uint32_t i = 0; i + 3 < room; i++) {
 		if (b[i] == 0x05000000)
 			break;
-		if ((b[i] & 0xFFFF0000U) == 0x70030000U) {
+		if (b[i] == 0x70010004U && (b[i + 3] & 0xF8000000U) == 0x08000000U && i + 5 < room) {
+			// V303: AppleGVA's decoder MFX_SURFACE_STATE has format 0 (YCRCB_NORMAL),
+			// reserved bit 20 and a Y-tiled pitch one short of 128-byte aligned, and no
+			// Cr offset: program NV12 like media-driver (PLANAR_420_8, aligned pitch).
+			const uint32_t pitch = (((b[i + 3] >> 3) & 0x1FFFF) + 1 + 127) & ~127U;
+			const uint32_t dw3 = 0x48000000U | ((pitch - 1) << 3) | (b[i + 3] & 7);
+			if (logs < 8)
+				SYSLOG("ngreen", "V303: batch %llx MFX_SURFACE dw3 %08x -> %08x dw5 %08x -> %08x", static_cast<unsigned long long>(bb),
+				       b[i + 3], dw3, b[i + 5], b[i + 5] ? b[i + 5] : b[i + 4]);
+			b[i + 3] = dw3;
+			if (!b[i + 5]) b[i + 5] = b[i + 4];
+			__asm__ volatile("clflush (%0)" :: "r"(&b[i + 3]) : "memory");
+			__asm__ volatile("clflush (%0)" :: "r"(&b[i + 5]) : "memory");
+		} else if ((b[i] & 0xFFFF0000U) == 0x70030000U) {
 			base = b[i + 1] | (static_cast<uint64_t>(b[i + 2] & 0xFFFF) << 32);
 			attr = b[i + 3];
 		} else if ((b[i] & 0xFFFF0000U) == 0x71280000U && base) {
