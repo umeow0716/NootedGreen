@@ -12622,6 +12622,21 @@ static void vfFlushDecodeBitstream(uint64_t root, volatile uint32_t *b, uint32_t
 	}
 }
 
+// V307: AppleGVA reads MFX status (byte counts, completion markers) that MI_STORE_REGISTER_MEM and
+// MI_STORE_DATA_IMM write without snooping. The driver clears those slots right before submission,
+// so a dirty CPU line can hide or later overwrite the GPU's value (coded size 0). Write the lines
+// back and drop them now, so the read after completion comes from memory.
+static void vfFlushStatusTargets(uint64_t root, volatile uint32_t *b, uint32_t room) {
+	for (uint32_t i = 0; i + 3 < room && b[i] != 0x05000000; i++) {
+		const uint32_t op = b[i] >> 23;
+		if (b[i] >> 29 == 0 && (op == 0x24 || op == 0x20) && (b[i] & 0xFF) <= 3) {
+			const uint64_t at = b[i + 2 - (op == 0x20)] | (static_cast<uint64_t>(b[i + 3 - (op == 0x20)] & 0xFFFF) << 32);
+			if (at && !(b[i] & (1U << 22))) vfFlushGpuRange(root, at, 8); // PPGTT targets only
+			i += (b[i] & 0xFF) + 1;
+		}
+	}
+}
+
 static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to) {
 	const uint32_t words = ringSize / 4;
 	if (!root || !ring || !words || (words & (words - 1)))
@@ -12655,6 +12670,7 @@ static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ri
 			} else {
 				vfFlushDecodeBitstream(root, b, (PAGE_SIZE - (bb & 0xFFF)) / 4, bb);
 			}
+			vfFlushStatusTargets(root, b, (PAGE_SIZE - (bb & 0xFFF)) / 4);
 			map->release();
 		}
 		OSSafeReleaseNULL(desc);
