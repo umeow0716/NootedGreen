@@ -12560,6 +12560,13 @@ static void vfFlushDecodeBitstream(uint64_t root, volatile uint32_t *b, uint32_t
 			if (logs++ < 8)
 				SYSLOG("ngreen", "V301: batch %llx bitstream %llx+%x len %x attr %08x flushed", static_cast<unsigned long long>(bb),
 				       static_cast<unsigned long long>(base), start, length, attr);
+			// First slice: each page's PTE and its first dwords as the CPU sees them.
+			for (uint32_t o = 0; logs == 1 && o < length && o < 0x10000; o += 0x1000) {
+				uint32_t d[4] {};
+				vfPpgttRead(root, base + start + o, d, 4);
+				SYSLOG("ngreen", "V301: +%05x pte %llx: %08x %08x %08x %08x", start + o,
+				       static_cast<unsigned long long>(vfPpgttLeaf(root, base + start + o)), d[0], d[1], d[2], d[3]);
+			}
 		}
 	}
 }
