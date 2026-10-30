@@ -12560,6 +12560,15 @@ static void vfFlushDecodeBitstream(uint64_t root, volatile uint32_t *b, uint32_t
 			if (logs++ < 8)
 				SYSLOG("ngreen", "V301: batch %llx bitstream %llx+%x len %x attr %08x flushed", static_cast<unsigned long long>(bb),
 				       static_cast<unsigned long long>(base), start, length, attr);
+			// V302: the first decode batch in full, to diff against media-driver's.
+			for (uint32_t k = 0; logs == 1 && k < room; k += 8) {
+				SYSLOG("ngreen", "V302: +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", k * 4, b[k], k + 1 < room ? b[k + 1] : 0,
+				       k + 2 < room ? b[k + 2] : 0, k + 3 < room ? b[k + 3] : 0, k + 4 < room ? b[k + 4] : 0,
+				       k + 5 < room ? b[k + 5] : 0, k + 6 < room ? b[k + 6] : 0, k + 7 < room ? b[k + 7] : 0);
+				bool end = false;
+				for (uint32_t e = k; e < k + 8 && e < room; e++) end |= b[e] == 0x05000000;
+				if (end) break;
+			}
 			// First slice: each page's PTE and its first dwords as the CPU sees them.
 			for (uint32_t o = 0; logs == 1 && o < length && o < 0x10000; o += 0x1000) {
 				uint32_t d[4] {};
