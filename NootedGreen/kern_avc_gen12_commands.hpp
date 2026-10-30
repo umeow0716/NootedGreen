@@ -218,9 +218,12 @@ inline bool legacyNv12Surface(const uint32_t* packet,uint32_t width,uint32_t hei
 namespace detail {
 // Size-only inspection runs before native resource relocation fills pitch.
 // It shares every other profile check, but never emits a command buffer.
+// relocated=false: the input still lacks resource addresses and pitches
+// (userspace, before submission). map (optional, count entries) receives
+// each input dword's output index, or 0xffff for dropped dwords.
 template<bool MeasureOnly>
 inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width,uint32_t height,
-                      uint32_t* output,size_t capacity) noexcept {
+                      uint32_t* output,size_t capacity,bool relocated=true,uint16_t* map=nullptr) noexcept {
     Result r;
     if(!input || (!MeasureOnly && !output) || count<2 || count>1024 || !width || width>4096 ||
        !height || height>4096 || (width&1U) || (height&1U))return r;
@@ -325,7 +328,7 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
                 if(pw>=w && pw<=((w+31)&~31U))w=pw;
                 if(ph>=h && ph<=((h+31)&~31U))h=ph;
             }
-            if(!legacyNv12Surface(input+at,w,h,!MeasureOnly)){
+            if(!legacyNv12Surface(input+at,w,h,!MeasureOnly && relocated)){
                 r.reason="surface-profile";return r;}
             if(op==0x70810000U)++srcSurface;
             if(op==0x70820000U)++refSurface;
@@ -380,6 +383,7 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
         if(op==0x70870000U)emitted=27;
         const size_t start=out;
         for(size_t k=0;k<emitted;++k)output[out++]=k<n?input[at+k]:0;
+        if(map)for(size_t k=0;k<n;++k)map[at+k]=k<emitted?static_cast<uint16_t>(start+k):0xffffU;
         if(emitted!=n)output[start]=(input[at]&~0xfffU)|static_cast<uint32_t>(emitted-2);
         if(op==0x70800000U){output[start+2]=0x002b030aU;output[start+3]=0x07000303U;}
         // Extended PAK is DW1 bit6 in BOTH pinned Gen9 and Gen12 layouts.
@@ -409,6 +413,10 @@ inline Result inspectOrProduce(const uint32_t* input,size_t count,uint32_t width
 inline Result produce(const uint32_t* input,size_t count,uint32_t width,uint32_t height,
                       uint32_t* output,size_t capacity) noexcept {
     return detail::inspectOrProduce<false>(input,count,width,height,output,capacity);
+}
+inline Result produceBeforeRelocation(const uint32_t* input,size_t count,uint32_t width,uint32_t height,
+                                     uint32_t* output,size_t capacity,uint16_t* map) noexcept {
+    return detail::inspectOrProduce<false>(input,count,width,height,output,capacity,false,map);
 }
 struct PreRelocationSize {
     bool bounded=false;size_t outputWords=0;const char* reason="input";

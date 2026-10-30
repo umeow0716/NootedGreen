@@ -20,6 +20,7 @@
 #include <mutex>
 #include <sys/mman.h>
 #include <unistd.h>
+#include "vdenc_gen12.hpp"
 #include <cstdio>
 #include <map>
 #include <syslog.h>
@@ -358,6 +359,78 @@ int finishFence(void *a, void *b, void *c, void *d, void *e, void *f) {
 	return result;
 }
 
+// AVC VDEnc: convert Apple's Gen9 batch to Gen12 before submission and
+// replace its 0x8d00 relocation token with a generic 0x82 record
+// (vdenc_gen12.hpp). The sizing slot (+0x30: encoder, frame, &batch dwords,
+// &sideband dwords) reserves room for the larger batch; the builder (+0x60:
+// encoder, frame, command buffer) writes the batch at command buffer +0x70
+// and the token at +0x78, advancing both as cursors (+0x20: reserved end).
+// /Users/Shared/ngva-kext-vdenc leaves the conversion to the kext (V300).
+constexpr uint32_t kVdencHeadroom = 256, kTokenScratch = 0x1e8 / 4, kRecordWords = 320;
+using SizeFrame = long (*)(void *, void *, uint32_t *, uint32_t *, void *, void *);
+using BuildBatch = long (*)(void *, void *, void *, void *, void *, void *);
+SizeFrame driverSizeFrame;
+BuildBatch driverBuildBatch;
+bool userVdenc;
+
+long sizeFrame(void *enc, void *frame, uint32_t *batch, uint32_t *side, void *a4, void *a5) {
+	const long result = driverSizeFrame(enc, frame, batch, side, a4, a5);
+	if (userVdenc && batch) {
+		*batch += kVdencHeadroom;
+		at<uint32_t>(static_cast<uint8_t *>(enc), 0x6c1c) = *batch;
+		// Later code places the fence record by the reserved size, so the
+		// 0x82 record must fill exactly this much.
+		if (side) *side += kRecordWords;
+	}
+	return result;
+}
+
+long buildBatch(void *enc, void *frame, void *cmd, void *a3, void *a4, void *a5) {
+	auto *c = static_cast<uint8_t *>(cmd);
+	uint32_t *batch = c ? at<uint32_t *>(c, 0x70) : nullptr, *side = c ? at<uint32_t *>(c, 0x78) : nullptr;
+	const long result = driverBuildBatch(enc, frame, cmd, a3, a4, a5);
+	if (!userVdenc || !batch || !side) return result;
+	const long words = at<uint32_t *>(c, 0x70) - batch, room = at<uint32_t *>(c, 0x20) - batch;
+	const long sideWords = at<uint32_t *>(c, 0x78) - side, sideRoom = at<uint32_t *>(c, 0x60) - side, tokenWords = side[0] >> 16;
+	// Encoders run on several threads; the conversion buffers are shared.
+	static std::mutex lock;
+	static NgvaVdenc::Output out;
+	static int logs;
+	std::lock_guard<std::mutex> guard(lock);
+	if (words <= 0 || words > 1024 || (side[0] & 0xffff) != 0x8d00 || tokenWords != sideWords ||
+	    !NgvaVdenc::convert(batch, static_cast<size_t>(words), side, static_cast<size_t>(tokenWords), out) ||
+	    static_cast<long>(out.words) + 1 + kTokenScratch > room || 4 + static_cast<long>(out.count) * 5 > kRecordWords ||
+	    tokenWords + kRecordWords > sideRoom) {
+		if (logs++ < 8)
+			syslog(LOG_ERR, "ngva: VDEnc batch (%ld dwords, room %ld, token %lx) left to the kext: %s", words, room,
+			       static_cast<unsigned long>(side[0]), out.reason);
+		return result;
+	}
+	const long end = static_cast<long>(out.words), entries = static_cast<long>(out.count);
+	memcpy(batch, out.batch, end * 4);
+	batch[end] = 0x05000000;
+	memset(batch + end + 1, 0, kTokenScratch * 4);
+	at<uint32_t *>(c, 0x70) = batch + end + 1 + kTokenScratch;
+	// Keep the 0x8d00 token for what only it does (resource binding with
+	// updateResourceMappingCacheType); its fixed-offset patches land in the
+	// scratch after MI_BATCH_BUFFER_END, and its status section is off.
+	uint32_t *P = side + 2;
+	P[0xc18 / 4] = P[0xc1c / 4] = static_cast<uint32_t>(end + 1);
+	P[0xc10 / 4] = 0;
+	P[0xc2c / 4] = 0;
+	// Then the real relocations as a generic 0x82 record.
+	uint32_t *r = side + tokenWords;
+	r[0] = 0x8200 | kRecordWords << 16;
+	r[1] = side[1];
+	r[2] = 0; // mode: patch the batch at startDw
+	memcpy(r + 3, out.relocs, entries * sizeof(out.relocs[0]));
+	memset(r + 3 + entries * 5, 0, (kRecordWords - 3 - entries * 5) * 4);
+	at<uint32_t *>(c, 0x78) = r + kRecordWords;
+	if (logs++ < 4)
+		syslog(LOG_NOTICE, "ngva: VDEnc batch %ld -> %ld dwords, %ld relocations", words, end, entries);
+	return result;
+}
+
 template <typename T> bool replacePointer(uintptr_t offset, T replacement, T &original) {
 	const long page = getpagesize();
 	auto *slot = reinterpret_cast<T *>(driverBase + offset);
@@ -419,8 +492,11 @@ bool load() {
 		if (driverBase) {
 			if (auto *contents = strstr(path, "/Contents/MacOS/")) *contents = 0;
 			replaceKernels(path);
+			userVdenc = access("/Users/Shared/ngva-kext-vdenc", F_OK) != 0;
 			if (!replacePointer<EncodeFrame>(0x754a90, encodeFrame, driverEncodeFrameCall) ||
-			    !replacePointer<FinishFence>(0x7600d0, finishFence, driverFinishFence))
+			    !replacePointer<FinishFence>(0x7600d0, finishFence, driverFinishFence) ||
+			    !replacePointer<BuildBatch>(0x754ac8, buildBatch, driverBuildBatch) ||
+			    !replacePointer<SizeFrame>(0x754a98, sizeFrame, driverSizeFrame))
 				syslog(LOG_ERR, "ngva: cannot hook the encoder status read");
 		}
 	});
