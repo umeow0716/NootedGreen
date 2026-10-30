@@ -341,6 +341,19 @@ int finishFence(void *a, void *b, void *c, void *d, void *e, void *f) {
 	if (encodingStatus) {
 		if (result) syslog(LOG_ERR, "ngva: encode fence wait returned %#x", result);
 		flushStatus(encodingStatus);
+		// A zero byte count after the fence: is the GPU still writing the status?
+		auto &count = *reinterpret_cast<volatile uint32_t *>(encodingStatus + 0x18);
+		auto &marker = *reinterpret_cast<volatile uint32_t *>(encodingStatus + 0x28);
+		if (!count) {
+			const uint32_t before = marker;
+			int waited = 0;
+			for (; !count && waited < 200; waited++) {
+				usleep(1000);
+				flushStatus(encodingStatus);
+			}
+			syslog(LOG_ERR, "ngva: zero byte count after fence (result %#x, marker %#x -> %#x): %u after %d ms", result, before,
+			       marker, count, waited);
+		}
 	}
 	return result;
 }
