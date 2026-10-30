@@ -12881,9 +12881,10 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	static uint32_t kernelDumps = 0;
 	uint32_t media[256];
 	if (entry.engineClass == 0 && hungBatch && kernelDumps < 4 && vfPpgttRead(root, hungBatch, media, 256)) {
-		uint64_t dynamicBase = 0, instructionBase = 0;
+		uint64_t dynamicBase = 0, instructionBase = 0, surfaceBase = 0;
 		for (uint32_t i = 0; i + 4 < 256; i++) {
 			if ((media[i] & 0xFFFF0000) == 0x61010000 && i + 12 < 256) {
+				surfaceBase = (media[i + 4] | (static_cast<uint64_t>(media[i + 5]) << 32)) & ~0xFFFULL;
 				dynamicBase = (media[i + 6] | (static_cast<uint64_t>(media[i + 7]) << 32)) & ~0xFFFULL;
 				instructionBase = (media[i + 10] | (static_cast<uint64_t>(media[i + 11]) << 32)) & ~0xFFFULL;
 				SYSLOG("ngreen", "V295: id=%u SBA len=%u dynamic=%llx instruction=%llx", id, media[i] & 0xFF,
@@ -12894,6 +12895,24 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 					break;
 				SYSLOG("ngreen", "V295: id=%u IDT %08x %08x %08x %08x %08x %08x %08x %08x", id, idt[0], idt[1], idt[2],
 				       idt[3], idt[4], idt[5], idt[6], idt[7]);
+				// V308: the walker's binding table: each surface and how many of its pages are mapped.
+				uint32_t table[8] {};
+				if (surfaceBase && vfPpgttRead(root, surfaceBase + (idt[4] & 0xFFE0), table, 8))
+					for (uint32_t e = 0; e < 8; e++) {
+						uint32_t ss[16] {};
+						if (!table[e] || !vfPpgttRead(root, surfaceBase + (table[e] & ~0x3FU), ss, 16))
+							continue;
+						const uint64_t surface = ss[8] | (static_cast<uint64_t>(ss[9] & 0xFFFF) << 32);
+						const uint32_t height = ((ss[2] >> 16) & 0x3FFF) + 1, pitch = (ss[3] & 0x3FFFF) + 1;
+						const uint64_t bytes = static_cast<uint64_t>(pitch) * (((ss[0] >> 12) & 3) == 3 ? (height + 31) & ~31U : height);
+						uint32_t pages = 0, holes = 0;
+						uint64_t firstHole = 0;
+						for (uint64_t at = surface & ~0xFFFULL; at < surface + bytes && pages < 4096; at += PAGE_SIZE, pages++)
+							if (!vfPpgttLeaf(root, at) && !holes++) firstHole = at;
+						SYSLOG("ngreen", "V308: id=%u bt[%u] ss %08x %08x %08x %08x surface %llx pages=%u unmapped=%u first=%llx", id, e,
+						       ss[0], ss[1], ss[2], ss[3], static_cast<unsigned long long>(surface), pages, holes,
+						       static_cast<unsigned long long>(firstHole));
+					}
 				if (!vfPpgttRead(root, instructionBase + (idt[0] & ~0x3FU), isa, 64))
 					break;
 				kernelDumps++;
