@@ -11,7 +11,9 @@
 // Gen11 ISA; Gen12 rebuilds placed in Resources replace them when present.
 // Load the driver, convert its description and SPS, and answer tag 0xe here.
 #include <dlfcn.h>
+#include <IOSurface/IOSurface.h>
 #include <malloc/malloc.h>
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -165,6 +167,41 @@ uint8_t *driverEncodeFrame(uint8_t *t) {
 	return d;
 }
 
+// AppleGVA copies app-owned encoder input into its own surface with a type-2
+// 0x800 (scaler) job. The driver's video processor would use VEBOX, which this
+// device does not have, so do same-size copies on the CPU (after the driver
+// has run the job as a no-op and handed out its completion stamp).
+struct ScaleJob { IOSurfaceRef source; uint64_t pad[2]; double width, height; IOSurfaceRef target; uint64_t pad2[2]; double targetWidth, targetHeight; };
+
+void copySurface(IOSurfaceRef from, IOSurfaceRef to) {
+	const size_t planes = IOSurfaceGetPlaneCount(from);
+	if (!planes || planes != IOSurfaceGetPlaneCount(to) || IOSurfaceGetPixelFormat(from) != IOSurfaceGetPixelFormat(to)) return;
+	IOSurfaceLock(from, kIOSurfaceLockReadOnly, nullptr);
+	IOSurfaceLock(to, 0, nullptr);
+	for (size_t p = 0; p < planes; p++) {
+		auto *src = static_cast<uint8_t *>(IOSurfaceGetBaseAddressOfPlane(from, p));
+		auto *dst = static_cast<uint8_t *>(IOSurfaceGetBaseAddressOfPlane(to, p));
+		const size_t srcPitch = IOSurfaceGetBytesPerRowOfPlane(from, p), dstPitch = IOSurfaceGetBytesPerRowOfPlane(to, p);
+		const size_t rows = std::min(IOSurfaceGetHeightOfPlane(from, p), IOSurfaceGetHeightOfPlane(to, p));
+		const size_t bytes = std::min(srcPitch, dstPitch);
+		for (size_t y = 0; src && dst && y < rows; y++)
+			memcpy(dst + y * dstPitch, src + y * srcPitch, bytes);
+	}
+	IOSurfaceUnlock(to, 0, nullptr);
+	IOSurfaceUnlock(from, kIOSurfaceLockReadOnly, nullptr);
+}
+
+void copyScaleJobs(Frames *frames) {
+	for (uint32_t i = 0; frames && frames->frame && i < frames->count; i++) {
+		auto *job = frames->frame[i];
+		if (!job || at<uint32_t>(job, 0) != 2 || at<uint64_t>(job, 8) != 0x800) continue;
+		auto *scale = at<ScaleJob *>(job, 0x20);
+		if (!scale || !scale->source || !scale->target || scale->width != scale->targetWidth ||
+		    scale->height != scale->targetHeight) continue;
+		copySurface(scale->source, scale->target);
+	}
+}
+
 int decode(void *self, void *raw, void *out) {
 	auto *frames = static_cast<Frames *>(raw);
 	const uint32_t count = frames && frames->frame ? frames->count : 0;
@@ -185,6 +222,7 @@ int decode(void *self, void *raw, void *out) {
 		if (encodeFrame[i]) picture = encodeFrame[i];
 	}
 	int result = driverDecode(self, raw, out);
+	if (!result) copyScaleJobs(frames);
 	for (uint32_t i = 0; i < count; i++) {
 		if (slot[i]) *slot[i] = saved[i];
 		if (encodeFrame[i]) {

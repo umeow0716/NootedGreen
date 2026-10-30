@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 work=$(mktemp -d)
 driver=/Library/Extensions/AppleIntelTGLGraphicsVADriver.bundle/Contents/MacOS/AppleIntelTGLGraphicsVADriver
 bundle=/Library/GPUBundles/NootedGreenTGLMediaAdapter.bundle
-clang++ -std=c++17 -O2 -bundle -Wno-vla-cxx-extension ngva.cpp -o "$work/ngva"
+clang++ -std=c++17 -O2 -bundle -Wno-vla-cxx-extension ngva.cpp -framework IOSurface -o "$work/ngva"
 /usr/bin/python3 patch-vadriver.py "$driver" "$work/driver"
 mkdir -p "$bundle/Contents/MacOS"
 cat > "$bundle/Contents/Info.plist" <<PLIST
