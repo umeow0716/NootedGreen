@@ -12523,6 +12523,47 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 		SYSLOG("ngreen", "V300: video batch %llx %ux%u VDEnc to Gen12, %u -> %u dwords", static_cast<unsigned long long>(bb), width, height, end, static_cast<uint32_t>(r.words));
 }
 
+// Write back CPU caches over a GPU virtual range of a 4-level PPGTT.
+static void vfFlushGpuRange(uint64_t root, uint64_t va, uint64_t length) {
+	for (uint64_t at = va & ~63ULL, end = va + length; at < end;) {
+		const uint64_t leaf = vfPpgttLeaf(root, at), next = (at | 0xFFF) + 1;
+		auto *desc = leaf ? IOMemoryDescriptor::withPhysicalAddress(leaf & 0x7FFFFFF000ULL, PAGE_SIZE, kIODirectionInOut) : nullptr;
+		auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere) : nullptr;
+		if (map) {
+			const auto page = map->getVirtualAddress();
+			for (; at < next && at < end; at += 64)
+				__asm__ volatile("clflush (%0)" :: "r"(page + (at & 0xFFF)) : "memory");
+			map->release();
+		}
+		OSSafeReleaseNULL(desc);
+		at = next;
+	}
+	__asm__ volatile("mfence" ::: "memory");
+}
+
+// V301: the GPU reads the AVC bitstream without snooping; AppleGVA's copy of
+// it may still sit in CPU caches. Flush every MFD_AVC_BSD_OBJECT's slice data
+// (MFX_IND_OBJ_BASE_ADDR_STATE base + start, length) before submission.
+static void vfFlushDecodeBitstream(uint64_t root, volatile uint32_t *b, uint32_t room, uint64_t bb) {
+	uint64_t base = 0;
+	uint32_t attr = 0;
+	static uint32_t logs = 0;
+	for (uint32_t i = 0; i + 3 < room; i++) {
+		if (b[i] == 0x05000000)
+			break;
+		if ((b[i] & 0xFFFF0000U) == 0x70030000U) {
+			base = b[i + 1] | (static_cast<uint64_t>(b[i + 2] & 0xFFFF) << 32);
+			attr = b[i + 3];
+		} else if ((b[i] & 0xFFFF0000U) == 0x71280000U && base) {
+			const uint32_t length = b[i + 1], start = b[i + 2] & 0x1FFFFFFF;
+			vfFlushGpuRange(root, base + start, length);
+			if (logs++ < 8)
+				SYSLOG("ngreen", "V301: batch %llx bitstream %llx+%x len %x attr %08x flushed", static_cast<unsigned long long>(bb),
+				       static_cast<unsigned long long>(base), start, length, attr);
+		}
+	}
+}
+
 static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to) {
 	const uint32_t words = ringSize / 4;
 	if (!root || !ring || !words || (words & (words - 1)))
@@ -12553,6 +12594,8 @@ static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ri
 				static uint32_t logs = 0;
 				if (logs++ < 4)
 					SYSLOG("ngreen", "V297: force wakeup in video batch %llx", static_cast<unsigned long long>(bb));
+			} else {
+				vfFlushDecodeBitstream(root, b, (PAGE_SIZE - (bb & 0xFFF)) / 4, bb);
 			}
 			map->release();
 		}
