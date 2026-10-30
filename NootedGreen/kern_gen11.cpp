@@ -13544,7 +13544,16 @@ static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
 		auto *stamps = static_cast<volatile uint8_t *>(reinterpret_cast<Getter>(getter)(entry.stampBacking));
 		if (!image || !stamps) continue;
 		frame.flags |= 8;
-		frame.observedStamp = *reinterpret_cast<volatile uint32_t *>(stamps + static_cast<size_t>(entry.stampIndex) * 64U);
+		{
+			// V305: is the CPU reading a stale cached stamp the GPU already wrote?
+			auto *stamp = reinterpret_cast<volatile uint32_t *>(stamps + static_cast<size_t>(entry.stampIndex) * 64U);
+			const uint32_t cached = *stamp;
+			__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(stamp) : "memory");
+			frame.observedStamp = *stamp;
+			static uint32_t staleLogs = 0;
+			if (frame.observedStamp != cached && staleLogs++ < 16)
+				SYSLOG("ngreen", "V305: id=%x stamp %x cached, %x after clflush", frame.id, cached, frame.observedStamp);
+		}
 		frame.reportedHead = *reinterpret_cast<volatile uint32_t *>(image + 0x10);
 		frame.ringHead = *reinterpret_cast<volatile uint32_t *>(image + 0x1014);
 		frame.ringTail = *reinterpret_cast<volatile uint32_t *>(image + 0x101C);
