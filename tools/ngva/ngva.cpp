@@ -167,6 +167,27 @@ int createAccelerators(void *self, void *requests) {
 
 struct Frames { uint32_t count; uint32_t pad; uint8_t **frame; };
 
+// Tahoe's VDEnc H.264 frame (job type 0x20, value 0x4000) and the layout the
+// driver's VDEnc encoder reads: same SPS/PPS/slice objects, moved fields.
+template <typename T> T &at(uint8_t *p, size_t o) { return *reinterpret_cast<T *>(p + o); }
+uint8_t *driverEncodeFrame(uint8_t *t) {
+	auto *d = static_cast<uint8_t *>(calloc(1, 0x4b0));
+	if (!d) return nullptr;
+	memcpy(d, t, 0x10);
+	at<uint64_t>(d, 0x8) = at<uint64_t>(t, 0x30);    // input surface
+	at<uint64_t>(d, 0x478) = at<uint64_t>(t, 0x40);  // bitstream
+	at<uint64_t>(d, 0x410) = at<uint64_t>(t, 0x448); // SPS
+	at<uint64_t>(d, 0x418) = at<uint64_t>(t, 0x450); // PPS
+	at<uint32_t>(d, 0x420) = at<uint32_t>(t, 0x458); // slice count
+	at<uint64_t>(d, 0x428) = at<uint64_t>(t, 0x460);
+	at<uint64_t>(d, 0x430) = at<uint64_t>(t, 0x468); // slices
+	at<uint64_t>(d, 0x440) = at<uint64_t>(t, 0x480);
+	at<uint32_t>(d, 0x454) = at<uint32_t>(t, 0x478); // reconstructed picture index
+	at<uint64_t>(d, 0x480) = at<uint64_t>(t, 0x470);
+	at<uint64_t>(d, 0x488) = at<uint64_t>(t, 0x4a0); // coded size out
+	return d;
+}
+
 int decode(void *self, void *raw, void *out) {
 	auto *frames = static_cast<Frames *>(raw);
 	const uint32_t count = frames && frames->frame ? frames->count : 0;
@@ -177,9 +198,23 @@ int decode(void *self, void *raw, void *out) {
 		saved[i] = slot[i] ? *slot[i] : nullptr;
 		if (auto *copy = saved[i] ? driverSps(saved[i]) : nullptr) *slot[i] = copy;
 	}
+	uint8_t *encodeFrame[count ? count : 1], *encodeSaved[count ? count : 1];
+	for (uint32_t i = 0; i < count; i++) {
+		auto *frame = frames->frame[i];
+		auto *&picture = at<uint8_t *>(frame, picturePointer);
+		encodeSaved[i] = picture;
+		encodeFrame[i] = at<uint32_t>(frame, 0) == 0x20 && at<uint64_t>(frame, 8) == 0x4000 && picture ?
+			driverEncodeFrame(picture) : nullptr;
+		if (encodeFrame[i]) picture = encodeFrame[i];
+	}
 	int result = driverDecode(self, raw, out);
-	for (uint32_t i = 0; i < count; i++)
+	for (uint32_t i = 0; i < count; i++) {
 		if (slot[i]) *slot[i] = saved[i];
+		if (encodeFrame[i]) {
+			at<uint8_t *>(frames->frame[i], picturePointer) = encodeSaved[i];
+			free(encodeFrame[i]);
+		}
+	}
 	return result;
 }
 

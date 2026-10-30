@@ -22,6 +22,11 @@ patches = [
     (0x14382, bytes.fromhex('483d00040000'), bytes.fromhex('483d00400000')),
     # ...and route its parameters to it (in place of the unused 0x2000 entry).
     (0x15e72, bytes.fromhex('4881fa00200000'), bytes.fromhex('4881fa00400000')),
+    # The VDEnc encoder's SetParameter accepts entries of its own codec value.
+    (0x27214, bytes.fromhex('48817e0800040000'), bytes.fromhex('48817e0800400000')),
+    # VDEnc starts with MB statistics stream-out on, writing into a pool that
+    # only a separate stream-out accelerator would allocate; start it off.
+    (0x26cda, bytes.fromhex('c786906a000001000001'), bytes.fromhex('c786906a000000000001')),
     # Encoder teardown releases a CF object that may never have been created.
     (0x63d15, bytes.fromhex('488b45f0488b40584889c7e85ba31d00488b45f04889c7be48010000e8fafafdff'),
      bytes.fromhex('488b45f0488b78584885ff7405e859a31d00488b7df0be48010000e8fbfafdff90')),

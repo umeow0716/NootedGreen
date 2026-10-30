@@ -12472,7 +12472,12 @@ static void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ri
 		auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere) : nullptr;
 		if (map) {
 			auto *b = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress() + (bb & 0xFFF));
-			if (b[0] == 0x13000083 && !b[1] && !b[2] && !b[3] && !b[4] && (b[5] >> 23) == 0x20) {
+			// V299: the first dwords of the first video batches.
+			static uint32_t heads = 0;
+			if (heads++ < 6)
+				SYSLOG("ngreen", "V299: video batch %llx: %08x %08x %08x %08x %08x %08x %08x %08x",
+				       static_cast<unsigned long long>(bb), b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
+			if (b[0] == 0x13000083 && !b[1] && !b[2] && !b[3] && !b[4]) {
 				b[0] = 0x0E800001; // MI_FORCE_WAKEUP
 				b[1] = 0x00030001; // MFX power well on (mask MFX|HEVC)
 				for (uint32_t k = 0; k < 2; k++)
