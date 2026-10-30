@@ -12478,11 +12478,22 @@ static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
 			SYSLOG("ngreen", "V300: video batch %llx %ux%u not converted: %s", static_cast<unsigned long long>(bb), width, height, r.reason);
 		return;
 	}
-	// Apple's VDEnc stream-out is off, so MFX frame statistics (bit6) would be
-	// written to the zero stream-out/MB-status addresses: a page fault at 0.
-	for (uint32_t k = 0, mode = 0; k + 11 < r.words; k++) {
-		if (out[k] == 0x70000003) mode = k + 1;
-		if (out[k] == 0x70020042 && mode && !out[k + 10] && !out[k + 11]) { out[mode] &= ~0x40U; break; }
+	// Apple leaves the MFX stream-out (DW10), MB status (DW52) and slice size
+	// stream-out (DW65) addresses 0, but Gen12 VDEnc writes them (Intel points
+	// them at its PAK statistics buffers): a page fault at 0. Use the unused
+	// VDEnc stream-in buffer (stream-in is disabled) as their scratch.
+	uint32_t mfxBuf = 0, streamIn = 0, streamInHigh = 0;
+	for (uint32_t k = 0; k < r.words; k++) {
+		if (out[k] == 0x70020042 && !mfxBuf) mfxBuf = k;
+		if (out[k] == 0x70840045 && k + 14 < r.words) { streamIn = out[k + 13]; streamInHigh = out[k + 14]; break; }
+	}
+	if (mfxBuf && streamIn) {
+		static const uint8_t slots[] = {10, 52, 65};
+		static const uint32_t offsets[] = {0x10000, 0x20000, 0};
+		for (uint32_t s = 0; s < 3; s++) {
+			uint32_t *dw = &out[mfxBuf + slots[s]];
+			if (!dw[0] && !dw[1]) { dw[0] = streamIn + offsets[s]; dw[1] = streamInHigh; }
+		}
 	}
 	for (uint32_t k = 0; k < r.words; k++)
 		b[k] = out[k];
