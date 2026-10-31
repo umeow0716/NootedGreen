@@ -2071,6 +2071,9 @@ uint16_t gVfStampRedirects[32];
 uint32_t gVfStampRedirectCount = 0;
 int gVfStampMergeOn = -1;
 uint8_t *(*gVfStampGetter)(void *) = nullptr; // set with the first redirect
+// Diagnostics: logging is not possible with interrupts disabled.
+struct { uint32_t id, before, after, newest, bound, own[4], covered[4]; } gVfMergeTrace[16];
+uint32_t gVfMergeCalls = 0;
 static void vfMergeRedirectedStamps() {
 	auto getter = gVfStampGetter;
 	if (!getter || !gVfContextLock || !gVfContexts)
@@ -2099,10 +2102,8 @@ static void vfMergeRedirectedStamps() {
 			auto *own = reinterpret_cast<volatile uint32_t *>(image + kVfPrivateStampOffset);
 			__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(own) : "memory");
 			const uint32_t done = *own;
-			static uint32_t privLogs = 0;
-			if (privLogs++ < 48)
-				SYSLOG("ngreen", "V317: id=%u own %x covered %x/%d", gVfStampRedirects[k], done,
-				       entry.submissionCoverage.coveredStamp, entry.submissionCoverage.covered);
+			if (k < 4) gVfMergeTrace[gVfMergeCalls % 16].own[k] = done, gVfMergeTrace[gVfMergeCalls % 16].covered[k] =
+				entry.submissionCoverage.covered ? entry.submissionCoverage.coveredStamp : ~0U;
 			if (!any || static_cast<int32_t>(done - newest) > 0)
 				newest = done;
 			any = true;
@@ -2116,10 +2117,8 @@ static void vfMergeRedirectedStamps() {
 			newest = bound;
 		if (any && static_cast<int32_t>(newest - *shared) > 0)
 			*shared = newest;
-		static uint32_t logs = 0;
-		if (logs++ < 48)
-			SYSLOG("ngreen", "V317: merge id=%u shared %x -> %x newest %x bound %x/%d live=%u", gVfStampRedirects[i], before,
-			       *shared, newestDone, bound, bounded, live);
+		auto &t = gVfMergeTrace[gVfMergeCalls++ % 16];
+		t.id = gVfStampRedirects[i], t.before = before, t.after = *shared, t.newest = newestDone, t.bound = bounded ? bound : ~0U;
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
 }
@@ -13872,8 +13871,16 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	// even when eventTimeout returns null. Do not return into that retry or
 	// fabricate completion while a direct GuC context may still DMA. Guest
 	// fail-stop is not PF containment; the independent host watcher is required.
-	if (gVfStampMergeOn > 0)
+	if (gVfStampMergeOn > 0) {
+		static uint32_t traceDumps = 0;
+		if (traceDumps++ < 3)
+			for (uint32_t i = gVfMergeCalls > 16 ? gVfMergeCalls - 16 : 0; i < gVfMergeCalls; i++) {
+				const auto &t = gVfMergeTrace[i % 16];
+				SYSLOG("ngreen", "V317: merge #%u id=%u shared %x->%x newest %x bound %x own %x/%x/%x covered %x/%x/%x", i, t.id,
+				       t.before, t.after, t.newest, t.bound, t.own[0], t.own[1], t.own[2], t.covered[0], t.covered[1], t.covered[2]);
+			}
 		vfMergeRedirectedStamps();
+	}
 	VfTimeoutContextFrame frames[NGVfTimeoutObservation::engineCount] {};
 	const uint32_t prefixEngine = NGVfTimeoutObservation::prefixEngineForChannel(channel);
 	const uint32_t capture = vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames, prefixEngine);
