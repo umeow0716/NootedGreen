@@ -5145,9 +5145,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfSchedulerPush, this->oVfSchedulerPush},
 				{"__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj",
 				 vfSubmitWorkItem},
-				// V317: merge redirected VCS stamps before Apple services any interrupt.
-				{"__ZN17IGInterruptBridge17serviceInterruptsERK8IGBitSetILm46EE",
-				 vfServiceInterruptsMerged, this->oVfServiceInterrupts},
 			};
 			PANIC_COND(!patcher.routeMultiple(index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
 
@@ -12242,6 +12239,12 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
 			ringSize, previousRingTail, ringTail);
 
+	// V317: merge on every submission (any engine, ~every frame) so Apple sees
+	// redirected VCS completions on its next interrupt. Routing
+	// IGInterruptBridge::serviceInterrupts for this broke most boots.
+	gVfMergeIrqs++;
+	vfMergeRedirectedStamps();
+
 	if (gVfContexts[slot].engineClass == 1 && gVfContexts[slot].contextBacking) {
 		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
 		auto *image = getter(gVfContexts[slot].contextBacking);
@@ -13366,15 +13369,6 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	return true;
 }
 
-// V317: Apple checks event stamps on whichever interrupt it services next (the
-// virtual-MMIO VF rarely raises the VCS user interrupt itself), so redirected
-// stamps are merged before every service.
-void Gen11::vfServiceInterruptsMerged(void *that, const void *bits) {
-	gVfMergeIrqs++;
-	vfMergeRedirectedStamps();
-	FunctionCast(vfServiceInterruptsMerged, callback->oVfServiceInterrupts)(that, bits);
-}
-
 bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
 	(void)eventSource;
 	if (!gVfUsesMemoryIrq)
@@ -13885,7 +13879,7 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	if (gVfStampMergeOn > 0) {
 		static uint32_t traceDumps = 0;
 		if (traceDumps < 24)
-			SYSLOG("ngreen", "V317: irqs=%u merges=%u advances=%u", gVfMergeIrqs, gVfMergeCalls, gVfMergeAdvances);
+			SYSLOG("ngreen", "V317: submits=%u merges=%u advances=%u", gVfMergeIrqs, gVfMergeCalls, gVfMergeAdvances);
 		if (traceDumps++ < 3)
 			for (uint32_t i = gVfMergeCalls > 16 ? gVfMergeCalls - 16 : 0; i < gVfMergeCalls; i++) {
 				const auto &t = gVfMergeTrace[i % 16];

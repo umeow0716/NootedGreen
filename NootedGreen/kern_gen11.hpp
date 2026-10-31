@@ -70,7 +70,6 @@ private:
 	                            bool carriesStamp,
 	                            bool hasPendingCommands);
 	mach_vm_address_t oVfSchedulerPush {};
-	mach_vm_address_t oVfServiceInterrupts {};
 	static void vfTransferOwnership(void *that, const void *backing, int owner);
 	static void vfInitDoorbells(void *that);
 	static bool vfReadDoorbellSQIDIConfig(void *that);
@@ -91,7 +90,6 @@ private:
 	static void vfInvalidateTLB(void *that);
 	static void vfBaseInvalidateTLB(const void *that);
 	static bool vfInterruptFilterHandler(void *that, void *eventSource);
-	static void vfServiceInterruptsMerged(void *that, const void *bits);
 	mach_vm_address_t vfServiceInterrupts {};
 	static void vfReadAndClearInterrupts(void *that, void *interrupts);
 	static void vfEnableInterrupts(void *that);
