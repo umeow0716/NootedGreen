@@ -6888,21 +6888,31 @@ bool Gen11::vfWaitForRingSpace(void *that, uint32_t requestedDwords)
 	PANIC_COND(!reservation.valid, "ngreen",
 		"Oversized or malformed VF ring reservation");
 
-	const bool nativeResult = FunctionCast(
-		vfWaitForRingSpace,
-		callback->oVfWaitForRingSpace)(that, callerRequest.dwords);
+	// A hung render context (recovered only when GuC resets it, seconds
+	// later) stops the engine; a busy client such as WindowServer then fills
+	// its ring and Apple's wait gives up. Wait again a few times, then report
+	// the failure to Apple's caller instead of panicking.
+	bool nativeResult = false;
+	for (uint32_t attempt = 0; attempt < 5 && !nativeResult; attempt++)
+		nativeResult = FunctionCast(
+			vfWaitForRingSpace,
+			callback->oVfWaitForRingSpace)(that, callerRequest.dwords);
 	const uint32_t available = getMember<uint32_t>(that, 0x88);
 	const uint32_t committedCursor = getMember<uint32_t>(that, 0x64);
-	PANIC_COND(!nativeResult ||
-	           getMember<void *>(that, 0x10) != accelerator ||
+	if (!nativeResult || !NGVfSubmission::ringReservationSatisfied(reservation, available, ringBytes)) {
+		static uint32_t logs = 0;
+		if (logs++ < 32)
+			SYSLOG("ngreen", "V344: engine %u ring wait failed native=%d available=%u requested=%u cursor=0x%x",
+			       engine, nativeResult, available, callerRequest.dwords, committedCursor);
+		return false;
+	}
+	PANIC_COND(getMember<void *>(that, 0x10) != accelerator ||
 	           getMember<uint8_t>(that, 0x40) != engine ||
 	           getMember<uint32_t>(that, 0x8C) != ringBytes ||
 	           getMember<uint32_t>(that, 0x90) != ringMask ||
 	           committedCursor >= ringBytes || (committedCursor & 3U) != 0 ||
 	           getMember<uint8_t>(that, 0x6D) != (tlbPending ? 1U : 0U) ||
-	           getMember<uint8_t>(that, 0x6E) != (auxPending ? 1U : 0U) ||
-	           !NGVfSubmission::ringReservationSatisfied(
-	               reservation, available, ringBytes),
+	           getMember<uint8_t>(that, 0x6E) != (auxPending ? 1U : 0U),
 		"ngreen", "VF ring reservation returned without proven capacity");
 	return true;
 }
