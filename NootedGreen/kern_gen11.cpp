@@ -12306,45 +12306,6 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		}
 		vfWakeVideoBatch(root & 0x7FFFFFF000ULL, reinterpret_cast<volatile uint32_t *>(getter(ringBacking)), ringSize,
 		                 previousRingTail, ringTail);
-		// V333: the first VCS batch after boot leaves its output unwritten (the
-		// first decoded frame is black; later batches and contexts are fine).
-		// Run that one batch twice through a GGTT trampoline in spare prologue space.
-		static bool vcsWarm = false;
-		// The RCS prologue page has room after its body.
-		auto *spare = gVfRcsPrologue ? reinterpret_cast<uint32_t *>(getter(gVfRcsPrologue)) : nullptr;
-		if (!vcsWarm && spare && gVfRcsPrologueGpu && !checkKernelArgument("-ngnovcswarm")) {
-			auto *r = reinterpret_cast<volatile uint32_t *>(getter(ringBacking));
-			const uint32_t words = ringSize / 4;
-			uint32_t at = previousRingTail / 4;
-			for (uint32_t n = 0; r && words && n < 16 && (at & (words - 1)) != (ringTail / 4 & (words - 1)) &&
-			     r[at & (words - 1)] != 0x18800101; n++, at++) {}
-			if (r && words && !(words & (words - 1)) && r[at & (words - 1)] == 0x18800101) {
-				vcsWarm = true;
-				uint32_t *t = spare + 0xC00 / 4;
-				const uint32_t lo = r[(at + 1) & (words - 1)], hi = r[(at + 2) & (words - 1)];
-				const uint32_t body[] {0x18C00101, lo, hi, 0x13000003, 0, 0, 0, 0, 0x18C00101, lo, hi, 0x05000000};
-				for (uint32_t k = 0; k < arrsize(body); k++) t[k] = body[k];
-				__asm__ volatile("clflush (%0)\n\tclflush (%1)\n\tmfence" :: "r"(t), "r"(t + arrsize(body) - 1) : "memory");
-				const uint64_t gpu = gVfRcsPrologueGpu + 0xC00;
-				r[(at + 1) & (words - 1)] = static_cast<uint32_t>(gpu);
-				r[(at + 2) & (words - 1)] = static_cast<uint32_t>(gpu >> 32);
-				r[at & (words - 1)] = 0x18800001; // GGTT
-				for (uint32_t k = 0; k < 3; k++)
-					__asm__ volatile("clflush (%0)" :: "r"(&r[(at + k) & (words - 1)]) : "memory");
-				__asm__ volatile("mfence" ::: "memory");
-				SYSLOG("ngreen", "V333: first VCS batch %08x%08x runs twice", hi, lo);
-			} else if (r) {
-				SYSLOG("ngreen", "V333: no batch start in first VCS submission +%x: %08x %08x", previousRingTail,
-				       r[(previousRingTail / 4) & (words - 1)], r[(previousRingTail / 4 + 1) & (words - 1)]);
-				vcsWarm = true;
-			}
-		} else if (!vcsWarm && !spare) {
-			static bool logged = false;
-			if (!logged) {
-				logged = true;
-				SYSLOG("ngreen", "V333: no prologue page");
-			}
-		}
 	}
 	if (gVfStampMergeOn < 0)
 		gVfStampMergeOn = !checkKernelArgument("-ngnostampmerge");
