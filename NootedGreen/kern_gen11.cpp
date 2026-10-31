@@ -12306,6 +12306,31 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		}
 		vfWakeVideoBatch(root & 0x7FFFFFF000ULL, reinterpret_cast<volatile uint32_t *>(getter(ringBacking)), ringSize,
 		                 previousRingTail, ringTail);
+		// V333: the first VCS batch after boot leaves its output unwritten (the
+		// first decoded frame is black; later batches and contexts are fine).
+		// Run that one batch twice through a GGTT trampoline.
+		static bool vcsWarm = false;
+		if (!vcsWarm && gVfRcsTrampolineCpu && !checkKernelArgument("-ngnovcswarm")) {
+			auto *r = reinterpret_cast<volatile uint32_t *>(getter(ringBacking));
+			const uint32_t words = ringSize / 4, at = previousRingTail / 4;
+			if (r && words && !(words & (words - 1)) && r[at & (words - 1)] == 0x18800101) {
+				vcsWarm = true;
+				const uint32_t slot = OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&gVfRcsTrampolineNext)) % kRcsTrampolines;
+				uint32_t *t = gVfRcsTrampolineCpu + slot * (kRcsTrampolineBytes / 4);
+				const uint32_t lo = r[(at + 1) & (words - 1)], hi = r[(at + 2) & (words - 1)];
+				const uint32_t body[] {0x18C00101, lo, hi, 0x13000003, 0, 0, 0, 0, 0x18C00101, lo, hi, 0x05000000};
+				for (uint32_t k = 0; k < arrsize(body); k++) t[k] = body[k];
+				__asm__ volatile("clflush (%0)\n\tclflush (%1)\n\tmfence" :: "r"(t), "r"(t + arrsize(body) - 1) : "memory");
+				const uint64_t gpu = gVfRcsTrampolineGpu + slot * kRcsTrampolineBytes;
+				r[(at + 1) & (words - 1)] = static_cast<uint32_t>(gpu);
+				r[(at + 2) & (words - 1)] = static_cast<uint32_t>(gpu >> 32);
+				r[at & (words - 1)] = 0x18800001; // GGTT
+				for (uint32_t k = 0; k < 3; k++)
+					__asm__ volatile("clflush (%0)" :: "r"(&r[(at + k) & (words - 1)]) : "memory");
+				__asm__ volatile("mfence" ::: "memory");
+				SYSLOG("ngreen", "V333: first VCS batch %08x%08x runs twice", hi, lo);
+			}
+		}
 	}
 	if (gVfStampMergeOn < 0)
 		gVfStampMergeOn = !checkKernelArgument("-ngnostampmerge");
