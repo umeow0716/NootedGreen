@@ -12339,7 +12339,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			}
 		} else if (!vcsWarm && !gVfRcsTrampolineCpu) {
 			static bool logged = false;
-			if (!logged) logged = true, SYSLOG("ngreen", "V333: no trampoline pool");
+			if (!logged) {
+				logged = true;
+				SYSLOG("ngreen", "V333: no trampoline pool");
+			}
 		}
 	}
 	if (gVfStampMergeOn < 0)
