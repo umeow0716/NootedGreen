@@ -39,6 +39,8 @@ int wrapGetInfo(void *that, int32_t mode, void *info) {
 // move. Claim a hardware cursor that draws nothing: the Looking Glass client
 // renders the cursor itself from the shape and position the guest host sends.
 constexpr uint32_t kHardwareCursorAttribute = 'crsr';
+constexpr size_t kHaveHardwareCursorOffset = 0x19e; // IOFramebuffer: crsr attribute cached by open()
+bool hardwareCursor;
 using GetAttribute = IOReturn (*)(void *, uint32_t, uintptr_t *);
 GetAttribute orgGetAttribute;
 IOReturn (*orgSetCursorImage)(void *, void *);
@@ -87,6 +89,9 @@ bool startVblank(void *, void *, IOService *fb, IONotifier *) {
     // Built by the first WindowServer, before the 144 Hz mode info above was in
     // place; the next WindowServer reuses it unless it is gone.
     fb->removeProperty("IOFBConfig");
+    // open() ran at boot, before the cursor hooks; the next WindowServer's
+    // cursor setup reads what it cached.
+    if (hardwareCursor) getMember<uint8_t>(fb, kHaveHardwareCursorOffset) = 1;
     auto *wl = fb->getWorkLoop();
     if (!handleVBL || !wl) return true;
     auto *v = new Vblank {fb, nullptr, mach_absolute_time()};
@@ -140,7 +145,8 @@ bool NDRVRefresh::processKext(KernelPatcher &p, size_t index, mach_vm_address_t 
             {"__ZN17IONDRVFramebuffer14setCursorImageEPv", wrapSetCursorImage, orgSetCursorImage},
             {"__ZN17IONDRVFramebuffer14setCursorStateEiib", wrapSetCursorState, orgSetCursorState},
         };
-        SYSLOG("ngreen", "V353: NDRV hardware cursor: %d", p.routeMultiple(index, cursor, arrsize(cursor), address, size));
+        hardwareCursor = p.routeMultiple(index, cursor, arrsize(cursor), address, size);
+        SYSLOG("ngreen", "V353: NDRV hardware cursor: %d", hardwareCursor);
         p.clearError();
     }
     ndrvRouted = ok;
