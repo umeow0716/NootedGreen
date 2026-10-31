@@ -2057,7 +2057,7 @@ bool vfQuiesceDeviceForShutdown(void *guc)
 	return true;
 }
 
-// V317: a task's stamp slot is per channel and shared by all of the task's
+// V324: a task's stamp slot is per channel and shared by all of the task's
 // contexts on it. GuC runs each context's queued submissions back to back, so
 // an older stamp can be stored after a newer one and the slot goes backwards:
 // the newer event never completes (head == tail, stamp behind forever; an
@@ -2173,9 +2173,42 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 			__asm__ volatile("clflush (%0)" :: "r"(&at(k)) : "memory");
 		__asm__ volatile("mfence" ::: "memory");
 		if (logs++ < 8)
-			SYSLOG("ngreen", "V317: id=%u class=%u stamp redirected to GGTT 0x%x", id, entry.engineClass, own);
+			SYSLOG("ngreen", "V324: id=%u class=%u stamp redirected to GGTT 0x%x", id, entry.engineClass, own);
 		i = (i + length - 1) & (words - 1), guard += length - 1;
 	}
+}
+
+// V330: after GuC resets a hung context nothing completes its submitted
+// stamps, so every wait on that context (some untimed: finishEvent during
+// teardown) blocks forever, and GuC replays the hung batch from the same head.
+// Like i915's reset handling, move the ring head past the submitted work and
+// complete its stamps; the hung work is dropped.
+static void vfSkipResetContext(uint32_t id, mach_vm_address_t getterAddress) {
+	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(getterAddress);
+	if (!getter || !gVfContextLock || !gVfContexts || id >= gVfContextCapacity)
+		return;
+	uint32_t head = 0, tail = 0, stamp = 0;
+	bool done = false;
+	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	auto &entry = gVfContexts[id];
+	auto *image = entry.contextBacking ? getter(entry.contextBacking) : nullptr;
+	auto *stamps = entry.stampBacking ? getter(entry.stampBacking) : nullptr;
+	if (image && stamps && entry.submissionCoverage.covered) {
+		auto *ringHead = reinterpret_cast<volatile uint32_t *>(image + 0x1014);
+		head = *ringHead, tail = *reinterpret_cast<volatile uint32_t *>(image + 0x101C);
+		*ringHead = (head & ~0x1FFFFCU) | (tail & 0x1FFFFCU);
+		stamp = entry.submissionCoverage.coveredStamp;
+		auto *target = entry.stampRedirected ? reinterpret_cast<volatile uint32_t *>(image + kVfPrivateStampOffset) :
+			reinterpret_cast<volatile uint32_t *>(stamps + entry.stampIndex * 64U);
+		if (static_cast<int32_t>(stamp - *target) > 0)
+			*target = stamp;
+		__asm__ volatile("clflush (%0)\n\tclflush (%1)\n\tmfence" :: "r"(ringHead), "r"(target) : "memory");
+		done = true;
+	}
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+	if (done)
+		vfMergeRedirectedStamps();
+	SYSLOG("ngreen", "V330: reset id=%u skipped head 0x%x -> tail 0x%x, stamp %x complete=%d", id, head, tail, stamp, done);
 }
 
 uint64_t vfConsumeMemoryInterrupts()
@@ -5157,7 +5190,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfSchedulerPush, this->oVfSchedulerPush},
 				{"__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj",
 				 vfSubmitWorkItem},
-				// V317: merge redirected stamps right before Apple reads them
+				// V324: merge redirected stamps right before Apple reads them
 				// (flush-notify secondary handlers, workloop context).
 				{"__ZN16IntelAccelerator17signalStampUpdateERK8IGBitSetILm64EE",
 				 vfSignalStampUpdate, this->oVfSignalStampUpdate},
@@ -13317,6 +13350,8 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		       action, length, payload0, payload1, payload2);
 		if (event.kind == NGVfGuCEvent::Kind::ContextReset)
 			vfDumpResetContext(payload0, callback->vfSharedMappedBufferGetVirtualAddress);
+		if (event.kind == NGVfGuCEvent::Kind::ContextReset && !checkKernelArgument("-ngnoresetskip"))
+			vfSkipResetContext(payload0, callback->vfSharedMappedBufferGetVirtualAddress);
 	// Default (opt out with -ngnoresetcontinue): GuC already reset the engine and dropped only
 		// the hung context; keep the other contexts running.
 		if (event.kind == NGVfGuCEvent::Kind::ContextReset && !checkKernelArgument("-ngnoresetcontinue"))
