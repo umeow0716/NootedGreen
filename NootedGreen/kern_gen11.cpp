@@ -1600,6 +1600,8 @@ bool vfWaitForContextShutdown(void *guc)
 	return false;
 }
 
+static void vfSlowMark(const char *n);
+volatile uint32_t gVfTlbInvalidations = 0;
 bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target)
 {
 	// GEN12_GUC_TLB_INV_CR (0xCEE8) belongs to the physical GT and is not in
@@ -1622,6 +1624,8 @@ bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target)
 		return false;
 	}
 
+	const uint64_t tlbStart = mach_absolute_time();
+	vfSlowMark(">tlb");
 	IOLockLock(gVfGucLock);
 	const uint32_t seqno = static_cast<uint32_t>(OSIncrementAtomic(
 		reinterpret_cast<volatile SInt32 *>(&gVfTlbNextSeqno)));
@@ -1663,6 +1667,15 @@ bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target)
 	gVfTlbWaitActive = 0;
 	OSSynchronizeIO();
 	IOLockUnlock(gVfGucLock);
+	{
+		uint64_t ns;
+		absolutetime_to_nanoseconds(mach_absolute_time() - tlbStart, &ns);
+		gVfTlbInvalidations++;
+		vfSlowMark("tlb");
+		static uint32_t logs = 0;
+		if (ns >= 500000 && logs++ < 200)
+			SYSLOG("ngreen", "V356: TLB invalidation target=%u took %llu us", static_cast<uint32_t>(target), ns / 1000);
+	}
 
 	if (!sent || !completed) {
 		SYSLOG("ngreen", "V237: VF GuC TLB invalidate failed seq=%u target=%u sent=%d fence=%u",
@@ -2081,6 +2094,92 @@ uint32_t gVfStampRedirectCount = 0;
 int gVfStampMergeOn = -1;
 bool gVfStampWaitOn = true; // V348, opt-out -ngnostampwait
 uint8_t *(*gVfStampGetter)(void *) = nullptr; // set with the first redirect
+// V354: submissions that hold up the caller (WindowServer blocks in
+// IOAccelCommandQueueSubmitCommandBuffers; 3-12 ms stalls drop frames).
+// Nested hooks on the same thread add marks through vfSlowMark.
+struct VfSlowSubmitLog;
+struct VfSlowSubmitThread {
+	thread_t thread;
+	VfSlowSubmitLog *log;
+} gVfSlowSubmitThreads[32];
+static void vfSlowMark(const char *n);
+struct VfSlowSubmitLog {
+	// Time between consecutive marks, summed per mark name.
+	static constexpr uint32_t kNames = 40;
+	const char *what;
+	uint64_t start = mach_absolute_time(), last = start;
+	uint64_t total[kNames] {};
+	uint32_t count[kNames] {};
+	const char *name[kNames] {};
+	uint32_t names = 0;
+	VfSlowSubmitThread *slot = nullptr;
+	explicit VfSlowSubmitLog(const char *w) : what(w) {
+		const auto self = current_thread();
+		for (auto &t : gVfSlowSubmitThreads)
+			if (OSCompareAndSwapPtr(nullptr, self, &t.thread)) {
+				t.log = this, slot = &t;
+				break;
+			}
+	}
+	void mark(const char *n) {
+		const uint64_t now = mach_absolute_time();
+		uint32_t i = 0;
+		while (i < names && name[i] != n)
+			i++;
+		if (i == names && names < kNames)
+			name[names++] = n;
+		if (i < names)
+			total[i] += now - last, count[i]++;
+		last = now;
+	}
+	~VfSlowSubmitLog() {
+		if (slot)
+			slot->log = nullptr, OSCompareAndSwapPtr(slot->thread, nullptr, &slot->thread);
+		const uint64_t end = mach_absolute_time();
+		uint64_t ns;
+		absolutetime_to_nanoseconds(end - start, &ns);
+		static volatile UInt32 logs = 0;
+		if (ns < 3000000 || logs >= 300)
+			return;
+		OSIncrementAtomic(&logs);
+		char line[1024], process[20] {};
+		proc_selfname(process, sizeof(process));
+		int used = snprintf(line, sizeof(line), "V354: %s by %s took %llu us:", what, process, ns / 1000);
+		for (uint32_t i = 0; i < names && used > 0 && used < static_cast<int>(sizeof(line)); i++) {
+			uint64_t part;
+			absolutetime_to_nanoseconds(total[i], &part);
+			used += snprintf(line + used, sizeof(line) - used, " %s %llu/%u", name[i], part / 1000, count[i]);
+		}
+		uint64_t rest;
+		absolutetime_to_nanoseconds(end - last, &rest);
+		if (used > 0 && used < static_cast<int>(sizeof(line)))
+			snprintf(line + used, sizeof(line) - used, " rest %llu", rest / 1000);
+		SYSLOG("ngreen", "%s", line);
+	}
+};
+
+static void vfSlowMark(const char *n) {
+	const auto self = current_thread();
+	for (auto &t : gVfSlowSubmitThreads)
+		if (t.thread == self) {
+			if (t.log)
+				t.log->mark(n);
+			return;
+		}
+}
+
+// Native submit stages, marked into the running submission's slow log.
+const char *const gVfSubmitProbeNames[][2] {{">pcb", "pcb"}, {">fifo", "fifo"}, {">coalesce", "coalesce"}};
+mach_vm_address_t gVfSubmitProbeOrg[arrsize(gVfSubmitProbeNames)] {};
+template <size_t N>
+static uint64_t vfSubmitProbe(void *a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+	vfSlowMark(gVfSubmitProbeNames[N][0]);
+	const uint64_t result = reinterpret_cast<uint64_t (*)(void *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t)>(
+		gVfSubmitProbeOrg[N])(a, b, c, d, e, f);
+	vfSlowMark(gVfSubmitProbeNames[N][1]);
+	return result;
+}
+
 static void vfMergeRedirectedStamps(bool dump = false) {
 	auto getter = gVfStampGetter;
 	if (!getter || !gVfContextLock || !gVfContexts)
@@ -2183,7 +2282,7 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 		if (!entry.stampRedirected)
 			return;
 	}
-	static uint8_t logs[8] {};
+	static uint32_t logs[8] {};
 	uint32_t values[104], count = 0; // the 512-dword scan holds at most 103 stores
 	// V348: semaphore waits on one of this task's shared stamp slots.
 	struct { uint32_t at, slot, value; } waits[16];
@@ -5333,6 +5432,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfSignalStampUpdate, this->oVfSignalStampUpdate},
 			};
 			PANIC_COND(!patcher.routeMultiple(index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
+			KernelPatcher::RouteRequest submitProbes[] = {
+				{"__ZN19IGAccelCommandQueue20processCommandBufferEjj", vfSubmitProbe<0>, gVfSubmitProbeOrg[0]},
+				{"__ZN18IGAccelFIFOChannel12submitBufferEP24IOAccelCommandDescriptor", vfSubmitProbe<1>, gVfSubmitProbeOrg[1]},
+				{"__ZN19IGAccelCommandQueue19endCoalescedSegmentEv", vfSubmitProbe<2>, gVfSubmitProbeOrg[2]},
+			};
+			SYSLOG("ngreen", "V354: submit probes routed %d", patcher.routeMultiple(index, submitProbes, address, size));
+			patcher.clearError();
 
 			if (gVfUsesMemoryIrq) {
 				// Only mtl_info-class VFs use the PF-provisioned memory-IRQ page.
@@ -5619,6 +5725,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 bool Gen11::vfAllocMoreCommandBuffers(void *pool)
 {
+	VfSlowSubmitLog slow("command pool growth");
 	PANIC_COND(!callback || !callback->oIOAccelAllocMoreCommandBuffers,
 	           "ngreen", "Missing native command-pool growth trampoline");
 	const bool target = pool && gVfIdentity == VfIdentity::Virtual &&
@@ -6057,6 +6164,14 @@ static bool vfCompleteGgttUpdate()
 	return true;
 }
 
+// V358: page-table commits map every resource segment separately; a GuC TLB
+// round trip per segment (470 per Activity Monitor refresh, 16k for a
+// wallpaper video) held the accelerator for up to 230 ms. Inside a commit or
+// update transaction the maps only take effect once it returns, so retire
+// them with one invalidation at its end.
+static uint32_t gVfGgttDeferDepth = 0;
+static bool gVfGgttDeferred = false;
+
 static void vfRequireCompletedGgttUpdate()
 {
 	// Native commit failure does not publish the installed-PTE flag. Its
@@ -6066,6 +6181,26 @@ static void vfRequireCompletedGgttUpdate()
 	// proof that Host DMA has stopped; runtime containment remains mandatory.
 	PANIC_COND(!vfCompleteGgttUpdate(), "ngreen",
 		"VF GGTT stores lack confirmed invalidation; refusing native backing cleanup");
+}
+
+// Map paths: defer inside this thread's commit/update transaction.
+static void vfRequireCompletedGgttMap()
+{
+	if (gVfGgttDeferDepth && gVfPageTableUpdateLock && IORecursiveLockHaveLock(gVfPageTableUpdateLock)) {
+		gVfGgttDeferred = true;
+		return;
+	}
+	vfRequireCompletedGgttUpdate();
+}
+
+// Enter/leave with gVfPageTableUpdateLock held.
+static void vfDeferGgttMaps() { gVfGgttDeferDepth++; }
+static void vfFlushGgttMaps()
+{
+	if (--gVfGgttDeferDepth || !gVfGgttDeferred)
+		return;
+	gVfGgttDeferred = false;
+	vfRequireCompletedGgttUpdate();
 }
 
 bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
@@ -6100,7 +6235,7 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
 			pteBase[gpu >> 12] = intended;
 		physical += 0x1000ULL;
 	}
-	vfRequireCompletedGgttUpdate();
+	vfRequireCompletedGgttMap();
 	if (diagnosticSample != 0)
 		SYSLOG("ngreen", "V316: GGTT complete sample=%d gpu=0x%llx length=0x%llx",
 		       static_cast<int>(diagnosticSample),
@@ -6268,7 +6403,7 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 
 	rotated->sourcePage = static_cast<uint32_t>(totalPages);
 	rotated->cursor = spec.rangeStart + spec.rangeLength;
-	vfRequireCompletedGgttUpdate();
+	vfRequireCompletedGgttMap();
 	segments->memory->release();
 
 	return true;
@@ -6420,6 +6555,7 @@ void Gen11::vfPpgtt64ShrinkRange(void *that,
 
 bool Gen11::vfCommitPageTablesForTask(void *that, void *task, void *mapping)
 {
+	VfSlowSubmitLog slow("page-table commit");
 	PANIC_COND(!that || !task || !mapping ||
 	           !callback->oVfCommitPageTablesForTask ||
 	           !callback->oVfReleasePageTablesForTask,
@@ -6427,9 +6563,11 @@ bool Gen11::vfCommitPageTablesForTask(void *that, void *task, void *mapping)
 	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
 		"VF page-table commit cannot enter the page-table transaction");
 	IORecursiveLockLock(gVfPageTableUpdateLock);
+	vfDeferGgttMaps();
 	const bool committed = FunctionCast(
 		vfCommitPageTablesForTask,
 		callback->oVfCommitPageTablesForTask)(that, task, mapping);
+	vfFlushGgttMaps();
 	if (committed) {
 		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 		return true;
@@ -6458,25 +6596,36 @@ bool Gen11::vfReleasePageTablesForTask(void *that, void *task, void *mapping)
 		"ngreen", "Missing native VF page-table release boundary");
 	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
 		"VF page-table release cannot enter the page-table transaction");
+	const uint64_t start = mach_absolute_time();
+	const uint32_t invalidations = gVfTlbInvalidations;
 	IORecursiveLockLock(gVfPageTableUpdateLock);
 	const bool released = FunctionCast(
 		vfReleasePageTablesForTask,
 		callback->oVfReleasePageTablesForTask)(that, task, mapping);
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+	uint64_t ns;
+	absolutetime_to_nanoseconds(mach_absolute_time() - start, &ns);
+	static uint32_t logs = 0;
+	if (ns >= 1000000 && logs++ < 200)
+		SYSLOG("ngreen", "V356: page-table release took %llu us, %u TLB invalidations", ns / 1000,
+		       gVfTlbInvalidations - invalidations);
 	return released;
 }
 
 bool Gen11::vfUpdatePageTablesForTask(void *that, void *task, void *mapping)
 {
+	VfSlowSubmitLog slow("page-table update");
 	PANIC_COND(!that || !task || !mapping ||
 	           !callback->oVfUpdatePageTablesForTask,
 		"ngreen", "Missing native VF page-table update boundary");
 	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
 		"VF page-table update cannot enter the page-table transaction");
 	IORecursiveLockLock(gVfPageTableUpdateLock);
+	vfDeferGgttMaps();
 	const bool updated = FunctionCast(
 		vfUpdatePageTablesForTask,
 		callback->oVfUpdatePageTablesForTask)(that, task, mapping);
+	vfFlushGgttMaps();
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 	return updated;
 }
@@ -6869,6 +7018,7 @@ void Gen11::vfMemoryManagerFree(void *that)
 
 void Gen11::vfUpdateMappingCacheType(void *that, uint32_t requestedType)
 {
+	VfSlowSubmitLog slow("mapping cache type");
 	PANIC_COND(!that || !callback || !callback->oVfUpdateMappingCacheType,
 		"ngreen", "Missing VF cache-type transaction boundary");
 	if (gVfIdentity != VfIdentity::Virtual) {
@@ -7205,39 +7355,6 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 	return original;
 }
 
-// V354: submissions that hold up the caller (WindowServer blocks in
-// IOAccelCommandQueueSubmitCommandBuffers; 3-12 ms stalls drop frames).
-struct VfSlowSubmitLog {
-	const char *what;
-	uint64_t start = mach_absolute_time();
-	uint64_t at[4] {};
-	const char *name[4] {};
-	uint32_t marks = 0;
-	explicit VfSlowSubmitLog(const char *w) : what(w) {}
-	void mark(const char *n) {
-		if (marks < 4) name[marks] = n, at[marks++] = mach_absolute_time();
-	}
-	~VfSlowSubmitLog() {
-		const uint64_t end = mach_absolute_time();
-		uint64_t ns;
-		absolutetime_to_nanoseconds(end - start, &ns);
-		static volatile UInt32 logs = 0;
-		if (ns < 3000000 || logs >= 200)
-			return;
-		OSIncrementAtomic(&logs);
-		uint64_t part[5] {};
-		uint64_t prev = start;
-		for (uint32_t i = 0; i < marks; i++) {
-			absolutetime_to_nanoseconds(at[i] - prev, &part[i]);
-			prev = at[i];
-		}
-		absolutetime_to_nanoseconds(end - prev, &part[marks]);
-		SYSLOG("ngreen", "V354: %s took %llu us: %s %llu, %s %llu, %s %llu, rest %llu", what, ns / 1000,
-		       marks > 0 ? name[0] : "-", part[0] / 1000, marks > 1 ? name[1] : "-", part[1] / 1000,
-		       marks > 2 ? name[2] : "-", part[2] / 1000, part[marks] / 1000);
-	}
-};
-
 IOReturn Gen11::vfCommandQueueSubmit(void *that, const void *arguments)
 {
 	VfSlowSubmitLog slow("command queue submit");
@@ -7245,6 +7362,7 @@ IOReturn Gen11::vfCommandQueueSubmit(void *that, const void *arguments)
 	VfExternalProducerGuard guard(accelerator);
 	if (!guard)
 		return kIOReturnOffline;
+	slow.mark("guard");
 	return FunctionCast(vfCommandQueueSubmit,
 	                    callback->oVfCommandQueueSubmit)(that, arguments);
 }
@@ -7252,6 +7370,7 @@ IOReturn Gen11::vfCommandQueueSubmit(void *that, const void *arguments)
 IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
 	                            uint64_t options, uint64_t *stamp)
 {
+	VfSlowSubmitLog slow("context submit");
 	void *accelerator = that ? getMember<void *>(that, 0x5A8) : nullptr;
 	VfExternalProducerGuard guard(accelerator);
 	if (!guard)
@@ -12390,7 +12509,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	                         const uint32_t *descriptor, IGHwCsType hwCsType,
 	                         unsigned int channelId, unsigned int ringSequence,
 	                         unsigned int ringTail) {
-	VfSlowSubmitLog slow("work item submit");
+	vfSlowMark(">work");
 	VfContextOperationGuard operationGuard;
 	if (!operationGuard)
 		return false;
@@ -12510,7 +12629,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	OSObject *admittedBacking = admitted ? gVfContexts[admittedSlot].contextBacking : nullptr;
 	OSObject *admittedRingBacking = admitted ? gVfContexts[admittedSlot].ringBacking : nullptr;
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, admissionState);
-	slow.mark("admit");
+	vfSlowMark("admit");
 	if (!admitted) {
 		if (identityAdmitted) {
 			vfMarkProtocolFault("GuC submit lacked matching Scheduler4 coverage metadata");
@@ -12642,7 +12761,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		                 reinterpret_cast<uint64_t (*)(void *)>(callback->vfMappedBufferGetGPUVirtualAddress));
 	}
 
-	slow.mark("ring");
+	vfSlowMark("ring");
 	const uint16_t gucId = static_cast<uint16_t>(slot);
 	const uint32_t enableRequest[] = {
 		kGucActionScheduleContextModeSet, gucId, kGucContextEnable,
@@ -12656,7 +12775,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		                    transportFence, queue.get(), ringTailField, ringTail) :
 		vfSendCtbFastAction(that, scheduleRequest, arrsize(scheduleRequest),
 		                    transportFence, queue.get(), ringTailField, ringTail);
-	slow.mark("ctb");
+	vfSlowMark("ctb");
 	if (submitted) {
 		bool coveragePublished = false;
 		interruptState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
@@ -13782,6 +13901,7 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 }
 
 void Gen11::vfSignalStampUpdate(void *that, const void *stamps) {
+	VfSlowSubmitLog slow("stamp update");
 	vfMergeRedirectedStamps();
 	FunctionCast(vfSignalStampUpdate, callback->oVfSignalStampUpdate)(that, stamps);
 }
@@ -13857,6 +13977,7 @@ void Gen11::vfRequestEnableCallback(void *that, OSObject *requestor,
 
 bool Gen11::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,
 	                         bool synchronousPoll) {
+	VfSlowSubmitLog slow("G2H drain");
 	if (!that || !vfCtbConsumerReady(!synchronousPoll))
 		return false;
 	VfIrqCallbackGuard irqGuard;
