@@ -7210,15 +7210,31 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 struct VfSlowSubmitLog {
 	const char *what;
 	uint64_t start = mach_absolute_time();
+	uint64_t at[4] {};
+	const char *name[4] {};
+	uint32_t marks = 0;
 	explicit VfSlowSubmitLog(const char *w) : what(w) {}
+	void mark(const char *n) {
+		if (marks < 4) name[marks] = n, at[marks++] = mach_absolute_time();
+	}
 	~VfSlowSubmitLog() {
+		const uint64_t end = mach_absolute_time();
 		uint64_t ns;
-		absolutetime_to_nanoseconds(mach_absolute_time() - start, &ns);
+		absolutetime_to_nanoseconds(end - start, &ns);
 		static volatile UInt32 logs = 0;
-		if (ns >= 3000000 && logs < 200) {
-			OSIncrementAtomic(&logs);
-			SYSLOG("ngreen", "V354: %s took %llu us", what, ns / 1000);
+		if (ns < 3000000 || logs >= 200)
+			return;
+		OSIncrementAtomic(&logs);
+		uint64_t part[5] {};
+		uint64_t prev = start;
+		for (uint32_t i = 0; i < marks; i++) {
+			absolutetime_to_nanoseconds(at[i] - prev, &part[i]);
+			prev = at[i];
 		}
+		absolutetime_to_nanoseconds(end - prev, &part[marks]);
+		SYSLOG("ngreen", "V354: %s took %llu us: %s %llu, %s %llu, %s %llu, rest %llu", what, ns / 1000,
+		       marks > 0 ? name[0] : "-", part[0] / 1000, marks > 1 ? name[1] : "-", part[1] / 1000,
+		       marks > 2 ? name[2] : "-", part[2] / 1000, part[marks] / 1000);
 	}
 };
 
@@ -12494,6 +12510,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	OSObject *admittedBacking = admitted ? gVfContexts[admittedSlot].contextBacking : nullptr;
 	OSObject *admittedRingBacking = admitted ? gVfContexts[admittedSlot].ringBacking : nullptr;
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, admissionState);
+	slow.mark("admit");
 	if (!admitted) {
 		if (identityAdmitted) {
 			vfMarkProtocolFault("GuC submit lacked matching Scheduler4 coverage metadata");
@@ -12625,6 +12642,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		                 reinterpret_cast<uint64_t (*)(void *)>(callback->vfMappedBufferGetGPUVirtualAddress));
 	}
 
+	slow.mark("ring");
 	const uint16_t gucId = static_cast<uint16_t>(slot);
 	const uint32_t enableRequest[] = {
 		kGucActionScheduleContextModeSet, gucId, kGucContextEnable,
@@ -12638,6 +12656,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		                    transportFence, queue.get(), ringTailField, ringTail) :
 		vfSendCtbFastAction(that, scheduleRequest, arrsize(scheduleRequest),
 		                    transportFence, queue.get(), ringTailField, ringTail);
+	slow.mark("ctb");
 	if (submitted) {
 		bool coveragePublished = false;
 		interruptState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
