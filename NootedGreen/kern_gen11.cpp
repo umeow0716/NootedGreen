@@ -2072,11 +2072,11 @@ uint16_t gVfStampRedirects[128];
 uint32_t gVfStampRedirectCount = 0;
 int gVfStampMergeOn = -1;
 uint8_t *(*gVfStampGetter)(void *) = nullptr; // set with the first redirect
-static void vfMergeRedirectedStamps() {
+static void vfMergeRedirectedStamps(bool dump = false) {
 	auto getter = gVfStampGetter;
 	if (!getter || !gVfContextLock || !gVfContexts)
 		return;
-	static struct { volatile uint32_t *shared; uint32_t done; bool busy; } c[arrsize(gVfStampRedirects)];
+	static struct { volatile uint32_t *shared; uint32_t done; bool busy; uint32_t covered, head, tail, state, before; } c[arrsize(gVfStampRedirects)];
 	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	uint32_t live = 0;
 	for (uint32_t i = 0; i < gVfStampRedirectCount; i++) {
@@ -2094,6 +2094,11 @@ static void vfMergeRedirectedStamps() {
 		c[live].done = own ? *own : 0;
 		c[live].busy = entry.submissionCoverage.covered &&
 			static_cast<int32_t>(entry.submissionCoverage.coveredStamp - c[live].done) > 0;
+		c[live].covered = entry.submissionCoverage.coveredStamp;
+		c[live].head = image ? *reinterpret_cast<volatile uint32_t *>(image + 0x1014) : 0;
+		c[live].tail = image ? *reinterpret_cast<volatile uint32_t *>(image + 0x101C) : 0;
+		c[live].state = static_cast<uint32_t>(entry.state);
+		c[live].before = c[live].shared ? *c[live].shared : 0;
 		live++;
 	}
 	gVfStampRedirectCount = live;
@@ -2120,6 +2125,14 @@ static void vfMergeRedirectedStamps() {
 			*shared = newest;
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+	// V345: who holds each shared slot back when an event times out.
+	static uint32_t dumps = 0;
+	if (dump && dumps++ < 6)
+		for (uint32_t i = 0; i < live; i++)
+			if (c[i].shared && (c[i].busy || c[i].before != *c[i].shared || (c[i].head & 0x1FFFFCU) != (c[i].tail & 0x1FFFFCU)))
+				SYSLOG("ngreen", "V345: id=%u slot=%llx done=%x covered=%x busy=%d shared %x->%x head=%x tail=%x state=%u",
+				       gVfStampRedirects[i], reinterpret_cast<uint64_t>(c[i].shared) & 0xFFFFFF, c[i].done, c[i].covered,
+				       c[i].busy, c[i].before, *c[i].shared, c[i].head, c[i].tail, c[i].state);
 }
 
 // Redirect the stamp stores (MI_FLUSH_DW or PIPE_CONTROL post-sync writes to
@@ -14110,7 +14123,7 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	// fabricate completion while a direct GuC context may still DMA. Guest
 	// fail-stop is not PF containment; the independent host watcher is required.
 	if (gVfStampMergeOn > 0)
-		vfMergeRedirectedStamps();
+		vfMergeRedirectedStamps(true);
 	VfTimeoutContextFrame frames[NGVfTimeoutObservation::engineCount] {};
 	const uint32_t prefixEngine = NGVfTimeoutObservation::prefixEngineForChannel(channel);
 	const uint32_t capture = vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames, prefixEngine);
