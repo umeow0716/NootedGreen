@@ -12299,6 +12299,21 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
 		auto *image = getter(gVfContexts[slot].contextBacking);
 		auto *regs = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
+		// V332: a new context's first submission has ENGINE_CTX_RESTORE_INHIBIT
+		// set, so it runs on whatever engine state is current. After boot the
+		// VDBOX state is the reset state and the first decode writes nothing
+		// (black first frame); later contexts inherit a used engine and work.
+		// Apple's VCS image is fully formed: load it.
+		static int restoreFirst = -1;
+		if (restoreFirst < 0)
+			restoreFirst = !checkKernelArgument("-ngnovcsrestore");
+		if (regs && restoreFirst && (regs[3] & 0x10001U) == 0x10001U) {
+			regs[3] &= ~1U;
+			__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(&regs[3]) : "memory");
+			static uint32_t logs = 0;
+			if (logs++ < 4)
+				SYSLOG("ngreen", "V332: id=%u first VCS submission restores its context image", static_cast<uint32_t>(slot));
+		}
 		uint64_t root = 0;
 		for (uint32_t i = 0; regs && i + 1 < 0x100; i++) {
 			if ((regs[i] & 0xFFF) == 0x270 && (regs[i] >> 12)) root |= regs[i + 1];
