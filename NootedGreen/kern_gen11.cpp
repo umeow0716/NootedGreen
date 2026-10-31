@@ -533,6 +533,7 @@ struct VfGucContext {
 	OSObject *stampBacking;
 	OSObject *scratchBacking;
 	uint32_t stampIndex;
+	bool stampRedirected;
 	NGVfSubmissionCoverage::Tracker submissionCoverage;
 };
 
@@ -2056,6 +2057,109 @@ bool vfQuiesceDeviceForShutdown(void *guc)
 	return true;
 }
 
+// V317: a task's stamp slot is per channel and shared by all of the task's
+// contexts on it. GuC time-slices those contexts (and VCS0/VCS2 run in
+// parallel), so an older submission can store its stamp after a newer one and
+// the slot goes backwards: the newer event never completes. VCS stamp stores
+// are redirected to a per-context PPHWSP dword (the context's last completed
+// stamp) and merged here: the shared slot may advance to the newest completed
+// stamp, but never past a busy context's own completed stamp, since that
+// context's pending stamps are all newer than it.
+constexpr uint32_t kVfPrivateStampOffset = 0xF00;
+// Context ids with redirected stamps (the context table is GuC-id sized).
+uint16_t gVfStampRedirects[32];
+uint32_t gVfStampRedirectCount = 0;
+int gVfStampMergeOn = -1;
+static void vfMergeRedirectedStamps() {
+	auto *cb = Gen11::callback;
+	if (!cb || !cb->vfSharedMappedBufferGetVirtualAddress || !gVfContextLock || !gVfContexts)
+		return;
+	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(cb->vfSharedMappedBufferGetVirtualAddress);
+	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	uint32_t live = 0;
+	for (uint32_t i = 0; i < gVfStampRedirectCount; i++)
+		if (gVfContexts[gVfStampRedirects[i]].stampRedirected)
+			gVfStampRedirects[live++] = gVfStampRedirects[i];
+	gVfStampRedirectCount = live;
+	for (uint32_t i = 0; i < live; i++) {
+		const auto &slot = gVfContexts[gVfStampRedirects[i]];
+		auto *stamps = slot.stampBacking ? getter(slot.stampBacking) : nullptr;
+		if (!stamps)
+			continue;
+		auto *shared = reinterpret_cast<volatile uint32_t *>(stamps + slot.stampIndex * 64U);
+		bool any = false, bounded = false;
+		uint32_t newest = 0, bound = 0;
+		for (uint32_t k = 0; k < live; k++) {
+			const auto &entry = gVfContexts[gVfStampRedirects[k]];
+			if (entry.stampBacking != slot.stampBacking || entry.stampIndex != slot.stampIndex)
+				continue;
+			auto *image = entry.contextBacking ? getter(entry.contextBacking) : nullptr;
+			if (!image)
+				continue;
+			auto *own = reinterpret_cast<volatile uint32_t *>(image + kVfPrivateStampOffset);
+			__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(own) : "memory");
+			const uint32_t done = *own;
+			if (!any || static_cast<int32_t>(done - newest) > 0)
+				newest = done;
+			any = true;
+			const auto &coverage = entry.submissionCoverage;
+			if (coverage.covered && static_cast<int32_t>(coverage.coveredStamp - done) > 0 &&
+			    (!bounded || static_cast<int32_t>(bound - done) > 0))
+				bound = done, bounded = true;
+		}
+		if (bounded && static_cast<int32_t>(newest - bound) > 0)
+			newest = bound;
+		if (any && static_cast<int32_t>(newest - *shared) > 0)
+			*shared = newest;
+	}
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+}
+
+// Redirect the stamp stores of newly written VCS ring commands (see above).
+static void vfRedirectVideoStamps(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to) {
+	auto *cb = Gen11::callback;
+	const uint32_t words = ringSize / 4;
+	if (!cb || !ring || !words || (words & (words - 1)))
+		return;
+	using GetGpu = uint64_t (*)(void *);
+	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(cb->vfSharedMappedBufferGetVirtualAddress);
+	auto &entry = gVfContexts[id];
+	if (!entry.stampBacking || !entry.contextBacking)
+		return;
+	const uint64_t target = reinterpret_cast<GetGpu>(cb->vfMappedBufferGetGPUVirtualAddress)(entry.stampBacking) +
+		entry.stampIndex * 64U;
+	const uint32_t own = (entry.descriptorLo & ~0xFFFU) + kVfPrivateStampOffset;
+	auto *image = getter(entry.contextBacking);
+	auto *stamps = getter(entry.stampBacking);
+	if (!target || !image || !stamps)
+		return;
+	if (!entry.stampRedirected) {
+		const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		if (gVfStampRedirectCount < arrsize(gVfStampRedirects)) {
+			auto *slot = reinterpret_cast<volatile uint32_t *>(image + kVfPrivateStampOffset);
+			*slot = *reinterpret_cast<volatile uint32_t *>(stamps + entry.stampIndex * 64U);
+			__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(slot) : "memory");
+			gVfStampRedirects[gVfStampRedirectCount++] = static_cast<uint16_t>(id);
+			entry.stampRedirected = true;
+		}
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+		if (!entry.stampRedirected)
+			return;
+	}
+	static uint32_t logs = 0;
+	for (uint32_t i = from / 4 % words, end = to / 4 % words, guard = 0; i != end && guard < 256; i = (i + 1) & (words - 1), guard++) {
+		auto at = [&](uint32_t k) -> volatile uint32_t & { return ring[(i + k) & (words - 1)]; };
+		if ((at(0) & 0xFF80C000U) != 0x13004000U || (at(1) | (static_cast<uint64_t>(at(2)) << 32)) != target)
+			continue;
+		at(1) = own | 4U; // GGTT
+		at(2) = 0;
+		__asm__ volatile("clflush (%0)\n\tclflush (%1)\n\tmfence" :: "r"(&at(1)), "r"(&at(2)) : "memory");
+		if (logs++ < 4)
+			SYSLOG("ngreen", "V317: id=%u stamp %x redirected to GGTT 0x%x", id, at(3), own);
+		i = (i + 4) & (words - 1), guard += 4;
+	}
+}
+
 uint64_t vfConsumeMemoryInterrupts()
 {
 	auto *base = gVfCtbCpuBase;
@@ -2094,6 +2198,8 @@ uint64_t vfConsumeMemoryInterrupts()
 	// i915. The shared table binds them to Tahoe's corresponding callbacks.
 	for (size_t i = 0; i < NGVfMemIrq::engineRouteCount; ++i)
 		consumeEngine(NGVfMemIrq::engineRoutes[i]);
+	if (pending & 0x18U)
+		vfMergeRedirectedStamps();
 
 	const uint8_t gucSource = sourceBase[kVfGucIrqOffset];
 	if (gucSource) {
@@ -11137,6 +11243,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 					scratchBacking->retain();
 					entry.scratchBacking = scratchBacking;
 					entry.stampIndex = static_cast<uint32_t>(stampIndex);
+					entry.stampRedirected = false;
 					entry.state = kVfGucContextRegistering;
 				}
 			}
@@ -12139,6 +12246,11 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		}
 		vfWakeVideoBatch(root & 0x7FFFFFF000ULL, reinterpret_cast<volatile uint32_t *>(getter(ringBacking)), ringSize,
 		                 previousRingTail, ringTail);
+		if (gVfStampMergeOn < 0)
+			gVfStampMergeOn = !checkKernelArgument("-ngnostampmerge");
+		if (gVfStampMergeOn)
+			vfRedirectVideoStamps(static_cast<uint32_t>(slot), reinterpret_cast<volatile uint32_t *>(getter(ringBacking)),
+			                      ringSize, previousRingTail, ringTail);
 	}
 
 	const uint16_t gucId = static_cast<uint16_t>(slot);
@@ -13752,6 +13864,8 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	// even when eventTimeout returns null. Do not return into that retry or
 	// fabricate completion while a direct GuC context may still DMA. Guest
 	// fail-stop is not PF containment; the independent host watcher is required.
+	if (gVfStampMergeOn > 0)
+		vfMergeRedirectedStamps();
 	VfTimeoutContextFrame frames[NGVfTimeoutObservation::engineCount] {};
 	const uint32_t prefixEngine = NGVfTimeoutObservation::prefixEngineForChannel(channel);
 	const uint32_t capture = vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames, prefixEngine);
