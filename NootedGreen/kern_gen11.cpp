@@ -13317,6 +13317,12 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	// legacy dispatcher, which has no modern-v70 event implementation.
 	const auto event = NGVfGuCEvent::inspect(hxg, length);
 	const uint32_t action = hxg & 0xFFFFU;
+	// V331: memory CAT error (a context's page fault). i915 only logs it; the
+	// GuC reset notification for the faulting context follows and is handled.
+	if (action == 0x6000U && length >= 2) {
+		SYSLOG("ngreen", "V331: GuC memory CAT error for context id=%u", message[2]);
+		return true;
+	}
 	if (!event.valid()) {
 		SYSLOG("ngreen", "V238: unsupported or malformed GuC event action=0x%04x len=%u hxg=0x%08x payload=%08x:%08x:%08x",
 		       action, length, hxg, length > 1 ? message[2] : 0, length > 2 ? message[3] : 0,
