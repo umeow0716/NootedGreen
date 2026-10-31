@@ -13148,6 +13148,28 @@ static void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 			OSSafeReleaseNULL(desc);
 		}
 	}
+	// V342: the first batch of a new render context starts by chaining to
+	// another buffer (MI_BATCH_BUFFER_START); dump the first pages there too.
+	static uint32_t chainDumps = 0;
+	uint32_t chain[3];
+	if (entry.engineClass == 0 && hungBatch && chainDumps < 2 && vfPpgttRead(root & 0x7FFFFFF000ULL, hungBatch, chain, 3) &&
+	    (chain[0] & 0xFF8000FF) == 0x18800001) {
+		chainDumps++;
+		const uint64_t target = chain[1] | (static_cast<uint64_t>(chain[2] & 0xFFFF) << 32);
+		SYSLOG("ngreen", "V342: id=%u batch %llx chains to %llx (%08x)", id, static_cast<unsigned long long>(hungBatch),
+		       static_cast<unsigned long long>(target), chain[0]);
+		static uint32_t words[1024];
+		for (uint32_t pageIndex = 0; pageIndex < 3; pageIndex++) {
+			const uint64_t va = (target & ~0xFFFULL) + pageIndex * 0x1000ULL;
+			if (!vfPpgttRead(root & 0x7FFFFFF000ULL, va, words, 1024))
+				break;
+			for (uint32_t i = pageIndex ? 0 : (target & 0xFE0) / 4; i + 8 <= 1024; i += 8)
+				if (words[i] | words[i + 1] | words[i + 2] | words[i + 3] | words[i + 4] | words[i + 5] | words[i + 6] | words[i + 7])
+					SYSLOG("ngreen", "V342: id=%u va=%llx: %08x %08x %08x %08x %08x %08x %08x %08x", id,
+					       static_cast<unsigned long long>(va + i * 4), words[i], words[i + 1], words[i + 2], words[i + 3],
+					       words[i + 4], words[i + 5], words[i + 6], words[i + 7]);
+		}
+	}
 	// V295: a hung media walker: dump its interface descriptor and the first
 	// instructions of its kernel (instruction base + kernel start pointer).
 	static uint32_t kernelDumps = 0;
