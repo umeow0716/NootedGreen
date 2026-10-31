@@ -20,7 +20,6 @@
 		A17E1E512DC0000100000001 /* kern_xe_access.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E502DC0000100000001 /* kern_xe_access.cpp */; };
 		A17E1E542DC0000100000001 /* kern_xe_render.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E532DC0000100000001 /* kern_xe_render.cpp */; };
 		A17E1E572DC0000100000001 /* kern_xe_lv.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E562DC0000100000001 /* kern_xe_lv.cpp */; };
-		A17E1E672DC0000100000001 /* kern_ndrv_refresh.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E662DC0000100000001 /* kern_ndrv_refresh.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -69,9 +68,7 @@
 		A17E1E532DC0000100000001 /* kern_xe_render.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_xe_render.cpp; sourceTree = "<group>"; };
 		A17E1E552DC0000100000001 /* kern_xe_render.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_xe_render.hpp; sourceTree = "<group>"; };
 		A17E1E562DC0000100000001 /* kern_xe_lv.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_xe_lv.cpp; sourceTree = "<group>"; };
-		A17E1E662DC0000100000001 /* kern_ndrv_refresh.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_ndrv_refresh.cpp; sourceTree = "<group>"; };
 		A17E1E582DC0000100000001 /* kern_xe_lv.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_xe_lv.hpp; sourceTree = "<group>"; };
-		A17E1E682DC0000100000001 /* kern_ndrv_refresh.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_ndrv_refresh.hpp; sourceTree = "<group>"; };
 		A17E1E592DC0000100000001 /* kern_xe_policy.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_xe_policy.hpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -125,9 +122,7 @@
 				A17E1E532DC0000100000001 /* kern_xe_render.cpp */,
 				A17E1E552DC0000100000001 /* kern_xe_render.hpp */,
 				A17E1E562DC0000100000001 /* kern_xe_lv.cpp */,
-				A17E1E662DC0000100000001 /* kern_ndrv_refresh.cpp */,
 				A17E1E582DC0000100000001 /* kern_xe_lv.hpp */,
-				A17E1E682DC0000100000001 /* kern_ndrv_refresh.hpp */,
 				A17E1E592DC0000100000001 /* kern_xe_policy.hpp */,
 				F009B7A029E4EE3C00786AFF /* kern_start.cpp */,
 			);
@@ -258,7 +253,6 @@
 				A17E1E512DC0000100000001 /* kern_xe_access.cpp in Sources */,
 				A17E1E542DC0000100000001 /* kern_xe_render.cpp in Sources */,
 				A17E1E572DC0000100000001 /* kern_xe_lv.cpp in Sources */,
-				A17E1E672DC0000100000001 /* kern_ndrv_refresh.cpp in Sources */,
 				F0AF08BB2A0F373F00B63C2B /* kern_gen11.cpp in Sources */,
 				CE405ED91E4A080700AA0B3D /* plugin_start.cpp in Sources */,
 			);

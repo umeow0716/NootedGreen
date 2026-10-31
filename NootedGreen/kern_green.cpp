@@ -8,7 +8,6 @@
 #include "kern_telemetry.hpp"
 #include "kern_xe_access.hpp"
 #include "kern_xe_lv.hpp"
-#include "kern_ndrv_refresh.hpp"
 #include "kern_xe_render.hpp"
 #include <Headers/kern_api.hpp>
 #include <libkern/OSKextLib.h>
@@ -238,7 +237,6 @@ void NGreen::init() {
 	XeDataAccess::init();
 	XeRender::init();
 	XeLV::init();
-	NDRVRefresh::init();
     lilu.onPatcherLoadForce(
         [](void *user, KernelPatcher &patcher) { static_cast<NGreen *>(user)->processPatcher(patcher); }, this);
     lilu.onKextLoadForce(
@@ -382,8 +380,7 @@ bool NGreen::setRMMIOIfNecessary() {
 }
 
 bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
-	if (XeDataAccess::processKext(patcher, index, address, size) || XeLV::processKext(patcher, index, address, size) ||
-	    NDRVRefresh::processKext(patcher, index, address, size))
+	if (XeDataAccess::processKext(patcher, index, address, size) || XeLV::processKext(patcher, index, address, size))
 		return true;
 	if (!this->driverReady)
 		return true;
