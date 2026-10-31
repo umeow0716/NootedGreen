@@ -12312,7 +12312,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		static bool vcsWarm = false;
 		if (!vcsWarm && gVfRcsTrampolineCpu && !checkKernelArgument("-ngnovcswarm")) {
 			auto *r = reinterpret_cast<volatile uint32_t *>(getter(ringBacking));
-			const uint32_t words = ringSize / 4, at = previousRingTail / 4;
+			const uint32_t words = ringSize / 4;
+			uint32_t at = previousRingTail / 4;
+			for (uint32_t n = 0; r && words && n < 16 && (at & (words - 1)) != (ringTail / 4 & (words - 1)) &&
+			     r[at & (words - 1)] != 0x18800101; n++, at++) {}
 			if (r && words && !(words & (words - 1)) && r[at & (words - 1)] == 0x18800101) {
 				vcsWarm = true;
 				const uint32_t slot = OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&gVfRcsTrampolineNext)) % kRcsTrampolines;
@@ -12329,7 +12332,14 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 					__asm__ volatile("clflush (%0)" :: "r"(&r[(at + k) & (words - 1)]) : "memory");
 				__asm__ volatile("mfence" ::: "memory");
 				SYSLOG("ngreen", "V333: first VCS batch %08x%08x runs twice", hi, lo);
+			} else if (r) {
+				SYSLOG("ngreen", "V333: no batch start in first VCS submission +%x: %08x %08x", previousRingTail,
+				       r[(previousRingTail / 4) & (words - 1)], r[(previousRingTail / 4 + 1) & (words - 1)]);
+				vcsWarm = true;
 			}
+		} else if (!vcsWarm && !gVfRcsTrampolineCpu) {
+			static bool logged = false;
+			if (!logged) logged = true, SYSLOG("ngreen", "V333: no trampoline pool");
 		}
 	}
 	if (gVfStampMergeOn < 0)
