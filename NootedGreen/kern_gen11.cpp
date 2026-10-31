@@ -517,6 +517,7 @@ void vfReleaseG2HCredits(uint32_t count)
 // GuC accepts REGISTER_CONTEXT and schedules the registered LRCA directly.
 // Keep a small lifecycle record keyed by context-image GGTT page and use the
 // array index as the local GuC ID. The VF quota is a local zero-based namespace.
+constexpr uint32_t kVfPendingStamps = 32;
 struct VfGucContext {
 	uint32_t lrcaPage;
 	uint32_t descriptorLo;
@@ -540,7 +541,7 @@ struct VfGucContext {
 	uint8_t pendingStampHead, pendingStampCount;
 	bool pendingStampLost;
 	uint32_t pendingStampLostUpTo;
-	uint32_t pendingStamps[32];
+	uint32_t pendingStamps[kVfPendingStamps];
 	NGVfSubmissionCoverage::Tracker submissionCoverage;
 };
 
@@ -2106,7 +2107,7 @@ static void vfMergeRedirectedStamps(bool dump = false) {
 		auto &pending = gVfContexts[id];
 		while (pending.pendingStampCount &&
 		       static_cast<int32_t>(pending.pendingStamps[pending.pendingStampHead] - c[live].done) <= 0)
-			pending.pendingStampHead = (pending.pendingStampHead + 1) % arrsize(pending.pendingStamps), pending.pendingStampCount--;
+			pending.pendingStampHead = (pending.pendingStampHead + 1) % kVfPendingStamps, pending.pendingStampCount--;
 		if (pending.pendingStampLost && static_cast<int32_t>(pending.pendingStampLostUpTo - c[live].done) <= 0)
 			pending.pendingStampLost = false;
 		c[live].limit = pending.pendingStampCount ? pending.pendingStamps[pending.pendingStampHead] - 1 : c[live].done;
@@ -2210,7 +2211,7 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 	}
 	if (count) {
 		const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
-		constexpr uint32_t capacity = arrsize(entry.pendingStamps);
+		constexpr uint32_t capacity = kVfPendingStamps;
 		for (uint32_t k = 0; k < count; k++)
 			if (!entry.pendingStampLost && entry.pendingStampCount < capacity)
 				entry.pendingStamps[(entry.pendingStampHead + entry.pendingStampCount++) % capacity] = values[k];
@@ -11635,9 +11636,9 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	}
 	// V271: register state of the first render contexts, to compare one that
 	// never runs with ones that do.
-	static uint32_t rcsDumps = 0;
-	if (engineClass == 0 && rcsDumps < 3) {
-		rcsDumps++;
+	static uint32_t rcsDumps = 0, ccsDumps = 0;
+	if ((engineClass == 0 && rcsDumps < 3) || (engineClass == 4 && ccsDumps < 2)) {
+		(engineClass ? ccsDumps : rcsDumps)++;
 		using Getter = uint8_t *(*)(void *);
 		auto *image = reinterpret_cast<Getter>(callback->vfSharedMappedBufferGetVirtualAddress)(contextBacking);
 		if (image) {
