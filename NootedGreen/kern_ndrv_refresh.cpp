@@ -15,15 +15,10 @@ GetInfo orgGetInfo;
 
 int wrapGetInfo(void *that, int32_t mode, void *info) {
     const int result = orgGetInfo(that, mode, info);
-    uint32_t before = 0;
     if (!result && info) {
         auto &rate = *reinterpret_cast<uint32_t *>(static_cast<uint8_t *>(info) + kRefreshRateOffset);
-        before = rate;
         if (!rate) rate = kRefresh60Hz;
     }
-    static uint32_t logs;
-    if (logs++ < 8)
-        SYSLOG("ngreen", "V350: mode %d info result=0x%x refresh 0x%x", mode, result, before);
     return result;
 }
 }
