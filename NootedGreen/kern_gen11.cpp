@@ -2205,11 +2205,6 @@ uint64_t vfConsumeMemoryInterrupts()
 	for (size_t i = 0; i < NGVfMemIrq::engineRouteCount; ++i)
 		consumeEngine(NGVfMemIrq::engineRoutes[i]);
 
-	// V317: VCS completions are seen on whichever interrupt comes next, as
-	// the stamp store was.
-	gVfMergeIrqs++;
-	vfMergeRedirectedStamps();
-
 	const uint8_t gucSource = sourceBase[kVfGucIrqOffset];
 	if (gucSource) {
 		sourceBase[kVfGucIrqOffset] = 0;
@@ -5150,6 +5145,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfSchedulerPush, this->oVfSchedulerPush},
 				{"__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj",
 				 vfSubmitWorkItem},
+				// V317: merge redirected VCS stamps before Apple services any interrupt.
+				{"__ZN17IGInterruptBridge17serviceInterruptsERK8IGBitSetILm46EE",
+				 vfServiceInterruptsMerged, this->oVfServiceInterrupts},
 			};
 			PANIC_COND(!patcher.routeMultiple(index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
 
@@ -13366,6 +13364,15 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	message[0] = length & 0x1FU;
 	message[1] = hxg;
 	return true;
+}
+
+// V317: Apple checks event stamps on whichever interrupt it services next (the
+// virtual-MMIO VF rarely raises the VCS user interrupt itself), so redirected
+// stamps are merged before every service.
+void Gen11::vfServiceInterruptsMerged(void *that, const void *bits) {
+	gVfMergeIrqs++;
+	vfMergeRedirectedStamps();
+	FunctionCast(vfServiceInterruptsMerged, callback->oVfServiceInterrupts)(that, bits);
 }
 
 bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
