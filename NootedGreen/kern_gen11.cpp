@@ -10450,8 +10450,21 @@ static void vfScanRingGgttWrites(uint32_t id, uint32_t type, volatile uint32_t *
 			write = true, ggtt = at(1) & 4, address = (at(1) & ~7U) | (uint64_t(at(2)) << 32);
 		} else if (w >> 16 == 0x7A00 && ((at(1) >> 14) & 3)) { // PIPE_CONTROL post-sync
 			write = true, ggtt = at(1) & (1U << 24), address = at(2) | (uint64_t(at(3)) << 32);
+		} else if (client == 0 && (op == 0x2F || op == 0x2E)) { // MI_ATOMIC, MI_COPY_MEM_MEM (destination)
+			write = true, ggtt = w & (1U << 22), address = at(1) | (uint64_t(at(2)) << 32);
 		} else if (client == 0 && op == 0x31) { // MI_BATCH_BUFFER_START
 			ggtt = !(w & (1U << 8)), address = at(1) | (uint64_t(at(2)) << 32);
+		}
+		// V352: a GGTT write through a non-present PTE goes out as PF address 0
+		// (host DMAR "DMA Write [00:02.0] fault addr 0x0").
+		if (ggtt && write) {
+			static uint32_t holes = 0;
+			auto *pte = vfDirectPteBase(gVfGlobalPageTable);
+			const uint64_t entry = pte && address < (1ULL << 32) ? pte[address >> 12] : 1;
+			if (!(entry & 1) && holes++ < 64)
+				SYSLOG("ngreen", "V352: id=%u type=%u ring +%03x %08x %08x writes GGTT 0x%llx through PTE 0x%llx", id,
+				       type, i * 4, w, at(1), static_cast<unsigned long long>(address),
+				       static_cast<unsigned long long>(entry));
 		}
 		if (ggtt && (address < 0x10000000ULL || sampled < 24)) {
 			sampled++;
