@@ -34,6 +34,27 @@ int wrapGetInfo(void *that, int32_t mode, void *info) {
     return result;
 }
 
+// V353: the firmware framebuffer has no cursor plane, so WindowServer draws the
+// cursor into every frame and recomposites the whole display on each mouse
+// move. Claim a hardware cursor that draws nothing: the Looking Glass client
+// renders the cursor itself from the shape and position the guest host sends.
+constexpr uint32_t kHardwareCursorAttribute = 'crsr';
+using GetAttribute = IOReturn (*)(void *, uint32_t, uintptr_t *);
+GetAttribute orgGetAttribute;
+IOReturn (*orgSetCursorImage)(void *, void *);
+IOReturn (*orgSetCursorState)(void *, int32_t, int32_t, bool);
+
+IOReturn wrapGetAttribute(void *that, uint32_t attribute, uintptr_t *value) {
+    if (attribute == kHardwareCursorAttribute && value) {
+        *value = 1;
+        return kIOReturnSuccess;
+    }
+    return orgGetAttribute(that, attribute, value);
+}
+
+IOReturn wrapSetCursorImage(void *, void *) { return kIOReturnSuccess; }
+IOReturn wrapSetCursorState(void *, int32_t, int32_t, bool) { return kIOReturnSuccess; }
+
 // The firmware framebuffer has no vblank interrupt, so drive IOFramebuffer's
 // vblank handler from a timer: it stamps vblTime/vblDelta in the shared
 // cursor memory that CoreDisplay paces WindowServer and the display link by.
@@ -113,6 +134,15 @@ bool NDRVRefresh::processKext(KernelPatcher &p, size_t index, mach_vm_address_t 
     const bool ok = p.routeMultiple(index, &route, 1, address, size);
     p.clearError();
     SYSLOG("ngreen", "V351: NDRV modes report %u Hz: %d", kRefreshHz, ok);
+    if (!checkKernelArgument("-ngnohwcursor")) {
+        KernelPatcher::RouteRequest cursor[] {
+            {"__ZN17IONDRVFramebuffer12getAttributeEjPm", wrapGetAttribute, orgGetAttribute},
+            {"__ZN17IONDRVFramebuffer14setCursorImageEPv", wrapSetCursorImage, orgSetCursorImage},
+            {"__ZN17IONDRVFramebuffer14setCursorStateEiib", wrapSetCursorState, orgSetCursorState},
+        };
+        SYSLOG("ngreen", "V353: NDRV hardware cursor: %d", p.routeMultiple(index, cursor, arrsize(cursor), address, size));
+        p.clearError();
+    }
     ndrvRouted = ok;
     maybeStart();
     return true;
