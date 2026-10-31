@@ -2070,11 +2070,11 @@ constexpr uint32_t kVfPrivateStampOffset = 0xF00;
 uint16_t gVfStampRedirects[32];
 uint32_t gVfStampRedirectCount = 0;
 int gVfStampMergeOn = -1;
+uint8_t *(*gVfStampGetter)(void *) = nullptr; // set with the first redirect
 static void vfMergeRedirectedStamps() {
-	auto *cb = Gen11::callback;
-	if (!cb || !cb->vfSharedMappedBufferGetVirtualAddress || !gVfContextLock || !gVfContexts)
+	auto getter = gVfStampGetter;
+	if (!getter || !gVfContextLock || !gVfContexts)
 		return;
-	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(cb->vfSharedMappedBufferGetVirtualAddress);
 	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	uint32_t live = 0;
 	for (uint32_t i = 0; i < gVfStampRedirectCount; i++)
@@ -2116,18 +2116,16 @@ static void vfMergeRedirectedStamps() {
 }
 
 // Redirect the stamp stores of newly written VCS ring commands (see above).
-static void vfRedirectVideoStamps(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to) {
-	auto *cb = Gen11::callback;
+static void vfRedirectVideoStamps(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to,
+                                  uint8_t *(*getter)(void *), uint64_t (*getGpu)(void *)) {
 	const uint32_t words = ringSize / 4;
-	if (!cb || !ring || !words || (words & (words - 1)))
+	if (!getter || !getGpu || !ring || !words || (words & (words - 1)))
 		return;
-	using GetGpu = uint64_t (*)(void *);
-	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(cb->vfSharedMappedBufferGetVirtualAddress);
+	gVfStampGetter = getter;
 	auto &entry = gVfContexts[id];
 	if (!entry.stampBacking || !entry.contextBacking)
 		return;
-	const uint64_t target = reinterpret_cast<GetGpu>(cb->vfMappedBufferGetGPUVirtualAddress)(entry.stampBacking) +
-		entry.stampIndex * 64U;
+	const uint64_t target = getGpu(entry.stampBacking) + entry.stampIndex * 64U;
 	const uint32_t own = (entry.descriptorLo & ~0xFFFU) + kVfPrivateStampOffset;
 	auto *image = getter(entry.contextBacking);
 	auto *stamps = getter(entry.stampBacking);
@@ -12250,7 +12248,8 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			gVfStampMergeOn = !checkKernelArgument("-ngnostampmerge");
 		if (gVfStampMergeOn)
 			vfRedirectVideoStamps(static_cast<uint32_t>(slot), reinterpret_cast<volatile uint32_t *>(getter(ringBacking)),
-			                      ringSize, previousRingTail, ringTail);
+			                      ringSize, previousRingTail, ringTail, getter,
+			                      reinterpret_cast<uint64_t (*)(void *)>(callback->vfMappedBufferGetGPUVirtualAddress));
 	}
 
 	const uint16_t gucId = static_cast<uint16_t>(slot);
