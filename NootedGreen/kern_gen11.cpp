@@ -12308,9 +12308,11 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		                 previousRingTail, ringTail);
 		// V333: the first VCS batch after boot leaves its output unwritten (the
 		// first decoded frame is black; later batches and contexts are fine).
-		// Run that one batch twice through a GGTT trampoline.
+		// Run that one batch twice through a GGTT trampoline in spare prologue space.
 		static bool vcsWarm = false;
-		if (!vcsWarm && gVfRcsTrampolineCpu && !checkKernelArgument("-ngnovcswarm")) {
+		// The RCS prologue page has room after its body.
+		auto *spare = gVfRcsPrologue ? reinterpret_cast<uint32_t *>(getter(gVfRcsPrologue)) : nullptr;
+		if (!vcsWarm && spare && gVfRcsPrologueGpu && !checkKernelArgument("-ngnovcswarm")) {
 			auto *r = reinterpret_cast<volatile uint32_t *>(getter(ringBacking));
 			const uint32_t words = ringSize / 4;
 			uint32_t at = previousRingTail / 4;
@@ -12318,13 +12320,12 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			     r[at & (words - 1)] != 0x18800101; n++, at++) {}
 			if (r && words && !(words & (words - 1)) && r[at & (words - 1)] == 0x18800101) {
 				vcsWarm = true;
-				const uint32_t slot = OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&gVfRcsTrampolineNext)) % kRcsTrampolines;
-				uint32_t *t = gVfRcsTrampolineCpu + slot * (kRcsTrampolineBytes / 4);
+				uint32_t *t = spare + 0xC00 / 4;
 				const uint32_t lo = r[(at + 1) & (words - 1)], hi = r[(at + 2) & (words - 1)];
 				const uint32_t body[] {0x18C00101, lo, hi, 0x13000003, 0, 0, 0, 0, 0x18C00101, lo, hi, 0x05000000};
 				for (uint32_t k = 0; k < arrsize(body); k++) t[k] = body[k];
 				__asm__ volatile("clflush (%0)\n\tclflush (%1)\n\tmfence" :: "r"(t), "r"(t + arrsize(body) - 1) : "memory");
-				const uint64_t gpu = gVfRcsTrampolineGpu + slot * kRcsTrampolineBytes;
+				const uint64_t gpu = gVfRcsPrologueGpu + 0xC00;
 				r[(at + 1) & (words - 1)] = static_cast<uint32_t>(gpu);
 				r[(at + 2) & (words - 1)] = static_cast<uint32_t>(gpu >> 32);
 				r[at & (words - 1)] = 0x18800001; // GGTT
@@ -12337,11 +12338,11 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 				       r[(previousRingTail / 4) & (words - 1)], r[(previousRingTail / 4 + 1) & (words - 1)]);
 				vcsWarm = true;
 			}
-		} else if (!vcsWarm && !gVfRcsTrampolineCpu) {
+		} else if (!vcsWarm && !spare) {
 			static bool logged = false;
 			if (!logged) {
 				logged = true;
-				SYSLOG("ngreen", "V333: no trampoline pool");
+				SYSLOG("ngreen", "V333: no prologue page");
 			}
 		}
 	}
