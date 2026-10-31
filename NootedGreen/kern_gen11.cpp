@@ -12431,8 +12431,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		channelId,ringSequence,ringTail,previousRingTail,enable?1U:0U,submitted?1U:0U,transportFence,
 		static_cast<uint32_t>(submissionToken),static_cast<uint32_t>(submissionToken>>32)};
 	vfFlightRecord(7,vfFlightCurrentGroup(),(uint64_t(descriptorHi)<<32)|descriptorLo,flightSubmit,arrsize(flightSubmit));
-	static uint32_t submitLogs = 0;
-	if (submitLogs++ < 600 || !submitted) {
+	static uint32_t submitLogs = 0, mediaLogs[8] {};
+	const uint32_t csType = static_cast<uint32_t>(hwCsType);
+	const bool media = (csType == 1 || csType == 3) && mediaLogs[csType & 7]++ < 40;
+	if (submitLogs++ < 600 || !submitted || media) {
 		char process[24] {};
 		proc_selfname(process, sizeof(process));
 		SYSLOG("ngreen", "V233: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x old=0x%x channel=%u seq=%u enable=%d ret=%d fence=%u desc-hi=%08x serial=%llx proc=%s",
