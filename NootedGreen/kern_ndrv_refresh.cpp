@@ -46,7 +46,11 @@ void vblankFire(Vblank *v) {
     nanoseconds_to_absolutetime(kPeriodNs, &period);
     v->next += period;
     if (v->next <= now) v->next = now + period - (now - v->next) % period;
-    v->timer->wakeAtTime(v->next);
+    // Default timer leeway lets it fire up to ~1 ms late, which shows as
+    // vblank jitter and a stretched period (vblDelta is measured).
+    uint64_t leeway;
+    nanoseconds_to_absolutetime(20000, &leeway);
+    v->timer->wakeAtTime(IOTimerEventSource::kIOTimeOptionsWithLeeway, v->next, leeway);
 }
 
 bool startVblank(void *, void *, IOService *fb, IONotifier *) {
