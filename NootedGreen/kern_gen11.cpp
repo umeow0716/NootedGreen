@@ -2204,8 +2204,6 @@ uint64_t vfConsumeMemoryInterrupts()
 	// i915. The shared table binds them to Tahoe's corresponding callbacks.
 	for (size_t i = 0; i < NGVfMemIrq::engineRouteCount; ++i)
 		consumeEngine(NGVfMemIrq::engineRoutes[i]);
-	if (pending & 0x18U)
-		vfMergeRedirectedStamps();
 
 	const uint8_t gucSource = sourceBase[kVfGucIrqOffset];
 	if (gucSource) {
@@ -13389,6 +13387,9 @@ bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
 		pending = 1ULL << 45;
 	if (!pending)
 		return false;
+	// V317: VCS completions are seen on whichever interrupt comes next (the
+	// VCS user interrupt rarely arrives on its own), as the stamp store was.
+	vfMergeRedirectedStamps();
 	if (!callback->vfServiceInterrupts) {
 		vfMarkProtocolFault("missing VF interrupt dispatcher");
 		return false;
