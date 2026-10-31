@@ -2073,7 +2073,7 @@ int gVfStampMergeOn = -1;
 uint8_t *(*gVfStampGetter)(void *) = nullptr; // set with the first redirect
 // Diagnostics: logging is not possible with interrupts disabled.
 struct { uint32_t id, before, after, newest, bound, own[4], covered[4]; } gVfMergeTrace[16];
-uint32_t gVfMergeCalls = 0;
+uint32_t gVfMergeCalls = 0, gVfMergeIrqs = 0, gVfMergeAdvances = 0;
 static void vfMergeRedirectedStamps() {
 	auto getter = gVfStampGetter;
 	if (!getter || !gVfContextLock || !gVfContexts)
@@ -2116,7 +2116,7 @@ static void vfMergeRedirectedStamps() {
 		if (bounded && static_cast<int32_t>(newest - bound) > 0)
 			newest = bound;
 		if (any && static_cast<int32_t>(newest - *shared) > 0)
-			*shared = newest;
+			*shared = newest, gVfMergeAdvances++;
 		auto &t = gVfMergeTrace[gVfMergeCalls++ % 16];
 		t.id = gVfStampRedirects[i], t.before = before, t.after = *shared, t.newest = newestDone, t.bound = bounded ? bound : ~0U;
 	}
@@ -2204,6 +2204,11 @@ uint64_t vfConsumeMemoryInterrupts()
 	// i915. The shared table binds them to Tahoe's corresponding callbacks.
 	for (size_t i = 0; i < NGVfMemIrq::engineRouteCount; ++i)
 		consumeEngine(NGVfMemIrq::engineRoutes[i]);
+
+	// V317: VCS completions are seen on whichever interrupt comes next, as
+	// the stamp store was.
+	gVfMergeIrqs++;
+	vfMergeRedirectedStamps();
 
 	const uint8_t gucSource = sourceBase[kVfGucIrqOffset];
 	if (gucSource) {
@@ -13387,9 +13392,7 @@ bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
 		pending = 1ULL << 45;
 	if (!pending)
 		return false;
-	// V317: VCS completions are seen on whichever interrupt comes next (the
-	// VCS user interrupt rarely arrives on its own), as the stamp store was.
-	vfMergeRedirectedStamps();
+
 	if (!callback->vfServiceInterrupts) {
 		vfMarkProtocolFault("missing VF interrupt dispatcher");
 		return false;
@@ -13874,6 +13877,8 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	// fail-stop is not PF containment; the independent host watcher is required.
 	if (gVfStampMergeOn > 0) {
 		static uint32_t traceDumps = 0;
+		if (traceDumps < 24)
+			SYSLOG("ngreen", "V317: irqs=%u merges=%u advances=%u", gVfMergeIrqs, gVfMergeCalls, gVfMergeAdvances);
 		if (traceDumps++ < 3)
 			for (uint32_t i = gVfMergeCalls > 16 ? gVfMergeCalls - 16 : 0; i < gVfMergeCalls; i++) {
 				const auto &t = gVfMergeTrace[i % 16];
