@@ -1,6 +1,7 @@
 #include "kern_ndrv_refresh.hpp"
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_util.hpp>
+#include <IOKit/IOService.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 
