@@ -2152,7 +2152,7 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 		if (!entry.stampRedirected)
 			return;
 	}
-	static uint32_t logs = 0;
+	static uint8_t logs[8] {};
 	for (uint32_t i = from / 4 % words, end = to / 4 % words, guard = 0; i != end && guard < 512; i = (i + 1) & (words - 1), guard++) {
 		auto at = [&](uint32_t k) -> volatile uint32_t & { return ring[(i + k) & (words - 1)]; };
 		uint32_t length;
@@ -2172,7 +2172,7 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 		for (uint32_t k = 1; k < 4; k++)
 			__asm__ volatile("clflush (%0)" :: "r"(&at(k)) : "memory");
 		__asm__ volatile("mfence" ::: "memory");
-		if (logs++ < 8)
+		if (logs[entry.engineClass & 7]++ < 3)
 			SYSLOG("ngreen", "V324: id=%u class=%u stamp redirected to GGTT 0x%x", id, entry.engineClass, own);
 		i = (i + length - 1) & (words - 1), guard += length - 1;
 	}
@@ -2182,7 +2182,8 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 // stamps, so every wait on that context (some untimed: finishEvent during
 // teardown) blocks forever, and GuC replays the hung batch from the same head.
 // Like i915's reset handling, move the ring head past the submitted work and
-// complete its stamps; the hung work is dropped.
+// complete its stamps; the hung work is dropped. GuC does not schedule the
+// context again on its own, so the next submission re-enables it.
 static void vfSkipResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(getterAddress);
 	if (!getter || !gVfContextLock || !gVfContexts || id >= gVfContextCapacity)
@@ -2192,7 +2193,7 @@ static void vfSkipResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	auto &entry = gVfContexts[id];
 	auto *image = entry.contextBacking ? getter(entry.contextBacking) : nullptr;
-	auto *stamps = entry.stampBacking ? getter(entry.stampBacking) : nullptr;
+	uint8_t *stamps = entry.stampBacking ? getter(entry.stampBacking) : nullptr;
 	if (image && stamps && entry.submissionCoverage.covered) {
 		auto *ringHead = reinterpret_cast<volatile uint32_t *>(image + 0x1014);
 		head = *ringHead, tail = *reinterpret_cast<volatile uint32_t *>(image + 0x101C);
@@ -2204,11 +2205,17 @@ static void vfSkipResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 			*target = stamp;
 		__asm__ volatile("clflush (%0)\n\tclflush (%1)\n\tmfence" :: "r"(ringHead), "r"(target) : "memory");
 		done = true;
+		// GuC no longer schedules it: the next submission re-enables it.
+		if (entry.state == kVfGucContextEnabled)
+			entry.state = kVfGucContextDisabled;
 	}
+	const bool redirected = entry.stampRedirected;
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
 	if (done)
 		vfMergeRedirectedStamps();
-	SYSLOG("ngreen", "V330: reset id=%u skipped head 0x%x -> tail 0x%x, stamp %x complete=%d", id, head, tail, stamp, done);
+	const uint32_t shared = stamps ? *reinterpret_cast<volatile uint32_t *>(stamps + entry.stampIndex * 64U) : 0;
+	SYSLOG("ngreen", "V330: reset id=%u skipped head 0x%x -> tail 0x%x, stamp %x complete=%d redirected=%d shared %x",
+	       id, head, tail, stamp, done, redirected, shared);
 }
 
 uint64_t vfConsumeMemoryInterrupts()
