@@ -431,6 +431,50 @@ long buildBatch(void *enc, void *frame, void *cmd, void *a3, void *a4, void *a5)
 	return result;
 }
 
+// H.264 decode (codechal) submit, 0x64df0 (osInterface, command buffer, ...):
+// patch-vadriver.py routes it through the pointer at 0x75f000; 0x2c13f runs
+// the original. The decode MFX_SURFACE_STATE is relocated by this submission's
+// 0x82 record: DW3 = ((pitch - 1) << 3) + delta, where Apple's delta carries
+// Gen9's surface format and leaves the pitch one short (0x080ffffb: 1280 ->
+// 0x081027f3); Gen12 needs PLANAR_420_8 (0x48000000) and DW5 (Cr Y offset)
+// equal to DW4, which no entry writes. Edit the record before submission.
+using Submit = long (*)(void *, void *, void *, void *, void *, void *);
+Submit driverSubmit;
+long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
+	auto *o = static_cast<uint8_t *>(os);
+	auto *ctx = o ? at<uint8_t *>(o, 0) : nullptr;
+	if (!userVdenc || !ctx || !cmd) return driverSubmit(os, cmd, a2, a3, a4, a5);
+	ctx += 8 + at<uint32_t>(o, 8) * 0x15c0;
+	auto **sb = at<uint32_t **>(ctx, 0x20);
+	const uint32_t *batch = at<uint32_t *>(static_cast<uint8_t *>(cmd), 0x148), *batchEnd = at<uint32_t *>(static_cast<uint8_t *>(cmd), 0x150);
+	uint32_t *record = nullptr;
+	if (sb && sb[0] && batch && batchEnd > batch)
+		for (uint32_t *w = sb[0] - 1, n = 0; n < 4096; n++, w--)
+			if ((*w & 0xffff) == 0x8200 && w + (*w >> 16) == sb[0]) { record = w; break; }
+	if (!record) return driverSubmit(os, cmd, a2, a3, a4, a5);
+	const uint32_t words = static_cast<uint32_t>(batchEnd - batch), length = record[0] >> 16;
+	uint32_t *chroma = nullptr, fixed = 0, k = 3;
+	bool hasCr = false;
+	for (; k + 5 < length && (record[k] & 1); k += 5) {
+		const uint32_t type = record[k] >> 1 & 7, at = record[k] >> 5 & 0xfffff;
+		if (type == 1 && at >= 3 && at < words && batch[at - 3] == 0x70010004 && (record[k + 2] & 0xf8000000) == 0x08000000) {
+			record[k + 2] = 0x48000000 | (record[k + 2] & 7);
+			fixed++;
+		}
+		if (type == 2 && at >= 4 && at + 1 < words && batch[at - 4] == 0x70010004) chroma = record + k;
+		if (type == 2 && at >= 5 && at < words && batch[at - 5] == 0x70010004) hasCr = true;
+	}
+	if (chroma && !hasCr && k + 6 <= length) {
+		memcpy(record + k, chroma, 5 * 4);
+		record[k] += 1 << 5; // next dword: DW5
+		record[k + 5] = 0;
+	}
+	static int logs;
+	if (fixed && logs++ < 2)
+		syslog(LOG_NOTICE, "ngva: decode surface relocations: %u DW3 to Gen12, DW5 %s", fixed, chroma && !hasCr ? "added" : "kept");
+	return driverSubmit(os, cmd, a2, a3, a4, a5);
+}
+
 template <typename T> bool replacePointer(uintptr_t offset, T replacement, T &original) {
 	const long page = getpagesize();
 	auto *slot = reinterpret_cast<T *>(driverBase + offset);
@@ -493,6 +537,10 @@ bool load() {
 			if (auto *contents = strstr(path, "/Contents/MacOS/")) *contents = 0;
 			replaceKernels(path);
 			userVdenc = access("/Users/Shared/ngva-kext-vdenc", F_OK) != 0;
+			driverSubmit = reinterpret_cast<Submit>(driverBase + 0x2c13f);
+			Submit unused = nullptr;
+			if (!replacePointer<Submit>(0x75f000, submitDecode, unused))
+				syslog(LOG_ERR, "ngva: cannot hook the codechal submit");
 			if (!replacePointer<EncodeFrame>(0x754a90, encodeFrame, driverEncodeFrameCall) ||
 			    !replacePointer<FinishFence>(0x7600d0, finishFence, driverFinishFence) ||
 			    !replacePointer<BuildBatch>(0x754ac8, buildBatch, driverBuildBatch) ||

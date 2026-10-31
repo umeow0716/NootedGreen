@@ -50,6 +50,13 @@ patches = [
                              '488b8d40ffffffff51108945dc837ddc000f8405000000e917010000'),
      bytes.fromhex('488b88180900004885c9742f488b75f0488b90c80900004889cf488b09ff5110'
                    '8945dc85c00f8527010000' + '90' * 16)),
+    # H.264 decode (codechal) submit hook: 0x64df0 jumps to a trampoline in the
+    # padding at 0x2c131 that calls the pointer at 0x75f000 (zero __DATA_CONST
+    # slack, set by ngva) when set, else runs the original prologue (ngva calls
+    # 0x2c13f for it) and continues at 0x64df8.
+    (0x2c131, bytes.fromhex('662e0f1f8400000000000f1f440000909090909090909090909090'),
+     bytes.fromhex('488b05c82e73004885c07402ffe0554889e54883ec50e9ac8c0300')),
+    (0x64df0, bytes.fromhex('554889e54883ec50'), bytes.fromhex('e93c73fcff0f1f00')),
 ]
 for off, old, new in patches:
     if data[off:off + len(old)] != old:
