@@ -13783,8 +13783,8 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 		if (ids != lastIds) { lastIds = ids; if (logs > 3) logs = 0; }
 		if (logs++ < 16)
 			SYSLOG("ngreen", "V267: event timeout channel=%d capture=%x T0=" NG_TIMEOUT_FRAME_FORMAT
-				" T2=" NG_TIMEOUT_FRAME_FORMAT "; continuing", channel, capture,
-				NG_TIMEOUT_FRAME_ARGS(frames[0]), NG_TIMEOUT_FRAME_ARGS(frames[2]));
+				" T2=" NG_TIMEOUT_FRAME_FORMAT " T3=" NG_TIMEOUT_FRAME_FORMAT "; continuing", channel, capture,
+				NG_TIMEOUT_FRAME_ARGS(frames[0]), NG_TIMEOUT_FRAME_ARGS(frames[2]), NG_TIMEOUT_FRAME_ARGS(frames[3]));
 		// Where the stalled contexts sit: ring around the saved head and the batch.
 		if (logs <= 3 && callback)
 			for (uint32_t engine = 0; engine < NGVfTimeoutObservation::engineCount; ++engine)
