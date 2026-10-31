@@ -12307,6 +12307,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		static int restoreFirst = -1;
 		if (restoreFirst < 0)
 			restoreFirst = !checkKernelArgument("-ngnovcsrestore");
+		static uint32_t ctrlLogs = 0;
+		if (regs && ctrlLogs++ < 6)
+			SYSLOG("ngreen", "V332: id=%u VCS image +000: %08x %08x %08x %08x %08x %08x %08x %08x", static_cast<uint32_t>(slot),
+			       regs[0], regs[1], regs[2], regs[3], regs[4], regs[5], regs[6], regs[7]);
 		if (regs && restoreFirst && (regs[3] & 0x10001U) == 0x10001U) {
 			regs[3] &= ~1U;
 			__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(&regs[3]) : "memory");
