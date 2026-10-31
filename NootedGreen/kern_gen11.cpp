@@ -2107,10 +2107,15 @@ static void vfMergeRedirectedStamps() {
 			    (!bounded || static_cast<int32_t>(bound - done) > 0))
 				bound = done, bounded = true;
 		}
+		const uint32_t before = *shared, newestDone = newest;
 		if (bounded && static_cast<int32_t>(newest - bound) > 0)
 			newest = bound;
 		if (any && static_cast<int32_t>(newest - *shared) > 0)
 			*shared = newest;
+		static uint32_t logs = 0;
+		if (before != newestDone && logs++ < 48)
+			SYSLOG("ngreen", "V317: merge id=%u shared %x -> %x newest %x bound %x/%d live=%u", gVfStampRedirects[i], before,
+			       *shared, newestDone, bound, bounded, live);
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
 }
