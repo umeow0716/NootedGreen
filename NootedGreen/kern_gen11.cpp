@@ -534,6 +534,13 @@ struct VfGucContext {
 	OSObject *scratchBacking;
 	uint32_t stampIndex;
 	bool stampRedirected;
+	// V346: stamp values this context's redirected stores will write, oldest
+	// first. When full, recording stops until the newest unrecorded stamp is
+	// done, so the front stays exact.
+	uint8_t pendingStampHead, pendingStampCount;
+	bool pendingStampLost;
+	uint32_t pendingStampLostUpTo;
+	uint32_t pendingStamps[32];
 	NGVfSubmissionCoverage::Tracker submissionCoverage;
 };
 
@@ -2076,7 +2083,7 @@ static void vfMergeRedirectedStamps(bool dump = false) {
 	auto getter = gVfStampGetter;
 	if (!getter || !gVfContextLock || !gVfContexts)
 		return;
-	static struct { volatile uint32_t *shared; uint32_t done; bool busy; uint32_t covered, head, tail, state, before; } c[arrsize(gVfStampRedirects)];
+	static struct { volatile uint32_t *shared; uint32_t done; bool busy; uint32_t limit, covered, head, tail, state, before; } c[arrsize(gVfStampRedirects)];
 	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	uint32_t live = 0;
 	for (uint32_t i = 0; i < gVfStampRedirectCount; i++) {
@@ -2094,6 +2101,15 @@ static void vfMergeRedirectedStamps(bool dump = false) {
 		c[live].done = own ? *own : 0;
 		c[live].busy = entry.submissionCoverage.covered &&
 			static_cast<int32_t>(entry.submissionCoverage.coveredStamp - c[live].done) > 0;
+		// V346: everything below this context's oldest pending stamp is done,
+		// whichever context it belonged to.
+		auto &pending = gVfContexts[id];
+		while (pending.pendingStampCount &&
+		       static_cast<int32_t>(pending.pendingStamps[pending.pendingStampHead] - c[live].done) <= 0)
+			pending.pendingStampHead = (pending.pendingStampHead + 1) % arrsize(pending.pendingStamps), pending.pendingStampCount--;
+		if (pending.pendingStampLost && static_cast<int32_t>(pending.pendingStampLostUpTo - c[live].done) <= 0)
+			pending.pendingStampLost = false;
+		c[live].limit = pending.pendingStampCount ? pending.pendingStamps[pending.pendingStampHead] - 1 : c[live].done;
 		c[live].covered = entry.submissionCoverage.coveredStamp;
 		c[live].head = image ? *reinterpret_cast<volatile uint32_t *>(image + 0x1014) : 0;
 		c[live].tail = image ? *reinterpret_cast<volatile uint32_t *>(image + 0x101C) : 0;
@@ -2116,8 +2132,8 @@ static void vfMergeRedirectedStamps(bool dump = false) {
 				continue;
 			if (static_cast<int32_t>(c[k].done - newest) > 0)
 				newest = c[k].done;
-			if (c[k].busy && (!bounded || static_cast<int32_t>(bound - c[k].done) > 0))
-				bound = c[k].done, bounded = true;
+			if (c[k].busy && (!bounded || static_cast<int32_t>(bound - c[k].limit) > 0))
+				bound = c[k].limit, bounded = true;
 		}
 		if (bounded && static_cast<int32_t>(newest - bound) > 0)
 			newest = bound;
@@ -2130,8 +2146,8 @@ static void vfMergeRedirectedStamps(bool dump = false) {
 	if (dump && dumps++ < 6)
 		for (uint32_t i = 0; i < live; i++)
 			if (c[i].shared && (c[i].busy || c[i].before != *c[i].shared || (c[i].head & 0x1FFFFCU) != (c[i].tail & 0x1FFFFCU)))
-				SYSLOG("ngreen", "V345: id=%u slot=%llx done=%x covered=%x busy=%d shared %x->%x head=%x tail=%x state=%u",
-				       gVfStampRedirects[i], reinterpret_cast<uint64_t>(c[i].shared) & 0xFFFFFF, c[i].done, c[i].covered,
+				SYSLOG("ngreen", "V345: id=%u slot=%llx done=%x limit=%x covered=%x busy=%d shared %x->%x head=%x tail=%x state=%u",
+				       gVfStampRedirects[i], reinterpret_cast<uint64_t>(c[i].shared) & 0xFFFFFF, c[i].done, c[i].limit, c[i].covered,
 				       c[i].busy, c[i].before, *c[i].shared, c[i].head, c[i].tail, c[i].state);
 }
 
@@ -2166,18 +2182,21 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 			return;
 	}
 	static uint8_t logs[8] {};
+	uint32_t values[104], count = 0; // the 512-dword scan holds at most 103 stores
 	for (uint32_t i = from / 4 % words, end = to / 4 % words, guard = 0; i != end && guard < 512; i = (i + 1) & (words - 1), guard++) {
 		auto at = [&](uint32_t k) -> volatile uint32_t & { return ring[(i + k) & (words - 1)]; };
 		uint32_t length;
 		if ((at(0) & 0xFF80C000U) == 0x13004000U && (at(1) | (static_cast<uint64_t>(at(2)) << 32)) == target) {
 			at(1) = own | 4U; // MI_FLUSH_DW: GGTT
 			at(2) = 0;
+			values[count++] = at(3);
 			length = 5;
 		} else if ((at(0) & 0xFFFF00FFU) == 0x7A000004U && ((at(1) >> 14) & 3) == 1 && !(at(1) & (1U << 24)) &&
 		           (at(2) | (static_cast<uint64_t>(at(3)) << 32)) == target) {
 			at(1) |= 1U << 24; // PIPE_CONTROL: GGTT
 			at(2) = own;
 			at(3) = 0;
+			values[count++] = at(4);
 			length = 6;
 		} else {
 			continue;
@@ -2188,6 +2207,16 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 		if (logs[entry.engineClass & 7]++ < 3)
 			SYSLOG("ngreen", "V324: id=%u class=%u stamp redirected to GGTT 0x%x", id, entry.engineClass, own);
 		i = (i + length - 1) & (words - 1), guard += length - 1;
+	}
+	if (count) {
+		const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		constexpr uint32_t capacity = arrsize(entry.pendingStamps);
+		for (uint32_t k = 0; k < count; k++)
+			if (!entry.pendingStampLost && entry.pendingStampCount < capacity)
+				entry.pendingStamps[(entry.pendingStampHead + entry.pendingStampCount++) % capacity] = values[k];
+			else
+				entry.pendingStampLost = true, entry.pendingStampLostUpTo = values[k];
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
 	}
 }
 
@@ -11457,6 +11486,8 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 					entry.scratchBacking = scratchBacking;
 					entry.stampIndex = static_cast<uint32_t>(stampIndex);
 					entry.stampRedirected = false;
+					entry.pendingStampHead = entry.pendingStampCount = 0;
+					entry.pendingStampLost = false;
 					entry.state = kVfGucContextRegistering;
 				}
 			}
