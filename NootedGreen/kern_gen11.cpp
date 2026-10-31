@@ -2298,13 +2298,21 @@ static void vfSkipResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	auto &entry = gVfContexts[id];
 	auto *image = entry.contextBacking ? getter(entry.contextBacking) : nullptr;
 	uint8_t *stamps = entry.stampBacking ? getter(entry.stampBacking) : nullptr;
-	if (image && stamps && entry.submissionCoverage.covered) {
+	// V349: a context hung on its first run may have no coverage record yet;
+	// skip it anyway (else it is never scheduled again and every wait on it
+	// hangs), completing the newest stamp its redirected stores would write.
+	if (image && stamps) {
 		auto *ringHead = reinterpret_cast<volatile uint32_t *>(image + 0x1014);
 		head = *ringHead, tail = *reinterpret_cast<volatile uint32_t *>(image + 0x101C);
 		*ringHead = (head & ~0x1FFFFCU) | (tail & 0x1FFFFCU);
-		stamp = entry.submissionCoverage.coveredStamp;
 		auto *target = entry.stampRedirected ? reinterpret_cast<volatile uint32_t *>(image + kVfPrivateStampOffset) :
 			reinterpret_cast<volatile uint32_t *>(stamps + entry.stampIndex * 64U);
+		stamp = entry.submissionCoverage.covered ? entry.submissionCoverage.coveredStamp : *target;
+		if (entry.pendingStampCount) {
+			const uint32_t newest = entry.pendingStamps[(entry.pendingStampHead + entry.pendingStampCount - 1) % kVfPendingStamps];
+			if (static_cast<int32_t>(newest - stamp) > 0)
+				stamp = newest;
+		}
 		if (static_cast<int32_t>(stamp - *target) > 0)
 			*target = stamp;
 		__asm__ volatile("clflush (%0)\n\tclflush (%1)\n\tmfence" :: "r"(ringHead), "r"(target) : "memory");
