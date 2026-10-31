@@ -2160,7 +2160,7 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 			at(1) = own | 4U; // MI_FLUSH_DW: GGTT
 			at(2) = 0;
 			length = 5;
-		} else if (at(0) == 0x7A000004U && ((at(1) >> 14) & 3) == 1 && !(at(1) & (1U << 24)) &&
+		} else if ((at(0) & 0xFFFF00FFU) == 0x7A000004U && ((at(1) >> 14) & 3) == 1 && !(at(1) & (1U << 24)) &&
 		           (at(2) | (static_cast<uint64_t>(at(3)) << 32)) == target) {
 			at(1) |= 1U << 24; // PIPE_CONTROL: GGTT
 			at(2) = own;
@@ -2168,7 +2168,7 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 			length = 6;
 		} else {
 			static uint32_t misses = 0;
-			if ((at(0) == 0x7A000004U || (at(0) & 0xFF80C000U) == 0x13004000U) && misses++ < 6)
+			if (((at(0) & 0xFFFF00FFU) == 0x7A000004U || (at(0) & 0xFF80C000U) == 0x13004000U) && misses++ < 6)
 				SYSLOG("ngreen", "V324: id=%u class=%u no match %08x %08x %08x %08x target %llx index %u", id,
 				       entry.engineClass, at(0), at(1), at(2), at(3), static_cast<unsigned long long>(target), entry.stampIndex);
 			continue;
