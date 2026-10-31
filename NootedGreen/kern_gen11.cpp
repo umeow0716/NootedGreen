@@ -70,16 +70,19 @@ static KernelPatcher::KextInfo kextG11FBTA {"com.apple.driver.AppleIntelTGLGraph
 	KernelPatcher::KextInfo::Unloaded};
 
 // TGL HW — com.xxxxx (loaded from /Library/Extensions/)
+// Loaded: kernelmanagerd sometimes loads it from the AuxKC (with
+// IOAcceleratorFamily2) before Lilu activates; Lilu then skips it unless the
+// handler also takes already loaded kexts, and it starts unpatched.
 static const char *pathsTGLHW[] = {
     "/Library/Extensions/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics",
 };
 static KernelPatcher::KextInfo kextG11HWT {"com.xxxxx.driver.AppleIntelTGLGraphics", pathsTGLHW, 1,
-    {false, false, false, true}, {},
+    {true, false, false, true}, {},
     KernelPatcher::KextInfo::Unloaded};
 
 // TGL HW — com.apple (loaded from /Library/Extensions/)
 static KernelPatcher::KextInfo kextG11HWTA {"com.apple.driver.AppleIntelTGLGraphics", pathsTGLHW, 1,
-	{false, false, false, true}, {},
+	{true, false, false, true}, {},
 	KernelPatcher::KextInfo::Unloaded};
 
 // Resolve the native accelerator lifecycle API from the running Tahoe
@@ -10614,7 +10617,9 @@ static void vfScanRingGgttWrites(uint32_t id, uint32_t type, volatile uint32_t *
 			static uint32_t holes = 0;
 			auto *pte = vfDirectPteBase(gVfGlobalPageTable);
 			const uint64_t entry = pte && address < (1ULL << 32) ? pte[address >> 12] : 1;
-			if (!(entry & 1) && holes++ < 64)
+			// A PF-provisioned VF slot the guest never mapped is present with
+			// address 0 (VFID only), which ends up at the same host address.
+			if ((!(entry & 1) || !(entry & ~0xFFFULL)) && holes++ < 64)
 				SYSLOG("ngreen", "V352: id=%u type=%u ring +%03x %08x %08x writes GGTT 0x%llx through PTE 0x%llx", id,
 				       type, i * 4, w, at(1), static_cast<unsigned long long>(address),
 				       static_cast<unsigned long long>(entry));
