@@ -520,7 +520,8 @@ void vfReleaseG2HCredits(uint32_t count)
 // GuC accepts REGISTER_CONTEXT and schedules the registered LRCA directly.
 // Keep a small lifecycle record keyed by context-image GGTT page and use the
 // array index as the local GuC ID. The VF quota is a local zero-based namespace.
-constexpr uint32_t kVfPendingStamps = 32;
+// A 16 KiB ring holds at most 819 five-dword stamp stores.
+constexpr uint32_t kVfPendingStamps = 1024;
 struct VfGucContext {
 	uint32_t lrcaPage;
 	uint32_t descriptorLo;
@@ -540,13 +541,36 @@ struct VfGucContext {
 	bool stampRedirected;
 	// V346: stamp values this context's redirected stores will write, oldest
 	// first. When full, recording stops until the newest unrecorded stamp is
-	// done, so the front stays exact.
-	uint8_t pendingStampHead, pendingStampCount;
+	// done, so the front stays exact. Storage comes from gVfPendingStampPool
+	// while the context is redirected.
+	uint16_t pendingStampHead, pendingStampCount;
 	bool pendingStampLost;
 	uint32_t pendingStampLostUpTo;
-	uint32_t pendingStamps[kVfPendingStamps];
+	uint32_t *pendingStamps;
 	NGVfSubmissionCoverage::Tracker submissionCoverage;
 };
+
+// V366: pending stamp storage for redirected contexts. With 32 entries per
+// context, a command buffer of ~40+ encoders overflowed it, so semaphore
+// waits on the lost stamps stayed on the shared slot, which only the CPU
+// advances: the GPU stalled for seconds (or until a reset).
+constexpr uint32_t kVfStampRedirectsMax = 128;
+uint32_t gVfPendingStampPool[kVfStampRedirectsMax][kVfPendingStamps];
+uint64_t gVfPendingStampPoolUsed[kVfStampRedirectsMax / 64];
+
+// A retired or reused context stops being redirected (the merge drops it
+// from gVfStampRedirects) and returns its pending stamp storage.
+void vfEndStampRedirectLocked(VfGucContext &entry)
+{
+	entry.stampRedirected = false;
+	if (entry.pendingStamps) {
+		const auto pool = static_cast<uint32_t>((entry.pendingStamps - gVfPendingStampPool[0]) / kVfPendingStamps);
+		gVfPendingStampPoolUsed[pool / 64] &= ~(1ULL << (pool % 64));
+		entry.pendingStamps = nullptr;
+	}
+	entry.pendingStampHead = entry.pendingStampCount = 0;
+	entry.pendingStampLost = false;
+}
 
 IOSimpleLock *gVfContextLock = nullptr;
 VfGucContext *gVfContexts = nullptr;
@@ -701,6 +725,7 @@ void vfReleaseRetiredContextBacking(uint16_t gucId)
 		stampBacking = entry.stampBacking;
 		scratchBacking = entry.scratchBacking;
 		entry.stampIndex = 0;
+		vfEndStampRedirectLocked(entry);
 		NGVfContextEvent::clearReleasedIdentity(entry);
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
@@ -2092,7 +2117,7 @@ bool vfQuiesceDeviceForShutdown(void *guc)
 // stamp, since that context's pending stamps are all newer than it.
 constexpr uint32_t kVfPrivateStampOffset = 0xF00;
 // Context ids with redirected stamps (the context table is GuC-id sized).
-uint16_t gVfStampRedirects[128];
+uint16_t gVfStampRedirects[kVfStampRedirectsMax];
 uint32_t gVfStampRedirectCount = 0;
 int gVfStampMergeOn = -1;
 bool gVfStampWaitOn = true; // V348, opt-out -ngnostampwait
@@ -2274,7 +2299,12 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 		return;
 	if (!entry.stampRedirected) {
 		const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
-		if (gVfStampRedirectCount < arrsize(gVfStampRedirects)) {
+		uint32_t pool = 0;
+		while (pool < kVfStampRedirectsMax && (gVfPendingStampPoolUsed[pool / 64] >> (pool % 64) & 1))
+			pool++;
+		if (gVfStampRedirectCount < kVfStampRedirectsMax && pool < kVfStampRedirectsMax) {
+			gVfPendingStampPoolUsed[pool / 64] |= 1ULL << (pool % 64);
+			entry.pendingStamps = gVfPendingStampPool[pool];
 			auto *slot = reinterpret_cast<volatile uint32_t *>(image + kVfPrivateStampOffset);
 			*slot = *reinterpret_cast<volatile uint32_t *>(stamps + entry.stampIndex * 64U);
 			__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(slot) : "memory");
@@ -2355,6 +2385,11 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 						continue;
 					if (!pass) {
 						lost |= other.pendingStampLost;
+						const uint32_t first = other.pendingStampCount ? other.pendingStamps[other.pendingStampHead] : 0;
+						const uint32_t last = other.pendingStampCount ?
+							other.pendingStamps[(other.pendingStampHead + other.pendingStampCount - 1) % kVfPendingStamps] : 0;
+						if (static_cast<int32_t>(waits[w].value - first) < 0 || static_cast<int32_t>(last - waits[w].value) < 0)
+							continue;
 						for (uint32_t q = 0; q < other.pendingStampCount && !found; q++)
 							found = other.pendingStamps[(other.pendingStampHead + q) % kVfPendingStamps] == waits[w].value;
 					} else {
@@ -5776,7 +5811,9 @@ bool Gen11::vfAllocMoreCommandBuffers(void *pool)
 	return complete;
 }
 
-static NGIOAccelCommandPool::ControlFrame vfCommandPoolFrame(void *pool)
+// V367: the 256-slot walk is for refusal diagnostics; the getter runs for
+// every command write, so its pre-call snapshot skips it.
+static NGIOAccelCommandPool::ControlFrame vfCommandPoolFrame(void *pool, bool slots = true)
 {
 	NGIOAccelCommandPool::ControlFrame frame {};
 	frame.maximum = getMember<uint16_t>(pool, NGIOAccelCommandPool::maximumOffset);
@@ -5795,7 +5832,7 @@ static NGIOAccelCommandPool::ControlFrame vfCommandPoolFrame(void *pool)
 		(getMember<void *>(pool, 0x20) != nullptr ? 4U : 0U) |
 		(getMember<void *>(pool, 0x28) != nullptr ? 8U : 0U) |
 		(getMember<void *>(pool, NGIOAccelCommandPool::recordOffset) != nullptr ? 16U : 0U);
-	for (size_t index = 0; index < NGIOAccelCommandPool::slotCapacity; ++index) {
+	for (size_t index = 0; slots && index < NGIOAccelCommandPool::slotCapacity; ++index) {
 		const size_t slot = NGIOAccelCommandPool::slotsOffset + index * NGIOAccelCommandPool::slotStride;
 		frame.slot(index, getMember<void *>(pool, slot) != nullptr,
 			getMember<void *>(pool, slot + sizeof(uintptr_t)) != nullptr,
@@ -5812,11 +5849,14 @@ void *Gen11::vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords)
 		gVfAccelerator &&
 		getMember<void *>(pool, NGIOAccelCommandPool::acceleratorOffset) ==
 			gVfAccelerator;
+	vfSlowMark(">getptr");
 	const NGIOAccelCommandPool::ControlFrame before = target ?
-		vfCommandPoolFrame(pool) : NGIOAccelCommandPool::ControlFrame {};
+		vfCommandPoolFrame(pool, false) : NGIOAccelCommandPool::ControlFrame {};
+	vfSlowMark("getptr pre");
 	void *const result = FunctionCast(
 		vfGetCommandBufferPtrNoInc,
 		callback->oIOAccelGetCommandBufferPtrNoInc)(pool, dwords);
+	vfSlowMark("getptr native");
 	if (!target)
 		return result;
 
@@ -5866,6 +5906,7 @@ void *Gen11::vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords)
 		           dwords, current, count, refusal, remaining,
 		           NG_POOL_FRAME_ARGS(before), NG_POOL_FRAME_ARGS(after));
 	}
+	vfSlowMark("getptr post");
 	return result;
 }
 
@@ -7184,6 +7225,7 @@ static void *vfRingVirtual(void *ring, size_t byteOffset)
 
 bool Gen11::vfWaitForRingSpace(void *that, uint32_t requestedDwords)
 {
+	vfSlowMark(">rspace");
 	PANIC_COND(!that || !callback->oVfWaitForRingSpace ||
 	           gVfIdentity != VfIdentity::Virtual || gVfSubmissionStopped ||
 	           gVfProtocolFault || !vfCanUseSleepingLock(),
@@ -7234,10 +7276,12 @@ bool Gen11::vfWaitForRingSpace(void *that, uint32_t requestedDwords)
 	// its ring and Apple's wait gives up. Wait again a few times, then report
 	// the failure to Apple's caller instead of panicking.
 	bool nativeResult = false;
+	vfSlowMark("rspace pre");
 	for (uint32_t attempt = 0; attempt < 5 && !nativeResult; attempt++)
 		nativeResult = FunctionCast(
 			vfWaitForRingSpace,
 			callback->oVfWaitForRingSpace)(that, callerRequest.dwords);
+	vfSlowMark("rspace native");
 	const uint32_t available = getMember<uint32_t>(that, 0x88);
 	const uint32_t committedCursor = getMember<uint32_t>(that, 0x64);
 	// Only Apple's own accounting counts: the modelled reservation above can
@@ -7258,6 +7302,7 @@ bool Gen11::vfWaitForRingSpace(void *that, uint32_t requestedDwords)
 	           getMember<uint8_t>(that, 0x6D) != (tlbPending ? 1U : 0U) ||
 	           getMember<uint8_t>(that, 0x6E) != (auxPending ? 1U : 0U),
 		"ngreen", "VF ring reservation returned without proven capacity");
+	vfSlowMark("rspace post");
 	return true;
 }
 
@@ -11803,9 +11848,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 					scratchBacking->retain();
 					entry.scratchBacking = scratchBacking;
 					entry.stampIndex = static_cast<uint32_t>(stampIndex);
-					entry.stampRedirected = false;
-					entry.pendingStampHead = entry.pendingStampCount = 0;
-					entry.pendingStampLost = false;
+					vfEndStampRedirectLocked(entry);
 					entry.state = kVfGucContextRegistering;
 				}
 			}
