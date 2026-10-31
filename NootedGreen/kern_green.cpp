@@ -255,8 +255,16 @@ void NGreen::init() {
 // is up, instead of from a launch daemon. WindowServer picks its compositor
 // once, when IOKit settles at its start: with the accelerator already loaded
 // it composites with Metal, otherwise it stays on the software compositor.
+// Lilu ignores kext loads until it activates, after every plugin's patcher
+// callback and its user patcher setup, which can take over 500 ms. A TGL load
+// before that starts the driver unpatched (no accelerator). Lilu's first kext
+// callback to us comes at activation, so wait for it.
+static volatile bool liluActive;
 static void loadTglEarly(void *, wait_result_t) {
-	IOSleep(500);
+	uint32_t waited = 0;
+	while (!liluActive && waited < 20000)
+		IOSleep(20), waited += 20;
+	SYSLOG("ngreen", "V361: Lilu active=%d after %u ms", liluActive, waited);
 	const OSReturn ret = OSKextLoadKextWithIdentifier("com.xxxxx.driver.AppleIntelTGLGraphics");
 	SYSLOG("ngreen", "V289: early TGL accelerator load returned 0x%x", ret);
 	thread_terminate(current_thread());
@@ -382,6 +390,7 @@ bool NGreen::setRMMIOIfNecessary() {
 }
 
 bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
+	liluActive = true;
 	if (XeDataAccess::processKext(patcher, index, address, size) || XeLV::processKext(patcher, index, address, size) ||
 	    NDRVRefresh::processKext(patcher, index, address, size))
 		return true;
