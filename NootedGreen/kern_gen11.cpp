@@ -2073,7 +2073,7 @@ int gVfStampMergeOn = -1;
 uint8_t *(*gVfStampGetter)(void *) = nullptr; // set with the first redirect
 // Diagnostics: logging is not possible with interrupts disabled.
 struct { uint32_t id, before, after, newest, bound, own[4], covered[4]; } gVfMergeTrace[16];
-uint32_t gVfMergeCalls = 0, gVfMergeIrqs = 0, gVfMergeAdvances = 0;
+uint32_t gVfMergeCalls = 0, gVfMergeIrqs = 0, gVfMergeSignals = 0, gVfMergeAdvances = 0;
 static void vfMergeRedirectedStamps() {
 	auto getter = gVfStampGetter;
 	if (!getter || !gVfContextLock || !gVfContexts)
@@ -5145,6 +5145,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfSchedulerPush, this->oVfSchedulerPush},
 				{"__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj",
 				 vfSubmitWorkItem},
+				// V317: merge redirected VCS stamps right before Apple reads them
+				// (flush-notify secondary handlers, workloop context).
+				{"__ZN16IntelAccelerator17signalStampUpdateERK8IGBitSetILm64EE",
+				 vfSignalStampUpdate, this->oVfSignalStampUpdate},
 			};
 			PANIC_COND(!patcher.routeMultiple(index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
 
@@ -13369,6 +13373,12 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	return true;
 }
 
+void Gen11::vfSignalStampUpdate(void *that, const void *stamps) {
+	gVfMergeSignals++;
+	vfMergeRedirectedStamps();
+	FunctionCast(vfSignalStampUpdate, callback->oVfSignalStampUpdate)(that, stamps);
+}
+
 bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
 	(void)eventSource;
 	if (!gVfUsesMemoryIrq)
@@ -13879,7 +13889,8 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	if (gVfStampMergeOn > 0) {
 		static uint32_t traceDumps = 0;
 		if (traceDumps < 24)
-			SYSLOG("ngreen", "V317: submits=%u merges=%u advances=%u", gVfMergeIrqs, gVfMergeCalls, gVfMergeAdvances);
+			SYSLOG("ngreen", "V317: submits=%u signals=%u merges=%u advances=%u", gVfMergeIrqs, gVfMergeSignals,
+			       gVfMergeCalls, gVfMergeAdvances);
 		if (traceDumps++ < 3)
 			for (uint32_t i = gVfMergeCalls > 16 ? gVfMergeCalls - 16 : 0; i < gVfMergeCalls; i++) {
 				const auto &t = gVfMergeTrace[i % 16];
