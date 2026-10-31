@@ -2071,9 +2071,6 @@ uint16_t gVfStampRedirects[32];
 uint32_t gVfStampRedirectCount = 0;
 int gVfStampMergeOn = -1;
 uint8_t *(*gVfStampGetter)(void *) = nullptr; // set with the first redirect
-// Diagnostics: logging is not possible with interrupts disabled.
-struct { uint32_t id, before, after, newest, bound, own[4], covered[4]; } gVfMergeTrace[16];
-uint32_t gVfMergeCalls = 0, gVfMergeIrqs = 0, gVfMergeSignals = 0, gVfMergeAdvances = 0;
 static void vfMergeRedirectedStamps() {
 	auto getter = gVfStampGetter;
 	if (!getter || !gVfContextLock || !gVfContexts)
@@ -2102,8 +2099,6 @@ static void vfMergeRedirectedStamps() {
 			auto *own = reinterpret_cast<volatile uint32_t *>(image + kVfPrivateStampOffset);
 			__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(own) : "memory");
 			const uint32_t done = *own;
-			if (k < 4) gVfMergeTrace[gVfMergeCalls % 16].own[k] = done, gVfMergeTrace[gVfMergeCalls % 16].covered[k] =
-				entry.submissionCoverage.covered ? entry.submissionCoverage.coveredStamp : ~0U;
 			if (!any || static_cast<int32_t>(done - newest) > 0)
 				newest = done;
 			any = true;
@@ -2112,13 +2107,10 @@ static void vfMergeRedirectedStamps() {
 			    (!bounded || static_cast<int32_t>(bound - done) > 0))
 				bound = done, bounded = true;
 		}
-		const uint32_t before = *shared, newestDone = newest;
 		if (bounded && static_cast<int32_t>(newest - bound) > 0)
 			newest = bound;
 		if (any && static_cast<int32_t>(newest - *shared) > 0)
-			*shared = newest, gVfMergeAdvances++;
-		auto &t = gVfMergeTrace[gVfMergeCalls++ % 16];
-		t.id = gVfStampRedirects[i], t.before = before, t.after = *shared, t.newest = newestDone, t.bound = bounded ? bound : ~0U;
+			*shared = newest;
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
 }
@@ -12243,12 +12235,6 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
 			ringSize, previousRingTail, ringTail);
 
-	// V317: merge on every submission (any engine, ~every frame) so Apple sees
-	// redirected VCS completions on its next interrupt. Routing
-	// IGInterruptBridge::serviceInterrupts for this broke most boots.
-	gVfMergeIrqs++;
-	vfMergeRedirectedStamps();
-
 	if (gVfContexts[slot].engineClass == 1 && gVfContexts[slot].contextBacking) {
 		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
 		auto *image = getter(gVfContexts[slot].contextBacking);
@@ -13374,7 +13360,6 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 }
 
 void Gen11::vfSignalStampUpdate(void *that, const void *stamps) {
-	gVfMergeSignals++;
 	vfMergeRedirectedStamps();
 	FunctionCast(vfSignalStampUpdate, callback->oVfSignalStampUpdate)(that, stamps);
 }
@@ -13886,19 +13871,8 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	// even when eventTimeout returns null. Do not return into that retry or
 	// fabricate completion while a direct GuC context may still DMA. Guest
 	// fail-stop is not PF containment; the independent host watcher is required.
-	if (gVfStampMergeOn > 0) {
-		static uint32_t traceDumps = 0;
-		if (traceDumps < 24)
-			SYSLOG("ngreen", "V317: submits=%u signals=%u merges=%u advances=%u", gVfMergeIrqs, gVfMergeSignals,
-			       gVfMergeCalls, gVfMergeAdvances);
-		if (traceDumps++ < 3)
-			for (uint32_t i = gVfMergeCalls > 16 ? gVfMergeCalls - 16 : 0; i < gVfMergeCalls; i++) {
-				const auto &t = gVfMergeTrace[i % 16];
-				SYSLOG("ngreen", "V317: merge #%u id=%u shared %x->%x newest %x bound %x own %x/%x/%x covered %x/%x/%x", i, t.id,
-				       t.before, t.after, t.newest, t.bound, t.own[0], t.own[1], t.own[2], t.covered[0], t.covered[1], t.covered[2]);
-			}
+	if (gVfStampMergeOn > 0)
 		vfMergeRedirectedStamps();
-	}
 	VfTimeoutContextFrame frames[NGVfTimeoutObservation::engineCount] {};
 	const uint32_t prefixEngine = NGVfTimeoutObservation::prefixEngineForChannel(channel);
 	const uint32_t capture = vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames, prefixEngine);
