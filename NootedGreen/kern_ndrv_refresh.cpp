@@ -50,7 +50,7 @@ void vblankFire(Vblank *v) {
     // vblank jitter and a stretched period (vblDelta is measured).
     uint64_t leeway;
     nanoseconds_to_absolutetime(20000, &leeway);
-    v->timer->wakeAtTime(IOTimerEventSource::kIOTimeOptionsWithLeeway, v->next, leeway);
+    v->timer->wakeAtTime(kIOTimeOptionsWithLeeway, v->next, leeway);
 }
 
 bool startVblank(void *, void *, IOService *fb, IONotifier *) {
