@@ -2099,6 +2099,10 @@ static void vfMergeRedirectedStamps() {
 			auto *own = reinterpret_cast<volatile uint32_t *>(image + kVfPrivateStampOffset);
 			__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(own) : "memory");
 			const uint32_t done = *own;
+			static uint32_t privLogs = 0;
+			if (privLogs++ < 48)
+				SYSLOG("ngreen", "V317: id=%u own %x covered %x/%d", gVfStampRedirects[k], done,
+				       entry.submissionCoverage.coveredStamp, entry.submissionCoverage.covered);
 			if (!any || static_cast<int32_t>(done - newest) > 0)
 				newest = done;
 			any = true;
@@ -2113,7 +2117,7 @@ static void vfMergeRedirectedStamps() {
 		if (any && static_cast<int32_t>(newest - *shared) > 0)
 			*shared = newest;
 		static uint32_t logs = 0;
-		if (before != newestDone && logs++ < 48)
+		if (logs++ < 48)
 			SYSLOG("ngreen", "V317: merge id=%u shared %x -> %x newest %x bound %x/%d live=%u", gVfStampRedirects[i], before,
 			       *shared, newestDone, bound, bounded, live);
 	}
