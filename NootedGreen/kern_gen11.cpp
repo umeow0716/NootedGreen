@@ -3323,9 +3323,10 @@ static bool vfRejectPhysicalFramebufferStart(void *, void *) {
 
 bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
 	if (index == kextIOPCIFamily.loadIndex) {
-		this->ioPciConfigureInterrupts = patcher.solveSymbol(
-			index, "__ZN11IOPCIDevice19configureInterruptsEjjjj",
-			address, size);
+		if (!this->ioPciConfigureInterrupts)
+			this->ioPciConfigureInterrupts = patcher.solveSymbol(
+				index, "__ZN11IOPCIDevice19configureInterruptsEjjjj",
+				address, size);
 		PANIC_COND(!this->ioPciConfigureInterrupts, "ngreen",
 			"Cannot resolve the exported Tahoe PCI MSI configurator");
 		SYSLOG("ngreen", "V246: resolved Tahoe IOPCIFamily PCI interrupt allocator");
@@ -3964,6 +3965,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			"Cannot bootstrap VF runtime/GGTT before accelerator publication");
 		SYSLOG("ngreen", "V165: setRMMIO done, starting symbol resolve");
 
+		// When TGL loaded before Lilu activated, Lilu replays the already loaded
+		// kexts newest first, so TGL comes before IOPCIFamily.
+		if (vfActive && !this->ioPciConfigureInterrupts) {
+			this->ioPciConfigureInterrupts = patcher.solveSymbol(kextIOPCIFamily.loadIndex,
+				"__ZN11IOPCIDevice19configureInterruptsEjjjj");
+			patcher.clearError();
+		}
 		if (vfActive) {
 			PANIC_COND(!this->ioPciConfigureInterrupts, "ngreen",
 				"Cannot resolve the exported Tahoe PCI MSI configurator");
@@ -6022,6 +6030,54 @@ bool Gen11::IGMemoryManagerInitSegments(void *that)
 	return true;
 }
 
+static volatile uint64_t *vfDirectPteBase(void *that);
+
+// V365: the PF provisions every VF GGTT slot as present with address 0 (VFID
+// only), and native init's clear is suppressed, so a GPU write through a slot
+// the guest never mapped would land on guest physical page 0. Point those
+// slots at a private page and report anything that lands there. (The host's
+// "[00:02.0] write fault addr 0x0" DMAR faults do not: nothing has so far.)
+static IOBufferMemoryDescriptor *gVfGgttTrap;
+static void vfWatchGgttTrap(void *, wait_result_t) {
+	auto *page = static_cast<volatile uint64_t *>(gVfGgttTrap->getBytesNoCopy());
+	uint32_t logs = 0;
+	for (;;) {
+		IOSleep(1000);
+		for (uint32_t i = 0; i < 512; i++) {
+			if (!page[i])
+				continue;
+			if (logs < 200) {
+				logs++;
+				SYSLOG("ngreen", "V365: GGTT trap +%03x: %016llx %016llx %016llx %016llx", i * 8, page[i],
+				       i + 1 < 512 ? page[i + 1] : 0, i + 2 < 512 ? page[i + 2] : 0, i + 3 < 512 ? page[i + 3] : 0);
+			}
+			page[i] = 0;
+		}
+	}
+}
+
+static void vfTrapUnmappedGgtt(void *table) {
+	auto *pte = vfDirectPteBase(table);
+	if (!pte || !gVfGGTTSize)
+		return;
+	gVfGgttTrap = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+		kIODirectionInOut | kIOMemoryPhysicallyContiguous, 0x1000, 0xFFFFFFFFF000ULL);
+	if (!gVfGgttTrap)
+		return;
+	bzero(gVfGgttTrap->getBytesNoCopy(), 0x1000);
+	const uint64_t trap = NGVfGgttPte::encodeSystemMemory(gVfGgttTrap->getPhysicalAddress());
+	uint32_t count = 0;
+	for (uint64_t gpu = gVfGGTTBase; gpu < gVfGGTTBase + gVfGGTTSize; gpu += 0x1000)
+		if (!(pte[gpu >> 12] & ~0xFFFULL))
+			pte[gpu >> 12] = trap, count++;
+	OSSynchronizeIO();
+	thread_t thread = nullptr;
+	if (kernel_thread_start(vfWatchGgttTrap, nullptr, &thread) == KERN_SUCCESS)
+		thread_deallocate(thread);
+	SYSLOG("ngreen", "V365: GGTT trap page 0x%llx behind %u unmapped VF GGTT slots",
+	       static_cast<unsigned long long>(gVfGgttTrap->getPhysicalAddress()), count);
+}
+
 bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
                                                      void *accelerator,
                                                      const NGIGAddressRange &range,
@@ -6064,8 +6120,10 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
 	                                                                                      fullBar0,
 	                                                                                      dummyPage,
 	                                                                                      options);
-	if (result)
+	if (result) {
 		gVfGlobalPageTable = that;
+		vfTrapUnmappedGgtt(that);
+	}
 	SYSLOG("ngreen", "V219: direct global GGTT init ret=%d AppleMMIO=%p fullBAR0=%p len=0x%llx range=[0x%llx,+0x%llx]",
 	       result, mmioBase, fullBar0,
 	       static_cast<unsigned long long>(cb->getRMMIOLength()),
@@ -10619,7 +10677,8 @@ static void vfScanRingGgttWrites(uint32_t id, uint32_t type, volatile uint32_t *
 			const uint64_t entry = pte && address < (1ULL << 32) ? pte[address >> 12] : 1;
 			// A PF-provisioned VF slot the guest never mapped is present with
 			// address 0 (VFID only), which ends up at the same host address.
-			if ((!(entry & 1) || !(entry & ~0xFFFULL)) && holes++ < 64)
+			const bool outside = address < gVfGGTTBase || address >= gVfGGTTBase + gVfGGTTSize;
+			if ((outside || !(entry & 1) || !(entry & ~0xFFFULL)) && holes++ < 64)
 				SYSLOG("ngreen", "V352: id=%u type=%u ring +%03x %08x %08x writes GGTT 0x%llx through PTE 0x%llx", id,
 				       type, i * 4, w, at(1), static_cast<unsigned long long>(address),
 				       static_cast<unsigned long long>(entry));
