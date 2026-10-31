@@ -7205,8 +7205,26 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 	return original;
 }
 
+// V354: submissions that hold up the caller (WindowServer blocks in
+// IOAccelCommandQueueSubmitCommandBuffers; 3-12 ms stalls drop frames).
+struct VfSlowSubmitLog {
+	const char *what;
+	uint64_t start = mach_absolute_time();
+	explicit VfSlowSubmitLog(const char *w) : what(w) {}
+	~VfSlowSubmitLog() {
+		uint64_t ns;
+		absolutetime_to_nanoseconds(mach_absolute_time() - start, &ns);
+		static volatile UInt32 logs = 0;
+		if (ns >= 3000000 && logs < 200) {
+			OSIncrementAtomic(&logs);
+			SYSLOG("ngreen", "V354: %s took %llu us", what, ns / 1000);
+		}
+	}
+};
+
 IOReturn Gen11::vfCommandQueueSubmit(void *that, const void *arguments)
 {
+	VfSlowSubmitLog slow("command queue submit");
 	void *accelerator = that ? getMember<void *>(that, 0x5C0) : nullptr;
 	VfExternalProducerGuard guard(accelerator);
 	if (!guard)
@@ -12356,6 +12374,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	                         const uint32_t *descriptor, IGHwCsType hwCsType,
 	                         unsigned int channelId, unsigned int ringSequence,
 	                         unsigned int ringTail) {
+	VfSlowSubmitLog slow("work item submit");
 	VfContextOperationGuard operationGuard;
 	if (!operationGuard)
 		return false;
