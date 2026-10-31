@@ -54,10 +54,7 @@ bool startVblank(void *, void *, IOService *fb, IONotifier *) {
     // place; the next WindowServer reuses it unless it is gone.
     fb->removeProperty("IOFBConfig");
     auto *wl = fb->getWorkLoop();
-    if (!handleVBL || !wl) {
-        SYSLOG("ngreen", "V351: no vblank source for %s (handler %d)", fb->getName(), handleVBL != nullptr);
-        return true;
-    }
+    if (!handleVBL || !wl) return true;
     auto *v = new Vblank {fb, nullptr, mach_absolute_time()};
     v->timer = IOTimerEventSource::timerEventSource(fb, [](OSObject *, IOTimerEventSource *t) {
         // owner is the framebuffer; the state rides in the timer's refCon.
@@ -72,6 +69,16 @@ bool startVblank(void *, void *, IOService *fb, IONotifier *) {
     SYSLOG("ngreen", "V351: %u Hz vblank for %s", kRefreshHz, fb->getName());
     return true;
 }
+
+bool ndrvRouted, graphicsSeen;
+
+// IOGraphicsFamily (vblank handler) and IONDRVSupport (mode info) come in
+// either order; start the vblank once both are in.
+void maybeStart() {
+    if (graphicsSeen && ndrvRouted)
+        IOService::addMatchingNotification(gIOFirstPublishNotification, IOService::serviceMatching("IONDRVFramebuffer"),
+            startVblank, nullptr);
+}
 } // namespace
 
 void NDRVRefresh::init() {
@@ -82,6 +89,9 @@ bool NDRVRefresh::processKext(KernelPatcher &p, size_t index, mach_vm_address_t 
     if (index == kexts[0].loadIndex) {
         handleVBL = p.solveSymbol<HandleVBL>(index, "__ZN13IOFramebuffer9handleVBLEPS_Pv", address, size);
         p.clearError();
+        SYSLOG("ngreen", "V351: vblank handler %d", handleVBL != nullptr);
+        graphicsSeen = true;
+        maybeStart();
         return true;
     }
     if (index != kexts[1].loadIndex) return false;
@@ -89,9 +99,8 @@ bool NDRVRefresh::processKext(KernelPatcher &p, size_t index, mach_vm_address_t 
         wrapGetInfo, orgGetInfo};
     const bool ok = p.routeMultiple(index, &route, 1, address, size);
     p.clearError();
-    SYSLOG("ngreen", "V351: NDRV modes report %u Hz: %d, vblank handler %d", kRefreshHz, ok, handleVBL != nullptr);
-    if (ok)
-        IOService::addMatchingNotification(gIOFirstPublishNotification, IOService::serviceMatching("IONDRVFramebuffer"),
-            startVblank, nullptr);
+    SYSLOG("ngreen", "V351: NDRV modes report %u Hz: %d", kRefreshHz, ok);
+    ndrvRouted = ok;
+    maybeStart();
     return true;
 }
