@@ -10106,6 +10106,133 @@ static void vfBuildRcsPrologue(uint32_t *b) {
 
 // Pixel hashing and the LRI workarounds are not kept across a VF context
 // switch, so every submission (each starts with kRcsRingHead) runs it.
+// V343: Apple creates the first render context of a process with an image
+// that only holds the ring registers and sets CTX_RESTORE_INHIBIT, so its
+// first run keeps whatever engine state the previous context (a host one
+// included) left behind. That first run is where render contexts hang
+// (first draw never completes; later runs restore their own image and are
+// fine). Give such contexts the engine state of a VF render context the
+// hardware has already saved, as i915 does with its default context image,
+// keeping the new context's own register values. Opt-in: -ngrcsgolden.
+static int gVfRcsGoldenOn = -1;
+static uint8_t *gVfRcsGolden;
+static uint32_t gVfRcsGoldenBytes;
+constexpr uint32_t kVfFreshRcsImageHeader = 0x11001015;
+
+// (register, value) pairs of the MI_LOAD_REGISTER_IMM blocks at the start of
+// a context's register state; stops at the first other command.
+static uint32_t vfImageLriPairs(const volatile uint32_t *r, uint32_t limit, uint32_t (*out)[2], uint32_t max) {
+	uint32_t n = 0;
+	for (uint32_t i = 0; i < limit;) {
+		const uint32_t header = r[i];
+		if (!header) {
+			i++;
+			continue;
+		}
+		if ((header & 0xFF000000U) != 0x11000000U)
+			break;
+		const uint32_t end = i + (header & 0xFFU) + 2;
+		for (uint32_t j = i + 1; j + 1 < end && j + 1 < limit; j += 2)
+			if (n < max) {
+				out[n][0] = r[j] & 0x7FFFFCU;
+				out[n][1] = r[j + 1];
+				n++;
+			}
+		i = end;
+	}
+	return n;
+}
+
+// Called on a render context's first enable.
+static void vfApplyRcsGolden(uint32_t id, uint8_t *image, uint32_t bytes, uint8_t *(*getter)(void *)) {
+	if (gVfRcsGoldenOn < 0)
+		gVfRcsGoldenOn = checkKernelArgument("-ngrcsgolden");
+	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
+	static uint32_t firstRunLogs = 0;
+	if (firstRunLogs++ < 64)
+		SYSLOG("ngreen", "V343: id=%u first render run, image header %08x ctl %08x bytes 0x%x", id, regs[1], regs[3], bytes);
+	if (!gVfRcsGoldenOn || bytes <= 0x2000 || regs[1] != kVfFreshRcsImageHeader)
+		return;
+	if (!gVfRcsGolden) {
+		// Donor: a render context whose image the hardware has saved (full
+		// LRI layout, no restore inhibit) and that was idle when saved.
+		OSObject *donors[16];
+		uint32_t donorIds[16], count = 0;
+		IOInterruptState state = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		for (uint32_t i = 0; i < gVfContextCapacity && count < 16; i++) {
+			auto &entry = gVfContexts[i];
+			if (i != id && entry.engineClass == 0 && entry.contextBacking &&
+			    (entry.state == kVfGucContextEnabled || entry.state == kVfGucContextDisabled)) {
+				entry.contextBacking->retain();
+				donors[count] = entry.contextBacking;
+				donorIds[count++] = i;
+			}
+		}
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, state);
+		for (uint32_t k = 0; k < count; k++) {
+			auto *donor = getter(donors[k]);
+			const auto donorBytes = static_cast<uint32_t>(getMember<uint64_t>(donors[k], kVfMappedBufferLengthOffset));
+			auto *d = donor ? reinterpret_cast<volatile uint32_t *>(donor + 0x1000) : nullptr;
+			if (!gVfRcsGolden && d && donorBytes == bytes && d[1] != kVfFreshRcsImageHeader &&
+			    (d[1] & 0xFF000000U) == 0x11000000U && !(d[3] & 1) && (d[5] & 0x3FFFFC) == (d[7] & 0x3FFFFC)) {
+				auto *copy = static_cast<uint8_t *>(IOMalloc(bytes - 0x1000));
+				if (copy) {
+					for (uint32_t o = 0; o < bytes - 0x1000; o += 64)
+						__asm__ volatile("clflush (%0)" :: "r"(donor + 0x1000 + o) : "memory");
+					__asm__ volatile("mfence" ::: "memory");
+					memcpy(copy, donor + 0x1000, bytes - 0x1000);
+					gVfRcsGolden = copy;
+					gVfRcsGoldenBytes = bytes;
+					SYSLOG("ngreen", "V343: golden render image from id=%u (%u bytes, header %08x)", donorIds[k], bytes, d[1]);
+				}
+			}
+			donors[k]->release();
+		}
+		if (!gVfRcsGolden) {
+			static uint32_t misses = 0;
+			if (misses++ < 8)
+				SYSLOG("ngreen", "V343: id=%u first run without golden image (%u donors)", id, count);
+			return;
+		}
+	}
+	if (bytes != gVfRcsGoldenBytes)
+		return;
+	// Keep every register the fresh image sets, take the rest from the golden
+	// image, and let the context restore it.
+	static uint32_t own[64][2];
+	const uint32_t ownCount = vfImageLriPairs(regs, 0x400, own, 64);
+	memcpy(image + 0x1000, gVfRcsGolden, bytes - 0x1000);
+	uint32_t kept = 0;
+	for (uint32_t i = 0; i < 0x400;) {
+		const uint32_t header = regs[i];
+		if (!header) {
+			i++;
+			continue;
+		}
+		if ((header & 0xFF000000U) != 0x11000000U)
+			break;
+		const uint32_t end = i + (header & 0xFFU) + 2;
+		for (uint32_t j = i + 1; j + 1 < end && j + 1 < 0x400; j += 2)
+			for (uint32_t k = 0; k < ownCount; k++)
+				if ((regs[j] & 0x7FFFFCU) == own[k][0]) {
+					regs[j + 1] = own[k][1];
+					kept++;
+				}
+		i = end;
+	}
+	for (uint32_t i = 0; i < 0x400; i += 2)
+		if ((regs[i] & 0x7FFFFCU) == 0x2244 && (regs[i] >> 24) == 0) {
+			regs[i + 1] = 0xFFFF0000U | (regs[i + 1] & 0xFFFEU); // clear CTX_RESTORE_INHIBIT
+			break;
+		}
+	for (uint32_t o = 0x1000; o < bytes; o += 64)
+		__asm__ volatile("clflush (%0)" :: "r"(image + o) : "memory");
+	__asm__ volatile("mfence" ::: "memory");
+	static uint32_t logs = 0;
+	if (logs++ < 32)
+		SYSLOG("ngreen", "V343: id=%u took golden render state, kept %u of %u own registers", id, kept, ownCount);
+}
+
 static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint32_t at, uint32_t end) {
 	const uint32_t words = ringSize / 4;
 	if (!gVfRcsPrologueGpu || !ring || !words || (words & (words - 1)))
@@ -12294,6 +12421,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		vfInjectRcsPrologue(static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
 			ringSize, previousRingTail, ringTail);
+	if (static_cast<uint32_t>(hwCsType) == 0 && previousState == kVfGucContextRegistered)
+		vfApplyRcsGolden(static_cast<uint32_t>(slot), contextImage,
+			static_cast<uint32_t>(getMember<uint64_t>(contextImageBuffer, kVfMappedBufferLengthOffset)),
+			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress));
 
 	if (gVfContexts[slot].engineClass == 1 && gVfContexts[slot].contextBacking) {
 		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
