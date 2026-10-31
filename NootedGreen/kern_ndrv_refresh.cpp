@@ -16,6 +16,9 @@ KernelPatcher::KextInfo kexts[] {
 constexpr uint32_t kRefreshHz = 144;
 constexpr uint64_t kPeriodNs = 1000000000ULL / kRefreshHz;
 constexpr size_t kRefreshRateOffset = 8; // IODisplayModeInformation::refreshRate (16.16)
+constexpr size_t kShmemOffset = 0x90;    // IOFramebuffer's StdFBShmem_t (see handleVBL)
+constexpr size_t kVblTimeOffset = 0x40;  // StdFBShmem_t::vblTime
+constexpr size_t kVblDeltaOffset = 0x48; // StdFBShmem_t::vblDelta
 
 using GetInfo = int (*)(void *, int32_t, void *);
 GetInfo orgGetInfo;
@@ -44,6 +47,12 @@ void vblankFire(Vblank *v) {
     handleVBL(v->fb, nullptr);
     uint64_t now = mach_absolute_time(), period;
     nanoseconds_to_absolutetime(kPeriodNs, &period);
+    // handleVBL stamps the wakeup time and its distance to the previous one,
+    // timer jitter included; a display's vblank is an exact grid.
+    if (auto *shmem = getMember<uint8_t *>(v->fb, kShmemOffset)) {
+        getMember<uint64_t>(shmem, kVblTimeOffset) = v->next;
+        getMember<uint64_t>(shmem, kVblDeltaOffset) = period;
+    }
     v->next += period;
     if (v->next <= now) v->next = now + period - (now - v->next) % period;
     // Default timer leeway lets it fire up to ~1 ms late, which shows as
