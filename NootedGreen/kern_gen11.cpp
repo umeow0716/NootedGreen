@@ -6899,7 +6899,10 @@ bool Gen11::vfWaitForRingSpace(void *that, uint32_t requestedDwords)
 			callback->oVfWaitForRingSpace)(that, callerRequest.dwords);
 	const uint32_t available = getMember<uint32_t>(that, 0x88);
 	const uint32_t committedCursor = getMember<uint32_t>(that, 0x64);
-	if (!nativeResult || !NGVfSubmission::ringReservationSatisfied(reservation, available, ringBytes)) {
+	// Only Apple's own accounting counts: the modelled reservation above can
+	// exceed what Apple reserves (it asked for 69 dwords with exactly 276
+	// bytes free and was right to proceed).
+	if (!nativeResult) {
 		static uint32_t logs = 0;
 		if (logs++ < 32)
 			SYSLOG("ngreen", "V344: engine %u ring wait failed native=%d available=%u requested=%u cursor=0x%x",
