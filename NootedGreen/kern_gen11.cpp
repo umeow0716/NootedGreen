@@ -2144,11 +2144,11 @@ static void vfMergeRedirectedStamps(bool dump = false) {
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
 	// V345: who holds each shared slot back when an event times out.
 	static uint32_t dumps = 0;
-	if (dump && dumps++ < 6)
+	if (dump && (++dumps <= 6 || (dumps % 8 == 0 && dumps < 512)))
 		for (uint32_t i = 0; i < live; i++)
 			if (c[i].shared && (c[i].busy || c[i].before != *c[i].shared || (c[i].head & 0x1FFFFCU) != (c[i].tail & 0x1FFFFCU)))
-				SYSLOG("ngreen", "V345: id=%u slot=%llx done=%x limit=%x covered=%x busy=%d shared %x->%x head=%x tail=%x state=%u",
-				       gVfStampRedirects[i], reinterpret_cast<uint64_t>(c[i].shared) & 0xFFFFFF, c[i].done, c[i].limit, c[i].covered,
+				SYSLOG("ngreen", "V345: #%u id=%u slot=%llx done=%x limit=%x covered=%x busy=%d shared %x->%x head=%x tail=%x state=%u",
+				       dumps, gVfStampRedirects[i], reinterpret_cast<uint64_t>(c[i].shared), c[i].done, c[i].limit, c[i].covered,
 				       c[i].busy, c[i].before, *c[i].shared, c[i].head, c[i].tail, c[i].state);
 }
 
@@ -4767,6 +4767,24 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			               acceleratorStartEnd - acceleratorStart), "ngreen",
 			           "Failed to defer native VF service publication");
 			SYSLOG("ngreen", "V323: deferred native synchronous VF service publication until callback validation");
+
+			// V347 (opt-in -ngnoccs): the PF exposes CCS0, which shares the render
+			// slice and reset domain with RCS. start() drops CCS0 from the engine
+			// mask unless a feature bit is set; make that unconditional so compute
+			// queues use RCS, as on parts without a CCS.
+			if (checkKernelArgument("-ngnoccs")) {
+				static const uint8_t keepCcsFind[] = {
+					0x41, 0xf6, 0x46, 0x04, 0x02, 0x75, 0x08,
+					0x41, 0x80, 0xa5, 0x00, 0x13, 0x00, 0x00, 0xfd,
+				};
+				static const uint8_t keepCcsReplace[] = {
+					0x41, 0xf6, 0x46, 0x04, 0x02, 0x90, 0x90,
+					0x41, 0x80, 0xa5, 0x00, 0x13, 0x00, 0x00, 0xfd,
+				};
+				LookupPatchPlus const keepCcsPatch {activeKext, keepCcsFind, keepCcsReplace, 1};
+				const bool dropped = keepCcsPatch.apply(patcher, acceleratorStart, acceleratorStartEnd - acceleratorStart);
+				SYSLOG("ngreen", "V347: drop CCS0 from the engine mask: %d", dropped);
+			}
 
 			// The exact V335 media panic reached Tahoe's native
 			// calculateIOSurfaceDeviceCacheVRAMBytes with a non-zero plane
