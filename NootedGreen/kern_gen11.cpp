@@ -4719,6 +4719,16 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			               patcher, blit3dBoundsStart,
 			               blit3dBoundsEnd - blit3dBoundsStart), "ngreen",
 			           "Failed to enlarge Blit3D scratch allocation");
+			// V371: a TGL load Lilu missed is processed after the kext's static
+			// constructors already ran (V368), so the patched constructor never
+			// executes and the published size is still 0xd240. Correct it.
+			auto *blit3dParams = reinterpret_cast<volatile uint64_t *>(patcher.solveSymbol(
+				index, "__ZN23IGHardwareBlit3DContext17ExtendedCtxParamsE", address, size));
+			PANIC_COND(!blit3dParams, "ngreen", "Missing Blit3D context parameters");
+			if (blit3dParams[2] == 0xd240) {
+				blit3dParams[2] = 0xe000;
+				SYSLOG("ngreen", "V371: Blit3D constructor already ran; scratch size set to 0xe000");
+			}
 			SYSLOG("ngreen", "V250: enlarged Blit3D scratch allocation 0xd240→0xe000");
 			mach_vm_address_t ccsStart = 0, ccsEnd = 0;
 			KernelPatcher::SolveRequest ccsBounds[] = {
@@ -6355,11 +6365,19 @@ static void vfFlushGgttMaps()
 	vfRequireCompletedGgttUpdate();
 }
 
+// Native GGTT range loops store one PTE per page while gpu < start + length,
+// so a sub-page length (e.g. a 0x240-byte dummy map) still covers its page.
+static NGIGAddressRange vfPageRange(const NGIGAddressRange &range)
+{
+	return {range.start & ~0xFFFULL, (range.length + 0xFFFULL) & ~0xFFFULL};
+}
+
 bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
-                                              const NGIGAddressRange &range,
+                                              const NGIGAddressRange &nativeRange,
                                               uint64_t physical,
                                               uint64_t flags)
 {
+	const NGIGAddressRange range = vfPageRange(nativeRange);
 	// Validate the complete operation before touching the direct PTE aperture.
 	// Do not pass Apple's physical-driver cache attributes through: on Gen12
 	// bits 4:2 are PF-owned VFID and bit 1 is local memory, neither of which a
@@ -6562,8 +6580,9 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 }
 
 void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
-                                                const NGIGAddressRange &range)
+                                                const NGIGAddressRange &nativeRange)
 {
+	const NGIGAddressRange range = vfPageRange(nativeRange);
 	// A void unmap cannot tell its caller not to free/reuse DMA backing.
 	// Tahoe IOAccelMemoryMap::release_pte also ignores the Intel mapping
 	// release bool, so returning false further up cannot preserve backing.
@@ -6609,15 +6628,20 @@ void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
 }
 
 bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
-                                                   const NGIGAddressRange &range,
+                                                   const NGIGAddressRange &nativeRange,
                                                    uint64_t flags)
 {
+	const NGIGAddressRange range = vfPageRange(nativeRange);
 	if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
 	    gVfProtocolFault ||
 	    !that || that != gVfGlobalPageTable ||
 	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length) ||
 	    !NGVfGgttPte::validAppleAttributes(flags) ||
 	    !vfCanCompleteGgttUpdate()) {
+		SYSLOG("ngreen", "V370: dummy map rejected id=%u ready=%u fault=%u table=%u range=%llx+%llx ggtt=%llx+%llx flags=%llx",
+		       gVfIdentity == VfIdentity::Virtual, gVfGGTTReady ? 1U : 0U, gVfProtocolFault ? 1U : 0U,
+		       that && that == gVfGlobalPageTable, range.start, range.length,
+		       static_cast<unsigned long long>(gVfGGTTBase), static_cast<unsigned long long>(gVfGGTTSize), flags);
 		vfMarkProtocolFault("invalid VF dummy GGTT range or transport state");
 		return false;
 	}
