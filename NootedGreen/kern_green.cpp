@@ -260,6 +260,8 @@ void NGreen::init() {
 // before that starts the driver unpatched (no accelerator). Lilu's first kext
 // callback to us comes at activation, so wait for it.
 static volatile bool liluActive;
+static KernelPatcher *gEarlyPatcher;
+
 static void loadTglEarly(void *, wait_result_t) {
 	uint32_t waited = 0;
 	while (!liluActive && waited < 20000)
@@ -267,6 +269,9 @@ static void loadTglEarly(void *, wait_result_t) {
 	SYSLOG("ngreen", "V361: Lilu active=%d after %u ms", liluActive, waited);
 	const OSReturn ret = OSKextLoadKextWithIdentifier("com.xxxxx.driver.AppleIntelTGLGraphics");
 	SYSLOG("ngreen", "V289: early TGL accelerator load returned 0x%x", ret);
+	IOSleep(1000);
+	if (gEarlyPatcher)
+		gen11.recoverMissedKexts(*gEarlyPatcher);
 	thread_terminate(current_thread());
 }
 
@@ -285,6 +290,7 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		return;
 	}
 	if (checkKernelArgument("-ngtglearly")) {
+		gEarlyPatcher = &patcher;
 		ngHoldTglBusy(this->iGPU);
 		thread_t thread = nullptr;
 		if (kernel_thread_start(loadTglEarly, nullptr, &thread) == KERN_SUCCESS)

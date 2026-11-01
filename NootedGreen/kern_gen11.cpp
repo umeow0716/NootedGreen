@@ -3356,6 +3356,55 @@ static bool vfRejectPhysicalFramebufferStart(void *, void *) {
 	return false;
 }
 
+// V368: when TGL was loaded before Lilu activated, Lilu replays the loaded
+// kexts newest first, so TGL is processed before IOPCIFamily and
+// IOAcceleratorFamily2. Publishing the accelerator personality starts it, and
+// its start needs both (MSI configurator, lifecycle API, routes): publish once
+// all three are processed, whatever their order.
+static const char *gPendingAcceleratorBundle;
+static bool gIoAccelLifecycleResolved; // IOAcceleratorFamily2 fully processed
+
+// Lilu handles a kext load by processing only the head of the kmod list. When
+// kernelmanagerd loads IOAcceleratorFamily2 and TGL back to back, the first
+// notification can already find the second kext at the head: one of them is
+// never processed (no accelerator, or a start without its dependencies). A
+// while after the early TGL load, process whatever was missed the way Lilu
+// would have, in dependency order.
+static volatile UInt32 gTglProcessed, gIoAccelProcessing;
+
+void Gen11::recoverMissedKexts(KernelPatcher &patcher) {
+	auto **kmods = reinterpret_cast<kmod_info_t **>(patcher.solveSymbol(KernelPatcher::KernelID, "_kmod"));
+	patcher.clearError();
+	KernelPatcher::KextInfo *const order[] {&kextIOPCIFamily, &kextIOAcceleratorFamily2, &kextG11HWT, &kextG11HWTA};
+	for (auto *info : order) {
+		const bool done = info == &kextIOPCIFamily ? this->ioPciConfigureInterrupts != 0 :
+			info == &kextIOAcceleratorFamily2 ? gIoAccelProcessing != 0 : gTglProcessed != 0;
+		if (done || info->loadIndex == KernelPatcher::KextInfo::Unloaded || !kmods)
+			continue;
+		kmod_info_t *kmod = *kmods;
+		while (kmod && strncmp(kmod->name, info->id, KMOD_MAX_NAME))
+			kmod = kmod->next;
+		if (!kmod)
+			continue;
+		const auto address = static_cast<mach_vm_address_t>(kmod->address);
+		const size_t size = patcher.updateRunningInfo(info->loadIndex, address, kmod->size);
+		patcher.clearError();
+		SYSLOG("ngreen", "V368: load of %s was missed; processing it now", info->id);
+		NGreen::callback->processKext(patcher, info->loadIndex, address, size);
+	}
+}
+
+void Gen11::publishAcceleratorWhenReady() {
+	if (!gPendingAcceleratorBundle || !this->ioPciConfigureInterrupts || !gIoAccelLifecycleResolved)
+		return;
+	const char *bundleId = gPendingAcceleratorBundle;
+	gPendingAcceleratorBundle = nullptr;
+	PANIC_COND(!injectAcceleratorPersonality(bundleId), "ngreen",
+		"Cannot publish complete TGL accelerator personality");
+	if (gVfIdentity == VfIdentity::Virtual)
+		ngArmV349MediaExecObservation();
+}
+
 bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
 	if (index == kextIOPCIFamily.loadIndex) {
 		if (!this->ioPciConfigureInterrupts)
@@ -3365,10 +3414,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		PANIC_COND(!this->ioPciConfigureInterrupts, "ngreen",
 			"Cannot resolve the exported Tahoe PCI MSI configurator");
 		SYSLOG("ngreen", "V246: resolved Tahoe IOPCIFamily PCI interrupt allocator");
+		publishAcceleratorWhenReady();
 		return true;
 	}
 
 	if (index == kextIOAcceleratorFamily2.loadIndex) {
+		if (!OSCompareAndSwap(0, 1, &gIoAccelProcessing))
+			return true;
 		const auto *ioAccelImage = reinterpret_cast<const uint8_t *>(address);
 		PANIC_COND(!NGBinaryIdentity::matchesKextUuid(
 		               ioAccelImage, size,
@@ -3763,6 +3815,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		               index, externalProducerRoutes, address, size),
 		           "ngreen", "Cannot route VF external-producer admission roots");
 		SYSLOG("ngreen", "V317: routed 16 counted VF external-producer roots plus one lifecycle finalizer");
+		gIoAccelLifecycleResolved = true;
+		publishAcceleratorWhenReady();
 		return true;
 	}
 
@@ -3836,6 +3890,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		return true;
 		
 	} else if (kextG11HWT.loadIndex == index || kextG11HWTA.loadIndex == index) {
+		if (!OSCompareAndSwap(0, 1, &gTglProcessed))
+			return true;
 		// Every route below depends on private Tahoe object offsets, symbol ABIs or
 		// exact instruction sequences. PF ownership does not make an unknown
 		// payload layout safe, so use the same fail-closed identity gate for both
@@ -4000,16 +4056,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			"Cannot bootstrap VF runtime/GGTT before accelerator publication");
 		SYSLOG("ngreen", "V165: setRMMIO done, starting symbol resolve");
 
-		// When TGL loaded before Lilu activated, Lilu replays the already loaded
-		// kexts newest first, so TGL comes before IOPCIFamily.
-		if (vfActive && !this->ioPciConfigureInterrupts) {
-			this->ioPciConfigureInterrupts = patcher.solveSymbol(kextIOPCIFamily.loadIndex,
-				"__ZN11IOPCIDevice19configureInterruptsEjjjj");
-			patcher.clearError();
-		}
 		if (vfActive) {
-			PANIC_COND(!this->ioPciConfigureInterrupts, "ngreen",
-				"Cannot resolve the exported Tahoe PCI MSI configurator");
 			if (checkKernelArgument("-ngreenmediaadapter") && checkKernelArgument("-ngreenavcgen12")) {
 				gVfMediaPublicationRouteReady=false;
 				gVfChecksumNativeBindingsQualified=false;
@@ -5758,10 +5805,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		const char *bundleId = activeKext == &kextG11HWTA ?
 			"com.apple.driver.AppleIntelTGLGraphics" :
 			"com.xxxxx.driver.AppleIntelTGLGraphics";
-		PANIC_COND(!injectAcceleratorPersonality(bundleId), "ngreen",
-			"Cannot publish complete TGL accelerator personality");
-		if (vfActive)
-			ngArmV349MediaExecObservation();
+		gPendingAcceleratorBundle = bundleId;
+		publishAcceleratorWhenReady();
 
 		return true;
 	}
@@ -6236,10 +6281,15 @@ static UInt32 vfStoreFirstPteWithDiagnostic(volatile uint64_t *pteBase,
 	return sample;
 }
 
+// V369: processes still create resources while the system shuts down (a
+// Blit3D context at exit). Once every context is retired and translations are
+// invalidated (gVfDmaQuiesced), no GPU work can consume a GGTT entry, so later
+// maps need no invalidation; refusing them faulted the VF and the next
+// mapping panicked.
 static bool vfCanCompleteGgttUpdate()
 {
 	OSSynchronizeIO();
-	if (!gVfCtbEverEnabled)
+	if (!gVfCtbEverEnabled || gVfDmaQuiesced)
 		return true;
 	if (!gVfHardwareGuc || !gVfCtbEnabled || gVfCtbStopped ||
 	    gVfProtocolFault || !vfCanWaitForGuc(gVfHardwareGuc)) {
@@ -6256,7 +6306,7 @@ static bool vfCompleteGgttUpdate()
 	OSSynchronizeIO();
 	__asm__ volatile("sfence" ::: "memory");
 	OSSynchronizeIO();
-	if (!gVfCtbEverEnabled)
+	if (!gVfCtbEverEnabled || gVfDmaQuiesced)
 		return true;
 	if (!gVfHardwareGuc || !vfInvalidateTLBSync(
 		gVfHardwareGuc, NGVfGuCRequest::TlbTarget::Guc)) {
@@ -6316,7 +6366,7 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
 	// media-12 integrated direct VF may encode.
 	auto *pteBase = vfDirectPteBase(that);
 	if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
-	    gVfSubmissionStopped || gVfProtocolFault ||
+	    gVfProtocolFault ||
 	    !that || that != gVfGlobalPageTable ||
 	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length) ||
 	    !NGGgtt::nativePhysicalRange(physical, range.length) || !pteBase ||
@@ -6377,7 +6427,7 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 	              "Tahoe physical iterator ABI drift");
 
 	if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
-	    gVfSubmissionStopped || gVfProtocolFault || !that ||
+	    gVfProtocolFault || !that ||
 	    that != gVfGlobalPageTable || !rangeIterator || !physicalIterator ||
 	    !NGVfGgttPte::validAppleAttributes(flags) ||
 	    !vfCanCompleteGgttUpdate()) {
@@ -6563,7 +6613,7 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
                                                    uint64_t flags)
 {
 	if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
-	    gVfSubmissionStopped || gVfProtocolFault ||
+	    gVfProtocolFault ||
 	    !that || that != gVfGlobalPageTable ||
 	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length) ||
 	    !NGVfGgttPte::validAppleAttributes(flags) ||
@@ -8960,6 +9010,16 @@ bool Gen11::start(void *that, void *provider)
 		}
 	}
 
+	// V368: kernelmanagerd may have loaded and matched TGL itself, so its start
+	// can come before IOPCIFamily and IOAcceleratorFamily2 are processed (by
+	// Lilu or, if Lilu missed them, by recoverMissedKexts a few seconds later).
+	if (vfActive) {
+		uint32_t waited = 0;
+		while ((!callback->ioPciConfigureInterrupts || !gIoAccelLifecycleResolved) && waited < 20000)
+			IOSleep(10), waited += 10;
+		if (waited)
+			SYSLOG("ngreen", "V368: start waited %u ms for IOPCIFamily/IOAcceleratorFamily2 processing", waited);
+	}
 	if (vfActive)
 		SYSLOG("ngreen", "V312: entering exact native IntelAccelerator start");
 	const auto result = FunctionCast(start, callback->ostart)(that, provider);
@@ -9844,6 +9904,12 @@ bool Gen11::startGraphicsEngine(void *that)
 	    !callback->ioPciConfigureInterrupts ||
 	    !callback->ioGraphicsEnableAccelerator ||
 	    !callback->ioAccelEventMachineInitEvent) {
+		if (callback)
+			SYSLOG("ngreen", "V368: lifecycle fw=%d bridge=%d/%d filter=%d msi=%d enable=%d event=%d",
+			       callback->vfSchedulerInitFirmware != 0, callback->vfInterruptBridgeEnable != 0,
+			       callback->vfInterruptBridgeDisable != 0, callback->oVfCreateFilterInterruptEventSource != 0,
+			       callback->ioPciConfigureInterrupts != 0, callback->ioGraphicsEnableAccelerator != 0,
+			       callback->ioAccelEventMachineInitEvent != 0);
 		vfMarkProtocolFault("VF engine start before accelerator lifecycle is ready");
 		return false;
 	}

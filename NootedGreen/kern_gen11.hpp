@@ -289,6 +289,7 @@ private:
 	static void *getBlit3DContext(void *that, bool create);
 	mach_vm_address_t ogetBlit3DContext {};
 
+	void publishAcceleratorWhenReady();
 	bool injectAcceleratorPersonality(const char *bundleId);
 	bool acceleratorPersonalityInjected {false};
 	mach_vm_address_t ioGraphicsEnableAccelerator {};
@@ -455,6 +456,7 @@ public:
 	static bool pollVfGuCToHost(void *that);
 	bool processKext(KernelPatcher &patcher, size_t index,
 	                 mach_vm_address_t address, size_t size);
+	void recoverMissedKexts(KernelPatcher &patcher);
 };
 
 void ngHoldTglBusy(IOService *service);
