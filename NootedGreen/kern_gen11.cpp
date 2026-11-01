@@ -9025,9 +9025,16 @@ bool Gen11::start(void *that, void *provider)
 			zero && service->setProperty("SchedulerFallbackOnFirmwareFail", zero);
 		const bool telemetryDisabled =
 			one && service->setProperty("TelemetryDisable", one);
+		// V372: the TGL personality sets EnableMultiContext=1, which puts every
+		// compute context on CCS0. Official i915-sriov-dkms (>= 2025.12.10.1)
+		// does not expose CCS on Xe_LP by default, and GuC then resets or
+		// rejects those contexts. CCS shares RCS's slice anyway; keep compute
+		// on RCS so the VF works with or without host xelp_enable_ccs.
+		const bool multiContextDisabled =
+			zero && service->setProperty("EnableMultiContext", zero);
 		OSSafeReleaseNULL(zero);
 		OSSafeReleaseNULL(one);
-		if (!pmDisabled || !fallbackDisabled || !telemetryDisabled) {
+		if (!pmDisabled || !fallbackDisabled || !telemetryDisabled || !multiContextDisabled) {
 			vfMarkProtocolFault(
 				"failed to disable PF-owned VF scheduler/telemetry paths");
 			return false;
