@@ -2304,8 +2304,6 @@ constexpr uint32_t kVfPrivateStampOffset = 0xF00;
 // Context ids with redirected stamps (the context table is GuC-id sized).
 uint16_t gVfStampRedirects[kVfStampRedirectsMax];
 uint32_t gVfStampRedirectCount = 0;
-int gVfStampMergeOn = -1;
-bool gVfStampWaitOn = true; // V348, opt-out -ngnostampwait
 uint8_t *(*gVfStampGetter)(void *) = nullptr; // set with the first redirect
 // V354: submissions that hold up the caller (WindowServer blocks in
 // IOAccelCommandQueueSubmitCommandBuffers; 3-12 ms stalls drop frames).
@@ -2553,7 +2551,7 @@ static void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ring
 	// on it can stall for as long as no merge happens. Stamps are monotonic
 	// per context: wait on the private slot of the context that writes the
 	// awaited stamp instead (or that already has).
-	if (waitCount && gVfStampWaitOn) {
+	if (waitCount) {
 		static uint32_t waitLogs = 0;
 		const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 		for (uint32_t w = 0; w < waitCount; w++) {
@@ -5229,19 +5227,17 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// slice and reset domain with RCS. start() drops CCS0 from the engine
 			// mask unless a feature bit is set; make that unconditional so compute
 			// queues use RCS, as on parts without a CCS.
-			if (checkKernelArgument("-ngnoccs")) {
-				static const uint8_t keepCcsFind[] = {
-					0x41, 0xf6, 0x46, 0x04, 0x02, 0x75, 0x08,
-					0x41, 0x80, 0xa5, 0x00, 0x13, 0x00, 0x00, 0xfd,
-				};
-				static const uint8_t keepCcsReplace[] = {
-					0x41, 0xf6, 0x46, 0x04, 0x02, 0x90, 0x90,
-					0x41, 0x80, 0xa5, 0x00, 0x13, 0x00, 0x00, 0xfd,
-				};
-				LookupPatchPlus const keepCcsPatch {activeKext, keepCcsFind, keepCcsReplace, 1};
-				const bool dropped = keepCcsPatch.apply(patcher, acceleratorStart, acceleratorStartEnd - acceleratorStart);
-				SYSLOG("ngreen", "V347: drop CCS0 from the engine mask: %d", dropped);
-			}
+			static const uint8_t keepCcsFind[] = {
+				0x41, 0xf6, 0x46, 0x04, 0x02, 0x75, 0x08,
+				0x41, 0x80, 0xa5, 0x00, 0x13, 0x00, 0x00, 0xfd,
+			};
+			static const uint8_t keepCcsReplace[] = {
+				0x41, 0xf6, 0x46, 0x04, 0x02, 0x90, 0x90,
+				0x41, 0x80, 0xa5, 0x00, 0x13, 0x00, 0x00, 0xfd,
+			};
+			LookupPatchPlus const keepCcsPatch {activeKext, keepCcsFind, keepCcsReplace, 1};
+			const bool dropped = keepCcsPatch.apply(patcher, acceleratorStart, acceleratorStartEnd - acceleratorStart);
+			SYSLOG("ngreen", "V347: drop CCS0 from the engine mask: %d", dropped);
 
 			// The exact V335 media panic reached Tahoe's native
 			// calculateIOSurfaceDeviceCacheVRAMBytes with a non-zero plane
@@ -9068,7 +9064,6 @@ void ngReleaseTglBusyHold() {
 }
 
 // Boot-arg cache for the per-submission RCS prologue switch.
-static int gVfRcsPrologueOn = -1;
 
 bool Gen11::start(void *that, void *provider)
 {
@@ -10683,17 +10678,6 @@ void Gen11::vfWorkQueueFree(void *that) {
 static const uint32_t kRcsRingHead[6] {0x7A000004, 0x00144000, 0x40000000, 0, 0, 0};
 static OSObject *gVfRcsPrologue;
 static uint64_t gVfRcsPrologueGpu;
-// V311: submissions that start with a plain MI_BATCH_BUFFER_START (IOSurface
-// blits, VT's copy contexts) never get the prologue and run with whatever the
-// previous context left in the non-restored registers (preemption granularity,
-// GT_MODE, hashing). They jump through a per-submission trampoline instead:
-// the prologue body, then MI_BATCH_BUFFER_START to the original batch.
-static constexpr uint32_t kRcsTrampolineBytes = 512, kRcsTrampolines = 256;
-static OSObject *gVfRcsTrampolines;
-static uint32_t *gVfRcsTrampolineCpu;
-static uint64_t gVfRcsTrampolineGpu;
-static uint32_t gVfRcsPrologueWords; // body length, without MI_BATCH_BUFFER_END
-static volatile uint32_t gVfRcsTrampolineNext;
 
 static void vfBuildRcsPrologue(uint32_t *b) {
 	size_t n = 0;
@@ -10703,10 +10687,8 @@ static void vfBuildRcsPrologue(uint32_t *b) {
 	// state may sit in the media/GPGPU pipeline (FrameStatistics walkers, host
 	// compute); its first batch then hung with only CS and SDE busy. Flush
 	// (RT, depth, DC, CS stall) and select 3D as Apple's batches do.
-	if (!checkKernelArgument("-ngnopipesel")) {
-		const uint32_t select[] {0x7A000004, 0x00101021, 0, 0, 0, 0, 0x69041310};
-		for (auto v : select) b[n++] = v;
-	}
+	const uint32_t select[] {0x7A000004, 0x00101021, 0, 0, 0, 0, 0x69041310};
+	for (auto v : select) b[n++] = v;
 	// TGL object-level 3D preemption corrupts the pipeline (PRM Vol14 UP3
 	// p53, WEX r135/r144). The host enables per-context control (0x20E0
 	// bit 14) and VF contexts start with CS_CHICKEN1 bit 0 set; GuC
@@ -10714,21 +10696,17 @@ static void vfBuildRcsPrologue(uint32_t *b) {
 	// V310: GPGPU/media granularity likewise defaults to mid-thread, which needs a
 	// system routine (STATE_SIP) the VF never has: a media walker preempted
 	// mid-thread (Apple's FrameStatistics kernel) never resumes. Command level.
-	if (!checkKernelArgument("-ngobjpreempt")) {
-		b[n++] = 0x11000001;
-		b[n++] = 0x2580;
-		b[n++] = (checkKernelArgument("-ngmidthread") ? 0x00010000 : 0x00070004) | (checkKernelArgument("-ngobj3d") ? 1 : 0);
-	}
+	b[n++] = 0x11000001;
+	b[n++] = 0x2580;
+	b[n++] = 0x00070004;
 	// CS_DEBUG_MODE2 bit 4 (CONSTANT_BUFFER address offset disable): Mesa sets
 	// it in every context. A VF context whose first run does not restore its
 	// image keeps the host's value, and then reads the UMD's push constant
 	// offsets as absolute addresses: its draws write nothing (or hang) for
 	// the context's whole life. The register is context-saved.
-	if (!checkKernelArgument("-ngnocsdm2")) {
-		b[n++] = 0x11000001;
-		b[n++] = 0x20D8;
-		b[n++] = 0x00100000;
-	}
+	b[n++] = 0x11000001;
+	b[n++] = 0x20D8;
+	b[n++] = 0x00100000;
 	// COMMON_SLICE_CHICKEN3 (Wa_1409142259), FF_MODE2 (Wa_1608008084),
 	// ROW_CHICKEN2 (Wa_1606931601)
 	const uint32_t lri[] {0x11000005, 0x7304, 0x02000200, 0x6604, 0xE0040000, 0xE4F4, 0x40004000};
@@ -10743,30 +10721,24 @@ static void vfBuildRcsPrologue(uint32_t *b) {
 	//   COMMON_SLICE_CHICKEN4 TDC load balancing calc off (Wa_1606376872)
 	//   COMMON_SLICE_CHICKEN1 RCC RHWO optimization off (Wa_1508744258, RCC hangs;
 	//     Mesa sets it in every render context)
-	if (!checkKernelArgument("-ngnoextrawa")) {
-		const uint32_t wa[] {0x1100000D, 0xE4F4, 0x01000100, 0xE48C, 0x02000200, 0x20EC, 0x00020002,
-		                     0xE18C, 0x80008000, 0x7018, 0x20002000, 0x7300, 0x00400040, 0x7010, 0x40004000};
-		for (auto v : wa) b[n++] = v;
-	}
+	const uint32_t wa[] {0x1100000D, 0xE4F4, 0x01000100, 0xE48C, 0x02000200, 0x20EC, 0x00020002,
+	                     0xE18C, 0x80008000, 0x7018, 0x20002000, 0x7300, 0x00400040, 0x7010, 0x40004000};
+	for (auto v : wa) b[n++] = v;
 	// GT_MODE as Apple's batches load it (0xE43F0000). That LRI comes from a
 	// non-privileged batch and 0x7008 is not in the host's whitelist, so it is
 	// dropped; a new context then keeps the host's (Mesa's) value with binding
 	// table alignment BTP_18_8, and every binding table pointer is read 8x too
 	// far: render targets resolve to garbage surface state.
-	if (!checkKernelArgument("-ngnogtmode")) {
-		b[n++] = 0x11000001;
-		b[n++] = 0x7008;
-		b[n++] = 0xE43F0000;
-	}
+	b[n++] = 0x11000001;
+	b[n++] = 0x7008;
+	b[n++] = 0xE43F0000;
 	// V315: L3 allocation (0xB134/0xB138) and 0x2084 as Apple's batches load them
 	// (0x88000020, 0x40000040, masked 0x0f5e0346). Those LRIs come from
 	// non-privileged batches and are dropped like GT_MODE's; a context whose
 	// first run inherits another L3 partition (host 0xb0000040, default
 	// 0xd0000020) hung its first draw (NotificationCenter, "bad boots").
-	if (!checkKernelArgument("-ngnol3")) {
-		const uint32_t l3[] {0x11000005, 0xB134, 0x88000020, 0xB138, 0x40000040, 0x2084, 0x0F5E0346};
-		for (auto v : l3) b[n++] = v;
-	}
+	const uint32_t l3[] {0x11000005, 0xB134, 0x88000020, 0xB138, 0x40000040, 0x2084, 0x0F5E0346};
+	for (auto v : l3) b[n++] = v;
 	// 3DSTATE_SUBSLICE_HASH_TABLE, slice 0 on TABLE_0, two- and three-way
 	// tables from intel_compute_pixel_hash_table_3way(8, 16, 2, 2, 0).
 	b[n++] = 0x791F000C;
@@ -10785,171 +10757,20 @@ static void vfBuildRcsPrologue(uint32_t *b) {
 	// (binding tables are relative to Surface State Base); Mesa enables it in
 	// every context, and a VF context whose first run inherits that reads its
 	// binding tables from a host address.
-	if (!checkKernelArgument("-ngnobtpool")) {
-		b[n++] = 0x79190002;
-		b[n++] = 0;
-		b[n++] = 0;
-		b[n++] = 0;
-	}
+	b[n++] = 0x79190002;
+	b[n++] = 0;
+	b[n++] = 0;
+	b[n++] = 0;
 	b[n++] = 0x05000000; // MI_BATCH_BUFFER_END
 }
 
 // Pixel hashing and the LRI workarounds are not kept across a VF context
 // switch, so every submission (each starts with kRcsRingHead) runs it.
-// V343: Apple creates the first render context of a process with an image
-// that only holds the ring registers and sets CTX_RESTORE_INHIBIT, so its
-// first run keeps whatever engine state the previous context (a host one
-// included) left behind. That first run is where render contexts hang
-// (first draw never completes; later runs restore their own image and are
-// fine). Give such contexts the engine state of a VF render context the
-// hardware has already saved, as i915 does with its default context image,
-// keeping the new context's own register values. Opt-in: -ngrcsgolden.
-static int gVfRcsGoldenOn = -1;
-static uint8_t *gVfRcsGolden;
-static uint32_t gVfRcsGoldenBytes;
-constexpr uint32_t kVfFreshRcsImageHeader = 0x11001015;
-
-// (register, value) pairs of the MI_LOAD_REGISTER_IMM blocks at the start of
-// a context's register state; stops at the first other command.
-static uint32_t vfImageLriPairs(const volatile uint32_t *r, uint32_t limit, uint32_t (*out)[2], uint32_t max) {
-	uint32_t n = 0;
-	for (uint32_t i = 0; i < limit;) {
-		const uint32_t header = r[i];
-		if (!header) {
-			i++;
-			continue;
-		}
-		if ((header & 0xFF000000U) != 0x11000000U)
-			break;
-		const uint32_t end = i + (header & 0xFFU) + 2;
-		for (uint32_t j = i + 1; j + 1 < end && j + 1 < limit; j += 2)
-			if (n < max) {
-				out[n][0] = r[j] & 0x7FFFFCU;
-				out[n][1] = r[j + 1];
-				n++;
-			}
-		i = end;
-	}
-	return n;
-}
-
-// Called on a render context's first enable.
-static void vfApplyRcsGolden(uint32_t id, uint8_t *image, uint32_t bytes, uint8_t *(*getter)(void *)) {
-	if (gVfRcsGoldenOn < 0)
-		gVfRcsGoldenOn = checkKernelArgument("-ngrcsgolden");
-	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
-	static uint32_t firstRunLogs = 0;
-	if (firstRunLogs++ < 64)
-		SYSLOG("ngreen", "V343: id=%u first render run, image header %08x ctl %08x bytes 0x%x", id, regs[1], regs[3], bytes);
-	if (!gVfRcsGoldenOn || bytes <= 0x2000 || regs[1] != kVfFreshRcsImageHeader)
-		return;
-	if (!gVfRcsGolden) {
-		// Donor: a render context whose image the hardware has saved (full
-		// LRI layout, no restore inhibit) and that was idle when saved.
-		OSObject *donors[16];
-		uint32_t donorIds[16], count = 0;
-		IOInterruptState state = IOSimpleLockLockDisableInterrupt(gVfContextLock);
-		for (uint32_t i = 0; i < gVfContextCapacity && count < 16; i++) {
-			auto &entry = gVfContexts[i];
-			if (i != id && entry.engineClass == 0 && entry.contextBacking &&
-			    (entry.state == kVfGucContextEnabled || entry.state == kVfGucContextDisabled)) {
-				entry.contextBacking->retain();
-				donors[count] = entry.contextBacking;
-				donorIds[count++] = i;
-			}
-		}
-		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, state);
-		for (uint32_t k = 0; k < count; k++) {
-			auto *donor = getter(donors[k]);
-			const auto donorBytes = static_cast<uint32_t>(getMember<uint64_t>(donors[k], kVfMappedBufferLengthOffset));
-			auto *d = donor ? reinterpret_cast<volatile uint32_t *>(donor + 0x1000) : nullptr;
-			if (!gVfRcsGolden && d && donorBytes == bytes && d[1] != kVfFreshRcsImageHeader &&
-			    (d[1] & 0xFF000000U) == 0x11000000U && !(d[3] & 1) && (d[5] & 0x3FFFFC) == (d[7] & 0x3FFFFC)) {
-				auto *copy = static_cast<uint8_t *>(IOMalloc(bytes - 0x1000));
-				if (copy) {
-					for (uint32_t o = 0; o < bytes - 0x1000; o += 64)
-						__asm__ volatile("clflush (%0)" :: "r"(donor + 0x1000 + o) : "memory");
-					__asm__ volatile("mfence" ::: "memory");
-					memcpy(copy, donor + 0x1000, bytes - 0x1000);
-					gVfRcsGolden = copy;
-					gVfRcsGoldenBytes = bytes;
-					SYSLOG("ngreen", "V343: golden render image from id=%u (%u bytes, header %08x)", donorIds[k], bytes, d[1]);
-				}
-			}
-			donors[k]->release();
-		}
-		if (!gVfRcsGolden) {
-			static uint32_t misses = 0;
-			if (misses++ < 8)
-				SYSLOG("ngreen", "V343: id=%u first run without golden image (%u donors)", id, count);
-			return;
-		}
-	}
-	if (bytes != gVfRcsGoldenBytes)
-		return;
-	// Keep every register the fresh image sets, take the rest from the golden
-	// image, and let the context restore it.
-	static uint32_t own[64][2];
-	const uint32_t ownCount = vfImageLriPairs(regs, 0x400, own, 64);
-	memcpy(image + 0x1000, gVfRcsGolden, bytes - 0x1000);
-	uint32_t kept = 0;
-	for (uint32_t i = 0; i < 0x400;) {
-		const uint32_t header = regs[i];
-		if (!header) {
-			i++;
-			continue;
-		}
-		if ((header & 0xFF000000U) != 0x11000000U)
-			break;
-		const uint32_t end = i + (header & 0xFFU) + 2;
-		for (uint32_t j = i + 1; j + 1 < end && j + 1 < 0x400; j += 2)
-			for (uint32_t k = 0; k < ownCount; k++)
-				if ((regs[j] & 0x7FFFFCU) == own[k][0]) {
-					regs[j + 1] = own[k][1];
-					kept++;
-				}
-		i = end;
-	}
-	for (uint32_t i = 0; i < 0x400; i += 2)
-		if ((regs[i] & 0x7FFFFCU) == 0x2244 && (regs[i] >> 24) == 0) {
-			regs[i + 1] = 0xFFFF0000U | (regs[i + 1] & 0xFFFEU); // clear CTX_RESTORE_INHIBIT
-			break;
-		}
-	for (uint32_t o = 0x1000; o < bytes; o += 64)
-		__asm__ volatile("clflush (%0)" :: "r"(image + o) : "memory");
-	__asm__ volatile("mfence" ::: "memory");
-	static uint32_t logs = 0;
-	if (logs++ < 32)
-		SYSLOG("ngreen", "V343: id=%u took golden render state, kept %u of %u own registers", id, kept, ownCount);
-}
-
-static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint32_t at, uint32_t end) {
+static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint32_t at) {
 	const uint32_t words = ringSize / 4;
 	if (!gVfRcsPrologueGpu || !ring || !words || (words & (words - 1)))
 		return;
 	auto w = [&](uint32_t i) -> volatile uint32_t & { return ring[(at / 4 + i) & (words - 1)]; };
-	if (w(0) == 0x18800101 && gVfRcsTrampolineCpu && gVfRcsPrologueWords) {
-		const uint32_t slot = OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&gVfRcsTrampolineNext)) % kRcsTrampolines;
-		uint32_t *t = gVfRcsTrampolineCpu + slot * (kRcsTrampolineBytes / 4);
-		const uint32_t *body = gVfRcsTrampolineCpu + kRcsTrampolines * (kRcsTrampolineBytes / 4);
-		uint32_t n = 0;
-		for (; n < gVfRcsPrologueWords; n++) t[n] = body[n];
-		t[n++] = 0x18C00101; // MI_BATCH_BUFFER_START, second level, PPGTT: the submission's batch
-		t[n++] = w(1);
-		t[n++] = w(2);
-		t[n++] = 0x05000000; // back to the ring
-		for (uint32_t i = 0; i < n; i += 16)
-			__asm__ volatile("clflush (%0)" :: "r"(&t[i]) : "memory");
-		__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(&t[n - 1]) : "memory");
-		const uint64_t gpu = gVfRcsTrampolineGpu + slot * kRcsTrampolineBytes;
-		w(1) = static_cast<uint32_t>(gpu);
-		w(2) = static_cast<uint32_t>(gpu >> 32);
-		w(0) = 0x18800001; // GGTT
-		for (uint32_t i = 0; i < 3; i++)
-			__asm__ volatile("clflush (%0)" :: "r"(&w(i)) : "memory");
-		__asm__ volatile("mfence" ::: "memory");
-		return;
-	}
 	for (uint32_t i = 0; i < arrsize(kRcsRingHead); i++)
 		if (w(i) != kRcsRingHead[i]) {
 			static uint32_t logs = 0;
@@ -11134,28 +10955,6 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 			gVfRcsPrologue = prologue;
 			gVfRcsPrologueGpu = gpu;
 			SYSLOG("ngreen", "V269: RCS prologue batch at GGTT 0x%llx", static_cast<unsigned long long>(gpu));
-			// V311: trampoline pool; the prologue body (no MI_BATCH_BUFFER_END) sits after the slots.
-			uint32_t words = 0;
-			while (words < PAGE_SIZE / 4 && cpu[words] != 0x05000000) words++;
-			const uint64_t poolBytes = kRcsTrampolines * kRcsTrampolineBytes + PAGE_SIZE;
-			auto *pool = checkKernelArgument("-ngtrampoline") && words + 4 <= kRcsTrampolineBytes / 4 ?
-				reinterpret_cast<SharedFactory>(callback->vfSharedMappedBufferWithOptions)(task, poolBytes, 2, 0) : nullptr;
-			auto *poolCpu = pool ? reinterpret_cast<uint32_t *>(getVirtual(pool)) : nullptr;
-			const uint64_t poolGpu = pool ? getGpu(pool) : 0;
-			if (poolCpu && NGGgtt::mappedBacking(reinterpret_cast<uint64_t>(poolCpu),
-			        getMember<uint64_t>(pool, kVfMappedBufferLengthOffset), poolBytes, poolGpu,
-			        gVfGGTTBase, gVfGGTTSize, kGucGgttTop)) {
-				bzero(poolCpu, poolBytes);
-				for (uint32_t i = 0; i < words; i++) poolCpu[kRcsTrampolines * (kRcsTrampolineBytes / 4) + i] = cpu[i];
-				gVfRcsTrampolines = pool;
-				gVfRcsTrampolineGpu = poolGpu;
-				gVfRcsPrologueWords = words;
-				gVfRcsTrampolineCpu = poolCpu;
-				SYSLOG("ngreen", "V311: RCS trampolines at GGTT 0x%llx, prologue %u dwords", static_cast<unsigned long long>(poolGpu), words);
-			} else {
-				SYSLOG("ngreen", "V311: no RCS trampolines");
-				if (pool) pool->release();
-			}
 		} else {
 			SYSLOG("ngreen", "V269: no RCS prologue batch");
 			if (prologue) prologue->release();
@@ -12233,19 +12032,6 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		SYSLOG("ngreen", "V230: registered GuC context id=%u LRCA=%08x:%08x class=%u instance=%u",
 		       gucId, descriptorHi, descriptorLo, engineClass, engineInstance);
 	}
-	// Experiment: the one render context that never starts is the only one
-	// whose image loads 0x21B0 with a GGTT address.
-	if (engineClass == 0 && checkKernelArgument("-ngno21b0")) {
-		using Getter = uint8_t *(*)(void *);
-		auto *image = reinterpret_cast<Getter>(callback->vfSharedMappedBufferGetVirtualAddress)(contextBacking);
-		auto *r = image ? reinterpret_cast<volatile uint32_t *>(image + 0x1000) : nullptr;
-		for (uint32_t i = 0; r && i + 1 < 0x100; i++)
-			if (r[i] == 0x21B0 && r[i + 1]) {
-				SYSLOG("ngreen", "V272: id=%u cleared 0x21b0=%08x", gucId, r[i + 1]);
-				r[i + 1] = 0;
-				__asm__ volatile("clflush (%0); mfence" :: "r"(&r[i + 1]) : "memory");
-			}
-	}
 	// V273: how the context's PPGTT translates the ring stamp page at
 	// 0x40000000 (every RCS ring starts with a PIPE_CONTROL write there).
 	static uint32_t walkDumps = 0;
@@ -13123,16 +12909,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		return false;
 	}
 
-	if (gVfRcsPrologueOn < 0)
-		gVfRcsPrologueOn = !checkKernelArgument("-ngnorcsprologue");
-	if (static_cast<uint32_t>(hwCsType) == 0 && gVfRcsPrologueOn)
+	if (static_cast<uint32_t>(hwCsType) == 0)
 		vfInjectRcsPrologue(static_cast<volatile uint32_t *>(reinterpret_cast<void *>(
 			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking))),
-			ringSize, previousRingTail, ringTail);
-	if (static_cast<uint32_t>(hwCsType) == 0 && previousState == kVfGucContextRegistered)
-		vfApplyRcsGolden(static_cast<uint32_t>(slot), contextImage,
-			static_cast<uint32_t>(getMember<uint64_t>(contextImageBuffer, kVfMappedBufferLengthOffset)),
-			reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress));
+			ringSize, previousRingTail);
 
 	if (gVfContexts[slot].engineClass == 1 && gVfContexts[slot].contextBacking) {
 		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
@@ -13146,10 +12926,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		vfWakeVideoBatch(root & 0x7FFFFFF000ULL, reinterpret_cast<volatile uint32_t *>(getter(ringBacking)), ringSize,
 		                 previousRingTail, ringTail);
 	}
-	if (gVfStampMergeOn < 0)
-		gVfStampMergeOn = !checkKernelArgument("-ngnostampmerge"),
-		gVfStampWaitOn = !checkKernelArgument("-ngnostampwait");
-	if (gVfStampMergeOn) {
+	{
 		auto getter = reinterpret_cast<uint8_t *(*)(void *)>(callback->vfSharedMappedBufferGetVirtualAddress);
 		vfRedirectStamps(static_cast<uint32_t>(slot), reinterpret_cast<volatile uint32_t *>(getter(ringBacking)),
 		                 ringSize, previousRingTail, ringTail, getter,
@@ -14275,17 +14052,14 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		const uint32_t payload2 = length >= 4 ? message[4] : 0;
 		SYSLOG("ngreen", "V234: GuC failure event action=0x%04x len=%u payload=%08x:%08x:%08x",
 		       action, length, payload0, payload1, payload2);
-		if (event.kind == NGVfGuCEvent::Kind::ContextReset)
+		// GuC already reset the engine and dropped only the hung context; keep
+		// the other contexts running.
+		if (event.kind == NGVfGuCEvent::Kind::ContextReset) {
 			vfDumpResetContext(payload0, callback->vfSharedMappedBufferGetVirtualAddress);
-		if (event.kind == NGVfGuCEvent::Kind::ContextReset && !checkKernelArgument("-ngnoresetskip"))
 			vfSkipResetContext(payload0, callback->vfSharedMappedBufferGetVirtualAddress);
-	// Default (opt out with -ngnoresetcontinue): GuC already reset the engine and dropped only
-		// the hung context; keep the other contexts running.
-		if (event.kind == NGVfGuCEvent::Kind::ContextReset && !checkKernelArgument("-ngnoresetcontinue"))
 			return true;
-		vfMarkProtocolFault(event.kind == NGVfGuCEvent::Kind::ContextReset ?
-		                         "GuC context reset notification" :
-		                         "GuC engine failure notification");
+		}
+		vfMarkProtocolFault("GuC engine failure notification");
 		return false;
 	}
 	if (gVfContextLock && gVfContexts &&
@@ -14866,8 +14640,7 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 	// even when eventTimeout returns null. Do not return into that retry or
 	// fabricate completion while a direct GuC context may still DMA. Guest
 	// fail-stop is not PF containment; the independent host watcher is required.
-	if (gVfStampMergeOn > 0)
-		vfMergeRedirectedStamps(true);
+	vfMergeRedirectedStamps(true);
 	VfTimeoutContextFrame frames[NGVfTimeoutObservation::engineCount] {};
 	const uint32_t prefixEngine = NGVfTimeoutObservation::prefixEngineForChannel(channel);
 	const uint32_t capture = vfCaptureTimeoutFrames(callback ? callback->vfSharedMappedBufferGetVirtualAddress : 0, frames, prefixEngine);
@@ -14890,33 +14663,21 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 				engine,frames[engine].id,i*4,w[i],w[i+1],w[i+2],w[i+3],w[i+4],w[i+5],w[i+6],w[i+7]);
 	}
 	ringDumps++;
-	// Default (opt out with -ngnoresetcontinue): GuC already reset the hung context, so nothing of it
-	// can still DMA; keep the guest alive and let the channel time out again.
-	if (!checkKernelArgument("-ngnoresetcontinue")) {
-		// Log and dump each newly stalled context set, not just the first 16 timeouts of a boot.
-		static uint32_t logs = 0, lastIds = 0;
-		const uint32_t ids = frames[0].id ^ (frames[2].id << 16) ^ (frames[3].id << 8);
-		if (ids != lastIds) { lastIds = ids; if (logs > 3) logs = 0; }
-		if (logs++ < 16)
-			SYSLOG("ngreen", "V267: event timeout channel=%d capture=%x T0=" NG_TIMEOUT_FRAME_FORMAT
-				" T2=" NG_TIMEOUT_FRAME_FORMAT " T3=" NG_TIMEOUT_FRAME_FORMAT "; continuing", channel, capture,
-				NG_TIMEOUT_FRAME_ARGS(frames[0]), NG_TIMEOUT_FRAME_ARGS(frames[2]), NG_TIMEOUT_FRAME_ARGS(frames[3]));
-		// Where the stalled contexts sit: ring around the saved head and the batch.
-		if (logs <= 3 && callback)
-			for (uint32_t engine = 0; engine < NGVfTimeoutObservation::engineCount; ++engine)
-				if ((frames[engine].flags & 8) && !(frames[engine].flags & 16))
-					vfDumpResetContext(frames[engine].id, callback->vfSharedMappedBufferGetVirtualAddress);
-		return nullptr;
-	}
-	vfMarkProtocolFault("VF native event timeout without verified GPU quiescence");
-	PANIC_COND(true, "ngreen", "V267: refusing VF event timeout recovery channel=%d V364: capture=%x"
-		" T0=" NG_TIMEOUT_FRAME_FORMAT " T1=" NG_TIMEOUT_FRAME_FORMAT
-		" T2=" NG_TIMEOUT_FRAME_FORMAT " T3=" NG_TIMEOUT_FRAME_FORMAT
-		" T4=" NG_TIMEOUT_FRAME_FORMAT " T5=" NG_TIMEOUT_FRAME_FORMAT " V379: E=%x V366: P=" NG_TIMEOUT_WINDOW_FORMAT,
-		channel,capture,NG_TIMEOUT_FRAME_ARGS(frames[0]),NG_TIMEOUT_FRAME_ARGS(frames[1]),
-		NG_TIMEOUT_FRAME_ARGS(frames[2]),NG_TIMEOUT_FRAME_ARGS(frames[3]),
-		NG_TIMEOUT_FRAME_ARGS(frames[4]),NG_TIMEOUT_FRAME_ARGS(frames[5]),prefixEngine,
-		NG_TIMEOUT_WINDOW_ARGS(frames[prefixEngine < NGVfTimeoutObservation::engineCount ? prefixEngine : 0]));
+	// GuC already reset the hung context, so nothing of it can still DMA; keep
+	// the guest alive and let the channel time out again.
+	// Log and dump each newly stalled context set, not just the first 16 timeouts of a boot.
+	static uint32_t logs = 0, lastIds = 0;
+	const uint32_t ids = frames[0].id ^ (frames[2].id << 16) ^ (frames[3].id << 8);
+	if (ids != lastIds) { lastIds = ids; if (logs > 3) logs = 0; }
+	if (logs++ < 16)
+		SYSLOG("ngreen", "V267: event timeout channel=%d capture=%x T0=" NG_TIMEOUT_FRAME_FORMAT
+			" T2=" NG_TIMEOUT_FRAME_FORMAT " T3=" NG_TIMEOUT_FRAME_FORMAT "; continuing", channel, capture,
+			NG_TIMEOUT_FRAME_ARGS(frames[0]), NG_TIMEOUT_FRAME_ARGS(frames[2]), NG_TIMEOUT_FRAME_ARGS(frames[3]));
+	// Where the stalled contexts sit: ring around the saved head and the batch.
+	if (logs <= 3 && callback)
+		for (uint32_t engine = 0; engine < NGVfTimeoutObservation::engineCount; ++engine)
+			if ((frames[engine].flags & 8) && !(frames[engine].flags & 16))
+				vfDumpResetContext(frames[engine].id, callback->vfSharedMappedBufferGetVirtualAddress);
 	return nullptr;
 }
 

@@ -121,7 +121,7 @@ void maybeStart() {
 } // namespace
 
 void NDRVRefresh::init() {
-    if (!checkKernelArgument("-ngndrv0hz")) lilu.onKextLoadForce(kexts, arrsize(kexts));
+    lilu.onKextLoadForce(kexts, arrsize(kexts));
 }
 
 bool NDRVRefresh::processKext(KernelPatcher &p, size_t index, mach_vm_address_t address, size_t size) {
@@ -139,16 +139,14 @@ bool NDRVRefresh::processKext(KernelPatcher &p, size_t index, mach_vm_address_t 
     const bool ok = p.routeMultiple(index, &route, 1, address, size);
     p.clearError();
     SYSLOG("ngreen", "V351: NDRV modes report %u Hz: %d", kRefreshHz, ok);
-    if (!checkKernelArgument("-ngnohwcursor")) {
-        KernelPatcher::RouteRequest cursor[] {
-            {"__ZN17IONDRVFramebuffer12getAttributeEjPm", wrapGetAttribute, orgGetAttribute},
-            {"__ZN17IONDRVFramebuffer14setCursorImageEPv", wrapSetCursorImage, orgSetCursorImage},
-            {"__ZN17IONDRVFramebuffer14setCursorStateEiib", wrapSetCursorState, orgSetCursorState},
-        };
-        hardwareCursor = p.routeMultiple(index, cursor, arrsize(cursor), address, size);
-        SYSLOG("ngreen", "V353: NDRV hardware cursor: %d", hardwareCursor);
-        p.clearError();
-    }
+    KernelPatcher::RouteRequest cursor[] {
+        {"__ZN17IONDRVFramebuffer12getAttributeEjPm", wrapGetAttribute, orgGetAttribute},
+        {"__ZN17IONDRVFramebuffer14setCursorImageEPv", wrapSetCursorImage, orgSetCursorImage},
+        {"__ZN17IONDRVFramebuffer14setCursorStateEiib", wrapSetCursorState, orgSetCursorState},
+    };
+    hardwareCursor = p.routeMultiple(index, cursor, arrsize(cursor), address, size);
+    SYSLOG("ngreen", "V353: NDRV hardware cursor: %d", hardwareCursor);
+    p.clearError();
     ndrvRouted = ok;
     maybeStart();
     return true;
