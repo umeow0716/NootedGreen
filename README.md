@@ -10,7 +10,7 @@ GPUs may work but have not been tried.
 
 ## Status
 
-Working on macOS Tahoe 26.7 (`25G229`):
+Working on macOS Tahoe 26.7 (`25G229`) and 26.7.2 (`25G332`):
 
 - Metal (WindowServer compositing, Metal apps)
 - H.264 hardware decode and encode through VideoToolbox
@@ -21,12 +21,12 @@ Known issues:
 - The first decoded frame after boot can come out black.
 - Only macOS Tahoe is supported. On a minor update the kext checks the
   IOAcceleratorFamily2 layout it depends on and boots without acceleration if it
-  changed. Only `25G229` has been tested.
+  changed. Tested on `25G229` and `25G332`.
 - Occasional GuC context resets on the video engine under long encode runs.
 
 ## Requirements
 
-- macOS Tahoe 26.7 (`25G229`)
+- macOS Tahoe (tested `25G229`, `25G332`)
 - [Lilu](https://github.com/acidanthera/Lilu) 1.7.2 or newer
 - Tiger Lake kexts and user-space bundles from an older macOS release, installed
   in `/Library/Extensions` (not included):
@@ -43,6 +43,13 @@ User-space pieces built from this repo:
   (`NGShim/install.sh`).
 - `tools/ngva`: VideoToolbox front end plus patched TGL VA driver, installed as
   `/Library/GPUBundles/NootedGreenTGLMediaAdapter.bundle` (`tools/ngva/install.sh`).
+
+## Updating macOS
+
+The macOS installer removes `AppleIntelTGLGraphics.kext` from
+`/Library/Extensions`. After a minor update, copy it back, install the Kernel
+Debug Kit matching the new build (`kmutil` refuses to rebuild the auxiliary kernel
+collection without it) and rebuild the collection with `kmutil create`.
 
 ## Boot args
 
