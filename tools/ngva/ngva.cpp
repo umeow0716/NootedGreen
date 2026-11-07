@@ -11,6 +11,8 @@
 // Gen11 ISA; Gen12 rebuilds placed in Resources replace them when present.
 // Load the driver, convert its description and SPS, and answer tag 0xe here.
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
 #include <IOSurface/IOSurface.h>
 #include <malloc/malloc.h>
 #include <algorithm>
@@ -513,9 +515,37 @@ void replaceKernels(const char *bundle) {
 	}
 }
 
+// The description, SPS and encode job layouts converted here are AppleGVA's.
+// Minor macOS updates rebuild AppleGVA from the same source version, so check
+// that rather than the image itself; another version makes VideoToolbox fall
+// back to software instead of handing the driver mismatched structures.
+constexpr uint64_t testedAppleGva = 113ULL << 40 | 56ULL << 30; // 113.56.0.0.0
+
+bool appleGvaTested() {
+	for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+		const char *name = _dyld_get_image_name(i);
+		const char *suffix = "/AppleGVA.framework/Versions/A/AppleGVA";
+		if (!name || strlen(name) < strlen(suffix) || strcmp(name + strlen(name) - strlen(suffix), suffix)) continue;
+		auto *header = reinterpret_cast<const mach_header_64 *>(_dyld_get_image_header(i));
+		auto *command = reinterpret_cast<const load_command *>(header + 1);
+		for (uint32_t c = 0; c < header->ncmds; c++) {
+			if (command->cmd == LC_SOURCE_VERSION) {
+				uint64_t version = reinterpret_cast<const source_version_command *>(command)->version;
+				if (version == testedAppleGva) return true;
+				syslog(LOG_ERR, "ngva: AppleGVA %llu.%llu not tested, hardware video off", version >> 40, version >> 30 & 0x3ff);
+				return false;
+			}
+			command = reinterpret_cast<const load_command *>(reinterpret_cast<const uint8_t *>(command) + command->cmdsize);
+		}
+	}
+	syslog(LOG_ERR, "ngva: AppleGVA version not found, hardware video off");
+	return false;
+}
+
 bool load() {
 	static std::once_flag once;
 	std::call_once(once, [] {
+		if (!appleGvaTested()) return;
 		// The patched driver sits next to this image.
 		Dl_info self {};
 		char path[1024];

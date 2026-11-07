@@ -4,7 +4,8 @@
 set -eu
 cd "$(dirname "$0")"
 work=$(mktemp -d)
-driver=/Library/Extensions/AppleIntelTGLGraphicsVADriver.bundle/Contents/MacOS/AppleIntelTGLGraphicsVADriver
+# Donor VA driver binary; macOS updates delete the copy in /Library/Extensions.
+driver=${1:-/Library/Extensions/AppleIntelTGLGraphicsVADriver.bundle/Contents/MacOS/AppleIntelTGLGraphicsVADriver}
 bundle=/Library/GPUBundles/NootedGreenTGLMediaAdapter.bundle
 clang++ -std=c++17 -O2 -bundle -Wno-vla-cxx-extension -I ../../NootedGreen -I . ngva.cpp -framework IOSurface -o "$work/ngva"
 /usr/bin/python3 patch-vadriver.py "$driver" "$work/driver"

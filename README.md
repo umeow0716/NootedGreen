@@ -42,7 +42,7 @@ User-space pieces built from this repo:
 - `NGShim`: replaces `impostor.dylib` in the TGL Metal driver bundle
   (`NGShim/install.sh`).
 - `tools/ngva`: VideoToolbox front end plus patched TGL VA driver, installed as
-  `/Library/GPUBundles/NootedGreenTGLMediaAdapter.bundle` (`tools/ngva/install.sh`).
+  `/Library/GPUBundles/NootedGreenTGLMediaAdapter.bundle` (`tools/ngva/install.sh [donor VA driver binary]`).
 
 ## Updating macOS
 
