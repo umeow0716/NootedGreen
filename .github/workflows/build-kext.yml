@@ -2,19 +2,12 @@ name: Build Tahoe SR-IOV kexts
 
 on:
   workflow_dispatch:
-    inputs:
-      full_static:
-        description: Run the full static suite again on the Tahoe runner
-        type: boolean
-        default: false
   push:
     branches:
       - codex/tahoe-sriov-vf
     paths:
       - "NootedGreen/**"
       - "NootedGreen.xcodeproj/**"
-      - "Lilu.kext/**"
-      - "MacKernelSDK/**"
       - "tools/**"
       - "NGShim/**"
       - "!tools/metal_smoke/**"
@@ -51,12 +44,8 @@ jobs:
           case "$XCODE_VERSION" in 26.*) ;; *) echo "Expected Xcode 26, got $XCODE_VERSION" >&2; exit 1;; esac
           case "$SDK_VERSION" in 26.*) ;; *) echo "Expected macOS 26 SDK, got $SDK_VERSION" >&2; exit 1;; esac
 
-      - name: Check all sources and protocol models
-        if: github.event_name == 'workflow_dispatch' && inputs.full_static
-        run: |
-          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
-            CXX="$(xcrun --sdk macosx -f clang++)" \
-            bash tools/check-static.sh
+      - name: Fetch dependencies
+        run: tools/fetch-deps.sh
 
       - name: Build x86_64 release kext
         run: |

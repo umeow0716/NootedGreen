@@ -4,3 +4,6 @@ DerivedData/
 xcuserdata/
 .DS_Store
 *.HEAD
+Lilu.kext/
+MacKernelSDK/
+__pycache__/

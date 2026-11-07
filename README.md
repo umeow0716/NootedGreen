@@ -405,7 +405,7 @@ media-model hook are not part of the maintained path.
 
 ## Building
 
-Open `NootedGreen.xcodeproj` and select the **NootedGreen** scheme to build the Gen11/Gen12 plugin, or one of the original NootedBlue schemes for legacy hardware. Build with Xcode.
+Run `tools/fetch-deps.sh` once to download Lilu and MacKernelSDK, then build the **NootedGreen** scheme of `NootedGreen.xcodeproj` with Xcode.
 
 ## Authors
 
