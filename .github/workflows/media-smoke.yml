@@ -2,7 +2,7 @@ name: Build native media smoke only
 on:
   workflow_dispatch:
   push:
-    branches: [codex/tahoe-sriov-vf]
+    branches: [main]
     paths: ["tools/metal_smoke/**", ".github/workflows/media-smoke.yml"]
 permissions:
   contents: read

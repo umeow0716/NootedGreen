@@ -2,7 +2,7 @@ name: Native TGL capability adapter probe
 on:
   workflow_dispatch:
   push:
-    branches: [codex/tahoe-sriov-vf]
+    branches: [main]
     paths: ["tools/media_adapter/**", "tools/personality_contract_test.py", "NootedGreen/**", ".github/workflows/media-adapter.yml"]
 permissions:
   contents: read
