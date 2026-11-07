@@ -1,7 +1,7 @@
 // Copyright © 2026 Stezza @ inc. Licensed under the Thou Shalt Not Profit
 // License version 1.0. See LICENSE for details.
-#ifndef kern_gen11_hpp
-#define kern_gen11_hpp
+#ifndef kern_tgl_accel_hpp
+#define kern_tgl_accel_hpp
 
 #include "kern_green.hpp"
 #include "kern_patcherplus.hpp"
@@ -23,7 +23,7 @@ enum IGHwCsType {
 	kIGHwCsTypeVECS0,
 };
 
-class Gen11 {
+class TglAccel {
 private:
 	static bool loadGuCBinary(void *that);
 	static bool vfMmioHostToGuCAction(void *that, const uint32_t *request,
@@ -432,7 +432,7 @@ private:
 
 public:
 	void init();
-	static Gen11 *callback;
+	static TglAccel *callback;
 	static bool pollVfGuCToHost(void *that);
 	bool processKext(KernelPatcher &patcher, size_t index,
 	                 mach_vm_address_t address, size_t size);

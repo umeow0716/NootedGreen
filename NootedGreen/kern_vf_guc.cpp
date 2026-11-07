@@ -655,7 +655,7 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 		// it has no tasklet retry path, so wait here while GuC consumes H2G and
 		// the independent G2H callback returns reply credits. The entry guard
 		// already proved this context may sleep.
-		if (!Gen11::pollVfGuCToHost(guc))
+		if (!TglAccel::pollVfGuCToHost(guc))
 			return false;
 		IOSleep(1);
 	}
@@ -976,7 +976,7 @@ bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target)
 				completed = true;
 				break;
 			}
-			if (!Gen11::pollVfGuCToHost(guc))
+			if (!TglAccel::pollVfGuCToHost(guc))
 				break;
 			if (spins < 1000) {
 				spins++;
@@ -1022,7 +1022,7 @@ bool vfWaitForContextState(void *guc, uint16_t gucId, VfGucContextState wanted)
 			return true;
 		if (!vfCanWaitForGuc(guc))
 			return false;
-		if (!Gen11::pollVfGuCToHost(guc))
+		if (!TglAccel::pollVfGuCToHost(guc))
 			return false;
 		IOSleep(1);
 	}
@@ -1045,7 +1045,7 @@ bool vfWaitForContextTransition(void *guc, uint16_t gucId, uint32_t lrcaPage,
 			return true;
 		if (!vfCanWaitForGuc(guc))
 			return false;
-		if (!Gen11::pollVfGuCToHost(guc))
+		if (!TglAccel::pollVfGuCToHost(guc))
 			return false;
 		IOSleep(1);
 	}
@@ -1153,7 +1153,7 @@ bool vfStopSubmissionAndSealCtb(void *guc)
 		}
 		if (gVfProtocolFault)
 			return false;
-		if (!Gen11::pollVfGuCToHost(guc))
+		if (!TglAccel::pollVfGuCToHost(guc))
 			return false;
 		IOSleep(1);
 	}

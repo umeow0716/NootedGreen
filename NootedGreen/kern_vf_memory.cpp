@@ -2,7 +2,7 @@
 //  details.
 #include "kern_vf_internal.hpp"
 
-bool Gen11::vfAllocMoreCommandBuffers(void *pool)
+bool TglAccel::vfAllocMoreCommandBuffers(void *pool)
 {
 	VfSlowSubmitLog slow("command pool growth");
 	PANIC_COND(!callback || !callback->oIOAccelAllocMoreCommandBuffers,
@@ -74,7 +74,7 @@ static NGIOAccelCommandPool::ControlFrame vfCommandPoolFrame(void *pool, bool sl
 	return frame;
 }
 
-void *Gen11::vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords)
+void *TglAccel::vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords)
 {
 	PANIC_COND(!callback || !callback->oIOAccelGetCommandBufferPtrNoInc,
 	           "ngreen", "Missing native command-pool getter trampoline");
@@ -189,7 +189,7 @@ static bool vfEventVectorGrowChecked(void *vector, size_t requested,
 	return nativeResult;
 }
 
-bool Gen11::vf2DEventVectorGrow(void *vector, size_t requested)
+bool TglAccel::vf2DEventVectorGrow(void *vector, size_t requested)
 {
 	PANIC_COND(!callback || !callback->oVf2DEventVectorGrow,
 	           "ngreen", "Missing 2D event-vector growth trampoline");
@@ -198,7 +198,7 @@ bool Gen11::vf2DEventVectorGrow(void *vector, size_t requested)
 		reinterpret_cast<Grow>(callback->oVf2DEventVectorGrow));
 }
 
-bool Gen11::vfAcceleratorEventVectorGrow(void *vector, size_t requested)
+bool TglAccel::vfAcceleratorEventVectorGrow(void *vector, size_t requested)
 {
 	PANIC_COND(!callback || !callback->oVfAcceleratorEventVectorGrow,
 	           "ngreen", "Missing accelerator event-vector growth trampoline");
@@ -207,7 +207,7 @@ bool Gen11::vfAcceleratorEventVectorGrow(void *vector, size_t requested)
 		reinterpret_cast<Grow>(callback->oVfAcceleratorEventVectorGrow));
 }
 
-bool Gen11::vfRenderEventVectorGrow(void *vector, size_t requested)
+bool TglAccel::vfRenderEventVectorGrow(void *vector, size_t requested)
 {
 	PANIC_COND(!callback || !callback->oVfRenderEventVectorGrow,
 	           "ngreen", "Missing render event-vector growth trampoline");
@@ -216,7 +216,7 @@ bool Gen11::vfRenderEventVectorGrow(void *vector, size_t requested)
 		reinterpret_cast<Grow>(callback->oVfRenderEventVectorGrow));
 }
 
-bool Gen11::vfBlitEventVectorGrow(void *vector, size_t requested)
+bool TglAccel::vfBlitEventVectorGrow(void *vector, size_t requested)
 {
 	PANIC_COND(!callback || !callback->oVfBlitEventVectorGrow,
 	           "ngreen", "Missing blit event-vector growth trampoline");
@@ -225,7 +225,7 @@ bool Gen11::vfBlitEventVectorGrow(void *vector, size_t requested)
 		reinterpret_cast<Grow>(callback->oVfBlitEventVectorGrow));
 }
 
-bool Gen11::vfGLEventVectorGrow(void *vector, size_t requested)
+bool TglAccel::vfGLEventVectorGrow(void *vector, size_t requested)
 {
 	PANIC_COND(!callback || !callback->oVfGLEventVectorGrow,
 	           "ngreen", "Missing GL event-vector growth trampoline");
@@ -234,7 +234,7 @@ bool Gen11::vfGLEventVectorGrow(void *vector, size_t requested)
 		reinterpret_cast<Grow>(callback->oVfGLEventVectorGrow));
 }
 
-bool Gen11::vfResourceEventVectorGrow(void *vector, size_t requested)
+bool TglAccel::vfResourceEventVectorGrow(void *vector, size_t requested)
 {
 	PANIC_COND(!callback || !callback->oVfResourceEventVectorGrow,
 	           "ngreen", "Missing resource event-vector growth trampoline");
@@ -243,7 +243,7 @@ bool Gen11::vfResourceEventVectorGrow(void *vector, size_t requested)
 		reinterpret_cast<Grow>(callback->oVfResourceEventVectorGrow));
 }
 
-bool Gen11::vfSharedEventVectorGrow(void *vector, size_t requested)
+bool TglAccel::vfSharedEventVectorGrow(void *vector, size_t requested)
 {
 	PANIC_COND(!callback || !callback->oVfSharedEventVectorGrow,
 	           "ngreen", "Missing shared event-vector growth trampoline");
@@ -252,7 +252,7 @@ bool Gen11::vfSharedEventVectorGrow(void *vector, size_t requested)
 		reinterpret_cast<Grow>(callback->oVfSharedEventVectorGrow));
 }
 
-bool Gen11::vfSurfaceEventVectorGrow(void *vector, size_t requested)
+bool TglAccel::vfSurfaceEventVectorGrow(void *vector, size_t requested)
 {
 	PANIC_COND(!callback || !callback->oVfSurfaceEventVectorGrow,
 	           "ngreen", "Missing surface event-vector growth trampoline");
@@ -261,7 +261,7 @@ bool Gen11::vfSurfaceEventVectorGrow(void *vector, size_t requested)
 		reinterpret_cast<Grow>(callback->oVfSurfaceEventVectorGrow));
 }
 
-bool Gen11::IGMemoryManagerInitSegments(void *that)
+bool TglAccel::IGMemoryManagerInitSegments(void *that)
 {
 	if (gVfIdentity != VfIdentity::Virtual || !that || !vfBootstrapDirectGgtt())
 		return false;
@@ -350,7 +350,7 @@ static void vfTrapUnmappedGgtt(void *table) {
 	       static_cast<unsigned long long>(gVfGgttTrap->getPhysicalAddress()), count);
 }
 
-bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
+bool TglAccel::IGHardwareGlobalPageTableInitWithOptions(void *that,
                                                      void *accelerator,
                                                      const NGIGAddressRange &range,
                                                      void *mmioBase,
@@ -548,7 +548,7 @@ static NGIGAddressRange vfPageRange(const NGIGAddressRange &range)
 	return {range.start & ~0xFFFULL, (range.length + 0xFFFULL) & ~0xFFFULL};
 }
 
-bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
+bool TglAccel::IGHardwareGlobalPageTableMapRange(void *that,
                                               const NGIGAddressRange &nativeRange,
                                               uint64_t physical,
                                               uint64_t flags)
@@ -590,7 +590,7 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
 	return true;
 }
 
-bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
+bool TglAccel::IGHardwareGlobalPageTableMapRangeRotated(void *that,
                                                      void *rangeIterator,
                                                      void *physicalIterator,
                                                      uint64_t flags)
@@ -755,7 +755,7 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 	return true;
 }
 
-void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
+void TglAccel::IGHardwareGlobalPageTableUnmapRange(void *that,
                                                 const NGIGAddressRange &nativeRange)
 {
 	const NGIGAddressRange range = vfPageRange(nativeRange);
@@ -803,7 +803,7 @@ void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
 		"ngreen", "VF GGTT unmap could not quiesce translations before DMA release");
 }
 
-bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
+bool TglAccel::IGHardwareGlobalPageTableMapRangeDummy(void *that,
                                                    const NGIGAddressRange &nativeRange,
                                                    uint64_t flags)
 {
@@ -855,7 +855,7 @@ static void vfRequireCompletedPpgttUpdate()
 		"ngreen", "VF PPGTT update did not retire engine translations");
 }
 
-void Gen11::vfPpgtt32UnmapRange(void *that,
+void TglAccel::vfPpgtt32UnmapRange(void *that,
 	                             const NGIGAddressRange &range)
 {
 	PANIC_COND(!that || !callback->oVfPpgtt32UnmapRange,
@@ -871,7 +871,7 @@ void Gen11::vfPpgtt32UnmapRange(void *that,
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
-void Gen11::vfPpgtt64UnmapRange(void *that,
+void TglAccel::vfPpgtt64UnmapRange(void *that,
 	                             const NGIGAddressRange &range)
 {
 	PANIC_COND(!that || !callback->oVfPpgtt64UnmapRange,
@@ -887,7 +887,7 @@ void Gen11::vfPpgtt64UnmapRange(void *that,
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
-void Gen11::vfPpgtt64ShrinkRange(void *that,
+void TglAccel::vfPpgtt64ShrinkRange(void *that,
 	                              const NGIGAddressRange &range)
 {
 	PANIC_COND(!that || !callback->oVfPpgtt64ShrinkRange,
@@ -905,7 +905,7 @@ void Gen11::vfPpgtt64ShrinkRange(void *that,
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
-bool Gen11::vfCommitPageTablesForTask(void *that, void *task, void *mapping)
+bool TglAccel::vfCommitPageTablesForTask(void *that, void *task, void *mapping)
 {
 	VfSlowSubmitLog slow("page-table commit");
 	PANIC_COND(!that || !task || !mapping ||
@@ -941,7 +941,7 @@ bool Gen11::vfCommitPageTablesForTask(void *that, void *task, void *mapping)
 	return false;
 }
 
-bool Gen11::vfReleasePageTablesForTask(void *that, void *task, void *mapping)
+bool TglAccel::vfReleasePageTablesForTask(void *that, void *task, void *mapping)
 {
 	PANIC_COND(!that || !task || !mapping ||
 	           !callback->oVfReleasePageTablesForTask,
@@ -964,7 +964,7 @@ bool Gen11::vfReleasePageTablesForTask(void *that, void *task, void *mapping)
 	return released;
 }
 
-bool Gen11::vfUpdatePageTablesForTask(void *that, void *task, void *mapping)
+bool TglAccel::vfUpdatePageTablesForTask(void *that, void *task, void *mapping)
 {
 	VfSlowSubmitLog slow("page-table update");
 	PANIC_COND(!that || !task || !mapping ||
@@ -982,7 +982,7 @@ bool Gen11::vfUpdatePageTablesForTask(void *that, void *task, void *mapping)
 	return updated;
 }
 
-void *Gen11::vfNewPageTableForTask(void *that, void *task)
+void *TglAccel::vfNewPageTableForTask(void *that, void *task)
 {
 	PANIC_COND(!that || !task || !callback ||
 	           !callback->oVfNewPageTableForTask ||
@@ -1157,7 +1157,7 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 	return pageTable;
 }
 
-void Gen11::vfSynchronizeAllTasks(void *that)
+void TglAccel::vfSynchronizeAllTasks(void *that)
 {
 	PANIC_COND(!that || !callback->oVfSynchronizeAllTasks ||
 	           getMember<void *>(that, 0x10) != gVfAccelerator,
@@ -1173,7 +1173,7 @@ void Gen11::vfSynchronizeAllTasks(void *that)
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
-void Gen11::vfSynchronizeEachEntry(void *that, const void *source,
+void TglAccel::vfSynchronizeEachEntry(void *that, const void *source,
 	                                const NGIGAddressRange &range,
 	                                bool remap)
 {
@@ -1242,7 +1242,7 @@ void Gen11::vfSynchronizeEachEntry(void *that, const void *source,
 	}
 }
 
-bool Gen11::vfPpgtt64RemapDescriptor(void *that,
+bool TglAccel::vfPpgtt64RemapDescriptor(void *that,
 	                                  const NGIGAddressRange &range,
 	                                  void *descriptor)
 {
@@ -1293,7 +1293,7 @@ bool Gen11::vfPpgtt64RemapDescriptor(void *that,
 	return true;
 }
 
-void *Gen11::vfPagePoolAllocatePage(void *that)
+void *TglAccel::vfPagePoolAllocatePage(void *that)
 {
 	PANIC_COND(!vfAdmitPagePoolTransactionOwner(that) ||
 	           !callback->oVfPagePoolAllocatePage ||
@@ -1306,7 +1306,7 @@ void *Gen11::vfPagePoolAllocatePage(void *that)
 	return descriptor;
 }
 
-void Gen11::vfPagePoolReleasePage(void *that, const void *descriptor)
+void TglAccel::vfPagePoolReleasePage(void *that, const void *descriptor)
 {
 	PANIC_COND(!vfAdmitPagePoolTransactionOwner(that) || !descriptor ||
 	           !callback->oVfPagePoolReleasePage ||
@@ -1318,7 +1318,7 @@ void Gen11::vfPagePoolReleasePage(void *that, const void *descriptor)
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
-void Gen11::vfPagePoolPrune(void *that, uint32_t age)
+void TglAccel::vfPagePoolPrune(void *that, uint32_t age)
 {
 	PANIC_COND(!vfAdmitPagePoolTransactionOwner(that) ||
 	           !callback->oVfPagePoolPrune ||
@@ -1330,7 +1330,7 @@ void Gen11::vfPagePoolPrune(void *that, uint32_t age)
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
-void Gen11::vfPagePoolFree(void *that)
+void TglAccel::vfPagePoolFree(void *that)
 {
 	PANIC_COND(!vfAdmitPagePoolTransactionOwner(that) ||
 	           !callback->oVfPagePoolFree ||
@@ -1342,7 +1342,7 @@ void Gen11::vfPagePoolFree(void *that)
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
-void Gen11::vfReleasePagePool(void *that)
+void TglAccel::vfReleasePagePool(void *that)
 {
 	PANIC_COND(!that || !callback->oVfReleasePagePool ||
 	           !vfEnsurePageTableUpdateLock(), "ngreen",
@@ -1353,7 +1353,7 @@ void Gen11::vfReleasePagePool(void *that)
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
-void Gen11::vfMemoryManagerFree(void *that)
+void TglAccel::vfMemoryManagerFree(void *that)
 {
 	PANIC_COND(!that || !callback->oVfMemoryManagerFree ||
 	           !vfEnsurePageTableUpdateLock(), "ngreen",
@@ -1368,7 +1368,7 @@ void Gen11::vfMemoryManagerFree(void *that)
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
-void Gen11::vfUpdateMappingCacheType(void *that, uint32_t requestedType)
+void TglAccel::vfUpdateMappingCacheType(void *that, uint32_t requestedType)
 {
 	VfSlowSubmitLog slow("mapping cache type");
 	PANIC_COND(!that || !callback || !callback->oVfUpdateMappingCacheType,
@@ -1473,7 +1473,7 @@ static void *vfRingVirtual(void *ring, size_t byteOffset)
 	return reinterpret_cast<void *>(vtable[byteOffset / sizeof(mach_vm_address_t)]);
 }
 
-bool Gen11::vfWaitForRingSpace(void *that, uint32_t requestedDwords)
+bool TglAccel::vfWaitForRingSpace(void *that, uint32_t requestedDwords)
 {
 	vfSlowMark(">rspace");
 	PANIC_COND(!that || !callback->oVfWaitForRingSpace ||
@@ -1578,7 +1578,7 @@ static bool vfPpgttTaskHasNoDirectContexts(void *task)
 	return empty;
 }
 
-void Gen11::vfAccelTaskFree(void *that)
+void TglAccel::vfAccelTaskFree(void *that)
 {
 	PANIC_COND(!that || !callback->oVfAccelTaskFree,
 		"ngreen", "Missing native VF task-free boundary");

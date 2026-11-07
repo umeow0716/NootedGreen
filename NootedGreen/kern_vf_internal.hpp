@@ -1,12 +1,12 @@
 //  Copyright © 2026 Stezza @ inc. Licensed under the Thou Shalt Not Profit License version 1.0. See LICENSE for
 //  details.
 
-// State and helpers shared by the VF sources (kern_gen11.cpp, kern_vf_*.cpp).
+// State and helpers shared by the VF sources (kern_tgl_accel.cpp, kern_vf_*.cpp).
 
 #ifndef kern_vf_internal_hpp
 #define kern_vf_internal_hpp
 
-#include "kern_gen11.hpp"
+#include "kern_tgl_accel.hpp"
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOUserClient.h>
 #include <sys/proc.h>

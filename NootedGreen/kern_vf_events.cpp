@@ -269,7 +269,7 @@ void vfDumpResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 	}
 }
 
-bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
+bool TglAccel::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	if (!that || !message || !vfCtbConsumerReady(false))
 		return false;
 	if (!vfCanUseSleepingLock())
@@ -463,13 +463,13 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	return true;
 }
 
-void Gen11::vfSignalStampUpdate(void *that, const void *stamps) {
+void TglAccel::vfSignalStampUpdate(void *that, const void *stamps) {
 	VfSlowSubmitLog slow("stamp update");
 	vfMergeRedirectedStamps();
 	FunctionCast(vfSignalStampUpdate, callback->oVfSignalStampUpdate)(that, stamps);
 }
 
-bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
+bool TglAccel::vfInterruptFilterHandler(void *that, void *eventSource) {
 	(void)eventSource;
 	if (!gVfUsesMemoryIrq)
 		return false;
@@ -509,7 +509,7 @@ bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
 	return false;
 }
 
-void Gen11::vfRequestEnableCallback(void *that, OSObject *requestor,
+void TglAccel::vfRequestEnableCallback(void *that, OSObject *requestor,
 	                                void (*action)(OSObject *, ...)) {
 	if (!that || !requestor || !action || !callback ||
 	    !callback->oVfRequestEnableCallback) {
@@ -538,7 +538,7 @@ void Gen11::vfRequestEnableCallback(void *that, OSObject *requestor,
 		callback->oVfRequestEnableCallback)(that, requestor, action);
 }
 
-bool Gen11::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,
+bool TglAccel::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,
 	                         bool synchronousPoll) {
 	VfSlowSubmitLog slow("G2H drain");
 	if (!that || !vfCtbConsumerReady(!synchronousPoll))
@@ -586,7 +586,7 @@ bool Gen11::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,
 	return gVfProtocolFault == 0;
 }
 
-bool Gen11::pollVfGuCToHost(void *that) {
+bool TglAccel::pollVfGuCToHost(void *that) {
 	// Every synchronous waiter has already proved it is outside the GuC
 	// workloop. A bounded direct drain closes the MSI lost-edge window without
 	// spinning: if more than one slice remains, the caller sleeps and polls the
@@ -594,12 +594,12 @@ bool Gen11::pollVfGuCToHost(void *that) {
 	return vfDrainGuCToHost(that, nullptr, true);
 }
 
-void Gen11::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, int count) {
+void TglAccel::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, int count) {
 	(void)count;
 	(void)vfDrainGuCToHost(that, source, false);
 }
 
-void Gen11::vfEnableInterrupts(void *that) {
+void TglAccel::vfEnableInterrupts(void *that) {
 	(void)that;
 	if (!gVfUsesMemoryIrq || gVfIdentity != VfIdentity::Virtual || gVfProtocolFault ||
 	    gVfSubmissionStopped || gVfCtbStopped)
@@ -614,7 +614,7 @@ void Gen11::vfEnableInterrupts(void *that) {
 	}
 }
 
-void Gen11::vfDisableInterrupts(void *that) {
+void TglAccel::vfDisableInterrupts(void *that) {
 	(void)that;
 	if (!gVfUsesMemoryIrq)
 		return;
@@ -630,7 +630,7 @@ void Gen11::vfDisableInterrupts(void *that) {
 	}
 }
 
-void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
+void TglAccel::vfReadAndClearInterrupts(void *that, void *interrupts) {
 	(void)that;
 	if (!interrupts)
 		return;
@@ -649,7 +649,7 @@ void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
 	*snapshot = vfConsumeMemoryInterrupts();
 }
 
-void Gen11::vfSuppressPhysicalErrorInterrupts(void *that) {
+void TglAccel::vfSuppressPhysicalErrorInterrupts(void *that) {
 	(void)that;
 	// Scheduler 4's outer enable/disable methods still register the logical
 	// scheduler callback with IGInterruptBridge.  Only their tail-called error
@@ -660,14 +660,14 @@ void Gen11::vfSuppressPhysicalErrorInterrupts(void *that) {
 // Tahoe's timeout recovery assumes ownership of physical engine stop/start
 // registers. The PF owns those registers for an SR-IOV VF. Keep these lower
 // boundaries inert even though the actual event-timeout root now fail-stops.
-void Gen11::vfSuppressTimeoutHardwareAction(void *that, uint32_t engine) {
+void TglAccel::vfSuppressTimeoutHardwareAction(void *that, uint32_t engine) {
 	(void)that;
 	(void)engine;
 }
 
 // Native debug capture is not observational on Gen11: it takes force-wake,
 // reads physical GuC/RING state and repeatedly writes the INSTDONE selector.
-void Gen11::vfSuppressPhysicalDebugCapture(void *that, uint32_t reason) {
+void TglAccel::vfSuppressPhysicalDebugCapture(void *that, uint32_t reason) {
 	(void)that;
 	(void)reason;
 }
@@ -784,7 +784,7 @@ static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
 #define NG_TIMEOUT_WINDOW_FORMAT "%x/%x/%.256s"
 #define NG_TIMEOUT_WINDOW_ARGS(f) (f).windowFlags,(f).windowBytes,(f).windowBase64
 
-void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
+void *TglAccel::vfRejectEventTimeout(void *that, int32_t channel) {
 	(void)that;
 	// V267: inherited restart clears its software error and restarts the timer
 	// even when eventTimeout returns null. Do not return into that retry or
@@ -827,21 +827,21 @@ void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
 
 // A zero signature is the native no-diagnosis result consumed by
 // IGAccelFIFOChannel::getHardwareDiagnosisReport.
-uint32_t Gen11::vfSuppressHangAnalysis(void *that) {
+uint32_t TglAccel::vfSuppressHangAnalysis(void *that) {
 	(void)that;
 	return 0;
 }
 
-void Gen11::vfSuppressHangDump(void *that) {
+void TglAccel::vfSuppressHangDump(void *that) {
 	(void)that;
 }
 
-void Gen11::vfRejectHardwareResetReplay(void *that) {
+void TglAccel::vfRejectHardwareResetReplay(void *that) {
 	(void)that;
 	vfMarkProtocolFault("physical engine reset/replay requested on VF");
 }
 
-bool Gen11::vfRejectPhysicalEngineReset(void *that, void *context) {
+bool TglAccel::vfRejectPhysicalEngineReset(void *that, void *context) {
 	(void)that;
 	(void)context;
 	vfMarkProtocolFault("physical engine reset requested on VF");

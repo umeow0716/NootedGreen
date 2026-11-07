@@ -19,7 +19,7 @@ bool ngGpuRegisterAccessAllowed(unsigned long reg);
 void ngArmV349MediaExecObservation();
 
 class NGreen {
-    friend class Gen11;
+    friend class TglAccel;
 
     public:
     static NGreen *callback;
@@ -73,7 +73,7 @@ private:
 	IOPCIDevice *iGPU {nullptr};
 	bool driverReady {false};
 	// The Tahoe IOGraphicsAccelerator2 base start enables PCI Bus Master before
-	// Intel's HWS construction.  Keep the exact VF sink closed until Gen11 has
+	// Intel's HWS construction.  Keep the exact VF sink closed until TglAccel has
 	// validated every native HWS mapping and is ready to allocate its sole MSI.
 	volatile UInt32 vfBusMasterAdmission {0};
 	volatile UInt32 vfEarlyBusMasterSuppressions {0};

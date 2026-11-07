@@ -5,7 +5,7 @@
 // A failed, unpublished object has no process pointer. Use this otherwise
 // invalid pointer value only to hand its proven cleanup state to virtual free;
 // never dereference it or publish this object to the native caller.
-bool Gen11::vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *process) {
+bool TglAccel::vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *process) {
 	// Installed only for the UUID-pinned VF payload. withOptions owns this
 	// fresh object exclusively until init returns; successful queues unchanged.
 	if (!that)
@@ -44,7 +44,7 @@ bool Gen11::vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *pr
 	return false;
 }
 
-void Gen11::vfWorkQueueFree(void *that) {
+void TglAccel::vfWorkQueueFree(void *that) {
 	PANIC_COND(!that, "ngreen", "Null VF workqueue in free");
 	if (getMember<void *>(that, 0x38) == NGWorkQueue::failedInitMarker()) {
 		PANIC_COND(!callback->vfOSObjectFree || !NGWorkQueue::consumeFailedInit(
@@ -251,7 +251,7 @@ static void vfScanRingGgttWrites(uint32_t id, uint32_t type, volatile uint32_t *
 	}
 }
 
-uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
+uint32_t TglAccel::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	if (!that || priority < 0 || priority > 3)
 		return NGContextPool::invalidId;
 	if (gVfIdentity != VfIdentity::Virtual || !gVfCtbEnabled ||
@@ -449,7 +449,7 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	return id;
 }
 
-uint32_t Gen11::vfAllocContextId(void *that, uint64_t owner, bool clear) {
+uint32_t TglAccel::vfAllocContextId(void *that, uint64_t owner, bool clear) {
 	if (!that || gVfIdentity != VfIdentity::Virtual || !gVfCtbEnabled ||
 	    gVfSubmissionStopped || gVfCtbStopped || gVfProtocolFault ||
 	    !callback->vfSharedMappedBufferGetVirtualAddress)
@@ -474,7 +474,7 @@ uint32_t Gen11::vfAllocContextId(void *that, uint64_t owner, bool clear) {
 	return id;
 }
 
-void Gen11::vfReleaseContextId(void *that, uint32_t id) {
+void TglAccel::vfReleaseContextId(void *that, uint32_t id) {
 	// Both native callers already own GuC+0x40. Cleanup may follow CTB
 	// shutdown/fault; do not require enabled transport or release DMA here.
 	PANIC_COND(!that || gVfIdentity != VfIdentity::Virtual ||
@@ -496,7 +496,7 @@ void Gen11::vfReleaseContextId(void *that, uint32_t id) {
 	getMember<void *>(entry, 8) = nullptr;
 }
 
-uint16_t Gen11::vfAcquireDoorbell(void *that, void *descriptor, bool pin) {
+uint16_t TglAccel::vfAcquireDoorbell(void *that, void *descriptor, bool pin) {
 	(void)that;
 	(void)descriptor;
 	(void)pin;
@@ -504,7 +504,7 @@ uint16_t Gen11::vfAcquireDoorbell(void *that, void *descriptor, bool pin) {
 	return 0x100U; // native invalid-doorbell sentinel, not an allocated ID
 }
 
-void Gen11::vfReleaseDoorbell(void *that, void *descriptor) {
+void TglAccel::vfReleaseDoorbell(void *that, void *descriptor) {
 	(void)that;
 	(void)descriptor;
 	// No legacy doorbell can have been acquired through the VF entry points.
@@ -512,7 +512,7 @@ void Gen11::vfReleaseDoorbell(void *that, void *descriptor) {
 	vfMarkProtocolFault("legacy doorbell release on direct-LRCA VF");
 }
 
-bool Gen11::vfAllocUkDoorbell(void *that, uint32_t contextId, bool pin) {
+bool TglAccel::vfAllocUkDoorbell(void *that, uint32_t contextId, bool pin) {
 	(void)that;
 	(void)contextId;
 	(void)pin;
@@ -520,7 +520,7 @@ bool Gen11::vfAllocUkDoorbell(void *that, uint32_t contextId, bool pin) {
 	return false;
 }
 
-uint16_t Gen11::vfReacquireDoorbell(void *that, uint32_t contextId) {
+uint16_t TglAccel::vfReacquireDoorbell(void *that, uint32_t contextId) {
 	(void)that;
 	(void)contextId;
 	// Reject before the original's acquire/sleep/retry loop.
@@ -528,7 +528,7 @@ uint16_t Gen11::vfReacquireDoorbell(void *that, uint32_t contextId) {
 	return 0x100U;
 }
 
-bool Gen11::vfRejectLegacyGucMessage(void *that, const void *message,
+bool TglAccel::vfRejectLegacyGucMessage(void *that, const void *message,
 	                                 unsigned int flags, void *completion) {
 	(void)that;
 	(void)message;
@@ -539,7 +539,7 @@ bool Gen11::vfRejectLegacyGucMessage(void *that, const void *message,
 	return false;
 }
 
-bool Gen11::vfRejectLegacyGucDma(void *that, uint64_t address,
+bool TglAccel::vfRejectLegacyGucDma(void *that, uint64_t address,
 	                             unsigned int size, unsigned int offset,
 	                             unsigned int dmaType, bool wait) {
 	(void)that;
@@ -553,14 +553,14 @@ bool Gen11::vfRejectLegacyGucDma(void *that, uint64_t address,
 	return false;
 }
 
-void Gen11::vfRejectLegacyDoorbell(void *that, IGHwCsType hwCsType) {
+void TglAccel::vfRejectLegacyDoorbell(void *that, IGHwCsType hwCsType) {
 	(void)that;
 	(void)hwCsType;
 	vfMarkProtocolFault("legacy IGGuC doorbell reached a VF");
 	PANIC_COND(true, "ngreen", "Refusing PF-owned legacy GuC doorbell on a VF");
 }
 
-bool Gen11::vfRejectNativeCtbAction(void *that, const uint32_t *request,
+bool TglAccel::vfRejectNativeCtbAction(void *that, const uint32_t *request,
 	                                unsigned int requestLength, int timeout,
 	                                uint32_t *response, bool fence) {
 	(void)that;
@@ -574,7 +574,7 @@ bool Gen11::vfRejectNativeCtbAction(void *that, const uint32_t *request,
 	return false;
 }
 
-void Gen11::vfRejectLegacyExecList(void *that, unsigned int tail) {
+void TglAccel::vfRejectLegacyExecList(void *that, unsigned int tail) {
 	(void)that;
 	(void)tail;
 	vfMarkProtocolFault("legacy execlist submission reached a VF");
@@ -691,7 +691,7 @@ bool vfKnownIdleSnapshot(mach_vm_address_t mappedBufferGetter,
 	return idle && !terminationRaced;
 }
 
-bool Gen11::vfSchedulerPush(void *that, void *hardwareContext,
+bool TglAccel::vfSchedulerPush(void *that, void *hardwareContext,
 	                        unsigned int ringTail,
 	                        unsigned int auxiliary,
 	                        bool carriesStamp,
@@ -815,13 +815,13 @@ bool Gen11::vfSchedulerPush(void *that, void *hardwareContext,
 	return accepted;
 }
 
-bool Gen11::vfIsGuCIdle(void *that) {
+bool TglAccel::vfIsGuCIdle(void *that) {
 	(void)that;
 	return vfKnownIdleSnapshot(callback ?
 		callback->vfSharedMappedBufferGetVirtualAddress : 0);
 }
 
-bool Gen11::vfIsContextIdle(void *that, uint32_t contextId) {
+bool TglAccel::vfIsContextIdle(void *that, uint32_t contextId) {
 	(void)that;
 	(void)contextId;
 	// Legacy proxy ID cannot identify a single modern LRCA. All-idle is a
@@ -830,13 +830,13 @@ bool Gen11::vfIsContextIdle(void *that, uint32_t contextId) {
 		callback->vfSharedMappedBufferGetVirtualAddress : 0);
 }
 
-bool Gen11::vfIsKmdContextIdle(void *that, const uint32_t *descriptor) {
+bool TglAccel::vfIsKmdContextIdle(void *that, const uint32_t *descriptor) {
 	(void)that;
 	return descriptor && vfKnownIdleSnapshot(callback ?
 		callback->vfSharedMappedBufferGetVirtualAddress : 0, descriptor);
 }
 
-void Gen11::vfTransferOwnership(void *that, const void *backing, int owner) {
+void TglAccel::vfTransferOwnership(void *that, const void *backing, int owner) {
 	(void)backing;
 	(void)owner;
 	// Native transferOwnership is itself a no-op without flag 0x20. With it,
@@ -849,7 +849,7 @@ void Gen11::vfTransferOwnership(void *that, const void *backing, int owner) {
 		"Unsupported legacy page-ownership transfer on a VF");
 }
 
-bool Gen11::vfLegacyHostToGuCAction(void *that, const uint32_t *request,
+bool TglAccel::vfLegacyHostToGuCAction(void *that, const uint32_t *request,
                                   unsigned int requestLength, int timeout,
                                   uint32_t *response) {
 	(void)that;
@@ -866,7 +866,7 @@ bool Gen11::vfLegacyHostToGuCAction(void *that, const uint32_t *request,
 	return false;
 }
 
-bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
+bool TglAccel::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	                              unsigned int requestLength, int timeout,
 	                              uint32_t *response) {
 	// All rejected requests leave an explicit failure result. Apple's audited
@@ -1025,7 +1025,7 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	return vfLegacyHostToGuCAction(that, request, requestLength, timeout, response);
 }
 
-bool Gen11::vfReadDoorbellSQIDIConfig(void *that) {
+bool TglAccel::vfReadDoorbellSQIDIConfig(void *that) {
 	if (!gVfGGTTReady)
 		return false;
 
@@ -1054,7 +1054,7 @@ bool Gen11::vfReadDoorbellSQIDIConfig(void *that) {
 	return true;
 }
 
-void Gen11::vfInitDoorbells(void *that) {
+void TglAccel::vfInitDoorbells(void *that) {
 	// IntelAccelerator::start normally completed this before constructing the
 	// scheduler.  Retrying here makes the ordering requirement explicit and
 	// prevents a transiently-unready VF from falling through to DISTRDB.
@@ -1144,7 +1144,7 @@ static bool vfPrepareContextMemoryIrq(OSObject *backing, mach_vm_address_t gette
 	return true;
 }
 
-bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
+bool TglAccel::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	VfContextOperationGuard operationGuard;
 	if (!operationGuard)
 		return false;
@@ -1415,7 +1415,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	return true;
 }
 
-void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
+void TglAccel::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	// V263/V264: native context free already released ring/FIFO objects, but
 	// the direct GuC record pins ring, stamp and scratch DMA buffers. This hook precedes release
 	// of additional mapped backing, context image and task/stamps. Any unproven
@@ -1667,7 +1667,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		vfReleaseRetiredContextBacking(gucId);
 }
 
-bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
+bool TglAccel::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	                         const uint32_t *descriptor, IGHwCsType hwCsType,
 	                         unsigned int channelId, unsigned int ringSequence,
 	                         unsigned int ringTail) {
@@ -1996,7 +1996,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	return submitted;
 }
 
-bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
+bool TglAccel::vfCtbInitWithAccelerator(void *that, void *accelerator) {
 	if (!that)
 		return false;
 	PANIC_COND(getMember<void *>(that, 0x10) || getMember<void *>(that, 0x18) ||
@@ -2055,7 +2055,7 @@ bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
 	return result;
 }
 
-void Gen11::vfCtbFree(void *that) {
+void TglAccel::vfCtbFree(void *that) {
 	PANIC_COND(!that, "ngreen", "Null VF CTB in free");
 	if (getMember<void *>(that, 0x90) == NGWorkQueue::failedInitMarker()) {
 		PANIC_COND(that == gVfCtbObject || !callback->vfOSObjectFree ||
@@ -2071,7 +2071,7 @@ void Gen11::vfCtbFree(void *that) {
 	FunctionCast(vfCtbFree, callback->oVfCtbFree)(that);
 }
 
-void *Gen11::vfCtbMappedBufferWithOptions(void *accelTask, unsigned long size,
+void *TglAccel::vfCtbMappedBufferWithOptions(void *accelTask, unsigned long size,
 	                                      unsigned int type, unsigned int flags) {
 	const bool ctbAllocation = gVfCtbAllocationPending && gVfGGTTReady &&
 	    gVfCtbAllocationThread == IOThreadSelf() && gVfCtbInitOwner &&
@@ -2093,7 +2093,7 @@ void *Gen11::vfCtbMappedBufferWithOptions(void *accelTask, unsigned long size,
 	return result;
 }
 
-void Gen11::vfCtbChannelInit(void *that) {
+void TglAccel::vfCtbChannelInit(void *that) {
 	// Validate the exact enlarged allocation before the native initializer or
 	// our layout writes. A process-global "pending" flag alone could match an
 	// unrelated thread's allocation or allow reinitializing a live ring.
@@ -2171,7 +2171,7 @@ void Gen11::vfCtbChannelInit(void *that) {
 	       kVfCtbBackingBytes);
 }
 
-void Gen11::vfInvalidateTLB(void *that) {
+void TglAccel::vfInvalidateTLB(void *that) {
 	OSSynchronizeIO();
 	if (!gVfCtbEverEnabled || gVfDmaQuiesced)
 		return;
@@ -2184,7 +2184,7 @@ void Gen11::vfInvalidateTLB(void *that) {
 		"Required IGHardwareGuC VF TLB invalidation did not complete");
 }
 
-void Gen11::vfBaseInvalidateTLB(const void *that) {
+void TglAccel::vfBaseInvalidateTLB(const void *that) {
 	(void)that;
 	OSSynchronizeIO();
 	// i915's gen12vf_ggtt_invalidate skips the request until GuC is ready.

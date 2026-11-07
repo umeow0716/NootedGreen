@@ -2,7 +2,7 @@
 //  details.
 
 #include "kern_green.hpp"
-#include "kern_gen11.hpp"
+#include "kern_tgl_accel.hpp"
 #include "kern_pci_identity.hpp"
 #include "kern_gpu_capabilities.hpp"
 #include "kern_telemetry.hpp"
@@ -20,7 +20,7 @@
 
 NGreen *NGreen::callback = nullptr;
 
-static Gen11 gen11;
+static TglAccel tglAccel;
 
 namespace {
 // Tahoe 25G229 AppleGVA consumes the native ICL AVD_DriverCapability layout
@@ -233,7 +233,7 @@ void ngArmV349MediaExecObservation() {
 void NGreen::init() {
     callback = this;
 
-	gen11.init();
+	tglAccel.init();
 	// WhateverXe-derived Gen12 support; independent of the VF driver state.
 	XeDataAccess::init();
 	XeRender::init();
@@ -271,7 +271,7 @@ static void loadTglEarly(void *, wait_result_t) {
 	SYSLOG("ngreen", "V289: early TGL accelerator load returned 0x%x", ret);
 	IOSleep(1000);
 	if (gEarlyPatcher)
-		gen11.recoverMissedKexts(*gEarlyPatcher);
+		tglAccel.recoverMissedKexts(*gEarlyPatcher);
 	thread_terminate(current_thread());
 }
 
@@ -402,10 +402,10 @@ bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t
 		return true;
 	if (!this->driverReady)
 		return true;
-	if (gen11.processKext(patcher, index, address, size)) {
+	if (tglAccel.processKext(patcher, index, address, size)) {
 		DBGLOG("ngreen", "Processed Generation 11 configuration");
 	}
-	// After gen11: it patches inside getGPUInfo, which XeRender wraps.
+	// After tglAccel: it patches inside getGPUInfo, which XeRender wraps.
 	XeRender::processKext(patcher, index, address, size);
 	return true;
 }

@@ -1,6 +1,6 @@
 //  Copyright © 2026 Stezza @ inc. Licensed under the Thou Shalt Not Profit License version 1.0. See LICENSE for
 //  details.
-#include "kern_gen11.hpp"
+#include "kern_tgl_accel.hpp"
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOUserClient.h>
 #include <sys/proc.h>
@@ -113,9 +113,9 @@ static KernelPatcher::KextInfo kextIOPCIFamily {
 	KernelPatcher::KextInfo::Unloaded
 };
 
-Gen11 *Gen11::callback = nullptr;
+TglAccel *TglAccel::callback = nullptr;
 
-void Gen11::init() {
+void TglAccel::init() {
 	callback = this;
 	const bool tglRequested = checkKernelArgument("-ngreentglfb") ||
 		checkKernelArgument("-ngreentglwithgfx") ||
@@ -126,16 +126,16 @@ void Gen11::init() {
 	}
 
 	if (checkKernelArgument("-ngreentglfb") || checkKernelArgument("-ngreentglwithgfx")) {
-		SYSLOG("ngreen", "Gen11::init: FB tier → TGL");
+		SYSLOG("ngreen", "TglAccel::init: FB tier → TGL");
 		lilu.onKextLoadForce(&kextG11FBT);
 		lilu.onKextLoadForce(&kextG11FBTA);
 		if (checkKernelArgument("-ngreentglwithgfx")) {
-			SYSLOG("ngreen", "Gen11::init: HW tier → TGL");
+			SYSLOG("ngreen", "TglAccel::init: HW tier → TGL");
 			lilu.onKextLoadForce(&kextG11HWT);
 			lilu.onKextLoadForce(&kextG11HWTA);
 		}
 	} else if (checkKernelArgument("-ngreentglgfx")) {
-		SYSLOG("ngreen", "Gen11::init: HW tier → TGL");
+		SYSLOG("ngreen", "TglAccel::init: HW tier → TGL");
 		lilu.onKextLoadForce(&kextG11HWT);
 		lilu.onKextLoadForce(&kextG11HWTA);
 	}
@@ -165,7 +165,7 @@ static bool gIoAccelLifecycleResolved; // IOAcceleratorFamily2 fully processed
 // would have, in dependency order.
 static volatile UInt32 gTglProcessed, gIoAccelProcessing;
 
-void Gen11::recoverMissedKexts(KernelPatcher &patcher) {
+void TglAccel::recoverMissedKexts(KernelPatcher &patcher) {
 	auto **kmods = reinterpret_cast<kmod_info_t **>(patcher.solveSymbol(KernelPatcher::KernelID, "_kmod"));
 	patcher.clearError();
 	KernelPatcher::KextInfo *const order[] {&kextIOPCIFamily, &kextIOAcceleratorFamily2, &kextG11HWT, &kextG11HWTA};
@@ -187,7 +187,7 @@ void Gen11::recoverMissedKexts(KernelPatcher &patcher) {
 	}
 }
 
-void Gen11::publishAcceleratorWhenReady() {
+void TglAccel::publishAcceleratorWhenReady() {
 	if (!gPendingAcceleratorBundle || !this->ioPciConfigureInterrupts || !gIoAccelLifecycleResolved)
 		return;
 	const char *bundleId = gPendingAcceleratorBundle;
@@ -198,7 +198,7 @@ void Gen11::publishAcceleratorWhenReady() {
 		ngArmV349MediaExecObservation();
 }
 
-bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
+bool TglAccel::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
 	if (index == kextIOPCIFamily.loadIndex) {
 		if (!this->ioPciConfigureInterrupts)
 			this->ioPciConfigureInterrupts = patcher.solveSymbol(
@@ -1815,7 +1815,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
     return false;
 }
 
-IOReturn Gen11::vfGetHwCaps(void *that, void *input, void *output,
+IOReturn TglAccel::vfGetHwCaps(void *that, void *input, void *output,
 	uint64_t inputSize, uint64_t *outputSize)
 {
 	PANIC_COND(!callback || !callback->oVfGetHwCaps, "ngreen",
@@ -1851,7 +1851,7 @@ IOReturn Gen11::vfGetHwCaps(void *that, void *input, void *output,
 	return kIOReturnSuccess;
 }
 
-IOReturn Gen11::vfVideoGetIosurfaceAccelId(void *that, void *arguments,
+IOReturn TglAccel::vfVideoGetIosurfaceAccelId(void *that, void *arguments,
 	uint64_t *outputSize)
 {
 	PANIC_COND(!callback || !callback->oVfVideoGetIosurfaceAccelId, "ngreen",
@@ -1870,7 +1870,7 @@ IOReturn Gen11::vfVideoGetIosurfaceAccelId(void *that, void *arguments,
 	return result;
 }
 
-IOReturn Gen11::vfVideoUpdatePerfCapability(void *that, void *arguments,
+IOReturn TglAccel::vfVideoUpdatePerfCapability(void *that, void *arguments,
 	uint64_t inputSize)
 {
 	PANIC_COND(!callback || !callback->oVfVideoUpdatePerfCapability, "ngreen",
@@ -1884,7 +1884,7 @@ IOReturn Gen11::vfVideoUpdatePerfCapability(void *that, void *arguments,
 	return result;
 }
 
-IOReturn Gen11::vfVideoSetContextPriority(void *that, void *arguments,
+IOReturn TglAccel::vfVideoSetContextPriority(void *that, void *arguments,
 	uint64_t inputSize)
 {
 	PANIC_COND(!callback || !callback->oVfVideoSetContextPriority, "ngreen",
@@ -1898,7 +1898,7 @@ IOReturn Gen11::vfVideoSetContextPriority(void *that, void *arguments,
 	return result;
 }
 
-bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
+bool TglAccel::IGAccelTaskIsKernelGPUTask(const void *that)
 {
 	const bool original = FunctionCast(IGAccelTaskIsKernelGPUTask,
 	                                   callback->oIGAccelTaskIsKernelGPUTask)(that);
@@ -1921,7 +1921,7 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 	return original;
 }
 
-IOReturn Gen11::vfCommandQueueSubmit(void *that, const void *arguments)
+IOReturn TglAccel::vfCommandQueueSubmit(void *that, const void *arguments)
 {
 	VfSlowSubmitLog slow("command queue submit");
 	void *accelerator = that ? getMember<void *>(that, 0x5C0) : nullptr;
@@ -1933,7 +1933,7 @@ IOReturn Gen11::vfCommandQueueSubmit(void *that, const void *arguments)
 	                    callback->oVfCommandQueueSubmit)(that, arguments);
 }
 
-IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
+IOReturn TglAccel::vfContextSubmit(void *that, void *input, void *output,
 	                            uint64_t options, uint64_t *stamp)
 {
 	VfSlowSubmitLog slow("context submit");
@@ -1945,7 +1945,7 @@ IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
 		that, input, output, options, stamp);
 }
 
-IOReturn Gen11::vf2DSetSurface(void *that, uint32_t surface, uint32_t mode)
+IOReturn TglAccel::vf2DSetSurface(void *that, uint32_t surface, uint32_t mode)
 {
 	void *accelerator = that ? getMember<void *>(that, 0x5A8) : nullptr;
 	VfExternalProducerGuard guard(accelerator);
@@ -1955,7 +1955,7 @@ IOReturn Gen11::vf2DSetSurface(void *that, uint32_t surface, uint32_t mode)
 		that, surface, mode);
 }
 
-IOReturn Gen11::vf2DFinish(void *that, uint32_t options)
+IOReturn TglAccel::vf2DFinish(void *that, uint32_t options)
 {
 	void *accelerator = that ? getMember<void *>(that, 0x5A8) : nullptr;
 	VfExternalProducerGuard guard(accelerator);
@@ -1964,7 +1964,7 @@ IOReturn Gen11::vf2DFinish(void *that, uint32_t options)
 	return FunctionCast(vf2DFinish, callback->oVf2DFinish)(that, options);
 }
 
-IOReturn Gen11::vf2DBlit(void *that, void *command, uint64_t options)
+IOReturn TglAccel::vf2DBlit(void *that, void *command, uint64_t options)
 {
 	void *accelerator = that ? getMember<void *>(that, 0x5A8) : nullptr;
 	VfExternalProducerGuard guard(accelerator);
@@ -1974,7 +1974,7 @@ IOReturn Gen11::vf2DBlit(void *that, void *command, uint64_t options)
 		that, command, options);
 }
 
-IOReturn Gen11::vfSurfaceExternalMethod(void *that, uint32_t selector,
+IOReturn TglAccel::vfSurfaceExternalMethod(void *that, uint32_t selector,
 	                                   void *arguments, void *dispatch,
 	                                   void *target, void *reference)
 {
@@ -1987,7 +1987,7 @@ IOReturn Gen11::vfSurfaceExternalMethod(void *that, uint32_t selector,
 		that, selector, arguments, dispatch, target, reference);
 }
 
-IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
+IOReturn TglAccel::vfSharedExternalMethod(void *that, uint32_t selector,
 	                                  void *arguments, void *dispatch,
 	                                  void *target, void *reference)
 {
@@ -2098,7 +2098,7 @@ IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	return result;
 }
 
-IOReturn Gen11::vfGLContextExternalMethod(void *that, uint32_t selector,
+IOReturn TglAccel::vfGLContextExternalMethod(void *that, uint32_t selector,
 	                                     void *arguments, void *dispatch,
 	                                     void *target, void *reference)
 {
@@ -2115,7 +2115,7 @@ IOReturn Gen11::vfGLContextExternalMethod(void *that, uint32_t selector,
 		that, selector, arguments, dispatch, target, reference);
 }
 
-IOReturn Gen11::vfGLDrawableExternalMethod(void *that, uint32_t selector,
+IOReturn TglAccel::vfGLDrawableExternalMethod(void *that, uint32_t selector,
 	                                      void *arguments, void *dispatch,
 	                                      void *target, void *reference)
 {
@@ -2128,7 +2128,7 @@ IOReturn Gen11::vfGLDrawableExternalMethod(void *that, uint32_t selector,
 		that, selector, arguments, dispatch, target, reference);
 }
 
-IOReturn Gen11::vfSurfaceMtlExternalMethod(void *that, uint32_t selector,
+IOReturn TglAccel::vfSurfaceMtlExternalMethod(void *that, uint32_t selector,
 	                                      void *arguments, void *dispatch,
 	                                      void *target, void *reference)
 {
@@ -2141,7 +2141,7 @@ IOReturn Gen11::vfSurfaceMtlExternalMethod(void *that, uint32_t selector,
 		that, selector, arguments, dispatch, target, reference);
 }
 
-IOReturn Gen11::vfMemoryInfoExternalMethod(void *that, uint32_t selector,
+IOReturn TglAccel::vfMemoryInfoExternalMethod(void *that, uint32_t selector,
 	                                      void *arguments, void *dispatch,
 	                                      void *target, void *reference)
 {
@@ -2154,7 +2154,7 @@ IOReturn Gen11::vfMemoryInfoExternalMethod(void *that, uint32_t selector,
 		that, selector, arguments, dispatch, target, reference);
 }
 
-IOReturn Gen11::vfDisplayPipeExternalMethod(void *that, uint32_t selector,
+IOReturn TglAccel::vfDisplayPipeExternalMethod(void *that, uint32_t selector,
 	                                       void *arguments, void *dispatch,
 	                                       void *target, void *reference)
 {
@@ -2167,7 +2167,7 @@ IOReturn Gen11::vfDisplayPipeExternalMethod(void *that, uint32_t selector,
 		that, selector, arguments, dispatch, target, reference);
 }
 
-IOReturn Gen11::vfDisplayChangeHandler(void *that, void *reference,
+IOReturn TglAccel::vfDisplayChangeHandler(void *that, void *reference,
 	                                  void *framebuffer, int event,
 	                                  void *argument)
 {
@@ -2180,7 +2180,7 @@ IOReturn Gen11::vfDisplayChangeHandler(void *that, void *reference,
 		that, reference, framebuffer, event, argument);
 }
 
-void Gen11::vfGartCollector(void *that, IOInterruptEventSource *source,
+void TglAccel::vfGartCollector(void *that, IOInterruptEventSource *source,
 	                        int count)
 {
 	VfExternalProducerGuard guard(that);
@@ -2190,7 +2190,7 @@ void Gen11::vfGartCollector(void *that, IOInterruptEventSource *source,
 		that, source, count);
 }
 
-void Gen11::vfFinalizeInterrupt(void *that,
+void TglAccel::vfFinalizeInterrupt(void *that,
 	                            IOInterruptEventSource *source, int count)
 {
 	if (!vfTargetsPublishedAccelerator(that)) {
@@ -2248,7 +2248,7 @@ void Gen11::vfFinalizeInterrupt(void *that,
 	SYSLOG("ngreen", "V317: synchronous finalize re-entry completed native VF stop");
 }
 
-void Gen11::vfDeviceCacheControl(void *that, void *cache,
+void TglAccel::vfDeviceCacheControl(void *that, void *cache,
 	                             uint32_t selector, uint64_t argument0,
 	                             uint64_t argument1)
 {
@@ -2262,7 +2262,7 @@ void Gen11::vfDeviceCacheControl(void *that, void *cache,
 		that, cache, selector, argument0, argument1);
 }
 
-void Gen11::vfEmitFirstFlushEvents(void *that)
+void TglAccel::vfEmitFirstFlushEvents(void *that)
 {
 	VfExternalProducerGuard guard(that);
 	if (!guard)
@@ -2271,7 +2271,7 @@ void Gen11::vfEmitFirstFlushEvents(void *that)
 	             callback->oVfEmitFirstFlushEvents)(that);
 }
 
-IOReturn Gen11::vfDisplaySleepCallback(void *that, uint32_t command,
+IOReturn TglAccel::vfDisplaySleepCallback(void *that, uint32_t command,
 	                                  uint32_t argument0,
 	                                  uint32_t argument1)
 {
@@ -2314,7 +2314,7 @@ void ngReleaseTglBusyHold() {
 
 // Boot-arg cache for the per-submission RCS prologue switch.
 
-bool Gen11::start(void *that, void *provider)
+bool TglAccel::start(void *that, void *provider)
 {
 	if (!that || !provider || !callback || !callback->ostart) {
 		SYSLOG("ngreen", "V239: refusing accelerator start with incomplete IOService ABI");
@@ -2529,7 +2529,7 @@ bool Gen11::start(void *that, void *provider)
 	return result;
 }
 
-void Gen11::acceleratorStop(void *that, void *provider)
+void TglAccel::acceleratorStop(void *that, void *provider)
 {
 	if (!vfTargetsPublishedAccelerator(that)) {
 		FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider);
@@ -2691,7 +2691,7 @@ void Gen11::acceleratorStop(void *that, void *provider)
 	runNativeStop();
 }
 
-void Gen11::vfBaseAcceleratorStop(void *that, void *provider)
+void TglAccel::vfBaseAcceleratorStop(void *that, void *provider)
 {
 	PANIC_COND(!callback || !callback->oVfBaseAcceleratorStop,
 		"ngreen", "Missing native IOAccelerator stop trampoline");
@@ -2773,7 +2773,7 @@ void Gen11::vfBaseAcceleratorStop(void *that, void *provider)
 	}
 }
 
-int Gen11::vfEventMachineFinishAllStamps(void *that)
+int TglAccel::vfEventMachineFinishAllStamps(void *that)
 {
 	PANIC_COND(!callback || !callback->oVfEventMachineFinishAllStamps,
 		"ngreen", "Missing native event-machine finish trampoline");
@@ -2788,7 +2788,7 @@ int Gen11::vfEventMachineFinishAllStamps(void *that)
 	return result;
 }
 
-void Gen11::vfEventMachineStop(void *that)
+void TglAccel::vfEventMachineStop(void *that)
 {
 	PANIC_COND(!callback || !callback->oVfEventMachineStop,
 		"ngreen", "Missing native event-machine stop trampoline");
@@ -2801,14 +2801,14 @@ void Gen11::vfEventMachineStop(void *that)
 		SYSLOG("ngreen", "V318: inherited VF event-machine stop return");
 }
 
-uint32_t Gen11::vfTelemetryPrintDashboard(void *that, uint64_t options)
+uint32_t TglAccel::vfTelemetryPrintDashboard(void *that, uint64_t options)
 {
 	(void)that;
 	(void)options;
 	return 0;
 }
 
-int Gen11::vfTelemetryInitWithAccelerator(void *that, void *accelerator,
+int TglAccel::vfTelemetryInitWithAccelerator(void *that, void *accelerator,
 	                                      uint32_t options)
 {
 	if (!that || !accelerator)
@@ -2832,24 +2832,24 @@ int Gen11::vfTelemetryInitWithAccelerator(void *that, void *accelerator,
 	return 0;
 }
 
-void Gen11::vfTelemetryRetain(void *that)
+void TglAccel::vfTelemetryRetain(void *that)
 {
 	(void)that;
 }
 
-void Gen11::vfTelemetryRelease(void *that)
+void TglAccel::vfTelemetryRelease(void *that)
 {
 	(void)that;
 }
 
-uint64_t Gen11::vfTelemetryCalcGlobalUsage(void *that, uint64_t timestamp)
+uint64_t TglAccel::vfTelemetryCalcGlobalUsage(void *that, uint64_t timestamp)
 {
 	(void)that;
 	(void)timestamp;
 	return 0;
 }
 
-int64_t Gen11::vfTelemetryOperation(void *that, uint64_t selector,
+int64_t TglAccel::vfTelemetryOperation(void *that, uint64_t selector,
 	                                int64_t value, void *operation,
 	                                void *connection, void *task)
 {
@@ -2862,13 +2862,13 @@ int64_t Gen11::vfTelemetryOperation(void *that, uint64_t selector,
 	return static_cast<int64_t>(static_cast<int32_t>(kIOReturnUnsupported));
 }
 
-void Gen11::vfTelemetryPatchContextImage(void *that, void *contextImage)
+void TglAccel::vfTelemetryPatchContextImage(void *that, void *contextImage)
 {
 	(void)that;
 	(void)contextImage;
 }
 
-void Gen11::vfTelemetryOnConnectionStop(void *that, void *connection,
+void TglAccel::vfTelemetryOnConnectionStop(void *that, void *connection,
 	                                     void *task)
 {
 	(void)that;
@@ -2881,7 +2881,7 @@ void Gen11::vfTelemetryOnConnectionStop(void *that, void *connection,
 	flags[0x0A] = 0;
 }
 
-IOReturn Gen11::vfTelemetryInitOaBuffer(void *that, void *connection,
+IOReturn TglAccel::vfTelemetryInitOaBuffer(void *that, void *connection,
 	                                    void *input, void *output,
 	                                    uint64_t inputSize,
 	                                    uint64_t *outputSize)
@@ -2895,7 +2895,7 @@ IOReturn Gen11::vfTelemetryInitOaBuffer(void *that, void *connection,
 	return kIOReturnUnsupported;
 }
 
-IOReturn Gen11::vfTelemetryReadOaBuffer(void *that, void *input,
+IOReturn TglAccel::vfTelemetryReadOaBuffer(void *that, void *input,
 	                                    void *output, uint64_t *outputSize,
 	                                    void *connection)
 {
@@ -2907,7 +2907,7 @@ IOReturn Gen11::vfTelemetryReadOaBuffer(void *that, void *input,
 	return kIOReturnUnsupported;
 }
 
-IOReturn Gen11::vfTelemetryMapOaBufferMemory(void *that, void *input,
+IOReturn TglAccel::vfTelemetryMapOaBufferMemory(void *that, void *input,
 	                                         void *output, uint64_t inputSize,
 	                                         uint64_t *outputSize, void *task)
 {
@@ -2920,7 +2920,7 @@ IOReturn Gen11::vfTelemetryMapOaBufferMemory(void *that, void *input,
 	return kIOReturnUnsupported;
 }
 
-void Gen11::vfTelemetryUsageAlloc(void *that)
+void TglAccel::vfTelemetryUsageAlloc(void *that)
 {
 	if (!that)
 		return;
@@ -2934,19 +2934,19 @@ void Gen11::vfTelemetryUsageAlloc(void *that)
 	getMember<uint32_t>(that, 0x90) = 0;
 }
 
-void Gen11::vfTelemetryUsageLog(void *that, void *context, uint64_t timestamp)
+void TglAccel::vfTelemetryUsageLog(void *that, void *context, uint64_t timestamp)
 {
 	(void)that;
 	(void)context;
 	(void)timestamp;
 }
 
-void Gen11::vfTelemetryUsageReportGlobal(void *that)
+void TglAccel::vfTelemetryUsageReportGlobal(void *that)
 {
 	(void)that;
 }
 
-bool Gen11::vfTelemetryUsageStartSample(void *that, void *ring,
+bool TglAccel::vfTelemetryUsageStartSample(void *that, void *ring,
 	                                     uint32_t stamp, uint32_t engine,
 	                                     uint64_t commandId,
 	                                     uint64_t submitTime,
@@ -2964,7 +2964,7 @@ bool Gen11::vfTelemetryUsageStartSample(void *that, void *ring,
 	return false;
 }
 
-void Gen11::vfTelemetryUsageStopSample(void *that, void *ring,
+void TglAccel::vfTelemetryUsageStopSample(void *that, void *ring,
 	                                   uint32_t stamp, uint32_t engine)
 {
 	(void)that;
@@ -2973,7 +2973,7 @@ void Gen11::vfTelemetryUsageStopSample(void *that, void *ring,
 	(void)engine;
 }
 
-void Gen11::vfTelemetryUsageFrameCalc(void *that, void *accelerator,
+void TglAccel::vfTelemetryUsageFrameCalc(void *that, void *accelerator,
 	                                   uint32_t frame)
 {
 	(void)that;
@@ -2981,12 +2981,12 @@ void Gen11::vfTelemetryUsageFrameCalc(void *that, void *accelerator,
 	(void)frame;
 }
 
-void Gen11::vfDisableDebugSysctl(void *that)
+void TglAccel::vfDisableDebugSysctl(void *that)
 {
 	(void)that;
 }
 
-IOReturn Gen11::vfRejectPavpCommandCallback(void *that, uint32_t command,
+IOReturn TglAccel::vfRejectPavpCommandCallback(void *that, uint32_t command,
 	                                         uint32_t session, uint32_t *data,
 	                                         bool recovery)
 {
@@ -2998,12 +2998,12 @@ IOReturn Gen11::vfRejectPavpCommandCallback(void *that, uint32_t command,
 	return kIOReturnUnsupported;
 }
 
-void Gen11::vfIgnoreTraceRecognizeFlip(void *that)
+void TglAccel::vfIgnoreTraceRecognizeFlip(void *that)
 {
 	(void)that;
 }
 
-void *Gen11::vfRejectPhysicalFence(void *that,
+void *TglAccel::vfRejectPhysicalFence(void *that,
 	                               const NGIGAddressRange &range,
 	                               uint64_t pitch, uint32_t tileMode)
 {
@@ -3014,7 +3014,7 @@ void *Gen11::vfRejectPhysicalFence(void *that,
 	return nullptr;
 }
 
-void Gen11::vfDisableEdramProbe(void *that)
+void TglAccel::vfDisableEdramProbe(void *that)
 {
 	if (!that)
 		return;
@@ -3038,7 +3038,7 @@ static UInt32 vfTakeTaskConstructionDiagnosticStage()
 	return stage > 8 ? 0 : stage;
 }
 
-bool Gen11::vfInitStampAndScratchPages(void *that)
+bool TglAccel::vfInitStampAndScratchPages(void *that)
 {
 	PANIC_COND(!that || !callback || !callback->oVfInitStampAndScratchPages,
 		"ngreen", "Missing native VF stamp/scratch construction boundary");
@@ -3058,7 +3058,7 @@ bool Gen11::vfInitStampAndScratchPages(void *that)
 	return initialized;
 }
 
-void *Gen11::vfAuxPageTableWithOptions(void *accelerator, void *task)
+void *TglAccel::vfAuxPageTableWithOptions(void *accelerator, void *task)
 {
 	PANIC_COND(!accelerator || !task || !callback ||
 	           !callback->oVfAuxPageTableWithOptions,
@@ -3077,7 +3077,7 @@ void *Gen11::vfAuxPageTableWithOptions(void *accelerator, void *task)
 	return table;
 }
 
-void Gen11::populateResetRegisterList(void *that)
+void TglAccel::populateResetRegisterList(void *that)
 {
 	(void)that;
 	// This replacement is installed only for a classified VF. It has no
@@ -3085,7 +3085,7 @@ void Gen11::populateResetRegisterList(void *that)
 	// from PF-managed state.
 }
 
-void *Gen11::igAccelTaskWithOptions(void *that)
+void *TglAccel::igAccelTaskWithOptions(void *that)
 {
 	// V216: IOGraphicsAccelerator2 stores IntelAccelerator+0x150 only after
 	// IGAccelTask::withOptions returns.  The first task therefore has to receive
@@ -3154,7 +3154,7 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 	return task;
 }
 
-void *Gen11::getBlit3DContext(void *that, bool create)
+void *TglAccel::getBlit3DContext(void *that, bool create)
 {
 	if (!that || !callback->ogetBlit3DContext)
 		return nullptr;
@@ -3164,7 +3164,7 @@ void *Gen11::getBlit3DContext(void *that, bool create)
 	                    callback->ogetBlit3DContext)(that, create);
 }
 
-bool Gen11::vfInitScheduler(void *scheduler, uint32_t options,
+bool TglAccel::vfInitScheduler(void *scheduler, uint32_t options,
 	                        uint64_t privateSize, void *accelerator)
 {
 	if (!scheduler || !accelerator || !callback || !callback->originalSchedulerInit)
@@ -3193,7 +3193,7 @@ bool Gen11::vfInitScheduler(void *scheduler, uint32_t options,
 	return true;
 }
 
-void *Gen11::vfCreateScheduler(void *accelerator)
+void *TglAccel::vfCreateScheduler(void *accelerator)
 {
 	// Installed only on the VF route table. Validate the final native bits
 	// before create can tail-dispatch into any physical scheduler factory.
@@ -3213,14 +3213,14 @@ void *Gen11::vfCreateScheduler(void *accelerator)
 	return scheduler;
 }
 
-void *Gen11::vfRejectLegacySchedulerFactory(void *accelerator)
+void *TglAccel::vfRejectLegacySchedulerFactory(void *accelerator)
 {
 	(void)accelerator;
 	vfMarkProtocolFault("legacy scheduler factory reached a VF");
 	return nullptr;
 }
 
-bool Gen11::vfRejectLegacySchedulerInit(void *scheduler, void *accelerator)
+bool TglAccel::vfRejectLegacySchedulerInit(void *scheduler, void *accelerator)
 {
 	(void)scheduler;
 	(void)accelerator;
@@ -3228,7 +3228,7 @@ bool Gen11::vfRejectLegacySchedulerInit(void *scheduler, void *accelerator)
 	return false;
 }
 
-void *Gen11::vfRejectLegacyCommandStreamerFactory(void *accelerator,
+void *TglAccel::vfRejectLegacyCommandStreamerFactory(void *accelerator,
 	                                               void *workLoop,
 	                                               void *scheduler,
 	                                               uint32_t engine)
@@ -3241,7 +3241,7 @@ void *Gen11::vfRejectLegacyCommandStreamerFactory(void *accelerator,
 	return nullptr;
 }
 
-bool Gen11::vfRejectLegacyCommandStreamerInit(void *streamer,
+bool TglAccel::vfRejectLegacyCommandStreamerInit(void *streamer,
 	                                          void *accelerator,
 	                                          void *workLoop,
 	                                          void *scheduler,
@@ -3256,7 +3256,7 @@ bool Gen11::vfRejectLegacyCommandStreamerInit(void *streamer,
 	return false;
 }
 
-uint32_t Gen11::vfRejectSafeReadRegister32(void *accelerator,
+uint32_t TglAccel::vfRejectSafeReadRegister32(void *accelerator,
 	                                       uint64_t registerOffset)
 {
 	(void)accelerator;
@@ -3266,7 +3266,7 @@ uint32_t Gen11::vfRejectSafeReadRegister32(void *accelerator,
 	return 0;
 }
 
-uint64_t Gen11::vfRejectSafeReadRegister64(void *accelerator,
+uint64_t TglAccel::vfRejectSafeReadRegister64(void *accelerator,
 	                                       uint64_t registerOffset)
 {
 	(void)accelerator;
@@ -3276,7 +3276,7 @@ uint64_t Gen11::vfRejectSafeReadRegister64(void *accelerator,
 	return 0;
 }
 
-void Gen11::vfRejectSafeWriteRegister32(void *accelerator,
+void TglAccel::vfRejectSafeWriteRegister32(void *accelerator,
 	                                    uint64_t registerOffset,
 	                                    uint32_t value)
 {
@@ -3287,7 +3287,7 @@ void Gen11::vfRejectSafeWriteRegister32(void *accelerator,
 	PANIC_COND(true, "ngreen", "Refusing PF-owned 32-bit register write on a VF");
 }
 
-IOReturn Gen11::vfRejectSchedulerPmAttributes(void *scheduler,
+IOReturn TglAccel::vfRejectSchedulerPmAttributes(void *scheduler,
 	                                          const void *attributes)
 {
 	(void)scheduler;
@@ -3296,13 +3296,13 @@ IOReturn Gen11::vfRejectSchedulerPmAttributes(void *scheduler,
 	return kIOReturnUnsupported;
 }
 
-void Gen11::vfDisablePhysicalCacheInit(void *memoryManager)
+void TglAccel::vfDisablePhysicalCacheInit(void *memoryManager)
 {
 	(void)memoryManager;
 	vfMarkProtocolFault("physical cache/PAT/MOCS initialization reached a VF");
 }
 
-void Gen11::vfRejectDynamicInterruptClear(void *bridge, uint32_t identity,
+void TglAccel::vfRejectDynamicInterruptClear(void *bridge, uint32_t identity,
 	                                       uint32_t identityClear,
 	                                       uint32_t iir,
 	                                       uint32_t iirClearMask)
@@ -3315,7 +3315,7 @@ void Gen11::vfRejectDynamicInterruptClear(void *bridge, uint32_t identity,
 	vfMarkProtocolFault("dynamic interrupt-register clear reached a VF");
 }
 
-uint32_t Gen11::vfRejectDynamicInterruptRead(void *bridge, uint32_t identity,
+uint32_t TglAccel::vfRejectDynamicInterruptRead(void *bridge, uint32_t identity,
 	                                         uint32_t iir,
 	                                         uint32_t iirClearMask)
 {
@@ -3327,7 +3327,7 @@ uint32_t Gen11::vfRejectDynamicInterruptRead(void *bridge, uint32_t identity,
 	return 0;
 }
 
-bool Gen11::vfDeferFilterInterruptEventSource(void *that)
+bool TglAccel::vfDeferFilterInterruptEventSource(void *that)
 {
 	if (!callback || !callback->oVfCreateFilterInterruptEventSource || !that) {
 		vfMarkProtocolFault("missing VF local interrupt-source factory");
@@ -3354,7 +3354,7 @@ bool Gen11::vfDeferFilterInterruptEventSource(void *that)
 	return true;
 }
 
-bool Gen11::startGraphicsEngine(void *that)
+bool TglAccel::startGraphicsEngine(void *that)
 {
 	// This replacement is installed only for a classified VF. Ring power,
 	// reset and legacy execlist state belong to the PF, but the native tail of
@@ -3586,7 +3586,7 @@ bool Gen11::startGraphicsEngine(void *that)
 	return true;
 }
 
-bool Gen11::stopGraphicsEngine(void *that)
+bool TglAccel::stopGraphicsEngine(void *that)
 {
 	if (!that || !callback || !callback->vfInterruptBridgeDisable ||
 	    !callback->ioGraphicsDisableAccelerator) {
@@ -3651,7 +3651,7 @@ static bool vfRequireSuccessfulNativeSubmission(bool submitted,
 	return false;
 }
 
-bool Gen11::submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4) {
+bool TglAccel::submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4) {
 	// Native returns a boolean in AL, not an IOReturn. Every rejected/no-op
 	// path below returns false. A classified VF must fail-stop those paths for
 	// non-empty work because the complete caller inventory includes consumers
@@ -3697,7 +3697,7 @@ bool Gen11::submitBlit(void *that, void *param_1, void *param_2, void *param_3, 
 		"Native VF blit returned without publishing non-empty work");
 }
 
-bool Gen11::vfSubmitCCSResolve(void *that, void *entry, void *accelerator,
+bool TglAccel::vfSubmitCCSResolve(void *that, void *entry, void *accelerator,
 	void *task, uint32_t resolveType, uint8_t plane, uint8_t level)
 {
 	PANIC_COND(!callback || !callback->oVfSubmitCCSResolve, "ngreen",
@@ -3717,7 +3717,7 @@ bool Gen11::vfSubmitCCSResolve(void *that, void *entry, void *accelerator,
 		"Native VF CCS resolve returned false after admission");
 }
 
-bool Gen11::vfSubmitDepthResolve(void *that, void *entry, void *accelerator,
+bool TglAccel::vfSubmitDepthResolve(void *that, void *entry, void *accelerator,
 	void *task, uint32_t resolveType, uint8_t plane, uint8_t level,
 	uint16_t width, uint16_t height)
 {
@@ -3739,7 +3739,7 @@ bool Gen11::vfSubmitDepthResolve(void *that, void *entry, void *accelerator,
 		"Native VF depth resolve returned false after admission");
 }
 
-void Gen11::barrierSubmission(void *queue, void *accelerator, void *cmdDesc,
+void TglAccel::barrierSubmission(void *queue, void *accelerator, void *cmdDesc,
 								void *event, uint16_t count, const uint16_t *list) {
 	// Both direct callers in the pinned Tahoe payload ignore RAX, and the native
 	// body has return paths that do not establish a value: this is a void ABI.
@@ -3777,7 +3777,7 @@ void Gen11::barrierSubmission(void *queue, void *accelerator, void *cmdDesc,
 		queue, accelerator, cmdDesc, event, count, list);
 }
 
-void *Gen11::getBlit2DContext(void *that, bool create)
+void *TglAccel::getBlit2DContext(void *that, bool create)
 {
 	if (!that || !callback->ogetBlit2DContext)
 		return nullptr;
@@ -3787,7 +3787,7 @@ void *Gen11::getBlit2DContext(void *that, bool create)
 	                    callback->ogetBlit2DContext)(that, create);
 }
 
-void *Gen11::getDepthResolveContext(void *that, bool create)
+void *TglAccel::getDepthResolveContext(void *that, bool create)
 {
 	if (!that || !callback->ogetDepthResolveContext)
 		return nullptr;
@@ -3797,7 +3797,7 @@ void *Gen11::getDepthResolveContext(void *that, bool create)
 	                    callback->ogetDepthResolveContext)(that, create);
 }
 
-void *Gen11::getColorResolveContext(void *that, bool create)
+void *TglAccel::getColorResolveContext(void *that, bool create)
 {
 	if (!that || !callback->ogetColorResolveContext)
 		return nullptr;
@@ -3807,7 +3807,7 @@ void *Gen11::getColorResolveContext(void *that, bool create)
 	                    callback->ogetColorResolveContext)(that, create);
 }
 
-bool Gen11::loadGuCBinary(void *that) {
+bool TglAccel::loadGuCBinary(void *that) {
 	// The PF already owns and runs GuC for an SR-IOV VF. Report firmware as
 	// available so Apple's GuC scheduler initializes its submission transport,
 	// but never try to replace the PF-owned image or WOPCM configuration.
@@ -3843,12 +3843,12 @@ bool Gen11::loadGuCBinary(void *that) {
 	return initialized && !gVfProtocolFault;
 }
 
-void Gen11::wrapSafeForceWake(void *that, bool set, uint32_t dom)
+void TglAccel::wrapSafeForceWake(void *that, bool set, uint32_t dom)
 {
 	forceWake(that, set, dom, 0);
 }
 
-void Gen11::forceWake(void *that, bool set, uint32_t dom, uint32_t ctx)
+void TglAccel::forceWake(void *that, bool set, uint32_t dom, uint32_t ctx)
 {
 	(void)that;
 	(void)set;
@@ -3862,7 +3862,7 @@ void Gen11::forceWake(void *that, bool set, uint32_t dom, uint32_t ctx)
 		SYSLOG("ngreen", "V240: guest force-wake suppressed for SR-IOV VF");
 	}
 }
-bool Gen11::injectAcceleratorPersonality(const char *bundleId)
+bool TglAccel::injectAcceleratorPersonality(const char *bundleId)
 {
 	if (this->acceleratorPersonalityInjected) {
 		DBGLOG("ngreen", "injectAcceleratorPersonality: already injected, skipping");
@@ -4025,13 +4025,13 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 
 // The VF has no guest-owned INSTDONE register. Its watchdog query is true only
 // after every tracked direct-LRCA context has reached an idle lifecycle state.
-bool Gen11::wrapIGScheduler5IsGpuIdle(const void *that) {
+bool TglAccel::wrapIGScheduler5IsGpuIdle(const void *that) {
 	(void)that;
 	return vfKnownIdleSnapshot(callback ?
 		callback->vfSharedMappedBufferGetVirtualAddress : 0);
 }
 
-bool Gen11::wrapIGScheduler4IsGpuIdle(const void *that) {
+bool TglAccel::wrapIGScheduler4IsGpuIdle(const void *that) {
 	(void)that;
 	return vfKnownIdleSnapshot(callback ?
 		callback->vfSharedMappedBufferGetVirtualAddress : 0);
