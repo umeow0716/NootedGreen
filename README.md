@@ -19,8 +19,9 @@ Working on macOS Tahoe 26.7 (`25G229`):
 Known issues:
 
 - The first decoded frame after boot can come out black.
-- Apple kexts are matched by exact UUID, so a macOS update disables acceleration
-  until the patches are updated.
+- Only macOS Tahoe is supported. On a minor update the kext checks the
+  IOAcceleratorFamily2 layout it depends on and boots without acceleration if it
+  changed. Only `25G229` has been tested.
 - Occasional GuC context resets on the video engine under long encode runs.
 
 ## Requirements

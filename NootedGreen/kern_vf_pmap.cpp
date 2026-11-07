@@ -22,6 +22,7 @@ static uint64_t (*physRead)(uint64_t);
 static void (*noPreempt)();
 static void (*preempt)();
 static uint32_t repairs;
+static uint32_t pml4Offset;
 constexpr uint64_t sharedBase = 0x7FF800000000ULL, sharedEnd = 0x800000000000ULL;
 constexpr uint64_t frame = 0x000FFFFFFFFFF000ULL, nested = 1ULL << 53;
 constexpr uint32_t chunk = 256;
@@ -40,7 +41,7 @@ static uint32_t hashIndex(void *pmap, uint64_t va) {
 
 // Physical address of the PT page covering va, or 0.
 static uint64_t ptPage(void *pmap, uint64_t va) {
-	auto *pml4 = *reinterpret_cast<uint64_t **>(static_cast<uint8_t *>(pmap) + 0x50);
+	auto *pml4 = *reinterpret_cast<uint64_t **>(static_cast<uint8_t *>(pmap) + pml4Offset);
 	if (!pml4)
 		return 0;
 	const uint64_t pml4e = pml4[(va >> 39) & 511];
@@ -153,6 +154,36 @@ static void wrapRemove(void *pmap, uint64_t start, uint64_t end, int options) {
 		org(pmap, sharedEnd, end, options);
 }
 
+static bool contains(mach_vm_address_t code, size_t span, const uint8_t *bytes, size_t length) {
+	for (size_t i = 0; code && i + length <= span; i++)
+		if (!memcmp(reinterpret_cast<const void *>(code + i), bytes, length))
+			return true;
+	return false;
+}
+
+// The PV layout, hash and PML4 field this relies on, as pmap_remove_range and
+// pmap_find_pa use them. A kernel that changed them leaves the repair off.
+static bool layoutMatches(KernelPatcher &patcher) {
+	const auto findPa = patcher.solveSymbol(KernelPatcher::KernelID, "_pmap_find_pa");
+	const auto removeRange = patcher.solveSymbol(KernelPatcher::KernelID, "_pmap_remove_range");
+	patcher.clearError();
+	if (!findPa || !removeRange)
+		return false;
+	// pmap_find_pa: "mov rax, [rdi+pm_pml4]; test rax, rax".
+	for (size_t i = 0; i + 7 <= 0x100 && !pml4Offset; i++) {
+		const auto *p = reinterpret_cast<const uint8_t *>(findPa + i);
+		if (p[0] == 0x48 && p[1] == 0x8B && p[2] == 0x47 && p[4] == 0x48 && p[5] == 0x85 && p[6] == 0xC0)
+			pml4Offset = p[3];
+	}
+	// Hash (pmap ^ va >> 12), 32-byte rooted entries with pmap at +0x18, and
+	// the hashed chain link at +0x28.
+	static const uint8_t hash[] = {0x48, 0xC1, 0xE8, 0x0C, 0x31, 0xF8};
+	static const uint8_t rooted[] = {0x49, 0xC1, 0xE7, 0x05, 0x4A, 0x83, 0x7C, 0x3B, 0x18, 0x00};
+	static const uint8_t chain[] = {0x49, 0x8B, 0x45, 0x28, 0x49, 0x83, 0xC5, 0x28};
+	return pml4Offset == 0x50 && contains(removeRange, 0x1000, hash, sizeof(hash)) &&
+		contains(removeRange, 0x1000, rooted, sizeof(rooted)) && contains(removeRange, 0x1000, chain, sizeof(chain));
+}
+
 void install(KernelPatcher &patcher) {
 	pvHead = reinterpret_cast<Pv **>(patcher.solveSymbol(KernelPatcher::KernelID, "_pv_head_table"));
 	pvLock = reinterpret_cast<char **>(patcher.solveSymbol(KernelPatcher::KernelID, "_pv_lock_table"));
@@ -167,6 +198,10 @@ void install(KernelPatcher &patcher) {
 	if (!pvHead || !pvLock || !hashTable || !hashLock || !hashMask || !lastManaged || !kernelPmap || !physRead || !noPreempt || !preempt) {
 		SYSLOG("ngreen", "V373: pmap symbols missing, stale PV repair off");
 		patcher.clearError();
+		return;
+	}
+	if (!layoutMatches(patcher)) {
+		SYSLOG("ngreen", "V373: pmap layout changed, stale PV repair off");
 		return;
 	}
 	KernelPatcher::RouteRequest request("_pmap_remove_options", wrapRemove, orgRemove);

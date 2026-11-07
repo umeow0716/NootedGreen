@@ -695,7 +695,7 @@ static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
 	using Getter = void *(*)(void *);
 	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	OSSynchronizeIO();
-	const bool softwareBefore = getMember<volatile UInt32>(gVfAccelerator, 0xDC8) != 0;
+	const bool softwareBefore = getMember<volatile UInt32>(gVfAccelerator, gVfTerminatedOffset) != 0;
 	for (uint32_t engine = 0; engine < NGVfTimeoutObservation::engineCount; ++engine) {
 		const auto &reference = gVfTimeoutReferences[engine];
 		auto &frame = frames[engine];
@@ -772,7 +772,7 @@ static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
 			frame.flags |= 16;
 	}
 	OSSynchronizeIO();
-	const bool softwareAfter = getMember<volatile UInt32>(gVfAccelerator, 0xDC8) != 0;
+	const bool softwareAfter = getMember<volatile UInt32>(gVfAccelerator, gVfTerminatedOffset) != 0;
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
 	if (softwareAfter)
 		for (auto &frame : frames) frame.flags &= ~16U;

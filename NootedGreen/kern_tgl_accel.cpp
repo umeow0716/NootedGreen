@@ -156,6 +156,72 @@ static bool vfRejectPhysicalFramebufferStart(void *, void *) {
 // all three are processed, whatever their order.
 static const char *gPendingAcceleratorBundle;
 static bool gIoAccelLifecycleResolved; // IOAcceleratorFamily2 fully processed
+// Set when this IOAcceleratorFamily2 does not match what the VF path relies
+// on. The TGL accelerator is then left alone and macOS boots unaccelerated.
+static bool gTglAccelDisabled;
+uint32_t gVfTerminatedOffset;
+
+static mach_vm_address_t familySymbol(KernelPatcher &patcher, size_t index, mach_vm_address_t address,
+	size_t size, const char *name, size_t span) {
+	const auto symbol = patcher.solveSymbol(index, name, address, size);
+	patcher.clearError();
+	return symbol >= address && symbol - address < size && span <= size - (symbol - address) ? symbol : 0;
+}
+
+// Minor Tahoe updates rebuild IOAcceleratorFamily2, so its UUID is not pinned.
+// The donor TGL subclasses were built against these base class sizes, and the
+// one private field the VF path reads is taken from the instruction that sets it.
+static bool familyLayoutMatches(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
+	if (getKernelVersion() != KernelVersion::Tahoe) {
+		SYSLOG("ngreen", "IOAcceleratorFamily2: not macOS Tahoe");
+		return false;
+	}
+	static const struct { const char *ctor; uint32_t size; } bases[] = {
+		{"__ZN22IOGraphicsAccelerator29MetaClassC1Ev", 0xDD8},
+		{"__ZN15IOAccelContext29MetaClassC1Ev", 0x10A8},
+		{"__ZN19IOAccelCommandQueue9MetaClassC1Ev", 0x6A8},
+		{"__ZN14IOAccelSurface9MetaClassC1Ev", 0x1338},
+		{"__ZN24IOAccelSharedUserClient29MetaClassC1Ev", 0x168},
+		{"__ZN11IOAccelTask9MetaClassC1Ev", 0x258},
+		{"__ZN16IOAccelResource29MetaClassC1Ev", 0x180},
+		{"__ZN16IOAccelMemoryMap9MetaClassC1Ev", 0x118},
+		{"__ZN24IOAccelEventMachineFast29MetaClassC1Ev", 0xD30},
+		{"__ZN25IOAccelCommandBufferPool29MetaClassC1Ev", 0x18B8},
+		{"__ZN17IOAccelSurfaceMTL9MetaClassC1Ev", 0x340},
+		{"__ZN27IOAccelMemoryInfoUserClient9MetaClassC1Ev", 0xE8},
+		{"__ZN29IOAccelDisplayPipeUserClient29MetaClassC1Ev", 0x1A8},
+		{"__ZN18IOAccelDisplayPipe9MetaClassC1Ev", 0x318},
+	};
+	for (const auto &base : bases) {
+		// OSMetaClass(name, super, size): "mov ecx, size; call".
+		const auto ctor = familySymbol(patcher, index, address, size, base.ctor, 0x40);
+		uint32_t found = 0;
+		for (size_t i = 0; ctor && i + 10 <= 0x40 && !found; i++) {
+			const auto *p = reinterpret_cast<const uint8_t *>(ctor + i);
+			if (p[0] == 0xB9 && p[5] == 0xE8)
+				found = static_cast<uint32_t>(p[1]) | static_cast<uint32_t>(p[2]) << 8 |
+					static_cast<uint32_t>(p[3]) << 16 | static_cast<uint32_t>(p[4]) << 24;
+		}
+		if (found != base.size) {
+			SYSLOG("ngreen", "IOAcceleratorFamily2: %s size 0x%x, expected 0x%x", base.ctor, found, base.size);
+			return false;
+		}
+	}
+	// deviceTerminatedUnlocked: "add rdi, offset" of the terminated counter.
+	const auto terminated = familySymbol(patcher, index, address, size,
+		"__ZN22IOGraphicsAccelerator224deviceTerminatedUnlockedEv", 0x20);
+	for (size_t i = 0; terminated && i + 7 <= 0x20 && !gVfTerminatedOffset; i++) {
+		const auto *p = reinterpret_cast<const uint8_t *>(terminated + i);
+		if (p[0] == 0x48 && p[1] == 0x81 && p[2] == 0xC7)
+			gVfTerminatedOffset = static_cast<uint32_t>(p[3]) | static_cast<uint32_t>(p[4]) << 8 |
+				static_cast<uint32_t>(p[5]) << 16 | static_cast<uint32_t>(p[6]) << 24;
+	}
+	if (gVfTerminatedOffset < 0x100 || gVfTerminatedOffset + 4 > 0xDD8) {
+		SYSLOG("ngreen", "IOAcceleratorFamily2: no terminated counter offset");
+		return false;
+	}
+	return true;
+}
 
 // Lilu handles a kext load by processing only the head of the kmod list. When
 // kernelmanagerd loads IOAcceleratorFamily2 and TGL back to back, the first
@@ -214,12 +280,36 @@ bool TglAccel::processKext(KernelPatcher &patcher, size_t index, mach_vm_address
 	if (index == kextIOAcceleratorFamily2.loadIndex) {
 		if (!OSCompareAndSwap(0, 1, &gIoAccelProcessing))
 			return true;
-		const auto *ioAccelImage = reinterpret_cast<const uint8_t *>(address);
-		PANIC_COND(!NGBinaryIdentity::matchesKextUuid(
-		               ioAccelImage, size,
-		               NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid),
-		           "ngreen", "Unsupported Tahoe IOAcceleratorFamily2 private ABI");
 		V373::install(patcher);
+		if (!familyLayoutMatches(patcher, index, address, size)) {
+			gTglAccelDisabled = true;
+			SYSLOG("ngreen", "IOAcceleratorFamily2 layout changed; GPU acceleration disabled");
+			return true;
+		}
+		mach_vm_address_t poolInitStart = 0, growthStart = 0, growthEnd = 0;
+		mach_vm_address_t getterStart = 0, getterEnd = 0;
+		KernelPatcher::SolveRequest commandPoolBounds[] = {
+			{"__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj",
+			 poolInitStart},
+			{"__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv", growthStart},
+			{"__ZN25IOAccelCommandBufferPool24freeEv", growthEnd},
+			{"__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj", getterStart},
+			{"__ZN25IOAccelCommandBufferPool212submitBufferEv", getterEnd},
+		};
+		if (!patcher.solveMultiple(index, commandPoolBounds, address, size) ||
+		    growthEnd <= growthStart ||
+		    !NGIOAccelCommandPool::hasReviewedGrowthContract(
+		        reinterpret_cast<const uint8_t *>(growthStart),
+		        growthEnd - growthStart) ||
+		    getterEnd <= getterStart ||
+		    !NGIOAccelCommandPool::hasReviewedGetBufferContract(
+		        reinterpret_cast<const uint8_t *>(getterStart),
+		        getterEnd - getterStart)) {
+			patcher.clearError();
+			gTglAccelDisabled = true;
+			SYSLOG("ngreen", "IOAccelCommandBufferPool2 changed; GPU acceleration disabled");
+			return true;
+		}
 		KernelPatcher::SolveRequest lifecycle[] = {
 			{"__ZN22IOGraphicsAccelerator217enableAcceleratorEv",
 			 this->ioGraphicsEnableAccelerator},
@@ -242,28 +332,6 @@ bool TglAccel::processKext(KernelPatcher &patcher, size_t index, mach_vm_address
 		PANIC_COND(!patcher.routeMultiple(index, callbackOwnerTeardown,
 		                                      address, size),
 		           "ngreen", "Cannot route VF callback-owner teardown boundary");
-		mach_vm_address_t poolInitStart = 0, growthStart = 0, growthEnd = 0;
-		mach_vm_address_t getterStart = 0, getterEnd = 0;
-		KernelPatcher::SolveRequest commandPoolBounds[] = {
-			{"__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj",
-			 poolInitStart},
-			{"__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv", growthStart},
-			{"__ZN25IOAccelCommandBufferPool24freeEv", growthEnd},
-			{"__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj", getterStart},
-			{"__ZN25IOAccelCommandBufferPool212submitBufferEv", getterEnd},
-		};
-		PANIC_COND(!patcher.solveMultiple(index, commandPoolBounds, address, size) ||
-		           growthStart <= poolInitStart ||
-		           growthStart - poolInitStart != 0x182 ||
-		           growthEnd <= growthStart ||
-		           !NGIOAccelCommandPool::hasReviewedGrowthContract(
-		               reinterpret_cast<const uint8_t *>(growthStart),
-		               growthEnd - growthStart) ||
-		           getterEnd <= getterStart ||
-		           !NGIOAccelCommandPool::hasReviewedGetBufferContract(
-		               reinterpret_cast<const uint8_t *>(getterStart),
-		               getterEnd - getterStart),
-		           "ngreen", "Changed IOAccelerator command-pool contract");
 		KernelPatcher::RouteRequest commandPoolRoutes[] = {
 			{"__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj",
 			 ngVfCommandPoolInitBridge, gIOAccelCommandPoolInit},
@@ -397,6 +465,11 @@ bool TglAccel::processKext(KernelPatcher &patcher, size_t index, mach_vm_address
 	} else if (kextG11HWT.loadIndex == index || kextG11HWTA.loadIndex == index) {
 		if (!OSCompareAndSwap(0, 1, &gTglProcessed))
 			return true;
+		if (gTglAccelDisabled) {
+			ngReleaseTglBusyHold();
+			SYSLOG("ngreen", "AppleIntelTGLGraphics left unpatched; GPU acceleration disabled");
+			return true;
+		}
 		// Every route below depends on private Tahoe object offsets, symbol ABIs or
 		// exact instruction sequences. PF ownership does not make an unknown
 		// payload layout safe, so use the same fail-closed identity gate for both
@@ -2119,7 +2192,9 @@ IOReturn TglAccel::vfGLDrawableExternalMethod(void *that, uint32_t selector,
 	                                      void *arguments, void *dispatch,
 	                                      void *target, void *reference)
 {
-	void *accelerator = that ? getMember<void *>(that, 0xF8) : nullptr;
+	// These user clients keep their accelerator in a field private to
+	// IOAcceleratorFamily2; a VF has exactly one accelerator anyway.
+	void *accelerator = gVfAccelerator;
 	VfExternalProducerGuard guard(accelerator);
 	if (!guard)
 		return kIOReturnOffline;
@@ -2132,7 +2207,7 @@ IOReturn TglAccel::vfSurfaceMtlExternalMethod(void *that, uint32_t selector,
 	                                      void *arguments, void *dispatch,
 	                                      void *target, void *reference)
 {
-	void *accelerator = that ? getMember<void *>(that, 0x2F8) : nullptr;
+	void *accelerator = gVfAccelerator;
 	VfExternalProducerGuard guard(accelerator);
 	if (!guard)
 		return kIOReturnOffline;
@@ -2145,7 +2220,7 @@ IOReturn TglAccel::vfMemoryInfoExternalMethod(void *that, uint32_t selector,
 	                                      void *arguments, void *dispatch,
 	                                      void *target, void *reference)
 {
-	void *accelerator = that ? getMember<void *>(that, 0xE0) : nullptr;
+	void *accelerator = gVfAccelerator;
 	VfExternalProducerGuard guard(accelerator);
 	if (!guard)
 		return kIOReturnOffline;
@@ -2158,7 +2233,7 @@ IOReturn TglAccel::vfDisplayPipeExternalMethod(void *that, uint32_t selector,
 	                                       void *arguments, void *dispatch,
 	                                       void *target, void *reference)
 {
-	void *accelerator = that ? getMember<void *>(that, 0xD8) : nullptr;
+	void *accelerator = gVfAccelerator;
 	VfExternalProducerGuard guard(accelerator);
 	if (!guard)
 		return kIOReturnOffline;
@@ -2311,8 +2386,6 @@ void ngReleaseTglBusyHold() {
 	service->release();
 	SYSLOG("ngreen", "V289: released IOKit busy hold");
 }
-
-// Boot-arg cache for the per-submission RCS prologue switch.
 
 bool TglAccel::start(void *that, void *provider)
 {
@@ -3175,7 +3248,7 @@ bool TglAccel::vfInitScheduler(void *scheduler, uint32_t options,
 	// Native base init ignores addEventSource's result. The pinned default
 	// timer constructor and effective getter let us verify actual attachment.
 	auto *timer = getMember<IOTimerEventSource *>(scheduler, 0x448);
-	auto *expected = getMember<IOWorkLoop *>(accelerator, 0xf0);
+	auto *expected = static_cast<IOService *>(accelerator)->getWorkLoop();
 	if (!timer || !expected) {
 		vfMarkProtocolFault("VF native scheduler success has incomplete timer ownership");
 		PANIC("ngreen", "Cannot unwind incomplete VF scheduler timer ownership");

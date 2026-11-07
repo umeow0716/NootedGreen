@@ -1811,7 +1811,7 @@ bool vfNativeCallbackBindingsReady(void *accelerator)
 {
 	if (!accelerator)
 		return false;
-	auto *workloop = getMember<IOWorkLoop *>(accelerator, 0xF0);
+	auto *workloop = static_cast<IOService *>(accelerator)->getWorkLoop();
 	auto *eventMachine = getMember<void *>(accelerator, 0x380);
 	auto *scheduler = getMember<void *>(accelerator, 0x1250);
 	auto *dpsmTimer = getMember<IOTimerEventSource *>(accelerator, 0x1460);
@@ -1877,7 +1877,7 @@ bool vfDetachNativeCallbackSourcesBeforeBaseStop(void *accelerator)
 {
 	if (!accelerator)
 		return false;
-	auto *workloop = getMember<IOWorkLoop *>(accelerator, 0xF0);
+	auto *workloop = static_cast<IOService *>(accelerator)->getWorkLoop();
 	auto *eventMachine = getMember<void *>(accelerator, 0x380);
 	auto *scheduler = getMember<void *>(accelerator, 0x1250);
 	if (!workloop || !eventMachine || !scheduler ||
@@ -1952,7 +1952,7 @@ bool vfDetachPartialNativeCallbackSources(void *accelerator)
 	if (!accelerator ||
 	    getMember<IOTimerEventSource *>(accelerator, 0x1460) != nullptr)
 		return false;
-	auto *workloop = getMember<IOWorkLoop *>(accelerator, 0xF0);
+	auto *workloop = static_cast<IOService *>(accelerator)->getWorkLoop();
 	auto *eventMachine = getMember<void *>(accelerator, 0x380);
 	auto *scheduler = getMember<void *>(accelerator, 0x1250);
 	if (!eventMachine && !scheduler)

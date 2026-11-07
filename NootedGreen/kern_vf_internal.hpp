@@ -181,6 +181,7 @@ extern volatile UInt32 gVfMemIrqRequested;
 extern volatile UInt32 gVfMmioIrqReady;
 
 extern volatile UInt32 gVfProtocolFault;
+extern uint32_t gVfTerminatedOffset;
 
 extern volatile UInt32 gVfGgttDiagnosticWrites;
 

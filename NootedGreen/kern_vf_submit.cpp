@@ -659,7 +659,7 @@ bool vfKnownIdleSnapshot(mach_vm_address_t mappedBufferGetter,
 	// completion and can never satisfy the GPU-idle contract.
 	OSSynchronizeIO();
 	const bool softwareCompletionPossible =
-		getMember<volatile UInt32>(gVfAccelerator, 0xDC8) != 0;
+		getMember<volatile UInt32>(gVfAccelerator, gVfTerminatedOffset) != 0;
 	if (softwareCompletionPossible)
 		return false;
 	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
@@ -686,7 +686,7 @@ bool vfKnownIdleSnapshot(mach_vm_address_t mappedBufferGetter,
 	// an overlap can only turn this snapshot into busy, never GPU-complete.
 	OSSynchronizeIO();
 	const bool terminationRaced =
-		getMember<volatile UInt32>(gVfAccelerator, 0xDC8) != 0;
+		getMember<volatile UInt32>(gVfAccelerator, gVfTerminatedOffset) != 0;
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
 	return idle && !terminationRaced;
 }
