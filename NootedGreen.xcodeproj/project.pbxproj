@@ -19,6 +19,12 @@
 		A17E1E342DC0000100000001 /* kern_tgl_compat.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E332DC0000100000001 /* kern_tgl_compat.cpp */; };
 		A17E1E512DC0000100000001 /* kern_xe_access.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E502DC0000100000001 /* kern_xe_access.cpp */; };
 		A17E1E542DC0000100000001 /* kern_xe_render.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E532DC0000100000001 /* kern_xe_render.cpp */; };
+		B17E1E032DC0000100000001 /* kern_vf_pmap.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B17E1E022DC0000100000001 /* kern_vf_pmap.cpp */; };
+		B17E1E052DC0000100000001 /* kern_vf_guc.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B17E1E042DC0000100000001 /* kern_vf_guc.cpp */; };
+		B17E1E072DC0000100000001 /* kern_vf_memory.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B17E1E062DC0000100000001 /* kern_vf_memory.cpp */; };
+		B17E1E092DC0000100000001 /* kern_vf_submit.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B17E1E082DC0000100000001 /* kern_vf_submit.cpp */; };
+		B17E1E0B2DC0000100000001 /* kern_vf_video.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B17E1E0A2DC0000100000001 /* kern_vf_video.cpp */; };
+		B17E1E0D2DC0000100000001 /* kern_vf_events.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B17E1E0C2DC0000100000001 /* kern_vf_events.cpp */; };
 		A17E1E572DC0000100000001 /* kern_xe_lv.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E562DC0000100000001 /* kern_xe_lv.cpp */; };
 		A17E1E672DC0000100000001 /* kern_ndrv_refresh.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E662DC0000100000001 /* kern_ndrv_refresh.cpp */; };
 /* End PBXBuildFile section */
@@ -68,6 +74,13 @@
 		A17E1E522DC0000100000001 /* kern_xe_access.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_xe_access.hpp; sourceTree = "<group>"; };
 		A17E1E532DC0000100000001 /* kern_xe_render.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_xe_render.cpp; sourceTree = "<group>"; };
 		A17E1E552DC0000100000001 /* kern_xe_render.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_xe_render.hpp; sourceTree = "<group>"; };
+		B17E1E022DC0000100000001 /* kern_vf_pmap.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_vf_pmap.cpp; sourceTree = "<group>"; };
+		B17E1E042DC0000100000001 /* kern_vf_guc.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_vf_guc.cpp; sourceTree = "<group>"; };
+		B17E1E062DC0000100000001 /* kern_vf_memory.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_vf_memory.cpp; sourceTree = "<group>"; };
+		B17E1E082DC0000100000001 /* kern_vf_submit.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_vf_submit.cpp; sourceTree = "<group>"; };
+		B17E1E0A2DC0000100000001 /* kern_vf_video.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_vf_video.cpp; sourceTree = "<group>"; };
+		B17E1E0C2DC0000100000001 /* kern_vf_events.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_vf_events.cpp; sourceTree = "<group>"; };
+		B17E1E0E2DC0000100000001 /* kern_vf_internal.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_vf_internal.hpp; sourceTree = "<group>"; };
 		A17E1E562DC0000100000001 /* kern_xe_lv.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_xe_lv.cpp; sourceTree = "<group>"; };
 		A17E1E662DC0000100000001 /* kern_ndrv_refresh.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_ndrv_refresh.cpp; sourceTree = "<group>"; };
 		A17E1E582DC0000100000001 /* kern_xe_lv.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_xe_lv.hpp; sourceTree = "<group>"; };
@@ -124,6 +137,13 @@
 				A17E1E522DC0000100000001 /* kern_xe_access.hpp */,
 				A17E1E532DC0000100000001 /* kern_xe_render.cpp */,
 				A17E1E552DC0000100000001 /* kern_xe_render.hpp */,
+				B17E1E022DC0000100000001 /* kern_vf_pmap.cpp */,
+				B17E1E042DC0000100000001 /* kern_vf_guc.cpp */,
+				B17E1E062DC0000100000001 /* kern_vf_memory.cpp */,
+				B17E1E082DC0000100000001 /* kern_vf_submit.cpp */,
+				B17E1E0A2DC0000100000001 /* kern_vf_video.cpp */,
+				B17E1E0C2DC0000100000001 /* kern_vf_events.cpp */,
+				B17E1E0E2DC0000100000001 /* kern_vf_internal.hpp */,
 				A17E1E562DC0000100000001 /* kern_xe_lv.cpp */,
 				A17E1E662DC0000100000001 /* kern_ndrv_refresh.cpp */,
 				A17E1E582DC0000100000001 /* kern_xe_lv.hpp */,
@@ -257,6 +277,12 @@
 				A17E1E342DC0000100000001 /* kern_tgl_compat.cpp in Sources */,
 				A17E1E512DC0000100000001 /* kern_xe_access.cpp in Sources */,
 				A17E1E542DC0000100000001 /* kern_xe_render.cpp in Sources */,
+				B17E1E032DC0000100000001 /* kern_vf_pmap.cpp in Sources */,
+				B17E1E052DC0000100000001 /* kern_vf_guc.cpp in Sources */,
+				B17E1E072DC0000100000001 /* kern_vf_memory.cpp in Sources */,
+				B17E1E092DC0000100000001 /* kern_vf_submit.cpp in Sources */,
+				B17E1E0B2DC0000100000001 /* kern_vf_video.cpp in Sources */,
+				B17E1E0D2DC0000100000001 /* kern_vf_events.cpp in Sources */,
 				A17E1E572DC0000100000001 /* kern_xe_lv.cpp in Sources */,
 				A17E1E672DC0000100000001 /* kern_ndrv_refresh.cpp in Sources */,
 				F0AF08BB2A0F373F00B63C2B /* kern_gen11.cpp in Sources */,
