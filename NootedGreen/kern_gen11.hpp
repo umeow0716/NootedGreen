@@ -300,26 +300,6 @@ private:
 	static IOReturn vfContextSubmit(void *that, void *input, void *output,
 	                               uint64_t options, uint64_t *stamp);
 	mach_vm_address_t oVfContextSubmit {};
-	static void vfMediaEnd(void *that,void *stream);
-	mach_vm_address_t oVfMediaEnd {};
-	static void vfChecksumUnmap(void **map);
-	mach_vm_address_t oVfChecksumUnmap {};
-	static void vfChecksumEnd(void *that,void *stream);
-	mach_vm_address_t oVfChecksumEnd {};
-	static bool vfChecksumBindResource(void *that,void *stream,uint32_t identifier,
-	    void **resource,uint64_t *gpuAddress,uint32_t *pitch,bool write);
-	mach_vm_address_t oVfChecksumBindResource {};
-	static bool vfObserveRingBatch(void *that,uint64_t gpu,uint32_t stamp,
-		uint32_t *cpu,uint32_t count,bool flagA,bool flagB);
-	mach_vm_address_t oVfObserveRingBatch {};
-	// Explicit machine ABI: preserve hidden sret RDI and native RAX exactly.
-	static void *vfObserveSurfaceState(void *output,const void *parameters,
-		uint32_t a,uint32_t b,uint32_t mode,uint32_t intent,uint32_t flags);
-	mach_vm_address_t oVfObserveSurfaceState {};
-	static uintptr_t vfObservePoolSubmit(void *pool);
-	mach_vm_address_t oVfObservePoolSubmit {};
-	static uintptr_t vfObserveRectList(void *context,void *parameters,const void *rectangles);
-	mach_vm_address_t oVfObserveRectList {};
 	static IOReturn vf2DSetSurface(void *that, uint32_t surface,
 	                              uint32_t mode);
 	mach_vm_address_t oVf2DSetSurface {};
