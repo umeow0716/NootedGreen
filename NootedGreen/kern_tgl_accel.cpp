@@ -465,33 +465,34 @@ bool TglAccel::processKext(KernelPatcher &patcher, size_t index, mach_vm_address
 	} else if (kextG11HWT.loadIndex == index || kextG11HWTA.loadIndex == index) {
 		if (!OSCompareAndSwap(0, 1, &gTglProcessed))
 			return true;
-		if (gTglAccelDisabled) {
+		// Nothing is routed yet and the TGL personality is only published at the
+		// end, so any failure up to the VF bootstrap leaves macOS booting
+		// unaccelerated instead of panicking (a panic at every boot makes macOS
+		// drop the auxiliary kernel collection).
+		const auto disable = [](const char *reason) {
 			ngReleaseTglBusyHold();
-			SYSLOG("ngreen", "AppleIntelTGLGraphics left unpatched; GPU acceleration disabled");
+			SYSLOG("ngreen", "%s; GPU acceleration disabled", reason);
 			return true;
-		}
-		// Every route below depends on private Tahoe object offsets, symbol ABIs or
-		// exact instruction sequences. PF ownership does not make an unknown
-		// payload layout safe, so use the same fail-closed identity gate for both
-		// physical and virtual devices.
-		PANIC_COND(!NGBinaryIdentity::matchesKextUuid(
-			reinterpret_cast<const uint8_t *>(address), size,
-			NGBinaryIdentity::tglVfPayloadUuid), "ngreen",
-			"Unsupported TGL accelerator payload ABI; refusing private-layout routes");
+		};
+		if (gTglAccelDisabled)
+			return disable("AppleIntelTGLGraphics left unpatched");
+		if (!NGBinaryIdentity::matchesKextUuid(reinterpret_cast<const uint8_t *>(address), size,
+		        NGBinaryIdentity::tglVfPayloadUuid))
+			return disable("Unsupported AppleIntelTGLGraphics build");
 		auto *activeKext = (kextG11HWTA.loadIndex == index) ? &kextG11HWTA : &kextG11HWT;
 		SYSLOG("ngreen", "init AppleIntelTGLGraphics (HW accelerator)");
-		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map TGL accelerator BAR0");
+		if (!NGreen::callback->setRMMIOIfNecessary())
+			return disable("Cannot map TGL accelerator BAR0");
 		const auto identity = vfIdentifyDevice();
-		PANIC_COND(identity == VfIdentity::Invalid, "ngreen",
-			"Cannot classify TGL accelerator as a physical function or VF");
+		if (identity == VfIdentity::Invalid)
+			return disable("Cannot classify TGL accelerator as a physical function or VF");
 		const bool vfActive = identity == VfIdentity::Virtual;
 		const uint32_t gpuDevice = NGreen::callback->getOriginalDeviceId();
 		gVfUsesMemoryIrq = vfActive &&
 			NGGpuCapabilities::hasIovMemoryIrq(gpuDevice);
 		const bool tglGeneration = NGGpuCapabilities::isTigerLake(gpuDevice);
-		PANIC_COND(!NGGpuCapabilities::supportsPinnedTigerLakePayload(
-			gpuDevice, vfActive), "ngreen",
-			"Refusing TGL native accelerator payload on a non-TGL physical function");
+		if (!NGGpuCapabilities::supportsPinnedTigerLakePayload(gpuDevice, vfActive))
+			return disable("Unsupported GPU for the TGL accelerator payload");
 		if (vfActive) {
 			SYSLOG("ngreen", "V251: VF interrupt transport=%s device=%04x",
 			       gVfUsesMemoryIrq ? "memory" : "Gen11 virtual MMIO",
@@ -499,9 +500,10 @@ bool TglAccel::processKext(KernelPatcher &patcher, size_t index, mach_vm_address
 		}
 		// The payload is patched before its personality is published. Complete the
 		// one-shot VF bootstrap here so every embedded fuse immediate comes from
-		// the same PF snapshot that owns this VF's GuC/GGTT assignment.
-		PANIC_COND(vfActive && !vfBootstrapDirectGgtt(), "ngreen",
-			"Cannot bootstrap VF runtime/GGTT before accelerator publication");
+		// the same PF snapshot that owns this VF's GuC/GGTT assignment. It fails
+		// when the host has not provisioned the VF (GuC handshake, GGTT quota).
+		if (vfActive && !vfBootstrapDirectGgtt())
+			return disable("Cannot bootstrap VF runtime/GGTT; check the host VF provisioning");
 		SYSLOG("ngreen", "V165: setRMMIO done, starting symbol resolve");
 
 		if (vfActive) {
