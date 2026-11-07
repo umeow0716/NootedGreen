@@ -188,6 +188,8 @@ FB+GFX:
 |---|---|
 | `-NGreenDebug` | Enable NootedGreen debug logging |
 | `-ngreenchecksumcapture` | V392+ owned-media diagnostic, used with `-ngreenmediaadapter -ngreenavcgen12`. Observe native checksum surface bindings, then cancel before checksum publication/submission and return the real submission error. Earlier BCS/RCS/VCS work may run; this is not a hardware H.264 pass. Mutually exclusive with `-ngreencaptureonly`. |
+| `-ngiclva` | Use Tahoe's own `AppleIntelICLGraphicsVADriver` for VideoToolbox instead of the TGL VA driver. H.264 hardware decode works; hardware encode does not yet. Off by default. |
+| `-ngvadump` | Log the first few video decode batches. |
 | `-ngreentglfb` | Load only the TGL framebuffer kext (FB-only mode). On Gen11+, this is generally NOT enough for a coherent display because per-plane DBUF allocation is HW-kext side. Diagnostic / FB-driver-isolation use only. |
 | `-ngreentglwithgfx` | Load both the TGL framebuffer AND the TGL HW accelerator kext. **Recommended for normal operation on TGL/RPL hardware.** Pairs the FB driver with `AppleIntelTGLGraphics.kext` so the watermark/DBUF programming pipeline runs at mode-set time. |
 | `-ngreentglgfx` | Load only the TGL HW kext, no FB. Diagnostic — hardware will not display anything without an FB driver. |
