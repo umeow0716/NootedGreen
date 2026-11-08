@@ -460,8 +460,8 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 	// slice parsing). The kext runs only those marked here (MI_NOOP with ID
 	// 0x4e47 in the prologue's NOOP at dword 6) and ends the rest at their
 	// first dword. /Users/Shared/ngva-hevc-dump logs the batch and its
-	// relocation record and leaves it unmarked; only 8-bit 4:2:0 decode
-	// (PLANAR_420_8 surfaces) runs, and only with /Users/Shared/ngva-hevc-run.
+	// relocation record and leaves it unmarked; only 4:2:0 decode (PLANAR_420_8
+	// and P010 surfaces) runs, and only with /Users/Shared/ngva-hevc-run.
 	if (words && std::find_if(batch, batchEnd, [](uint32_t w) { return (w & 0xffff0000) == 0x73800000 || (w & 0xffff0000) == 0x75800000; }) != batchEnd) {
 		static const bool hevcDump = access("/Users/Shared/ngva-hevc-dump", F_OK) == 0;
 		static const bool hevcRun = access("/Users/Shared/ngva-hevc-run", F_OK) == 0;
@@ -481,12 +481,13 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 		// The slice commands sit in a second-level batch at a PPGTT address,
 		// but the driver's MI_BATCH_BUFFER_START leaves the address space bit
 		// (8) at GGTT; the relocation entry for its address finds it.
-		uint32_t surfaces = 0, planar8 = 0, starts = 0;
+		uint32_t surfaces = 0, planar420 = 0, starts = 0;
 		for (uint32_t k = 3; k + 5 <= length && (record[k] & 1); k += 5) {
 			const uint32_t type = record[k] >> 1 & 7, at = record[k] >> 5 & 0xfffff;
 			if (type == 2 && at >= 2 && at < words && batch[at - 2] == 0x73810003) {
 				surfaces++;
-				planar8 += (record[k + 2] & 0xf8000000) == 0x20000000;
+				const uint32_t format = record[k + 2] & 0xf8000000;
+				planar420 += format == 0x20000000 || format == 0x68000000; // PLANAR_420_8, P010
 			}
 			if (type == 0 && at >= 1 && at < words && batch[at - 1] == 0x18c00001) {
 				const_cast<uint32_t *>(batch)[at - 1] |= 0x100;
@@ -499,10 +500,10 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 			lastSlice[3] |= 4;
 			lastSlice = nullptr;
 		}
-		const bool run = !hevcDump && hevcRun && lastSet && surfaces && surfaces == planar8 && words > 6 && !batch[6];
+		const bool run = !hevcDump && hevcRun && lastSet && surfaces && surfaces == planar420 && words > 6 && !batch[6];
 		if (run) const_cast<uint32_t *>(batch)[6] = 0x00404e47;
 		if (logs++ < 4)
-			syslog(LOG_NOTICE, "ngva: HEVC batch %u dwords, %u/%u 8-bit surfaces, %u PPGTT batch starts, last slice %s: %s", words, planar8,
+			syslog(LOG_NOTICE, "ngva: HEVC batch %u dwords, %u/%u 4:2:0 surfaces, %u PPGTT batch starts, last slice %s: %s", words, planar420,
 			       surfaces, starts, lastSet ? "set" : "missing", run ? "run" : "dropped");
 		return driverSubmit(os, cmd, a2, a3, a4, a5);
 	}
