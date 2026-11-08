@@ -669,8 +669,11 @@ constexpr uintptr_t iclHcpVtable = 0x792250, iclAddCommand = 0x3dbb0, iclStructM
 Create iclCreate;
 Destroy iclDestroy;
 uintptr_t iclBase;
+int iclAdd(uint8_t *buffer, const void *words, uint32_t bytes) {
+	return reinterpret_cast<int (*)(uint8_t *, const void *, uint32_t)>(iclBase + iclAddCommand)(buffer, words, bytes);
+}
 using HcpCommand = long (*)(void *, uint8_t *, void *);
-HcpCommand iclPipeMode, iclSurface;
+HcpCommand iclPipeMode, iclSurface, iclBsd, iclVp9Bsd;
 Submit iclSubmitOriginal;
 using Any = long (*)(void *, void *, void *, void *, void *, void *);
 std::map<void *, void *> twins; // TGL accelerator table -> ICL twin
@@ -684,25 +687,73 @@ struct Session { void *icl; bool vp9; };
 std::map<void *, Session> sessions;
 Any tglFn[16], iclFn[16];
 
+// The ICL (Gen11) VP9 batch on Gen12: the prologue becomes the TGL driver's
+// (MI_FORCE_WAKEUP, the status MI_STORE_DATA_IMM moved up to free dword 6 for
+// the kext's marker), MI stores get the GGTT bit, PIPE_BUF_ADDR loses the
+// Gen11 attribute bit 10 and takes the Gen12 deblocking row-store offset.
+// Returns whether the batch is safe to run.
+bool iclToGen12(const Submission &sub) {
+	auto *b = const_cast<uint32_t *>(sub.batch);
+	const uint32_t n = sub.words;
+	if (n < 16 || b[0] != 0x13000082 || b[4] || b[5] != 0x10000002 || !sub.record) return false;
+	uint32_t *status = nullptr;
+	for (uint32_t i = 3; i + 5 <= sub.length && sub.record[i] & 1; i += 5)
+		if ((sub.record[i] >> 5 & 0xfffff) == 6) status = &sub.record[i];
+	if (!status) return false;
+	*status = (*status & ~(0xfffffu << 5)) | 3 << 5;
+	const uint32_t prologue[10] = {0x0e800000, 0x03000100, 0x10400002, b[6], b[7], b[8], 0, 0, 0, 0};
+	memcpy(b, prologue, sizeof(prologue));
+	bool pipeMode = false, control = false, surface = false, pba = false;
+	uint32_t width = 0;
+	for (uint32_t i = 10; i < n;) {
+		const uint32_t h = b[i];
+		uint32_t length = 1;
+		if (h >> 29 == 0) {
+			const uint32_t op = h >> 23 & 0x3f;
+			if (op == 0x0a) break;
+			if (op == 0x20 || op == 0x24) b[i] = h | 0x00400000;
+			if (op == 0x20) length = (h & 0x3ff) + 2;
+			else if (op == 0x24 || op == 0x31 || op == 0x1d) length = (h & 0xff) + 2;
+			else if (op == 0x26) length = (h & 0x3f) + 2;
+		} else if (h >> 29 == 3) {
+			length = h >> 16 == 0x6800 ? 1 : (h & 0xfff) + 2;
+			if (h == 0x738a0001) control = true;
+			if (h == 0x73800005) pipeMode = true;
+			if (h == 0x73810003 && i + 2 < n) surface = (b[i + 2] & 0xf8000000) == 0x20000000;
+			if (h == 0x73b0000a && i + 1 < n) width = (b[i + 1] & 0x3fff) + 1;
+			if (h == 0x73820077 && i + 54 < n) {
+				b[i + 3] &= ~0x400u;
+				b[i + 53] &= ~0x400u;
+				if (b[i + 6] & 0x1000) b[i + 4] = 0x6000;
+				pba = true;
+			}
+		} else return false;
+		i += length;
+	}
+	return pipeMode && control && surface && pba && width && width <= 2048;
+}
+
 long iclSubmit(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 	Submission sub {};
 	static const bool dump = access("/Users/Shared/ngva-vp9-dump", F_OK) == 0;
 	static const bool run = access("/Users/Shared/ngva-vp9-run", F_OK) == 0;
 	static int dumps, logs;
 	if (findSubmission(os, cmd, sub) && sub.words) {
-		if (dump && dumps++ < 2) {
+		const bool safe = iclToGen12(sub);
+		if (dump && sub.words > 16 && dumps++ < 3) {
 			logWords("vp9 batch", dumps, sub.batch, sub.words);
 			if (sub.record) logWords("vp9 record", dumps, sub.record, sub.length);
 		}
 		// Unmarked HCP batches end at their first dword in the kext.
-		const bool mark = run && !dump && sub.words > 6 && !sub.batch[6];
+		const bool mark = run && !dump && safe;
 		if (mark) const_cast<uint32_t *>(sub.batch)[6] = 0x00404e47;
-		if (logs++ < 4) syslog(LOG_NOTICE, "ngva: VP9 batch %u dwords: %s", sub.words, mark ? "run" : "dropped");
+		if (logs++ < 4) syslog(LOG_NOTICE, "ngva: VP9 batch %u dwords, %s: %s", sub.words, safe ? "converted" : "not converted", mark ? "run" : "dropped");
 	}
 	return iclSubmitOriginal(os, cmd, a2, a3, a4, a5);
 }
 
-// Append the Gen12 dword to the command the driver just wrote (DW0 length +1).
+// Append the Gen12 dword to the command the driver just wrote (DW0 length +1),
+// before the MFX_WAIT that may follow it.
 long appendGen12Dword(void *self, uint8_t *buffer, uint32_t header) {
 	if (!buffer) return 0;
 	auto *os = at<uint8_t *>(static_cast<uint8_t *>(self), 8);
@@ -712,17 +763,30 @@ long appendGen12Dword(void *self, uint8_t *buffer, uint32_t header) {
 	}
 	const uint32_t length = (header & 0xfff) + 2;
 	auto *end = at<uint32_t *>(buffer, 0x150);
-	uint32_t *command = end - length;
+	const bool wait = end[-1] == 0x68000100;
+	uint32_t *command = end - wait - length;
 	if (command[0] != header) return 0;
-	const uint32_t zero = 0;
-	const int added = reinterpret_cast<int (*)(uint8_t *, const void *, uint32_t)>(iclBase + iclAddCommand)(buffer, &zero, 4);
-	if (!added) command[0] = header + 1;
-	return added;
+	const uint32_t trailer = wait ? 0x68000100 : 0;
+	const int result = iclAdd(buffer, &trailer, 4);
+	if (result) return result;
+	command[0] = header + 1;
+	command[length] = 0;
+	return 0;
 }
+// Gen12 wraps the HCP pipeline in VD_CONTROL_STATE: initialization before
+// PIPE_MODE_SELECT, memory implicit flush after the BSD object.
 long hcpPipeModeGen12(void *self, uint8_t *buffer, void *params) {
+	const uint32_t init[3] = {0x738a0001, 1, 0};
+	if (buffer && iclAdd(buffer, init, sizeof(init))) return 1;
 	const long result = iclPipeMode(self, buffer, params);
 	return result ? result : appendGen12Dword(self, buffer, 0x73800004);
 }
+long bsdFlush(long result, uint8_t *buffer) {
+	const uint32_t flush[3] = {0x738a0001, 0, 4};
+	return result || !buffer ? result : iclAdd(buffer, flush, sizeof(flush));
+}
+long hcpBsdGen12(void *self, uint8_t *buffer, void *params) { return bsdFlush(iclBsd(self, buffer, params), buffer); }
+long hcpVp9BsdGen12(void *self, uint8_t *buffer, void *params) { return bsdFlush(iclVp9Bsd(self, buffer, params), buffer); }
 long hcpSurfaceGen12(void *self, uint8_t *buffer, void *params) {
 	const long result = iclSurface(self, buffer, params);
 	return result ? result : appendGen12Dword(self, buffer, 0x73810002);
@@ -748,13 +812,16 @@ bool loadIcl() {
 	if (!iclCreate || !iclDestroy || !dladdr(reinterpret_cast<void *>(iclCreate), &info)) return false;
 	iclBase = reinterpret_cast<uintptr_t>(info.dli_fbase);
 	auto *vtable = reinterpret_cast<uintptr_t *>(iclBase + iclHcpVtable);
-	if (vtable[0x78 / 8] != iclBase + 0x19bd50 || vtable[0x80 / 8] != iclBase + 0x19c050 ||
+	if (vtable[0x78 / 8] != iclBase + 0x19bd50 || vtable[0x80 / 8] != iclBase + 0x19c050 || vtable[0xe0 / 8] != iclBase + 0x1a1210 ||
+		vtable[0xe8 / 8] != iclBase + 0x169fc0 ||
 		*reinterpret_cast<void **>(iclBase + iclStructMethodSlot) != dlsym(RTLD_DEFAULT, "IOConnectCallStructMethod")) {
 		syslog(LOG_ERR, "ngva: ICL VA driver build not tested, VP9 off");
 		return false;
 	}
 	return replacePointer<StructMethod>(iclStructMethodSlot, iclHwCaps, iclStructMethod, iclBase) &&
 		replacePointer<HcpCommand>(iclHcpVtable + 0x78, hcpPipeModeGen12, iclPipeMode, iclBase) &&
+		replacePointer<HcpCommand>(iclHcpVtable + 0xe0, hcpBsdGen12, iclBsd, iclBase) &&
+		replacePointer<HcpCommand>(iclHcpVtable + 0xe8, hcpVp9BsdGen12, iclVp9Bsd, iclBase) &&
 		replacePointer<HcpCommand>(iclHcpVtable + 0x80, hcpSurfaceGen12, iclSurface, iclBase);
 }
 
