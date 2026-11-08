@@ -11,6 +11,7 @@
 // Gen11 ISA; Gen12 rebuilds placed in Resources replace them when present.
 // Load the driver, convert its description and SPS, and answer tag 0xe here.
 #include <dlfcn.h>
+#include <mach/mach.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <IOSurface/IOSurface.h>
@@ -665,7 +666,8 @@ bool appleGvaTested() {
 // after the driver writes them, which keeps their relocation offsets. Offsets
 // are of the 25G332 ICL driver; another build leaves VP9 off.
 constexpr const char *iclPath = "/System/Library/Extensions/AppleIntelICLGraphicsVADriver.bundle/Contents/MacOS/AppleIntelICLGraphicsVADriver";
-constexpr uintptr_t iclHcpVtable = 0x792250, iclAddCommand = 0x3dbb0, iclStructMethodSlot = 0x78a0c0;
+constexpr uintptr_t iclHcpVtable = 0x792250, iclAddCommand = 0x3dbb0, iclStructMethodSlot = 0x78a0c0, iclPoolInit = 0x8b26,
+	iclPoolAllocate = 0x8c2e;
 Create iclCreate;
 Destroy iclDestroy;
 uintptr_t iclBase;
@@ -949,13 +951,19 @@ long createAccelerators(void *self, void *requests, void *b, void *c, void *d, v
 		if (vp9 && it != sessions.end() && it->second.tglBuffer) session = &it->second;
 	}
 	if (!session) return tglFn[2](self, requests, b, c, d, e);
-	uint8_t pool[0x20];
-	void *buffer = nullptr;
-	memcpy(pool, session->pool, sizeof(pool));
-	at<void **>(pool, 0x18) = &buffer;
-	const long result = iclFn[5](session->icl, pool, nullptr, nullptr, nullptr, nullptr);
-	if (result || !buffer) {
-		syslog(LOG_ERR, "ngva: ICL bitstream pool failed %#lx", result);
+	// The twin's bitstream pool (session +0x80) as fn5 builds it, but in
+	// kernel memory (pool +0 set): fn5's vm_allocate'd client memory gets a
+	// CPU-equal GPU address the VF page tables leave on the scratch page.
+	auto *pool = static_cast<uint8_t *>(session->icl) + 0x80;
+	reinterpret_cast<int (*)(uint8_t *)>(iclBase + iclPoolInit)(pool);
+	at<uint32_t>(pool, 0) = 1;
+	at<uint32_t>(pool, 4) = 1;
+	at<uint32_t>(pool, 8) = static_cast<uint32_t>(round_page(at<uint32_t>(session->pool, 8)));
+	const int result = reinterpret_cast<int (*)(void *, uint8_t *)>(iclBase + iclPoolAllocate)(at<void *>(static_cast<uint8_t *>(session->icl), 0x38), pool);
+	static auto dataBytes = reinterpret_cast<void *(*)(void *)>(dlsym(RTLD_DEFAULT, "IOAccelResourceGetDataBytes"));
+	void *buffer = !result && dataBytes && at<void *>(pool, 0x18) ? dataBytes(at<void *>(pool, 0x18)) : nullptr;
+	if (!buffer) {
+		syslog(LOG_ERR, "ngva: ICL bitstream pool failed %d", result);
 		return result ? result : 1;
 	}
 	{
