@@ -5,7 +5,9 @@
 // After a GuC context reset the image holds the saved state: log where the
 // ring stopped and which batch it was in.
 // The leaf PTE of a GPU virtual address in a 4-level PPGTT (0 if unmapped).
-uint64_t vfPpgttLeaf(uint64_t root, uint64_t va) {
+// V386: 1 GB / 2 MB entries (PS, bit 7) end the walk; the result is then the
+// 4 KB frame's address within the large page. chain gets each level's entry.
+uint64_t vfPpgttLeaf(uint64_t root, uint64_t va, uint64_t *chain) {
 	uint64_t table = root & 0x7FFFFFF000ULL, entry = 0;
 	for (uint32_t level = 0; table && level < 4; level++) {
 		auto *desc = IOMemoryDescriptor::withPhysicalAddress(table, PAGE_SIZE, kIODirectionIn);
@@ -13,8 +15,14 @@ uint64_t vfPpgttLeaf(uint64_t root, uint64_t va) {
 		entry = map ? reinterpret_cast<volatile uint64_t *>(map->getVirtualAddress())[(va >> (39 - 9 * level)) & 511] : 0;
 		OSSafeReleaseNULL(map);
 		OSSafeReleaseNULL(desc);
+		if (chain)
+			chain[level] = entry;
 		if (!(entry & 1))
 			return 0;
+		if ((level == 1 || level == 2) && (entry & 0x80)) {
+			const uint64_t size = 1ULL << (39 - 9 * level);
+			return ((entry & 0x7FFFFFF000ULL & ~(size - 1)) + (va & (size - 1) & ~0xFFFULL)) | (entry & 0xFFF);
+		}
 		table = level < 3 ? (entry & 0x7FFFFFF000ULL) : 0;
 	}
 	return entry;
@@ -332,6 +340,10 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 								{"bitstream", b[ind + 1] | (static_cast<uint64_t>(b[ind + 2] & 0xFFFF) << 32), 16},
 								{"probabilities", b[pba + 83] | (static_cast<uint64_t>(b[pba + 84] & 0xFFFF) << 32), 512}};
 							for (const auto &d : dumps) {
+								uint64_t chain[4] {};
+								vfPpgttLeaf(root, d.va, chain);
+								SYSLOG("ngreen", "V386: VP9 %s %llx entries %llx %llx %llx %llx", d.what, static_cast<unsigned long long>(d.va),
+								       chain[0], chain[1], chain[2], chain[3]);
 								if (!vfPpgttRead(root, d.va, w, d.count)) {
 									SYSLOG("ngreen", "V386: VP9 %s %llx unmapped", d.what, static_cast<unsigned long long>(d.va));
 									continue;

@@ -618,7 +618,7 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 
 bool vfKnownIdleSnapshot(mach_vm_address_t mappedBufferGetter, const uint32_t *descriptor = nullptr);
 
-uint64_t vfPpgttLeaf(uint64_t root, uint64_t va);
+uint64_t vfPpgttLeaf(uint64_t root, uint64_t va, uint64_t *chain = nullptr);
 
 bool vfPpgttRead(uint64_t root, uint64_t va, uint32_t *out, uint32_t count);
 
