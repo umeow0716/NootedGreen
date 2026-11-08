@@ -667,7 +667,7 @@ bool appleGvaTested() {
 // are of the 25G332 ICL driver; another build leaves VP9 off.
 constexpr const char *iclPath = "/System/Library/Extensions/AppleIntelICLGraphicsVADriver.bundle/Contents/MacOS/AppleIntelICLGraphicsVADriver";
 constexpr uintptr_t iclHcpVtable = 0x792250, iclAddCommand = 0x3dbb0, iclStructMethodSlot = 0x78a0c0, iclPoolInit = 0x8b26,
-	iclPoolAllocate = 0x8c2e;
+	iclPoolWrap = 0x8b43;
 Create iclCreate;
 Destroy iclDestroy;
 uintptr_t iclBase;
@@ -689,7 +689,7 @@ struct Session {
 	void *icl;
 	bool vp9;
 	uint8_t pool[0x20];
-	void *tglBuffer, *iclBuffer;
+	void *tglBuffer;
 };
 thread_local Session *vp9Session; // the routed session whose ICL call is running
 std::map<void *, Session> sessions;
@@ -700,12 +700,6 @@ Any tglFn[16], iclFn[16];
 // the kext's marker), MI stores get the GGTT bit, PIPE_BUF_ADDR loses the
 // Gen11 attribute bit 10 and takes the Gen12 deblocking row-store offset.
 // Returns whether the batch is safe to run.
-void flushCache(const void *p, size_t bytes) {
-	for (auto a = reinterpret_cast<uintptr_t>(p) & ~uintptr_t(63); a < reinterpret_cast<uintptr_t>(p) + bytes; a += 64)
-		__builtin_ia32_clflush(reinterpret_cast<const void *>(a));
-	__builtin_ia32_mfence();
-}
-
 bool iclToGen12(const Submission &sub) {
 	auto *b = const_cast<uint32_t *>(sub.batch);
 	const uint32_t n = sub.words;
@@ -735,18 +729,10 @@ bool iclToGen12(const Submission &sub) {
 			if (h == 0x73800005) pipeMode = true;
 			if (h == 0x73810003 && i + 2 < n) surface = (b[i + 2] & 0xf8000000) == 0x20000000;
 			if (h == 0x73b0000a && i + 1 < n) width = (b[i + 1] & 0x3fff) + 1;
-			if (h == 0x73a00001 && i + 2 < n && vp9Session && vp9Session->tglBuffer && vp9Session->iclBuffer &&
-				static_cast<uint64_t>(b[i + 1]) + b[i + 2] <= at<uint32_t>(vp9Session->pool, 8)) {
-				// The twin's buffer is CPU-cached; the video engine reads memory.
-				memcpy(vp9Session->iclBuffer, vp9Session->tglBuffer, static_cast<size_t>(b[i + 1]) + b[i + 2]);
-				flushCache(vp9Session->iclBuffer, static_cast<size_t>(b[i + 1]) + b[i + 2]);
+			// The bitstream within the pool's buffer (the twin's pool entry wraps
+			// the TGL pool's client memory, which AppleGVA fills).
+			if (h == 0x73a00001 && i + 2 < n && vp9Session && static_cast<uint64_t>(b[i + 1]) + b[i + 2] <= at<uint32_t>(vp9Session->pool, 8))
 				bitstream = true;
-				static int copies;
-				if (copies++ < 2) {
-					logWords("vp9 tgl bitstream", copies, static_cast<uint32_t *>(vp9Session->tglBuffer), 8);
-					logWords("vp9 icl bitstream", copies, static_cast<uint32_t *>(vp9Session->iclBuffer), 8);
-				}
-			}
 			if (h == 0x73820077 && i + 121 <= n) {
 				// Memory attributes (MOCS) as the Linux media driver sets them on
 				// this MOCS table; the row-store cache select bit stays.
@@ -930,9 +916,27 @@ long destroySession(void *self, void *a, void *b, void *c, void *d, void *e) {
 	}
 	long result = tglFn[1](self, a, b, c, d, e);
 	if (session.icl) {
+		if (session.vp9) at<void *>(static_cast<uint8_t *>(session.icl), 0x90) = nullptr; // the TGL pool's memory
 		const long iclResult = iclFn[1](session.icl, a, b, c, d, e);
 		if (session.vp9) result = iclResult;
 	}
+	return result;
+}
+
+// fn6 frees a pool (type 0: bitstream). The twin's bitstream pool frees only
+// its resource; the memory is the TGL pool's, freed with it.
+long freePool(void *self, void *type, void *b, void *c, void *d, void *e) {
+	void *icl = nullptr;
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		auto it = sessions.find(self);
+		if (it != sessions.end() && it->second.vp9) icl = it->second.icl;
+	}
+	if (!icl) return tglFn[6](self, type, b, c, d, e);
+	const bool bitstream = !static_cast<uint32_t>(reinterpret_cast<uintptr_t>(type));
+	if (bitstream) at<void *>(static_cast<uint8_t *>(icl), 0x90) = nullptr;
+	const long result = iclFn[6](icl, type, b, c, d, e);
+	if (bitstream) tglFn[6](self, type, b, c, d, e);
 	return result;
 }
 
@@ -951,24 +955,24 @@ long createAccelerators(void *self, void *requests, void *b, void *c, void *d, v
 		if (vp9 && it != sessions.end() && it->second.tglBuffer) session = &it->second;
 	}
 	if (!session) return tglFn[2](self, requests, b, c, d, e);
-	// The twin's bitstream pool (session +0x80) as fn5 builds it, but in
-	// kernel memory (pool +0 set): fn5's vm_allocate'd client memory gets a
-	// CPU-equal GPU address the VF page tables leave on the scratch page.
+	// The twin's bitstream pool (session +0x80, entries {client memory,
+	// resource, client shared, shared}) as fn5 builds it.
 	auto *pool = static_cast<uint8_t *>(session->icl) + 0x80;
 	reinterpret_cast<int (*)(uint8_t *)>(iclBase + iclPoolInit)(pool);
-	at<uint32_t>(pool, 0) = 1;
 	at<uint32_t>(pool, 4) = 1;
 	at<uint32_t>(pool, 8) = static_cast<uint32_t>(round_page(at<uint32_t>(session->pool, 8)));
-	const int result = reinterpret_cast<int (*)(void *, uint8_t *)>(iclBase + iclPoolAllocate)(at<void *>(static_cast<uint8_t *>(session->icl), 0x38), pool);
-	static auto dataBytes = reinterpret_cast<void *(*)(void *)>(dlsym(RTLD_DEFAULT, "IOAccelResourceGetDataBytes"));
-	void *buffer = !result && dataBytes && at<void *>(pool, 0x18) ? dataBytes(at<void *>(pool, 0x18)) : nullptr;
-	if (!buffer) {
+	// One entry wrapping the TGL pool's client memory in an ICL resource: the
+	// pictures name the bitstream by its client memory.
+	at<void *>(pool, 0x10) = session->tglBuffer;
+	const int result = reinterpret_cast<int (*)(void *, uint8_t *, uint32_t)>(iclBase + iclPoolWrap)(at<void *>(static_cast<uint8_t *>(session->icl), 0x38),
+	                                                                                                pool + 0x10, at<uint32_t>(pool, 8));
+	if (result) {
 		syslog(LOG_ERR, "ngva: ICL bitstream pool failed %d", result);
-		return result ? result : 1;
+		return result;
 	}
+	at<uint32_t>(pool, 0xc) = 1;
 	{
 		std::lock_guard<std::mutex> guard(lock);
-		session->iclBuffer = buffer;
 		session->vp9 = true;
 	}
 	syslog(LOG_NOTICE, "ngva: VP9 session on the ICL VA driver");
@@ -1098,6 +1102,7 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 		*reinterpret_cast<void **>(table + 0x10) = reinterpret_cast<void *>(destroySession);
 		*reinterpret_cast<void **>(table + 0x18) = reinterpret_cast<void *>(createAccelerators);
 		*reinterpret_cast<void **>(table + 0x30) = reinterpret_cast<void *>(allocatePool);
+		*reinterpret_cast<void **>(table + 0x38) = reinterpret_cast<void *>(freePool);
 		std::lock_guard<std::mutex> guard(lock);
 		twins[*accelerator] = twin;
 	}
