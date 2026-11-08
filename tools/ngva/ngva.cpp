@@ -456,13 +456,16 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 	const uint32_t words = batch && batchEnd > batch ? static_cast<uint32_t>(batchEnd - batch) : 0;
 	const uint32_t length = record ? record[0] >> 16 : 0;
 	// HEVC batches (HCP_PIPE_MODE_SELECT, or HUC_PIPE_MODE_SELECT for HuC
-	// slice parsing): /Users/Shared/ngva-hevc-dump logs the batch and its
-	// relocation record, then ends the batch at its first dword so the video
-	// engine runs nothing.
-	static const bool hevcDump = access("/Users/Shared/ngva-hevc-dump", F_OK) == 0;
-	if (hevcDump && words && std::find_if(batch, batchEnd, [](uint32_t w) { return (w & 0xffff0000) == 0x73800000 || (w & 0xffff0000) == 0x75800000; }) != batchEnd) {
-		static int dumps;
-		if (dumps++ < 2) {
+	// slice parsing). The kext runs only those marked here (MI_NOOP with ID
+	// 0x4e47 in the prologue's NOOP at dword 6) and ends the rest at their
+	// first dword. /Users/Shared/ngva-hevc-dump logs the batch and its
+	// relocation record and leaves it unmarked; only 8-bit 4:2:0 decode
+	// (PLANAR_420_8 surfaces) runs, and only with /Users/Shared/ngva-hevc-run.
+	if (words && std::find_if(batch, batchEnd, [](uint32_t w) { return (w & 0xffff0000) == 0x73800000 || (w & 0xffff0000) == 0x75800000; }) != batchEnd) {
+		static const bool hevcDump = access("/Users/Shared/ngva-hevc-dump", F_OK) == 0;
+		static const bool hevcRun = access("/Users/Shared/ngva-hevc-run", F_OK) == 0;
+		static int dumps, logs;
+		if (hevcDump && dumps++ < 2) {
 			for (uint32_t i = 0; i < words; i += 8)
 				syslog(LOG_NOTICE, "ngva: hevc %d batch +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", dumps, i * 4, batch[i],
 				       i + 1 < words ? batch[i + 1] : 0, i + 2 < words ? batch[i + 2] : 0, i + 3 < words ? batch[i + 3] : 0,
@@ -474,7 +477,18 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 				       i + 4 < length ? record[i + 4] : 0, i + 5 < length ? record[i + 5] : 0, i + 6 < length ? record[i + 6] : 0,
 				       i + 7 < length ? record[i + 7] : 0);
 		}
-		const_cast<uint32_t *>(batch)[0] = 0x05000000;
+		uint32_t surfaces = 0, planar8 = 0;
+		for (uint32_t k = 3; k + 5 <= length && (record[k] & 1); k += 5) {
+			const uint32_t type = record[k] >> 1 & 7, at = record[k] >> 5 & 0xfffff;
+			if (type == 2 && at >= 2 && at < words && batch[at - 2] == 0x73810003) {
+				surfaces++;
+				planar8 += (record[k + 2] & 0xf8000000) == 0x20000000;
+			}
+		}
+		const bool run = !hevcDump && hevcRun && surfaces && surfaces == planar8 && words > 6 && !batch[6];
+		if (run) const_cast<uint32_t *>(batch)[6] = 0x00404e47;
+		if (logs++ < 4)
+			syslog(LOG_NOTICE, "ngva: HEVC batch %u dwords, %u/%u 8-bit surfaces: %s", words, planar8, surfaces, run ? "run" : "dropped");
 		return driverSubmit(os, cmd, a2, a3, a4, a5);
 	}
 	if (!record) return driverSubmit(os, cmd, a2, a3, a4, a5);
@@ -498,6 +512,30 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 	if (fixed && logs++ < 2)
 		syslog(LOG_NOTICE, "ngva: decode surface relocations: %u DW3 to Gen12, DW5 %s", fixed, chroma && !hasCr ? "added" : "kept");
 	return driverSubmit(os, cmd, a2, a3, a4, a5);
+}
+
+// HEVC decode surfaces: the driver's Gen12 AddHcpDecodeSurfaceStateCmd
+// (0x192d20, two vtables) builds HCP_SURFACE_STATE on its stack and adds the
+// DW1 (pitch) and DW2 (Cb row offset) relocations at the command buffer's
+// write position, but never writes the command: the relocations then land on
+// the next command, HCP_PIPE_BUF_ADDR_STATE's decoded picture address. Write
+// the command there; the kernel fills DW1 and DW2 (surface ID and format come
+// with the relocations), DW3 (Cr offset) and DW4 (compression) stay 0.
+using HcpSurface = long (*)(void *, uint8_t *, uint8_t *);
+using AddCommand = int (*)(uint8_t *, const void *, uint32_t);
+HcpSurface driverHcpSurface;
+long hcpSurface(void *self, uint8_t *buffer, uint8_t *params) {
+	const long result = driverHcpSurface(self, buffer, params);
+	// Without relocations (osInterface +0x70 bit 0 clear) DW1/DW2 would need
+	// the driver's own values; that mode is not used with AppleGVA.
+	auto *os = at<uint8_t *>(static_cast<uint8_t *>(self), 8);
+	if (result || !buffer || !os || !(os[0x70] & 1)) return result;
+	const uint32_t command[5] = {0x73810003, 0, 0, 0, 0};
+	const int added = reinterpret_cast<AddCommand>(driverBase + 0x41300)(buffer, command, sizeof(command));
+	static int logs;
+	if (logs++ < 2) syslog(LOG_NOTICE, "ngva: HEVC surface state %u written at dword %u (%d)", params ? params[0x12] & 0xf : 0,
+	                       at<uint32_t>(buffer, 0x158) / 4 - 5, added);
+	return added;
 }
 
 template <typename T> bool replacePointer(uintptr_t offset, T replacement, T &original) {
@@ -594,6 +632,10 @@ bool load() {
 			Submit unused = nullptr;
 			if (!replacePointer<Submit>(0x75f000, submitDecode, unused))
 				syslog(LOG_ERR, "ngva: cannot hook the codechal submit");
+			HcpSurface second = nullptr;
+			if (!replacePointer<HcpSurface>(0x759898, hcpSurface, driverHcpSurface) ||
+			    !replacePointer<HcpSurface>(0x75a3e0, hcpSurface, second))
+				syslog(LOG_ERR, "ngva: cannot hook the HEVC surface state");
 			if (!replacePointer<EncodeFrame>(0x754a90, encodeFrame, driverEncodeFrameCall) ||
 			    !replacePointer<FinishFence>(0x7600d0, finishFence, driverFinishFence) ||
 			    !replacePointer<BuildBatch>(0x754ac8, buildBatch, driverBuildBatch) ||
