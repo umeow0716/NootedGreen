@@ -183,7 +183,8 @@ static void vfInjectRcsPrologue(volatile uint32_t *ring, uint32_t ringSize, uint
 		if (w(i) != kRcsRingHead[i]) {
 			static uint32_t logs = 0;
 			if (logs++ < 16)
-				SYSLOG("ngreen", "V269: RCS ring +%x %08x %08x differs; no prologue", at, w(0), w(1));
+				SYSLOG("ngreen", "V269: RCS ring +%x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x differs; no prologue",
+				       at, w(0), w(1), w(2), w(3), w(4), w(5), w(6), w(7), w(8), w(9), w(10), w(11));
 			return;
 		}
 	w(1) = static_cast<uint32_t>(gVfRcsPrologueGpu);

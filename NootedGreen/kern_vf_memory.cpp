@@ -841,6 +841,40 @@ bool TglAccel::IGHardwareGlobalPageTableMapRangeDummy(void *that,
 	return true;
 }
 
+struct VfPpgttRangeRecord {
+	uint64_t time;
+	const void *table;
+	uint64_t start;
+	uint64_t length;
+	uint32_t kind;
+};
+static VfPpgttRangeRecord gVfPpgttRanges[512];
+static volatile SInt32 gVfPpgttRangeNext;
+
+void vfRecordPpgttRange(uint32_t kind, const void *table, uint64_t start, uint64_t length)
+{
+	const uint32_t i = static_cast<uint32_t>(OSIncrementAtomic(&gVfPpgttRangeNext)) % arrsize(gVfPpgttRanges);
+	gVfPpgttRanges[i] = {mach_absolute_time(), table, start, length, kind};
+}
+
+void vfDumpPpgttRanges(const char *reason)
+{
+	static volatile UInt32 dumped;
+	if (!OSCompareAndSwap(0, 1, &dumped))
+		return;
+	const uint64_t now = mach_absolute_time();
+	const uint32_t next = static_cast<uint32_t>(gVfPpgttRangeNext);
+	SYSLOG("ngreen", "V382: %s; last PPGTT unmap ranges (kind 1=unmap32 2=unmap64 3=shrink64):", reason);
+	for (uint32_t n = 0; n < arrsize(gVfPpgttRanges); n++) {
+		const auto &r = gVfPpgttRanges[(next + n) % arrsize(gVfPpgttRanges)];
+		if (!r.time)
+			continue;
+		uint64_t ns;
+		absolutetime_to_nanoseconds(now - r.time, &ns);
+		SYSLOG("ngreen", "V382: -%llu ms kind=%u table=%p %llx+%llx", ns / 1000000, r.kind, r.table, r.start, r.length);
+	}
+}
+
 static void vfRequireCompletedPpgttUpdate()
 {
 	// Before CTB enable no GPU work could have consumed a translation. After
@@ -855,6 +889,21 @@ static void vfRequireCompletedPpgttUpdate()
 		"ngreen", "VF PPGTT update did not retire engine translations");
 }
 
+// V381: table pages released by a shrink, returned to PagePool only after the
+// engines can no longer walk them (see vfPpgtt64ShrinkRange).
+static uint32_t gVfShrinkDepth;
+static struct { void *pool; const void *descriptor; } gVfShrinkPages[64];
+static uint32_t gVfShrinkPageCount;
+static void (*gVfShrinkPageRelease)(void *, const void *); // native IGPagePool::releasePage
+
+static void vfReleaseShrinkPages()
+{
+	vfRequireCompletedPpgttUpdate();
+	for (uint32_t i = 0; i < gVfShrinkPageCount; i++)
+		gVfShrinkPageRelease(gVfShrinkPages[i].pool, gVfShrinkPages[i].descriptor);
+	gVfShrinkPageCount = 0;
+}
+
 void TglAccel::vfPpgtt32UnmapRange(void *that,
 	                             const NGIGAddressRange &range)
 {
@@ -863,6 +912,7 @@ void TglAccel::vfPpgtt32UnmapRange(void *that,
 	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
 		"VF 32-bit PPGTT unmap cannot enter the page-table transaction");
 	IORecursiveLockLock(gVfPageTableUpdateLock);
+	vfRecordPpgttRange(1, that, range.start, range.length);
 	FunctionCast(vfPpgtt32UnmapRange,
 	             callback->oVfPpgtt32UnmapRange)(that, range);
 	// This native body only installs dummy leaf PTEs. Confirm their engine-wide
@@ -882,6 +932,7 @@ void TglAccel::vfPpgtt64UnmapRange(void *that,
 	// The original tail enters the separately routed shrink boundary. Keeping
 	// this outer recursive hold prevents another mapper/task/pool operation from
 	// observing the dummy-PTE prefix before pruning and retirement complete.
+	vfRecordPpgttRange(2, that, range.start, range.length);
 	FunctionCast(vfPpgtt64UnmapRange,
 	             callback->oVfPpgtt64UnmapRange)(that, range);
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
@@ -895,13 +946,20 @@ void TglAccel::vfPpgtt64ShrinkRange(void *that,
 	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
 		"VF 64-bit PPGTT shrink cannot enter the page-table transaction");
 	IORecursiveLockLock(gVfPageTableUpdateLock);
-	// Every pinned caller has already finished its hardware-entry writes. The
-	// native shrink helpers may release a descriptor into PagePool, whose final
-	// return zeroes the CPU page before taking the optional pool lock. Retire
-	// engine translations first, then allow that irreversible page return.
-	vfRequireCompletedPpgttUpdate();
+	// V381: native shrinkLevel stores the dummy parent entry and releases the
+	// emptied table page in one step. PagePool zeroes a returned page and hands
+	// it to the next table, while the engines' page-walk caches may still hold
+	// the old parent entry: walks then read zeros (a command streamer fault,
+	// unresettable CAT error on RCS) or another table's entries (DMA into an
+	// arbitrary page). Hold the released pages until one engine invalidation
+	// after all parent stores; it also retires unmapRange's dummy leaf PTEs
+	// before the caller frees the unmapped backing.
+	vfRecordPpgttRange(3, that, range.start, range.length);
+	gVfShrinkDepth++;
 	FunctionCast(vfPpgtt64ShrinkRange,
 	             callback->oVfPpgtt64ShrinkRange)(that, range);
+	if (!--gVfShrinkDepth)
+		vfReleaseShrinkPages();
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
@@ -1313,8 +1371,18 @@ void TglAccel::vfPagePoolReleasePage(void *that, const void *descriptor)
 	           !vfEnsurePageTableUpdateLock(), "ngreen",
 		"Missing VF PagePool return transaction");
 	IORecursiveLockLock(gVfPageTableUpdateLock);
-	FunctionCast(vfPagePoolReleasePage,
-	             callback->oVfPagePoolReleasePage)(that, descriptor);
+	// Inside a shrink (this thread holds the lock) the page waits for V381's
+	// invalidation.
+	if (gVfShrinkDepth) {
+		gVfShrinkPageRelease = reinterpret_cast<decltype(gVfShrinkPageRelease)>(
+			callback->oVfPagePoolReleasePage);
+		if (gVfShrinkPageCount == arrsize(gVfShrinkPages))
+			vfReleaseShrinkPages();
+		gVfShrinkPages[gVfShrinkPageCount++] = {that, descriptor};
+	} else {
+		FunctionCast(vfPagePoolReleasePage,
+		             callback->oVfPagePoolReleasePage)(that, descriptor);
+	}
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 

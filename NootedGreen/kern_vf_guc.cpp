@@ -1003,6 +1003,7 @@ bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target)
 	if (!sent || !completed) {
 		SYSLOG("ngreen", "V237: VF GuC TLB invalidate failed seq=%u target=%u sent=%d fence=%u",
 		       seqno, static_cast<unsigned int>(target), sent, transportFence);
+		vfDumpPpgttRanges("GuC TLB invalidation failed");
 		vfMarkProtocolFault(sent ? "GuC TLB invalidation timeout" :
 		                         "GuC TLB invalidation enqueue failure");
 	}

@@ -182,6 +182,9 @@ extern volatile UInt32 gVfMmioIrqReady;
 
 extern volatile UInt32 gVfProtocolFault;
 extern uint32_t gVfTerminatedOffset;
+// Diagnostics for unresettable RCS hangs: recent PPGTT unmap/shrink ranges.
+void vfRecordPpgttRange(uint32_t kind, const void *table, uint64_t start, uint64_t length);
+void vfDumpPpgttRanges(const char *reason);
 
 extern volatile UInt32 gVfGgttDiagnosticWrites;
 
