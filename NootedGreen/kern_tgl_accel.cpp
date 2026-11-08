@@ -4045,6 +4045,29 @@ bool TglAccel::injectAcceleratorPersonality(const char *bundleId)
 		SYSLOG("ngreen", "V383: HEVC decode gate on");
 	}
 
+	// V385: VP9 decode (opt-in -ngvp9). No shipping Intel kext sets
+	// AppleGVA's VP9 gate; ngva serves VP9 sessions with Tahoe's ICL VA driver.
+	// Profiles 0 (8-bit) and 2 (10-bit), 4:2:0.
+	if (checkKernelArgument("-ngvp9")) {
+		auto *vp9Decode = OSString::withCString("2");
+		auto *caps = OSDictionary::withCapacity(1);
+		auto *profiles = OSArray::withCapacity(2);
+		auto *profile0 = OSNumber::withNumber(0ULL, 32), *profile2 = OSNumber::withNumber(2ULL, 32);
+		const bool vp9Ready = vp9Decode && caps && profiles && profile0 && profile2 && profiles->setObject(profile0) &&
+			profiles->setObject(profile2) && caps->setObject("VTSupportedProfileArray", profiles) &&
+			dict->setObject("IOGVAVP9Decode", vp9Decode) && dict->setObject("IOGVAVP9DecodeCapabilities", caps);
+		OSSafeReleaseNULL(vp9Decode);
+		OSSafeReleaseNULL(caps);
+		OSSafeReleaseNULL(profiles);
+		OSSafeReleaseNULL(profile0);
+		OSSafeReleaseNULL(profile2);
+		if (!vp9Ready) {
+			dict->release();
+			return false;
+		}
+		SYSLOG("ngreen", "V385: VP9 decode gate on");
+	}
+
 	// Tahoe 25G229 AppleGVA removed the former TGL renderer slot 0x1080040
 	// from its hard admission set, while retaining the ICL/Gen11 slot
 	// 0x1080080.  Keep that admission alias, but preserve the cloned native TGL

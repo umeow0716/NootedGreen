@@ -57,18 +57,26 @@ struct Description {
 
 // Old: entry[0x428] linked through entry+0x428. New: entry[0x438] linked
 // through entry+0x430, field 0x18 duplicated at 0x20, rest shifted by 8.
-uint8_t *convert(const Description *old) {
+uint8_t *convert(const Description *old, const uint8_t *extra = nullptr) {
 	if (!old || old->count != slots || !old->slot) return nullptr;
 	size_t entries = 0;
 	for (size_t i = 0; i < slots; i++)
 		for (auto *e = old->slot[i]; e; e = *reinterpret_cast<uint8_t **>(e + oldEntry))
 			entries++;
-	auto *out = static_cast<uint8_t *>(calloc(1, 0x20 + slots * 8 + entries * newEntry));
+	const size_t total = slots + (extra ? 1 : 0);
+	auto *out = static_cast<uint8_t *>(calloc(1, 0x20 + total * 8 + (entries + (extra ? 1 : 0)) * newEntry));
 	if (!out) return nullptr;
 	memcpy(out, old, 0x20);
 	auto *slot = reinterpret_cast<uint8_t **>(out + 0x20);
 	reinterpret_cast<Description *>(out)->slot = slot;
-	auto *next = out + 0x20 + slots * 8;
+	reinterpret_cast<Description *>(out)->count = static_cast<uint32_t>(total);
+	auto *next = out + 0x20 + total * 8;
+	if (extra) {
+		// Already in the new layout (ICL driver), alone in the last slot.
+		slot[slots] = next + entries * newEntry;
+		memcpy(slot[slots], extra, newEntry);
+		*reinterpret_cast<uint8_t **>(slot[slots] + 0x430) = nullptr;
+	}
 	for (size_t i = 0; i < slots; i++) {
 		uint8_t **link = &slot[i];
 		for (auto *e = old->slot[i]; e; e = *reinterpret_cast<uint8_t **>(e + oldEntry)) {
@@ -443,19 +451,41 @@ long buildBatch(void *enc, void *frame, void *cmd, void *a3, void *a4, void *a5)
 thread_local uint32_t *lastSlice; // newest HEVC slice state (hcpSlice below)
 using Submit = long (*)(void *, void *, void *, void *, void *, void *);
 Submit driverSubmit;
-long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
+
+// A submission's batch (command buffer +0x148..+0x150) and its generic 0x82
+// relocation record, which ends at the context's sideband cursor (os: *os +8 +
+// index (os +8) * 0x15c0, sideband +0x20). Same layout in both VA drivers.
+struct Submission { const uint32_t *batch, *batchEnd; uint32_t words; uint32_t *record; uint32_t length; };
+bool findSubmission(void *os, void *cmd, Submission &s) {
 	auto *o = static_cast<uint8_t *>(os);
 	auto *ctx = o ? at<uint8_t *>(o, 0) : nullptr;
-	if (!userVdenc || !ctx || !cmd) return driverSubmit(os, cmd, a2, a3, a4, a5);
+	if (!ctx || !cmd) return false;
 	ctx += 8 + at<uint32_t>(o, 8) * 0x15c0;
 	auto **sb = at<uint32_t **>(ctx, 0x20);
-	const uint32_t *batch = at<uint32_t *>(static_cast<uint8_t *>(cmd), 0x148), *batchEnd = at<uint32_t *>(static_cast<uint8_t *>(cmd), 0x150);
-	uint32_t *record = nullptr;
-	if (sb && sb[0] && batch && batchEnd > batch)
+	s.batch = at<uint32_t *>(static_cast<uint8_t *>(cmd), 0x148);
+	s.batchEnd = at<uint32_t *>(static_cast<uint8_t *>(cmd), 0x150);
+	s.record = nullptr;
+	if (sb && sb[0] && s.batch && s.batchEnd > s.batch)
 		for (uint32_t *w = sb[0] - 1, n = 0; n < 4096; n++, w--)
-			if ((*w & 0xffff) == 0x8200 && w + (*w >> 16) == sb[0]) { record = w; break; }
-	const uint32_t words = batch && batchEnd > batch ? static_cast<uint32_t>(batchEnd - batch) : 0;
-	const uint32_t length = record ? record[0] >> 16 : 0;
+			if ((*w & 0xffff) == 0x8200 && w + (*w >> 16) == sb[0]) { s.record = w; break; }
+	s.words = s.batch && s.batchEnd > s.batch ? static_cast<uint32_t>(s.batchEnd - s.batch) : 0;
+	s.length = s.record ? s.record[0] >> 16 : 0;
+	return true;
+}
+
+void logWords(const char *what, int n, const uint32_t *w, uint32_t count) {
+	for (uint32_t i = 0; i < count; i += 8)
+		syslog(LOG_NOTICE, "ngva: %s %d +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", what, n, i * 4, w[i], i + 1 < count ? w[i + 1] : 0,
+		       i + 2 < count ? w[i + 2] : 0, i + 3 < count ? w[i + 3] : 0, i + 4 < count ? w[i + 4] : 0, i + 5 < count ? w[i + 5] : 0,
+		       i + 6 < count ? w[i + 6] : 0, i + 7 < count ? w[i + 7] : 0);
+}
+
+long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
+	Submission sub {};
+	if (!userVdenc || !findSubmission(os, cmd, sub)) return driverSubmit(os, cmd, a2, a3, a4, a5);
+	const uint32_t *batch = sub.batch, *batchEnd = sub.batchEnd;
+	uint32_t *record = sub.record;
+	const uint32_t words = sub.words, length = sub.length;
 	// HEVC batches (HCP_PIPE_MODE_SELECT, or HUC_PIPE_MODE_SELECT for HuC
 	// slice parsing). The kext runs only those marked here (MI_NOOP with ID
 	// 0x4e47 in the prologue's NOOP at dword 6) and ends the rest at their
@@ -466,16 +496,8 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 		static const bool hevcDump = access("/Users/Shared/ngva-hevc-dump", F_OK) == 0;
 		static int dumps, logs;
 		if (hevcDump && dumps++ < 2) {
-			for (uint32_t i = 0; i < words; i += 8)
-				syslog(LOG_NOTICE, "ngva: hevc %d batch +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", dumps, i * 4, batch[i],
-				       i + 1 < words ? batch[i + 1] : 0, i + 2 < words ? batch[i + 2] : 0, i + 3 < words ? batch[i + 3] : 0,
-				       i + 4 < words ? batch[i + 4] : 0, i + 5 < words ? batch[i + 5] : 0, i + 6 < words ? batch[i + 6] : 0,
-				       i + 7 < words ? batch[i + 7] : 0);
-			for (uint32_t i = 0; i < length; i += 8)
-				syslog(LOG_NOTICE, "ngva: hevc %d record +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", dumps, i * 4, record[i],
-				       i + 1 < length ? record[i + 1] : 0, i + 2 < length ? record[i + 2] : 0, i + 3 < length ? record[i + 3] : 0,
-				       i + 4 < length ? record[i + 4] : 0, i + 5 < length ? record[i + 5] : 0, i + 6 < length ? record[i + 6] : 0,
-				       i + 7 < length ? record[i + 7] : 0);
+			logWords("hevc batch", dumps, batch, words);
+			if (record) logWords("hevc record", dumps, record, length);
 		}
 		// The slice commands sit in a second-level batch at a PPGTT address,
 		// but the driver's MI_BATCH_BUFFER_START leaves the address space bit
@@ -571,9 +593,9 @@ long hcpSlice(void *self, uint8_t *buffer, uint8_t *state) {
 	return result;
 }
 
-template <typename T> bool replacePointer(uintptr_t offset, T replacement, T &original) {
+template <typename T> bool replacePointer(uintptr_t offset, T replacement, T &original, uintptr_t base = 0) {
 	const long page = getpagesize();
-	auto *slot = reinterpret_cast<T *>(driverBase + offset);
+	auto *slot = reinterpret_cast<T *>((base ? base : driverBase) + offset);
 	auto start = reinterpret_cast<uintptr_t>(slot) & ~(page - 1);
 	if (mprotect(reinterpret_cast<void *>(start), page, PROT_READ | PROT_WRITE)) return false;
 	original = *slot;
@@ -634,6 +656,122 @@ bool appleGvaTested() {
 	}
 	syslog(LOG_ERR, "ngva: AppleGVA version not found, hardware video off");
 	return false;
+}
+
+// VP9 decode: Tahoe's ICL VA driver (shipped with AppleGVA, same structures)
+// serves the sessions that ask for VP9 (request type 1, value 0x1000); the
+// TGL driver has no VP9. Its Gen11 HCP commands become Gen12 here:
+// HCP_PIPE_MODE_SELECT gains DW6 and HCP_SURFACE_STATE DW4 (both 0), appended
+// after the driver writes them, which keeps their relocation offsets. Offsets
+// are of the 25G332 ICL driver; another build leaves VP9 off.
+constexpr const char *iclPath = "/System/Library/Extensions/AppleIntelICLGraphicsVADriver.bundle/Contents/MacOS/AppleIntelICLGraphicsVADriver";
+constexpr uintptr_t iclHcpVtable = 0x792250, iclAddCommand = 0x3dbb0;
+Create iclCreate;
+Destroy iclDestroy;
+uintptr_t iclBase;
+using HcpCommand = long (*)(void *, uint8_t *, void *);
+HcpCommand iclPipeMode, iclSurface;
+Submit iclSubmitOriginal;
+using Any = long (*)(void *, void *, void *, void *, void *, void *);
+struct Route { void *icl; bool vp9; Any fn2; };
+std::map<void *, Route *> routes; // TGL accelerator table -> its ICL twin
+
+long iclSubmit(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
+	Submission sub {};
+	static const bool dump = access("/Users/Shared/ngva-vp9-dump", F_OK) == 0;
+	static const bool run = access("/Users/Shared/ngva-vp9-run", F_OK) == 0;
+	static int dumps, logs;
+	if (findSubmission(os, cmd, sub) && sub.words) {
+		if (dump && dumps++ < 2) {
+			logWords("vp9 batch", dumps, sub.batch, sub.words);
+			if (sub.record) logWords("vp9 record", dumps, sub.record, sub.length);
+		}
+		// Unmarked HCP batches end at their first dword in the kext.
+		const bool mark = run && !dump && sub.words > 6 && !sub.batch[6];
+		if (mark) const_cast<uint32_t *>(sub.batch)[6] = 0x00404e47;
+		if (logs++ < 4) syslog(LOG_NOTICE, "ngva: VP9 batch %u dwords: %s", sub.words, mark ? "run" : "dropped");
+	}
+	return iclSubmitOriginal(os, cmd, a2, a3, a4, a5);
+}
+
+// Append the Gen12 dword to the command the driver just wrote (DW0 length +1).
+long appendGen12Dword(void *self, uint8_t *buffer, uint32_t header) {
+	if (!buffer) return 0;
+	auto *os = at<uint8_t *>(static_cast<uint8_t *>(self), 8);
+	if (os && at<Submit>(os, 0x2d0) != iclSubmit) {
+		if (!iclSubmitOriginal) iclSubmitOriginal = at<Submit>(os, 0x2d0);
+		if (at<Submit>(os, 0x2d0) == iclSubmitOriginal) at<Submit>(os, 0x2d0) = iclSubmit;
+	}
+	const uint32_t length = (header & 0xfff) + 2;
+	auto *end = at<uint32_t *>(buffer, 0x150);
+	uint32_t *command = end - length;
+	if (command[0] != header) return 0;
+	const uint32_t zero = 0;
+	const int added = reinterpret_cast<int (*)(uint8_t *, const void *, uint32_t)>(iclBase + iclAddCommand)(buffer, &zero, 4);
+	if (!added) command[0] = header + 1;
+	return added;
+}
+long hcpPipeModeGen12(void *self, uint8_t *buffer, void *params) {
+	const long result = iclPipeMode(self, buffer, params);
+	return result ? result : appendGen12Dword(self, buffer, 0x73800004);
+}
+long hcpSurfaceGen12(void *self, uint8_t *buffer, void *params) {
+	const long result = iclSurface(self, buffer, params);
+	return result ? result : appendGen12Dword(self, buffer, 0x73810002);
+}
+
+bool loadIcl() {
+	void *icl = dlopen(iclPath, RTLD_NOW | RTLD_LOCAL);
+	iclCreate = icl ? reinterpret_cast<Create>(dlsym(icl, "AVD_CreateAVDAccelerator")) : nullptr;
+	iclDestroy = icl ? reinterpret_cast<Destroy>(dlsym(icl, "AVD_DestroyAVDAccelerator")) : nullptr;
+	Dl_info info {};
+	if (!iclCreate || !iclDestroy || !dladdr(reinterpret_cast<void *>(iclCreate), &info)) return false;
+	iclBase = reinterpret_cast<uintptr_t>(info.dli_fbase);
+	auto *vtable = reinterpret_cast<uintptr_t *>(iclBase + iclHcpVtable);
+	if (vtable[0x78 / 8] != iclBase + 0x19bd50 || vtable[0x80 / 8] != iclBase + 0x19c050) {
+		syslog(LOG_ERR, "ngva: ICL VA driver build not tested, VP9 off");
+		return false;
+	}
+	return replacePointer<HcpCommand>(iclHcpVtable + 0x78, hcpPipeModeGen12, iclPipeMode, iclBase) &&
+		replacePointer<HcpCommand>(iclHcpVtable + 0x80, hcpSurfaceGen12, iclSurface, iclBase);
+}
+
+// A routed accelerator's calls go to its ICL twin (self: the variable holding
+// the table, as AppleGVA passes it).
+template <int I> long forward(void **self, void *a, void *b, void *c, void *d, void *e) {
+	Route *route = nullptr;
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		auto it = routes.find(*self);
+		if (it != routes.end()) route = it->second;
+	}
+	if (!route) return 0xb;
+	return reinterpret_cast<Any>(*reinterpret_cast<void **>(static_cast<uint8_t *>(route->icl) + 8 + I * 8))(&route->icl, a, b, c, d, e);
+}
+template <int... I> void forwardAll(uint8_t *table, std::integer_sequence<int, I...>) {
+	((*reinterpret_cast<void **>(table + 8 + I * 8) = reinterpret_cast<void *>(forward<I>)), ...);
+}
+
+// fn2 creates the session's accelerators from AppleGVA's requests ({count,
+// list}; request: type +0, value +8, next +0x38).
+long createAccelerators(void **self, void *requests, void *b, void *c, void *d, void *e) {
+	Route *route = nullptr;
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		auto it = routes.find(*self);
+		if (it != routes.end()) route = it->second;
+	}
+	bool vp9 = false;
+	auto *list = requests ? *static_cast<uint8_t **>(requests) : nullptr;
+	for (uint32_t i = 0; list && i < at<uint32_t>(list, 0); i++)
+		for (auto *r = at<uint8_t **>(list, 8)[i]; r; r = at<uint8_t *>(r, 0x38))
+			vp9 |= at<uint32_t>(r, 0) == 1 && at<uint64_t>(r, 8) == 0x1000;
+	if (!route) return 0xb;
+	if (!vp9 || !route->icl) return route->fn2(self, requests, b, c, d, e);
+	route->vp9 = true;
+	forwardAll(static_cast<uint8_t *>(*self), std::make_integer_sequence<int, 16>{});
+	syslog(LOG_NOTICE, "ngva: VP9 session on the ICL VA driver");
+	return forward<2>(self, requests, b, c, d, e);
 }
 
 bool load() {
@@ -705,7 +843,31 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 	auto *table = static_cast<uint8_t *>(*accelerator);
 	auto *context = *reinterpret_cast<uint8_t **>(table);
 	auto *original = *reinterpret_cast<Description **>(context + 0x30);
-	auto *description = convert(original);
+	// VP9: an ICL twin and its VP9 decode entry.
+	Route *route = nullptr;
+	const uint8_t *vp9Entry = nullptr;
+	static const bool icl = loadIcl();
+	if (icl) {
+		route = new Route {};
+		uint8_t iclMetadata[0x40] {};
+		if (iclCreate(&route->icl, input, iclMetadata) || !route->icl) route->icl = nullptr;
+		auto *d = route->icl ? *reinterpret_cast<Description **>(iclMetadata + 8) : nullptr;
+		for (uint32_t i = 0; d && i < d->count && !vp9Entry; i++)
+			for (auto *e = d->slot[i]; e && !vp9Entry; e = *reinterpret_cast<uint8_t **>(e + 0x430))
+				if (at<uint32_t>(e, 0) == 1 && at<uint64_t>(e, 8) == 0x1000) vp9Entry = e;
+		if (!vp9Entry) {
+			if (route->icl) iclDestroy(route->icl);
+			delete route;
+			route = nullptr;
+		}
+	}
+	auto *description = convert(original, vp9Entry);
+	if (route) {
+		route->fn2 = *reinterpret_cast<Any *>(table + 0x18);
+		*reinterpret_cast<void **>(table + 0x18) = reinterpret_cast<void *>(createAccelerators);
+		std::lock_guard<std::mutex> guard(lock);
+		routes[*accelerator] = route;
+	}
 	if (!description) {
 		syslog(LOG_ERR, "ngva: unexpected accelerator description");
 		driverDestroy(*accelerator);
@@ -749,7 +911,18 @@ int AVD_DestroyAVDAccelerator(void *accelerator) {
 			descriptions.erase(it);
 		}
 	}
+	Route *route = nullptr;
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		auto it = routes.find(accelerator);
+		if (it != routes.end()) { route = it->second; routes.erase(it); }
+	}
 	int result = driverDestroy(accelerator);
+	if (route) {
+		const int iclResult = route->icl ? iclDestroy(route->icl) : 0;
+		if (route->vp9) result = iclResult;
+		delete route;
+	}
 	free(description);
 	return result;
 }
