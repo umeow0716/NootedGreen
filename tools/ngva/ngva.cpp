@@ -679,11 +679,17 @@ using Any = long (*)(void *, void *, void *, void *, void *, void *);
 std::map<void *, void *> twins; // TGL accelerator table -> ICL twin
 // Sessions (fn0 creates one, fn1 destroys it, the rest take it as self) get an
 // ICL twin too; after a VP9 fn2 the session's calls go to the twin.
-// AppleGVA checks the session's buffer formats with fn4 ({u32 type, u32 value,
-// u32 family}, as in the description entries) before it allocates them with
-// fn5; a check in the VP9 family (0x3e9, which the TGL driver lacks) moves the
-// session to the twin.
-struct Session { void *icl; bool vp9; };
+// Only fn2 tells a VP9 session (AppleGVA has already allocated its bitstream
+// buffer pool on the TGL session with fn5: input {u32 kind, ..., u32 count
+// +0x14, address array +0x18}). fn2 allocates the same pool on the twin, and
+// each VP9 submission copies its bitstream from the TGL buffer AppleGVA wrote.
+struct Session {
+	void *icl;
+	bool vp9;
+	uint8_t pool[0x20];
+	void *tglBuffer, *iclBuffer;
+};
+thread_local Session *vp9Session; // the routed session whose ICL call is running
 std::map<void *, Session> sessions;
 Any tglFn[16], iclFn[16];
 
@@ -703,7 +709,7 @@ bool iclToGen12(const Submission &sub) {
 	*status = (*status & ~(0xfffffu << 5)) | 3 << 5;
 	const uint32_t prologue[10] = {0x0e800000, 0x03000100, 0x10400002, b[6], b[7], b[8], 0, 0, 0, 0};
 	memcpy(b, prologue, sizeof(prologue));
-	bool pipeMode = false, control = false, surface = false, pba = false;
+	bool pipeMode = false, control = false, surface = false, pba = false, bitstream = false;
 	uint32_t width = 0;
 	for (uint32_t i = 10; i < n;) {
 		const uint32_t h = b[i];
@@ -721,6 +727,11 @@ bool iclToGen12(const Submission &sub) {
 			if (h == 0x73800005) pipeMode = true;
 			if (h == 0x73810003 && i + 2 < n) surface = (b[i + 2] & 0xf8000000) == 0x20000000;
 			if (h == 0x73b0000a && i + 1 < n) width = (b[i + 1] & 0x3fff) + 1;
+			if (h == 0x73a00001 && i + 2 < n && vp9Session && vp9Session->tglBuffer && vp9Session->iclBuffer &&
+				static_cast<uint64_t>(b[i + 1]) + b[i + 2] <= at<uint32_t>(vp9Session->pool, 8)) {
+				memcpy(vp9Session->iclBuffer, vp9Session->tglBuffer, static_cast<size_t>(b[i + 1]) + b[i + 2]);
+				bitstream = true;
+			}
 			if (h == 0x73820077 && i + 54 < n) {
 				b[i + 3] &= ~0x400u;
 				b[i + 53] &= ~0x400u;
@@ -730,7 +741,7 @@ bool iclToGen12(const Submission &sub) {
 		} else return false;
 		i += length;
 	}
-	return pipeMode && control && surface && pba && width && width <= 2048;
+	return pipeMode && control && surface && pba && bitstream && width && width <= 2048;
 }
 
 long iclSubmit(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
@@ -833,14 +844,13 @@ template <int I> long forward(void *self, void *a, void *b, void *c, void *d, vo
 		std::lock_guard<std::mutex> guard(lock);
 		auto it = sessions.find(self);
 		twin = it != sessions.end();
-		if (twin && I == 4 && a && at<uint32_t>(static_cast<uint8_t *>(a), 0) == 1 &&
-			at<uint32_t>(static_cast<uint8_t *>(a), 8) == 0x3e9 && !it->second.vp9) {
-			it->second.vp9 = true;
-			syslog(LOG_NOTICE, "ngva: VP9 session on the ICL VA driver");
+		if (twin && it->second.vp9) {
+			icl = it->second.icl;
+			vp9Session = &it->second;
 		}
-		if (twin && it->second.vp9) icl = it->second.icl;
 	}
 	const long result = icl ? iclFn[I](icl, a, b, c, d, e) : tglFn[I](self, a, b, c, d, e);
+	vp9Session = nullptr;
 	if (trace && twin) syslog(LOG_NOTICE, "ngva: %s fn%d(%p, %p, %p) = %#lx", icl ? "ICL" : "TGL", I, a, b, c, result);
 	else if (icl && result) syslog(LOG_ERR, "ngva: ICL fn%d returned %#lx", I, result);
 	return result;
@@ -872,6 +882,19 @@ long createSession(void *out, void *input, void *b, void *c, void *d, void *e) {
 	return result;
 }
 
+long allocatePool(void *self, void *input, void *b, void *c, void *d, void *e) {
+	const long result = tglFn[5](self, input, b, c, d, e);
+	auto *in = static_cast<uint8_t *>(input);
+	if (result || !in || at<uint32_t>(in, 0) || at<uint32_t>(in, 0x14) != 1 || !at<void **>(in, 0x18)) return result;
+	std::lock_guard<std::mutex> guard(lock);
+	auto it = sessions.find(self);
+	if (it != sessions.end()) {
+		memcpy(it->second.pool, in, sizeof(it->second.pool));
+		it->second.tglBuffer = at<void **>(in, 0x18)[0];
+	}
+	return result;
+}
+
 long destroySession(void *self, void *a, void *b, void *c, void *d, void *e) {
 	Session session {};
 	{
@@ -898,17 +921,29 @@ long createAccelerators(void *self, void *requests, void *b, void *c, void *d, v
 	for (uint32_t i = 0; list && i < at<uint32_t>(list, 0); i++)
 		for (auto *r = at<uint8_t **>(list, 8)[i]; r; r = at<uint8_t *>(r, 0x38))
 			vp9 |= at<uint32_t>(r, 0) == 1 && at<uint64_t>(r, 8) == 0x1000;
-	void *icl = nullptr;
+	Session *session = nullptr;
 	{
 		std::lock_guard<std::mutex> guard(lock);
 		auto it = sessions.find(self);
-		if (it != sessions.end() && it->second.vp9) icl = it->second.icl;
+		if (vp9 && it != sessions.end() && it->second.tglBuffer) session = &it->second;
 	}
-	if (!icl) {
-		if (vp9) syslog(LOG_ERR, "ngva: VP9 accelerators for a session not checked for VP9");
-		return tglFn[2](self, requests, b, c, d, e);
+	if (!session) return tglFn[2](self, requests, b, c, d, e);
+	uint8_t pool[0x20];
+	void *buffer = nullptr;
+	memcpy(pool, session->pool, sizeof(pool));
+	at<void **>(pool, 0x18) = &buffer;
+	const long result = iclFn[5](session->icl, pool, nullptr, nullptr, nullptr, nullptr);
+	if (result || !buffer) {
+		syslog(LOG_ERR, "ngva: ICL bitstream pool failed %#lx", result);
+		return result ? result : 1;
 	}
-	return iclFn[2](icl, requests, b, c, d, e);
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		session->iclBuffer = buffer;
+		session->vp9 = true;
+	}
+	syslog(LOG_NOTICE, "ngva: VP9 session on the ICL VA driver");
+	return iclFn[2](session->icl, requests, b, c, d, e);
 }
 
 bool load() {
@@ -1033,6 +1068,7 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 		*reinterpret_cast<void **>(table + 8) = reinterpret_cast<void *>(createSession);
 		*reinterpret_cast<void **>(table + 0x10) = reinterpret_cast<void *>(destroySession);
 		*reinterpret_cast<void **>(table + 0x18) = reinterpret_cast<void *>(createAccelerators);
+		*reinterpret_cast<void **>(table + 0x30) = reinterpret_cast<void *>(allocatePool);
 		std::lock_guard<std::mutex> guard(lock);
 		twins[*accelerator] = twin;
 	}
