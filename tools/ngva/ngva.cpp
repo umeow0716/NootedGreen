@@ -461,10 +461,9 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 	// 0x4e47 in the prologue's NOOP at dword 6) and ends the rest at their
 	// first dword. /Users/Shared/ngva-hevc-dump logs the batch and its
 	// relocation record and leaves it unmarked; only 4:2:0 decode (PLANAR_420_8
-	// and P010 surfaces) runs, and only with /Users/Shared/ngva-hevc-run.
+	// and P010 surfaces) runs.
 	if (words && std::find_if(batch, batchEnd, [](uint32_t w) { return (w & 0xffff0000) == 0x73800000 || (w & 0xffff0000) == 0x75800000; }) != batchEnd) {
 		static const bool hevcDump = access("/Users/Shared/ngva-hevc-dump", F_OK) == 0;
-		static const bool hevcRun = access("/Users/Shared/ngva-hevc-run", F_OK) == 0;
 		static int dumps, logs;
 		if (hevcDump && dumps++ < 2) {
 			for (uint32_t i = 0; i < words; i += 8)
@@ -500,7 +499,7 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 			lastSlice[3] |= 4;
 			lastSlice = nullptr;
 		}
-		const bool run = !hevcDump && hevcRun && lastSet && surfaces && surfaces == planar420 && words > 6 && !batch[6];
+		const bool run = !hevcDump && lastSet && surfaces && surfaces == planar420 && words > 6 && !batch[6];
 		if (run) const_cast<uint32_t *>(batch)[6] = 0x00404e47;
 		if (logs++ < 4)
 			syslog(LOG_NOTICE, "ngva: HEVC batch %u dwords, %u/%u 4:2:0 surfaces, %u PPGTT batch starts, last slice %s: %s", words, planar420,
