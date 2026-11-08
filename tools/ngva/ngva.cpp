@@ -698,6 +698,12 @@ Any tglFn[16], iclFn[16];
 // the kext's marker), MI stores get the GGTT bit, PIPE_BUF_ADDR loses the
 // Gen11 attribute bit 10 and takes the Gen12 deblocking row-store offset.
 // Returns whether the batch is safe to run.
+void flushCache(const void *p, size_t bytes) {
+	for (auto a = reinterpret_cast<uintptr_t>(p) & ~uintptr_t(63); a < reinterpret_cast<uintptr_t>(p) + bytes; a += 64)
+		__builtin_ia32_clflush(reinterpret_cast<const void *>(a));
+	__builtin_ia32_mfence();
+}
+
 bool iclToGen12(const Submission &sub) {
 	auto *b = const_cast<uint32_t *>(sub.batch);
 	const uint32_t n = sub.words;
@@ -729,15 +735,27 @@ bool iclToGen12(const Submission &sub) {
 			if (h == 0x73b0000a && i + 1 < n) width = (b[i + 1] & 0x3fff) + 1;
 			if (h == 0x73a00001 && i + 2 < n && vp9Session && vp9Session->tglBuffer && vp9Session->iclBuffer &&
 				static_cast<uint64_t>(b[i + 1]) + b[i + 2] <= at<uint32_t>(vp9Session->pool, 8)) {
+				// The twin's buffer is CPU-cached; the video engine reads memory.
 				memcpy(vp9Session->iclBuffer, vp9Session->tglBuffer, static_cast<size_t>(b[i + 1]) + b[i + 2]);
+				flushCache(vp9Session->iclBuffer, static_cast<size_t>(b[i + 1]) + b[i + 2]);
 				bitstream = true;
+				static int copies;
+				if (copies++ < 2) {
+					logWords("vp9 tgl bitstream", copies, static_cast<uint32_t *>(vp9Session->tglBuffer), 8);
+					logWords("vp9 icl bitstream", copies, static_cast<uint32_t *>(vp9Session->iclBuffer), 8);
+				}
 			}
-			if (h == 0x73820077 && i + 54 < n) {
-				b[i + 3] &= ~0x400u;
-				b[i + 53] &= ~0x400u;
+			if (h == 0x73820077 && i + 121 <= n) {
+				// Memory attributes (MOCS) as the Linux media driver sets them on
+				// this MOCS table; the row-store cache select bit stays.
+				static const uint8_t attributes[] = {3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 53, 56, 59, 62, 65, 82, 85, 88, 91,
+					94, 97, 100, 103, 106, 109, 112, 115, 118};
+				for (const uint32_t j : attributes)
+					b[i + j] = (b[i + j] & 0x1000) | (j == 3 || j == 18 || j == 21 || j == 33 || j == 82 ? 6 : 0xa);
 				if (b[i + 6] & 0x1000) b[i + 4] = 0x6000;
 				pba = true;
 			}
+			if (h == 0x7383001b && i + 4 < n) b[i + 3] = 6;
 		} else return false;
 		i += length;
 	}
@@ -760,7 +778,10 @@ long iclSubmit(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 		if (mark) const_cast<uint32_t *>(sub.batch)[6] = 0x00404e47;
 		if (logs++ < 4) syslog(LOG_NOTICE, "ngva: VP9 batch %u dwords, %s: %s", sub.words, safe ? "converted" : "not converted", mark ? "run" : "dropped");
 	}
-	return iclSubmitOriginal(os, cmd, a2, a3, a4, a5);
+	const long result = iclSubmitOriginal(os, cmd, a2, a3, a4, a5);
+	static int after;
+	if (sub.words > 16 && after++ < 2) logWords("vp9 submitted", after, sub.batch, std::min(sub.words, 0xc0u));
+	return result;
 }
 
 // Append the Gen12 dword to the command the driver just wrote (DW0 length +1),

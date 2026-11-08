@@ -315,6 +315,33 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 									       r * 4, w[r], w[r + 1], w[r + 2], w[r + 3], w[r + 4], w[r + 5], w[r + 6], w[r + 7]);
 							break;
 						}
+						// V386: the first VP9 frames' bitstream head and probability
+						// buffer (PIPE_BUF_ADDR dw83) as the engine reads them.
+						static uint32_t vp9Dumps = 0;
+						uint32_t pba = 0, ind = 0;
+						bool vp9 = false;
+						for (uint32_t s = k; vp9Dumps < 2 && s < room && b[s] != 0x05000000; s++) {
+							if (b[s] == 0x73820077) pba = s;
+							else if (b[s] == 0x7383001B) ind = s;
+							else if (b[s] == 0x73B0000A) vp9 = true;
+						}
+						if (vp9 && pba && ind && pba + 85 < room && ind + 3 < room) {
+							vp9Dumps++;
+							static uint32_t w[512];
+							const struct { const char *what; uint64_t va; uint32_t count; } dumps[] = {
+								{"bitstream", b[ind + 1] | (static_cast<uint64_t>(b[ind + 2] & 0xFFFF) << 32), 16},
+								{"probabilities", b[pba + 83] | (static_cast<uint64_t>(b[pba + 84] & 0xFFFF) << 32), 512}};
+							for (const auto &d : dumps) {
+								if (!vfPpgttRead(root, d.va, w, d.count)) {
+									SYSLOG("ngreen", "V386: VP9 %s %llx unmapped", d.what, static_cast<unsigned long long>(d.va));
+									continue;
+								}
+								for (uint32_t r = 0; r < d.count; r += 8)
+									SYSLOG("ngreen", "V386: VP9 %s %llx +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", d.what,
+									       static_cast<unsigned long long>(d.va), r * 4, w[r], w[r + 1], w[r + 2], w[r + 3], w[r + 4], w[r + 5],
+									       w[r + 6], w[r + 7]);
+							}
+						}
 						break;
 					}
 					if (drops++ < 8)
