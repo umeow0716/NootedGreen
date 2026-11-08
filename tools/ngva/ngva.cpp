@@ -727,7 +727,7 @@ bool iclToGen12(const Submission &sub) {
 			length = h >> 16 == 0x6800 ? 1 : (h & 0xfff) + 2;
 			if (h == 0x738a0001) control = true;
 			if (h == 0x73800005) pipeMode = true;
-			if (h == 0x73810003 && i + 2 < n) surface = (b[i + 2] & 0xf8000000) == 0x20000000;
+			if (h == 0x73810003 && i + 2 < n) surface = (b[i + 2] & 0xf8000000) == 0x20000000 || (b[i + 2] & 0xf8000000) == 0x68000000; // PLANAR_420_8, P010
 			if (h == 0x73b0000a && i + 1 < n) width = (b[i + 1] & 0x3fff) + 1;
 			// The bitstream within the pool's buffer (the twin's pool entry wraps
 			// the TGL pool's client memory, which AppleGVA fills).
@@ -740,20 +740,22 @@ bool iclToGen12(const Submission &sub) {
 					94, 97, 100, 103, 106, 109, 112, 115, 118};
 				for (const uint32_t j : attributes)
 					b[i + j] = (b[i + j] & 0x1000) | (j == 3 || j == 18 || j == 21 || j == 33 || j == 82 ? 6 : 0xa);
+				// Row stores the driver keeps in the internal cache, at their
+				// Gen12 offsets (deblocking line, metadata line).
 				if (b[i + 6] & 0x1000) b[i + 4] = 0x6000;
+				if (b[i + 15] & 0x1000) b[i + 13] = 0x1000;
 				pba = true;
 			}
 			if (h == 0x7383001b && i + 4 < n) b[i + 3] = 6;
 		} else return false;
 		i += length;
 	}
-	return pipeMode && control && surface && pba && bitstream && width && width <= 2048;
+	return pipeMode && control && surface && pba && bitstream && width && width <= 4096;
 }
 
 long iclSubmit(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 	Submission sub {};
 	static const bool dump = access("/Users/Shared/ngva-vp9-dump", F_OK) == 0;
-	static const bool run = access("/Users/Shared/ngva-vp9-run", F_OK) == 0;
 	static int dumps, logs;
 	if (findSubmission(os, cmd, sub) && sub.words) {
 		const bool safe = iclToGen12(sub);
@@ -762,14 +764,11 @@ long iclSubmit(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 			if (sub.record) logWords("vp9 record", dumps, sub.record, sub.length);
 		}
 		// Unmarked HCP batches end at their first dword in the kext.
-		const bool mark = run && !dump && safe;
+		const bool mark = !dump && safe;
 		if (mark) const_cast<uint32_t *>(sub.batch)[6] = 0x00404e47;
 		if (logs++ < 4) syslog(LOG_NOTICE, "ngva: VP9 batch %u dwords, %s: %s", sub.words, safe ? "converted" : "not converted", mark ? "run" : "dropped");
 	}
-	const long result = iclSubmitOriginal(os, cmd, a2, a3, a4, a5);
-	static int after;
-	if (sub.words > 16 && after++ < 2) logWords("vp9 submitted", after, sub.batch, std::min(sub.words, 0xc0u));
-	return result;
+	return iclSubmitOriginal(os, cmd, a2, a3, a4, a5);
 }
 
 // Append the Gen12 dword to the command the driver just wrote (DW0 length +1),
