@@ -326,7 +326,7 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 						// V386: VP9 bitstream head and probability buffer (PIPE_BUF_ADDR
 						// dw83) as the engine reads them, for the first frames of each new
 						// bitstream buffer.
-						static uint32_t vp9Dumps = 0;
+						static uint32_t vp9Dumps = 0, vp9Frame = 0;
 						static uint64_t vp9Bitstream = 0;
 						uint32_t pba = 0, ind = 0;
 						bool vp9 = false;
@@ -336,7 +336,8 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 							else if (b[s] == 0x73B0000A) vp9 = true;
 						}
 						const uint64_t bitstream = ind && ind + 3 < room ? b[ind + 1] | (static_cast<uint64_t>(b[ind + 2] & 0xFFFF) << 32) : 0;
-						if (vp9 && pba && bitstream && bitstream != vp9Bitstream && pba + 85 < room) {
+						if (vp9 && bitstream != vp9Bitstream) vp9Frame = 0;
+						if (vp9 && pba && bitstream && (bitstream != vp9Bitstream || ++vp9Frame == 3) && pba + 85 < room) {
 							vp9Dumps++;
 							vp9Bitstream = bitstream;
 							static uint32_t w[512];
