@@ -440,6 +440,7 @@ long buildBatch(void *enc, void *frame, void *cmd, void *a3, void *a4, void *a5)
 // Gen9's surface format and leaves the pitch one short (0x080ffffb: 1280 ->
 // 0x081027f3); Gen12 needs PLANAR_420_8 (0x48000000) and DW5 (Cr Y offset)
 // equal to DW4, which no entry writes. Edit the record before submission.
+thread_local uint32_t *lastSlice; // newest HEVC slice state (hcpSlice below)
 using Submit = long (*)(void *, void *, void *, void *, void *, void *);
 Submit driverSubmit;
 long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
@@ -492,11 +493,17 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 				starts++;
 			}
 		}
-		const bool run = !hevcDump && hevcRun && surfaces && surfaces == planar8 && words > 6 && !batch[6];
+		const bool lastSet = lastSlice != nullptr;
+		if (lastSlice) {
+			lastSlice[2] &= ~0x07ff03ffU;
+			lastSlice[3] |= 4;
+			lastSlice = nullptr;
+		}
+		const bool run = !hevcDump && hevcRun && lastSet && surfaces && surfaces == planar8 && words > 6 && !batch[6];
 		if (run) const_cast<uint32_t *>(batch)[6] = 0x00404e47;
 		if (logs++ < 4)
-			syslog(LOG_NOTICE, "ngva: HEVC batch %u dwords, %u/%u 8-bit surfaces, %u PPGTT batch starts: %s", words, planar8, surfaces, starts,
-			       run ? "run" : "dropped");
+			syslog(LOG_NOTICE, "ngva: HEVC batch %u dwords, %u/%u 8-bit surfaces, %u PPGTT batch starts, last slice %s: %s", words, planar8,
+			       surfaces, starts, lastSet ? "set" : "missing", run ? "run" : "dropped");
 		return driverSubmit(os, cmd, a2, a3, a4, a5);
 	}
 	if (!record) return driverSubmit(os, cmd, a2, a3, a4, a5);
@@ -544,6 +551,24 @@ long hcpSurface(void *self, uint8_t *buffer, uint8_t *params) {
 	if (logs++ < 2) syslog(LOG_NOTICE, "ngva: HEVC surface state %u written at dword %u (%d)", params ? params[0x12] & 0xf : 0,
 	                       at<uint32_t>(buffer, 0x158) / 4 - 5, added);
 	return added;
+}
+
+// HEVC decode slices (Gen12 AddHcpDecodeSliceStateCmd 0x198f90, two
+// vtables): the driver never sets bLastSlice, and derives the next slice's
+// start from a CTU count it leaves 0. HCP then waits for a slice that never
+// comes and the frame's closing MI_FLUSH_DW never completes. Each slice gives
+// its start (DW1) to the previous slice's next-slice start (DW2); submit sets
+// LastSliceOfPic (DW3 bit 2) on the picture's final slice.
+using HcpSlice = long (*)(void *, uint8_t *, uint8_t *);
+HcpSlice driverHcpSlice;
+long hcpSlice(void *self, uint8_t *buffer, uint8_t *state) {
+	auto *slice = buffer ? at<uint32_t *>(buffer, 0x150) : nullptr;
+	const long result = driverHcpSlice(self, buffer, state);
+	if (result || !slice || slice[0] != 0x7394000b) return result;
+	// A picture's first slice starts at CTB 0 (DW1 0).
+	if (lastSlice && slice[1]) lastSlice[2] = (lastSlice[2] & ~0x07ff03ffU) | (slice[1] & 0x03ff03ffU);
+	lastSlice = slice;
+	return result;
 }
 
 template <typename T> bool replacePointer(uintptr_t offset, T replacement, T &original) {
@@ -644,6 +669,10 @@ bool load() {
 			if (!replacePointer<HcpSurface>(0x759898, hcpSurface, driverHcpSurface) ||
 			    !replacePointer<HcpSurface>(0x75a3e0, hcpSurface, second))
 				syslog(LOG_ERR, "ngva: cannot hook the HEVC surface state");
+			HcpSlice secondSlice = nullptr;
+			if (!replacePointer<HcpSlice>(0x7598f0, hcpSlice, driverHcpSlice) ||
+			    !replacePointer<HcpSlice>(0x75a438, hcpSlice, secondSlice))
+				syslog(LOG_ERR, "ngva: cannot hook the HEVC slice state");
 			if (!replacePointer<EncodeFrame>(0x754a90, encodeFrame, driverEncodeFrameCall) ||
 			    !replacePointer<FinishFence>(0x7600d0, finishFence, driverFinishFence) ||
 			    !replacePointer<BuildBatch>(0x754ac8, buildBatch, driverBuildBatch) ||
