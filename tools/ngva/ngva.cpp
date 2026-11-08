@@ -665,7 +665,7 @@ bool appleGvaTested() {
 // after the driver writes them, which keeps their relocation offsets. Offsets
 // are of the 25G332 ICL driver; another build leaves VP9 off.
 constexpr const char *iclPath = "/System/Library/Extensions/AppleIntelICLGraphicsVADriver.bundle/Contents/MacOS/AppleIntelICLGraphicsVADriver";
-constexpr uintptr_t iclHcpVtable = 0x792250, iclAddCommand = 0x3dbb0;
+constexpr uintptr_t iclHcpVtable = 0x792250, iclAddCommand = 0x3dbb0, iclStructMethodSlot = 0x78a0c0;
 Create iclCreate;
 Destroy iclDestroy;
 uintptr_t iclBase;
@@ -673,8 +673,16 @@ using HcpCommand = long (*)(void *, uint8_t *, void *);
 HcpCommand iclPipeMode, iclSurface;
 Submit iclSubmitOriginal;
 using Any = long (*)(void *, void *, void *, void *, void *, void *);
-struct Route { void *icl; bool vp9; Any fn2; };
-std::map<void *, Route *> routes; // TGL accelerator table -> its ICL twin
+std::map<void *, void *> twins; // TGL accelerator table -> ICL twin
+// Sessions (fn0 creates one, fn1 destroys it, the rest take it as self) get an
+// ICL twin too; after a VP9 fn2 the session's calls go to the twin.
+// AppleGVA checks the session's buffer formats with fn4 ({u32 type, u32 value,
+// u32 family}, as in the description entries) before it allocates them with
+// fn5; a check in the VP9 family (0x3e9, which the TGL driver lacks) moves the
+// session to the twin.
+struct Session { void *icl; bool vp9; };
+std::map<void *, Session> sessions;
+Any tglFn[16], iclFn[16];
 
 long iclSubmit(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 	Submission sub {};
@@ -720,6 +728,18 @@ long hcpSurfaceGen12(void *self, uint8_t *buffer, void *params) {
 	return result ? result : appendGen12Dword(self, buffer, 0x73810002);
 }
 
+// The ICL driver accepts only ICL device ids from its hw-caps query
+// (IOConnectCallStructMethod selector 0xb, id at dword 2); its import slot
+// for that call goes through here.
+using StructMethod = int (*)(unsigned, uint32_t, const void *, size_t, void *, size_t *);
+StructMethod iclStructMethod;
+int iclHwCaps(unsigned connection, uint32_t selector, const void *in, size_t inSize, void *out, size_t *outSize) {
+	const int result = iclStructMethod(connection, selector, in, inSize, out, outSize);
+	if (!result && selector == 0xb && out && outSize && *outSize >= 12 && static_cast<uint32_t *>(out)[2] == 0x9a408086)
+		static_cast<uint32_t *>(out)[2] = 0x8a528086;
+	return result;
+}
+
 bool loadIcl() {
 	void *icl = dlopen(iclPath, RTLD_NOW | RTLD_LOCAL);
 	iclCreate = icl ? reinterpret_cast<Create>(dlsym(icl, "AVD_CreateAVDAccelerator")) : nullptr;
@@ -728,50 +748,100 @@ bool loadIcl() {
 	if (!iclCreate || !iclDestroy || !dladdr(reinterpret_cast<void *>(iclCreate), &info)) return false;
 	iclBase = reinterpret_cast<uintptr_t>(info.dli_fbase);
 	auto *vtable = reinterpret_cast<uintptr_t *>(iclBase + iclHcpVtable);
-	if (vtable[0x78 / 8] != iclBase + 0x19bd50 || vtable[0x80 / 8] != iclBase + 0x19c050) {
+	if (vtable[0x78 / 8] != iclBase + 0x19bd50 || vtable[0x80 / 8] != iclBase + 0x19c050 ||
+		*reinterpret_cast<void **>(iclBase + iclStructMethodSlot) != dlsym(RTLD_DEFAULT, "IOConnectCallStructMethod")) {
 		syslog(LOG_ERR, "ngva: ICL VA driver build not tested, VP9 off");
 		return false;
 	}
-	return replacePointer<HcpCommand>(iclHcpVtable + 0x78, hcpPipeModeGen12, iclPipeMode, iclBase) &&
+	return replacePointer<StructMethod>(iclStructMethodSlot, iclHwCaps, iclStructMethod, iclBase) &&
+		replacePointer<HcpCommand>(iclHcpVtable + 0x78, hcpPipeModeGen12, iclPipeMode, iclBase) &&
 		replacePointer<HcpCommand>(iclHcpVtable + 0x80, hcpSurfaceGen12, iclSurface, iclBase);
 }
 
-// A routed accelerator's calls go to its ICL twin (self: the variable holding
-// the table, as AppleGVA passes it).
-template <int I> long forward(void **self, void *a, void *b, void *c, void *d, void *e) {
-	Route *route = nullptr;
+template <int I> long forward(void *self, void *a, void *b, void *c, void *d, void *e) {
+	static const bool trace = access("/Users/Shared/ngva-vp9-dump", F_OK) == 0;
+	void *icl = nullptr;
+	bool twin = false;
 	{
 		std::lock_guard<std::mutex> guard(lock);
-		auto it = routes.find(*self);
-		if (it != routes.end()) route = it->second;
+		auto it = sessions.find(self);
+		twin = it != sessions.end();
+		if (twin && I == 4 && a && at<uint32_t>(static_cast<uint8_t *>(a), 0) == 1 &&
+			at<uint32_t>(static_cast<uint8_t *>(a), 8) == 0x3e9 && !it->second.vp9) {
+			it->second.vp9 = true;
+			syslog(LOG_NOTICE, "ngva: VP9 session on the ICL VA driver");
+		}
+		if (twin && it->second.vp9) icl = it->second.icl;
 	}
-	if (!route) return 0xb;
-	return reinterpret_cast<Any>(*reinterpret_cast<void **>(static_cast<uint8_t *>(route->icl) + 8 + I * 8))(&route->icl, a, b, c, d, e);
+	const long result = icl ? iclFn[I](icl, a, b, c, d, e) : tglFn[I](self, a, b, c, d, e);
+	if (trace && twin) syslog(LOG_NOTICE, "ngva: %s fn%d(%p, %p, %p) = %#lx", icl ? "ICL" : "TGL", I, a, b, c, result);
+	else if (icl && result) syslog(LOG_ERR, "ngva: ICL fn%d returned %#lx", I, result);
+	return result;
 }
 template <int... I> void forwardAll(uint8_t *table, std::integer_sequence<int, I...>) {
 	((*reinterpret_cast<void **>(table + 8 + I * 8) = reinterpret_cast<void *>(forward<I>)), ...);
 }
 
-// fn2 creates the session's accelerators from AppleGVA's requests ({count,
-// list}; request: type +0, value +8, next +0x38).
-long createAccelerators(void **self, void *requests, void *b, void *c, void *d, void *e) {
-	Route *route = nullptr;
+// fn0's input is {u32 index, accelerator table}; the session keeps the table
+// and reaches the accelerator description through it.
+long createSession(void *out, void *input, void *b, void *c, void *d, void *e) {
+	const long result = tglFn[0](out, input, b, c, d, e);
+	if (result || !*static_cast<void **>(out) || !input) return result;
+	struct Input { uint32_t index; void *accelerator; } twinInput = *static_cast<Input *>(input);
 	{
 		std::lock_guard<std::mutex> guard(lock);
-		auto it = routes.find(*self);
-		if (it != routes.end()) route = it->second;
+		auto it = twins.find(twinInput.accelerator);
+		if (it == twins.end()) return result;
+		twinInput.accelerator = it->second;
 	}
+	void *icl = nullptr;
+	const long iclResult = iclFn[0](&icl, &twinInput, b, c, d, e);
+	if (iclResult || !icl) {
+		syslog(LOG_ERR, "ngva: ICL session failed %ld", iclResult);
+		return result;
+	}
+	std::lock_guard<std::mutex> guard(lock);
+	sessions[*static_cast<void **>(out)] = {icl};
+	return result;
+}
+
+long destroySession(void *self, void *a, void *b, void *c, void *d, void *e) {
+	Session session {};
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		auto it = sessions.find(self);
+		if (it != sessions.end()) {
+			session = it->second;
+			sessions.erase(it);
+		}
+	}
+	long result = tglFn[1](self, a, b, c, d, e);
+	if (session.icl) {
+		const long iclResult = iclFn[1](session.icl, a, b, c, d, e);
+		if (session.vp9) result = iclResult;
+	}
+	return result;
+}
+
+// fn2 creates the session's accelerators from AppleGVA's requests ({count,
+// list}; request: type +0, value +8, next +0x38).
+long createAccelerators(void *self, void *requests, void *b, void *c, void *d, void *e) {
 	bool vp9 = false;
 	auto *list = requests ? *static_cast<uint8_t **>(requests) : nullptr;
 	for (uint32_t i = 0; list && i < at<uint32_t>(list, 0); i++)
 		for (auto *r = at<uint8_t **>(list, 8)[i]; r; r = at<uint8_t *>(r, 0x38))
 			vp9 |= at<uint32_t>(r, 0) == 1 && at<uint64_t>(r, 8) == 0x1000;
-	if (!route) return 0xb;
-	if (!vp9 || !route->icl) return route->fn2(self, requests, b, c, d, e);
-	route->vp9 = true;
-	forwardAll(static_cast<uint8_t *>(*self), std::make_integer_sequence<int, 16>{});
-	syslog(LOG_NOTICE, "ngva: VP9 session on the ICL VA driver");
-	return forward<2>(self, requests, b, c, d, e);
+	void *icl = nullptr;
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		auto it = sessions.find(self);
+		if (it != sessions.end() && it->second.vp9) icl = it->second.icl;
+	}
+	if (!icl) {
+		if (vp9) syslog(LOG_ERR, "ngva: VP9 accelerators for a session not checked for VP9");
+		return tglFn[2](self, requests, b, c, d, e);
+	}
+	return iclFn[2](icl, requests, b, c, d, e);
 }
 
 bool load() {
@@ -844,30 +914,21 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 	auto *context = *reinterpret_cast<uint8_t **>(table);
 	auto *original = *reinterpret_cast<Description **>(context + 0x30);
 	// VP9: an ICL twin and its VP9 decode entry.
-	Route *route = nullptr;
+	void *twin = nullptr;
 	const uint8_t *vp9Entry = nullptr;
 	static const bool icl = loadIcl();
-	if (icl) {
-		route = new Route {};
-		uint8_t iclMetadata[0x40] {};
-		if (iclCreate(&route->icl, input, iclMetadata) || !route->icl) route->icl = nullptr;
-		auto *d = route->icl ? *reinterpret_cast<Description **>(iclMetadata + 8) : nullptr;
+	uint8_t iclMetadata[0x40] {};
+	if (icl && !iclCreate(&twin, input, iclMetadata) && twin) {
+		auto *d = *reinterpret_cast<Description **>(iclMetadata + 8);
 		for (uint32_t i = 0; d && i < d->count && !vp9Entry; i++)
 			for (auto *e = d->slot[i]; e && !vp9Entry; e = *reinterpret_cast<uint8_t **>(e + 0x430))
 				if (at<uint32_t>(e, 0) == 1 && at<uint64_t>(e, 8) == 0x1000) vp9Entry = e;
 		if (!vp9Entry) {
-			if (route->icl) iclDestroy(route->icl);
-			delete route;
-			route = nullptr;
+			iclDestroy(twin);
+			twin = nullptr;
 		}
 	}
 	auto *description = convert(original, vp9Entry);
-	if (route) {
-		route->fn2 = *reinterpret_cast<Any *>(table + 0x18);
-		*reinterpret_cast<void **>(table + 0x18) = reinterpret_cast<void *>(createAccelerators);
-		std::lock_guard<std::mutex> guard(lock);
-		routes[*accelerator] = route;
-	}
 	if (!description) {
 		syslog(LOG_ERR, "ngva: unexpected accelerator description");
 		driverDestroy(*accelerator);
@@ -895,6 +956,19 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 #ifdef NGVA_TRACE
 	traceAll(table, std::make_integer_sequence<int, 16>{});
 #endif
+	if (twin) {
+		static std::once_flag once;
+		std::call_once(once, [&] {
+			memcpy(tglFn, table + 8, sizeof(tglFn));
+			memcpy(iclFn, static_cast<uint8_t *>(twin) + 8, sizeof(iclFn));
+		});
+		forwardAll(table, std::make_integer_sequence<int, 16>{});
+		*reinterpret_cast<void **>(table + 8) = reinterpret_cast<void *>(createSession);
+		*reinterpret_cast<void **>(table + 0x10) = reinterpret_cast<void *>(destroySession);
+		*reinterpret_cast<void **>(table + 0x18) = reinterpret_cast<void *>(createAccelerators);
+		std::lock_guard<std::mutex> guard(lock);
+		twins[*accelerator] = twin;
+	}
 	*reinterpret_cast<void **>(static_cast<uint8_t *>(metadata) + 8) = description;
 	return 0;
 }
@@ -902,7 +976,7 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 extern "C" __attribute__((visibility("default")))
 int AVD_DestroyAVDAccelerator(void *accelerator) {
 	if (!load()) return 5;
-	void *description = nullptr;
+	void *description = nullptr, *twin = nullptr;
 	{
 		std::lock_guard<std::mutex> guard(lock);
 		auto it = descriptions.find(accelerator);
@@ -910,19 +984,14 @@ int AVD_DestroyAVDAccelerator(void *accelerator) {
 			description = it->second;
 			descriptions.erase(it);
 		}
+		auto t = twins.find(accelerator);
+		if (t != twins.end()) {
+			twin = t->second;
+			twins.erase(t);
+		}
 	}
-	Route *route = nullptr;
-	{
-		std::lock_guard<std::mutex> guard(lock);
-		auto it = routes.find(accelerator);
-		if (it != routes.end()) { route = it->second; routes.erase(it); }
-	}
-	int result = driverDestroy(accelerator);
-	if (route) {
-		const int iclResult = route->icl ? iclDestroy(route->icl) : 0;
-		if (route->vp9) result = iclResult;
-		delete route;
-	}
+	const int result = driverDestroy(accelerator);
+	if (twin) iclDestroy(twin);
 	free(description);
 	return result;
 }
