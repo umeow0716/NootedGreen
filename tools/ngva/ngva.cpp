@@ -453,8 +453,31 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 	if (sb && sb[0] && batch && batchEnd > batch)
 		for (uint32_t *w = sb[0] - 1, n = 0; n < 4096; n++, w--)
 			if ((*w & 0xffff) == 0x8200 && w + (*w >> 16) == sb[0]) { record = w; break; }
+	const uint32_t words = batch && batchEnd > batch ? static_cast<uint32_t>(batchEnd - batch) : 0;
+	const uint32_t length = record ? record[0] >> 16 : 0;
+	// HEVC batches (HCP_PIPE_MODE_SELECT, or HUC_PIPE_MODE_SELECT for HuC
+	// slice parsing): /Users/Shared/ngva-hevc-dump logs the batch and its
+	// relocation record, then ends the batch at its first dword so the video
+	// engine runs nothing.
+	static const bool hevcDump = access("/Users/Shared/ngva-hevc-dump", F_OK) == 0;
+	if (hevcDump && words && std::find_if(batch, batchEnd, [](uint32_t w) { return (w & 0xffff0000) == 0x73800000 || (w & 0xffff0000) == 0x75800000; }) != batchEnd) {
+		static int dumps;
+		if (dumps++ < 2) {
+			for (uint32_t i = 0; i < words; i += 8)
+				syslog(LOG_NOTICE, "ngva: hevc %d batch +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", dumps, i * 4, batch[i],
+				       i + 1 < words ? batch[i + 1] : 0, i + 2 < words ? batch[i + 2] : 0, i + 3 < words ? batch[i + 3] : 0,
+				       i + 4 < words ? batch[i + 4] : 0, i + 5 < words ? batch[i + 5] : 0, i + 6 < words ? batch[i + 6] : 0,
+				       i + 7 < words ? batch[i + 7] : 0);
+			for (uint32_t i = 0; i < length; i += 8)
+				syslog(LOG_NOTICE, "ngva: hevc %d record +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", dumps, i * 4, record[i],
+				       i + 1 < length ? record[i + 1] : 0, i + 2 < length ? record[i + 2] : 0, i + 3 < length ? record[i + 3] : 0,
+				       i + 4 < length ? record[i + 4] : 0, i + 5 < length ? record[i + 5] : 0, i + 6 < length ? record[i + 6] : 0,
+				       i + 7 < length ? record[i + 7] : 0);
+		}
+		const_cast<uint32_t *>(batch)[0] = 0x05000000;
+		return driverSubmit(os, cmd, a2, a3, a4, a5);
+	}
 	if (!record) return driverSubmit(os, cmd, a2, a3, a4, a5);
-	const uint32_t words = static_cast<uint32_t>(batchEnd - batch), length = record[0] >> 16;
 	uint32_t *chroma = nullptr, fixed = 0, k = 3;
 	bool hasCr = false;
 	for (; k + 5 < length && (record[k] & 1); k += 5) {

@@ -286,6 +286,21 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 					for (uint32_t e = k; e < k + 8; e++) end |= b[e] == 0x05000000;
 					if (end) break;
 				}
+			// V383: with -nghevcdrop, HEVC batches (HCP or HuC pipe mode select)
+			// end at their first dword, so the video engine runs nothing.
+			if (checkKernelArgument("-nghevcdrop") && b[0] != 0x05000000) {
+				const uint32_t room = (PAGE_SIZE - (bb & 0xFFF)) / 4;
+				for (uint32_t k = 0; k < room && b[k] != 0x05000000; k++) {
+					if ((b[k] & 0xFFFF0000) != 0x73800000 && (b[k] & 0xFFFF0000) != 0x75800000)
+						continue;
+					static uint32_t drops = 0;
+					if (drops++ < 8)
+						SYSLOG("ngreen", "V383: dropped HEVC batch %llx (%08x at +%03x)", static_cast<unsigned long long>(bb), b[k], k * 4);
+					b[0] = 0x05000000;
+					__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(&b[0]) : "memory");
+					break;
+				}
+			}
 			if (checkKernelArgument("-ngiclva") && b[5] != 0x05000000)
 				vfIclDecodeToGen12(b, (PAGE_SIZE - (bb & 0xFFF)) / 4);
 			if (b[0] == 0x13000083 && !b[1] && !b[2] && !b[3] && !b[4]) {

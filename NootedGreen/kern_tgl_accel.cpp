@@ -4031,6 +4031,20 @@ bool TglAccel::injectAcceleratorPersonality(const char *bundleId)
 		return false;
 	}
 
+	// V383: the TGL personality predates the HEVC gate that AppleGVA reads
+	// before IOGVAHEVCDecodeCapabilities; shipping Gen9.5/Gen11 kexts set it
+	// to "2". HEVC decode is not working on the VF yet: opt-in with -nghevc.
+	if (checkKernelArgument("-nghevc")) {
+		auto *hevcDecode = OSString::withCString("2");
+		const bool hevcReady = hevcDecode && dict->setObject("IOGVAHEVCDecode", hevcDecode);
+		OSSafeReleaseNULL(hevcDecode);
+		if (!hevcReady) {
+			dict->release();
+			return false;
+		}
+		SYSLOG("ngreen", "V383: HEVC decode gate on");
+	}
+
 	// Tahoe 25G229 AppleGVA removed the former TGL renderer slot 0x1080040
 	// from its hard admission set, while retaining the ICL/Gen11 slot
 	// 0x1080080.  Keep that admission alias, but preserve the cloned native TGL
