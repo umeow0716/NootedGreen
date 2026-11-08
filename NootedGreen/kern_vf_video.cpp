@@ -300,6 +300,21 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 					if (marked) {
 						if (runs++ < 4)
 							SYSLOG("ngreen", "V383: HEVC batch %llx marked by ngva", static_cast<unsigned long long>(bb));
+						// V384: the slice commands of the first HEVC frames (second-level batch).
+						static uint32_t slices = 0;
+						for (uint32_t s = k; s + 2 < room && b[s] != 0x05000000 && slices < 3; s++) {
+							if (b[s] != 0x18C00101)
+								continue;
+							slices++;
+							const uint64_t sb = b[s + 1] | (static_cast<uint64_t>(b[s + 2] & 0xFFFF) << 32);
+							uint32_t w[48] {};
+							vfFlushGpuRange(root, sb, sizeof(w));
+							if (vfPpgttRead(root, sb, w, 48))
+								for (uint32_t r = 0; r < 48; r += 8)
+									SYSLOG("ngreen", "V384: slice batch %llx +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", static_cast<unsigned long long>(sb),
+									       r * 4, w[r], w[r + 1], w[r + 2], w[r + 3], w[r + 4], w[r + 5], w[r + 6], w[r + 7]);
+							break;
+						}
 						break;
 					}
 					if (drops++ < 8)

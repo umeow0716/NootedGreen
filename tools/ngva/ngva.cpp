@@ -477,18 +477,26 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 				       i + 4 < length ? record[i + 4] : 0, i + 5 < length ? record[i + 5] : 0, i + 6 < length ? record[i + 6] : 0,
 				       i + 7 < length ? record[i + 7] : 0);
 		}
-		uint32_t surfaces = 0, planar8 = 0;
+		// The slice commands sit in a second-level batch at a PPGTT address,
+		// but the driver's MI_BATCH_BUFFER_START leaves the address space bit
+		// (8) at GGTT; the relocation entry for its address finds it.
+		uint32_t surfaces = 0, planar8 = 0, starts = 0;
 		for (uint32_t k = 3; k + 5 <= length && (record[k] & 1); k += 5) {
 			const uint32_t type = record[k] >> 1 & 7, at = record[k] >> 5 & 0xfffff;
 			if (type == 2 && at >= 2 && at < words && batch[at - 2] == 0x73810003) {
 				surfaces++;
 				planar8 += (record[k + 2] & 0xf8000000) == 0x20000000;
 			}
+			if (type == 0 && at >= 1 && at < words && batch[at - 1] == 0x18c00001) {
+				const_cast<uint32_t *>(batch)[at - 1] |= 0x100;
+				starts++;
+			}
 		}
 		const bool run = !hevcDump && hevcRun && surfaces && surfaces == planar8 && words > 6 && !batch[6];
 		if (run) const_cast<uint32_t *>(batch)[6] = 0x00404e47;
 		if (logs++ < 4)
-			syslog(LOG_NOTICE, "ngva: HEVC batch %u dwords, %u/%u 8-bit surfaces: %s", words, planar8, surfaces, run ? "run" : "dropped");
+			syslog(LOG_NOTICE, "ngva: HEVC batch %u dwords, %u/%u 8-bit surfaces, %u PPGTT batch starts: %s", words, planar8, surfaces, starts,
+			       run ? "run" : "dropped");
 		return driverSubmit(os, cmd, a2, a3, a4, a5);
 	}
 	if (!record) return driverSubmit(os, cmd, a2, a3, a4, a5);
@@ -520,7 +528,7 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 // write position, but never writes the command: the relocations then land on
 // the next command, HCP_PIPE_BUF_ADDR_STATE's decoded picture address. Write
 // the command there; the kernel fills DW1 and DW2 (surface ID and format come
-// with the relocations), DW3 (Cr offset) and DW4 (compression) stay 0.
+// with the relocations), DW4 (compression) stays 0.
 using HcpSurface = long (*)(void *, uint8_t *, uint8_t *);
 using AddCommand = int (*)(uint8_t *, const void *, uint32_t);
 HcpSurface driverHcpSurface;
@@ -530,7 +538,7 @@ long hcpSurface(void *self, uint8_t *buffer, uint8_t *params) {
 	// the driver's own values; that mode is not used with AppleGVA.
 	auto *os = at<uint8_t *>(static_cast<uint8_t *>(self), 8);
 	if (result || !buffer || !os || !(os[0x70] & 1)) return result;
-	const uint32_t command[5] = {0x73810003, 0, 0, 0, 0};
+	const uint32_t command[5] = {0x73810003, 0, 0, 0xffff, 0}; // DW3: default alpha, as media-driver
 	const int added = reinterpret_cast<AddCommand>(driverBase + 0x41300)(buffer, command, sizeof(command));
 	static int logs;
 	if (logs++ < 2) syslog(LOG_NOTICE, "ngva: HEVC surface state %u written at dword %u (%d)", params ? params[0x12] & 0xf : 0,

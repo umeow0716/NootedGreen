@@ -137,13 +137,15 @@ int main(int argc, char **argv)
       for (size_t i = 0; i < n; i++) printf("%02x", ps[i]);
       printf("\n");
     }
-    if (getenv("VTDEC_DUMP") && codec == kCMVideoCodecType_H264) {
+    if (getenv("VTDEC_DUMP")) {
       // Annex B copy of the stream for host-side inspection.
-      FILE *f = fopen("/tmp/vtdec.264", "wb");
+      const bool hevc = codec == kCMVideoCodecType_HEVC;
+      FILE *f = fopen(hevc ? "/tmp/vtdec.265" : "/tmp/vtdec.264", "wb");
       static const uint8_t sc[4] = {0, 0, 0, 1};
-      for (size_t p = 0; p < 2; p++) {
+      for (size_t p = 0; p < (hevc ? 3 : 2); p++) {
         const uint8_t *ps; size_t n;
-        if (!CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, p, &ps, &n, NULL, NULL)) { fwrite(sc, 1, 4, f); fwrite(ps, 1, n, f); }
+        if (!(hevc ? CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(fmt, p, &ps, &n, NULL, NULL)
+                   : CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, p, &ps, &n, NULL, NULL))) { fwrite(sc, 1, 4, f); fwrite(ps, 1, n, f); }
       }
       for (id s in samples) {
         CMBlockBufferRef bb = CMSampleBufferGetDataBuffer((__bridge CMSampleBufferRef)s);
