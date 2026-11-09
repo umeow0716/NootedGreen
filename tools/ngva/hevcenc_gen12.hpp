@@ -80,10 +80,11 @@ inline bool convert(const uint32_t *in, size_t words, const uint32_t *record, si
 	auto put = [&](uint32_t v) { if (w < cap) out[w] = v; w++; };
 
 	// Prologue as the ICL VP9 path: MI_FORCE_WAKEUP (HEVC and MFX wells, as the
-	// media driver's encode), the status MI_STORE_DATA_IMM (GGTT) moved to
-	// dword 2, dword 6 free for the kext's marker.
+	// media driver's encode), the status MI_STORE_DATA_IMM moved to dword 2,
+	// dword 6 free for the kext's marker. MI stores stay in the batch's PPGTT
+	// (the status buffer the driver reads the byte count from).
 	for (size_t i = 0; i < 10; i++) map[i] = ~0U;
-	const uint32_t prologue[10] = {0x0e800000, 0x03000300, 0x10400002, in[6], in[7], in[8], 0, 0, 0, 0};
+	const uint32_t prologue[10] = {0x0e800000, 0x03000300, 0x10000002, in[6], in[7], in[8], 0, 0, 0, 0};
 	for (uint32_t v : prologue) put(v);
 	map[6] = 3, map[7] = 4, map[8] = 5;
 
@@ -97,10 +98,6 @@ inline bool convert(const uint32_t *in, size_t words, const uint32_t *record, si
 		if (h >> 29 == 0) {
 			const uint32_t op = h >> 23 & 0x3f;
 			copy();
-			// Stores to the status buffer address the GGTT, as in the VP9 path;
-			// the copies read the frame statistics (PPGTT) into it.
-			if (op == 0x20 || op == 0x24) out[at] |= 1U << 22;
-			if (op == 0x2e) out[at] |= 1U << 21;
 			if (op == 0x0a) { end = true; break; }
 		} else switch (h) {
 		case 0x738a0001:

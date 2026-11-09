@@ -1128,6 +1128,13 @@ Traced traced[16];
 template <int I> long trace(long a, long b, long c, long d, long e, long f) {
 	long r = traced[I](a, b, c, d, e, f);
 	syslog(LOG_NOTICE, "ngva: fn%d(%lx, %lx, %lx) -> %ld", I, a, b, c, r);
+	if ((I == 10 || I == 11) && b && c) {
+		const auto *x = reinterpret_cast<const uint32_t *>(b), *y = reinterpret_cast<const uint32_t *>(c);
+		syslog(LOG_NOTICE, "ngva: fn%d b %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x", I, x[0], x[1], x[2], x[3], x[4], x[5],
+		       x[6], x[7], x[8], x[9], x[10], x[11]);
+		syslog(LOG_NOTICE, "ngva: fn%d c %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x", I, y[0], y[1], y[2], y[3], y[4], y[5],
+		       y[6], y[7], y[8], y[9], y[10], y[11]);
+	}
 	return r;
 }
 template <int... I> void traceAll(uint8_t *table, std::integer_sequence<int, I...>) {
