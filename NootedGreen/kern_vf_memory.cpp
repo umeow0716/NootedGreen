@@ -304,52 +304,6 @@ bool TglAccel::IGMemoryManagerInitSegments(void *that)
 	return true;
 }
 
-// V365: the PF provisions every VF GGTT slot as present with address 0 (VFID
-// only), and native init's clear is suppressed, so a GPU write through a slot
-// the guest never mapped would land on guest physical page 0. Point those
-// slots at a private page and report anything that lands there. (The host's
-// "[00:02.0] write fault addr 0x0" DMAR faults do not: nothing has so far.)
-static IOBufferMemoryDescriptor *gVfGgttTrap;
-static void vfWatchGgttTrap(void *, wait_result_t) {
-	auto *page = static_cast<volatile uint64_t *>(gVfGgttTrap->getBytesNoCopy());
-	uint32_t logs = 0;
-	for (;;) {
-		IOSleep(1000);
-		for (uint32_t i = 0; i < 512; i++) {
-			if (!page[i])
-				continue;
-			if (logs < 200) {
-				logs++;
-				SYSLOG("ngreen", "V365: GGTT trap +%03x: %016llx %016llx %016llx %016llx", i * 8, page[i],
-				       i + 1 < 512 ? page[i + 1] : 0, i + 2 < 512 ? page[i + 2] : 0, i + 3 < 512 ? page[i + 3] : 0);
-			}
-			page[i] = 0;
-		}
-	}
-}
-
-static void vfTrapUnmappedGgtt(void *table) {
-	auto *pte = vfDirectPteBase(table);
-	if (!pte || !gVfGGTTSize)
-		return;
-	gVfGgttTrap = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
-		kIODirectionInOut | kIOMemoryPhysicallyContiguous, 0x1000, 0xFFFFFFFFF000ULL);
-	if (!gVfGgttTrap)
-		return;
-	bzero(gVfGgttTrap->getBytesNoCopy(), 0x1000);
-	const uint64_t trap = NGVfGgttPte::encodeSystemMemory(gVfGgttTrap->getPhysicalAddress());
-	uint32_t count = 0;
-	for (uint64_t gpu = gVfGGTTBase; gpu < gVfGGTTBase + gVfGGTTSize; gpu += 0x1000)
-		if (!(pte[gpu >> 12] & ~0xFFFULL))
-			pte[gpu >> 12] = trap, count++;
-	OSSynchronizeIO();
-	thread_t thread = nullptr;
-	if (kernel_thread_start(vfWatchGgttTrap, nullptr, &thread) == KERN_SUCCESS)
-		thread_deallocate(thread);
-	SYSLOG("ngreen", "V365: GGTT trap page 0x%llx behind %u unmapped VF GGTT slots",
-	       static_cast<unsigned long long>(gVfGgttTrap->getPhysicalAddress()), count);
-}
-
 bool TglAccel::IGHardwareGlobalPageTableInitWithOptions(void *that,
                                                      void *accelerator,
                                                      const NGIGAddressRange &range,
@@ -392,10 +346,8 @@ bool TglAccel::IGHardwareGlobalPageTableInitWithOptions(void *that,
 	                                                                                      fullBar0,
 	                                                                                      dummyPage,
 	                                                                                      options);
-	if (result) {
+	if (result)
 		gVfGlobalPageTable = that;
-		vfTrapUnmappedGgtt(that);
-	}
 	SYSLOG("ngreen", "V219: direct global GGTT init ret=%d AppleMMIO=%p fullBAR0=%p len=0x%llx range=[0x%llx,+0x%llx]",
 	       result, mmioBase, fullBar0,
 	       static_cast<unsigned long long>(cb->getRMMIOLength()),
