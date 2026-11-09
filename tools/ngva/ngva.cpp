@@ -1140,24 +1140,7 @@ long encFactory(void *self, uint32_t *settings, void *a, void *b, void *c) {
 	}
 	return iclFactoryOriginal(self, settings, a, b, c);
 }
-// AppleGVAHEVCEncoder takes its CTB size from the driver (fn13 query,
-// entry {..., u32 parameter +0x20, u32 *out +0x28}, parameter 2). The ICL driver
-// answers 32; Gen12 VDEnc encodes 64x64 CTBs.
-Traced iclQuery;
-long encQuery(long self, long arg, long c, long d, long e, long f) {
-	const long result = iclQuery(self, arg, c, d, e, f);
-	auto *query = reinterpret_cast<uint8_t *>(arg);
-	if (!result && query && at<uint32_t>(query, 0) == 1) {
-		auto *entry = at<uint8_t *>(query, 8);
-		auto *out = entry ? at<uint32_t *>(entry, 0x28) : nullptr;
-		if (at<uint32_t>(entry, 0x20) == 2 && out && *out == 32) {
-			*out = 64;
-			syslog(LOG_NOTICE, "ngva: HEVC encoder: 64x64 CTB");
-		}
-	}
-	return result;
-}
-// It also asks Intel drivers for 32x32 CTBs: the requested size (session
+// AppleGVAHEVCEncoder asks Intel drivers for 32x32 CTBs: the requested size (session
 // storage +0x4778) defaults to 32 at each encodeFrame (plugin class slot
 // 0x33950) when 0, and every CTB count follows it. Ask for 64 first.
 struct Time { int64_t value; int32_t scale; uint32_t flags; int64_t epoch; };
@@ -1202,8 +1185,6 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 		if (!result && *accelerator) {
 			auto *table = static_cast<uint8_t *>(*accelerator);
 			traceAll(table, std::make_integer_sequence<int, 16>{});
-			iclQuery = at<Traced>(table, 0x70);
-			at<Traced>(table, 0x70) = encQuery;
 		}
 		return result;
 	}
