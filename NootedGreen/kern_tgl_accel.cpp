@@ -4045,6 +4045,21 @@ bool TglAccel::injectAcceleratorPersonality(const char *bundleId)
 		SYSLOG("ngreen", "V383: HEVC decode gate on");
 	}
 
+	// V387: HEVC encode (opt-in -nghevcenc). AppleGVA registers its HEVC
+	// encoder only when IOGVAHEVCEncode is present (the Gen11 kext sets "2");
+	// IOGVAHEVCEncodeCapabilities is already in the TGL personality. The
+	// kext's HCP/HuC gate drops the batches until ngva marks them.
+	if (checkKernelArgument("-nghevcenc")) {
+		auto *hevcEncode = OSString::withCString("2");
+		const bool hevcEncodeReady = hevcEncode && dict->setObject("IOGVAHEVCEncode", hevcEncode);
+		OSSafeReleaseNULL(hevcEncode);
+		if (!hevcEncodeReady) {
+			dict->release();
+			return false;
+		}
+		SYSLOG("ngreen", "V387: HEVC encode gate on");
+	}
+
 	// V385: VP9 decode (opt-in -ngvp9). ngva serves VP9 sessions with Tahoe's
 	// ICL VA driver. AppleGVAVPXDecoder.bundle registers its vp09 decoder only
 	// when IOGVAXDecode is present (as on ICL); AppleGVA itself checks
