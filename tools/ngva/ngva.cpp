@@ -1140,6 +1140,47 @@ long encFactory(void *self, uint32_t *settings, void *a, void *b, void *c) {
 	}
 	return iclFactoryOriginal(self, settings, a, b, c);
 }
+// AppleGVAHEVCEncoder takes its CTB size from the driver (fn13 query,
+// entry {..., u32 parameter +0x20, u32 *out +0x28}, parameter 2). The ICL driver
+// answers 32; Gen12 VDEnc encodes 64x64 CTBs.
+Traced iclQuery;
+long encQuery(long self, long arg, long c, long d, long e, long f) {
+	const long result = iclQuery(self, arg, c, d, e, f);
+	auto *query = reinterpret_cast<uint8_t *>(arg);
+	if (!result && query && at<uint32_t>(query, 0) == 1) {
+		auto *entry = at<uint8_t *>(query, 8);
+		auto *out = entry ? at<uint32_t *>(entry, 0x28) : nullptr;
+		if (at<uint32_t>(entry, 0x20) == 2 && out && *out == 32) {
+			*out = 64;
+			syslog(LOG_NOTICE, "ngva: HEVC encoder: 64x64 CTB");
+		}
+	}
+	return result;
+}
+// It also asks Intel drivers for 32x32 CTBs: the requested size (session
+// storage +0x4778) defaults to 32 at each encodeFrame (plugin class slot
+// 0x33950) when 0, and every CTB count follows it. Ask for 64 first.
+struct Time { int64_t value; int32_t scale; uint32_t flags; int64_t epoch; };
+using EncodeFrame2 = int (*)(void *, void *, void *, Time, Time, void *, uint32_t *);
+constexpr uintptr_t pluginEncodeFrameSlot = 0x33950, pluginEncodeFrame = 0x5c08, pluginRequestedCtb = 0x4778;
+EncodeFrame2 pluginEncode;
+int encEncodeFrame(void *encoder, void *token, void *image, Time pts, Time duration, void *properties, uint32_t *flags) {
+	static auto base = reinterpret_cast<void *(*)(void *)>(dlsym(RTLD_DEFAULT, "VTVideoEncoderGetCMBaseObject"));
+	static auto storage = reinterpret_cast<uint8_t *(*)(void *)>(dlsym(RTLD_DEFAULT, "CMBaseObjectGetDerivedStorage"));
+	if (auto *session = base && storage ? storage(base(encoder)) : nullptr; session && !at<uint32_t>(session, pluginRequestedCtb))
+		at<uint32_t>(session, pluginRequestedCtb) = 64;
+	return pluginEncode(encoder, token, image, pts, duration, properties, flags);
+}
+bool hookPlugin() {
+	for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+		const char *name = _dyld_get_image_name(i);
+		if (!name || !strstr(name, "/AppleGVAHEVCEncoder.bundle/")) continue;
+		const auto plugin = reinterpret_cast<uintptr_t>(_dyld_get_image_header(i));
+		return at<uintptr_t>(reinterpret_cast<uint8_t *>(plugin), pluginEncodeFrameSlot) == plugin + pluginEncodeFrame &&
+			replacePointer<EncodeFrame2>(pluginEncodeFrameSlot, encEncodeFrame, pluginEncode, plugin);
+	}
+	return false;
+}
 } // namespace
 
 extern "C" __attribute__((visibility("default")))
@@ -1154,11 +1195,16 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 			at<uintptr_t>(reinterpret_cast<uint8_t *>(iclBase), iclFactorySlot) == iclBase + iclFactory &&
 			(standIn = static_cast<uint8_t *>(calloc(1, standInSize))) && (statistics = static_cast<uint8_t *>(calloc(1, statisticsSize))) &&
 			replacePointer<DynamicCast>(iclDynamicCastSlot, encDynamicCast, iclDynamicCast, iclBase) &&
-			replacePointer<Factory>(iclFactorySlot, encFactory, iclFactoryOriginal, iclBase);
+			replacePointer<Factory>(iclFactorySlot, encFactory, iclFactoryOriginal, iclBase) && hookPlugin();
 		if (!icl) return 7;
 		const int result = iclCreate(accelerator, input, metadata);
 		syslog(LOG_NOTICE, "ngva: HEVC encoder on the ICL VA driver (%d)", result);
-		if (!result && *accelerator) traceAll(static_cast<uint8_t *>(*accelerator), std::make_integer_sequence<int, 16>{});
+		if (!result && *accelerator) {
+			auto *table = static_cast<uint8_t *>(*accelerator);
+			traceAll(table, std::make_integer_sequence<int, 16>{});
+			iclQuery = at<Traced>(table, 0x70);
+			at<Traced>(table, 0x70) = encQuery;
+		}
 		return result;
 	}
 	int result = driverCreate(accelerator, input, metadata);
