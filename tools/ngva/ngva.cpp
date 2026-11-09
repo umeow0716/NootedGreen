@@ -24,6 +24,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include "vdenc_gen12.hpp"
+#include "hevcenc_gen12.hpp"
 #include <cstdio>
 #include <map>
 #include <syslog.h>
@@ -797,6 +798,47 @@ void saveWords(const char *what, int n, const uint32_t *words, uint32_t count) {
 	}
 }
 
+// HEVC encode batch -> Gen12 (hevcenc_gen12.hpp), rewritten in the command
+// buffer (MOS_COMMAND_BUFFER: base +0x148, write pointer +0x150, offset
+// +0x158, remaining bytes +0x15c) with its relocation record. Runs (kext marker
+// in dword 6, data buffers submitted) only with /Users/Shared/ngva-hevcenc-run;
+// otherwise the batches are saved to the temporary directory.
+bool hevcEncodeRun() {
+	static const bool run = access("/Users/Shared/ngva-hevcenc-run", F_OK) == 0;
+	return run;
+}
+void hevcEncodeToGen12(void *cmd, const Submission &sub) {
+	static std::mutex lock;
+	static NgvaHevcEnc::Output out;
+	static int saved, logs;
+	std::lock_guard<std::mutex> guard(lock);
+	auto *c = static_cast<uint8_t *>(cmd);
+	const bool ok = NgvaHevcEnc::convert(sub.batch, sub.words, sub.record, sub.length, out);
+	const long grow = ok ? static_cast<long>(out.words) - sub.words : 0;
+	const bool fits = ok && at<uint32_t *>(c, 0x148) == sub.batch && at<int32_t>(c, 0x15c) >= grow * 4 &&
+		at<int32_t>(c, 0x158) == static_cast<int32_t>(sub.words * 4);
+	if (logs++ < 4)
+		syslog(LOG_NOTICE, "ngva: HEVC encode batch %u -> %zu dwords (%s), offset %d remaining %d: %s", sub.words, out.words, out.reason,
+		       at<int32_t>(c, 0x158), at<int32_t>(c, 0x15c), fits ? (hevcEncodeRun() ? "run" : "converted, dropped") : "dropped");
+	if (saved < 40) {
+		saved++;
+		saveWords("encbatch", saved, sub.batch, sub.words);
+		saveWords("encrecord", saved, sub.record, sub.length);
+		if (fits) {
+			saveWords("encconv", saved, out.batch, static_cast<uint32_t>(out.words));
+			saveWords("encconvrec", saved, out.relocs, static_cast<uint32_t>(out.relocWords));
+		}
+	}
+	if (!fits) return;
+	auto *batch = const_cast<uint32_t *>(sub.batch);
+	memcpy(batch, out.batch, out.words * 4);
+	memcpy(sub.record, out.relocs, out.relocWords * 4);
+	at<uint32_t *>(c, 0x150) = batch + out.words;
+	at<int32_t>(c, 0x158) += static_cast<int32_t>(grow * 4);
+	at<int32_t>(c, 0x15c) -= static_cast<int32_t>(grow * 4);
+	if (hevcEncodeRun()) batch[6] = 0x00404e47;
+}
+
 long iclSubmit(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 	Submission sub {};
 	if (hevcEncoderClient()) {
@@ -806,12 +848,9 @@ long iclSubmit(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 			at<Lock>(o, 0x220) = encLock;
 			at<Unlock>(o, 0x228) = encUnlock;
 		}
-		static int saved;
-		if (findSubmission(os, cmd, sub) && sub.words && saved < 60) {
-			saved++;
-			saveWords("encbatch", saved, sub.batch, sub.words);
-			if (sub.record) saveWords("encrecord", saved, sub.record, sub.length);
-		}
+		if (findSubmission(os, cmd, sub) && sub.words && sub.record &&
+		    std::find(sub.batch, sub.batchEnd, 0x73800005U) != sub.batchEnd)
+			hevcEncodeToGen12(cmd, sub);
 		return iclSubmitOriginal(os, cmd, a2, a3, a4, a5);
 	}
 	static const bool dump = access("/Users/Shared/ngva-vp9-dump", F_OK) == 0;
@@ -1107,9 +1146,9 @@ bool hevcEncoderClient() {
 	return client;
 }
 
-// Bring-up: no ICL command of the HEVC encoder reaches the GPU yet (Gen11
-// commands and kernels). iclSubmit saves each batch; its data buffers go to
-// the kernel empty, which only rotates them.
+// Bring-up: without /Users/Shared/ngva-hevcenc-run no command of the HEVC
+// encoder reaches the GPU; its data buffers go to the kernel empty, which only
+// rotates them.
 using SetUsedBytes = int (*)(void *, uint32_t, uint32_t);
 using SubmitBuffers = int (*)(void *, uint32_t, void *, void *);
 constexpr uintptr_t iclSetUsedSlot = 0x78a0b0, iclSubmitSlot = 0x78a0b8;
@@ -1121,6 +1160,7 @@ int encSetUsed(void *context, uint32_t kind, uint32_t bytes) {
 	return iclSetUsed(context, kind, bytes);
 }
 int encSubmit(void *context, uint32_t a, void *b, void *c) {
+	if (hevcEncodeRun()) return iclSubmitBuffers(context, a, b, c);
 	for (uint32_t kind = 0; kind < 8; kind++)
 		if (encUsed[kind]) iclSetUsed(context, kind, 0);
 	memset(encUsed, 0, sizeof(encUsed));
