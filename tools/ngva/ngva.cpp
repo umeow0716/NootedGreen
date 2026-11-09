@@ -632,27 +632,37 @@ void replaceKernels(const char *bundle) {
 	}
 }
 
-// The description, SPS and encode job layouts converted here are AppleGVA's.
-// Minor macOS updates rebuild AppleGVA from the same source version, so check
+// The description, SPS and encode job layouts converted here are AppleGVA's
+// (AppleGVAHEVCEncoder in VTEncoderXPCService talks to the driver the same
+// way). Minor macOS updates rebuild them from the same source version, so check
 // that rather than the image itself; another version makes VideoToolbox fall
 // back to software instead of handing the driver mismatched structures.
-constexpr uint64_t testedAppleGva = 113ULL << 40 | 56ULL << 30; // 113.56.0.0.0
+constexpr struct {
+	const char *suffix;
+	uint64_t version;
+} testedClients[] = {
+	{"/AppleGVA.framework/Versions/A/AppleGVA", 113ULL << 40 | 56ULL << 30}, // 113.56
+	{"/AppleGVAHEVCEncoder.bundle/Contents/MacOS/AppleGVAHEVCEncoder", 93ULL << 40}, // 93.0
+};
 
 bool appleGvaTested() {
 	for (uint32_t i = 0; i < _dyld_image_count(); i++) {
 		const char *name = _dyld_get_image_name(i);
-		const char *suffix = "/AppleGVA.framework/Versions/A/AppleGVA";
-		if (!name || strlen(name) < strlen(suffix) || strcmp(name + strlen(name) - strlen(suffix), suffix)) continue;
-		auto *header = reinterpret_cast<const mach_header_64 *>(_dyld_get_image_header(i));
-		auto *command = reinterpret_cast<const load_command *>(header + 1);
-		for (uint32_t c = 0; c < header->ncmds; c++) {
-			if (command->cmd == LC_SOURCE_VERSION) {
-				uint64_t version = reinterpret_cast<const source_version_command *>(command)->version;
-				if (version == testedAppleGva) return true;
-				syslog(LOG_ERR, "ngva: AppleGVA %llu.%llu not tested, hardware video off", version >> 40, version >> 30 & 0x3ff);
-				return false;
+		for (const auto &client : testedClients) {
+			const size_t length = strlen(client.suffix);
+			if (!name || strlen(name) < length || strcmp(name + strlen(name) - length, client.suffix)) continue;
+			auto *header = reinterpret_cast<const mach_header_64 *>(_dyld_get_image_header(i));
+			auto *command = reinterpret_cast<const load_command *>(header + 1);
+			for (uint32_t c = 0; c < header->ncmds; c++) {
+				if (command->cmd == LC_SOURCE_VERSION) {
+					uint64_t version = reinterpret_cast<const source_version_command *>(command)->version;
+					if (version == client.version) return true;
+					syslog(LOG_ERR, "ngva: %s %llu.%llu not tested, hardware video off", strrchr(name, '/') + 1, version >> 40,
+					       version >> 30 & 0x3ff);
+					return false;
+				}
+				command = reinterpret_cast<const load_command *>(reinterpret_cast<const uint8_t *>(command) + command->cmdsize);
 			}
-			command = reinterpret_cast<const load_command *>(reinterpret_cast<const uint8_t *>(command) + command->cmdsize);
 		}
 	}
 	syslog(LOG_ERR, "ngva: AppleGVA version not found, hardware video off");
@@ -753,8 +763,57 @@ bool iclToGen12(const Submission &sub) {
 	return pipeMode && control && surface && pba && bitstream && width && width <= 4096;
 }
 
+bool hevcEncoderClient();
+// Apple's ICL wrapper reads its frame statistics from the ENC_PAK encoder
+// after each Execute: dynamic_cast to CodechalEncHevcStateG11 (typeinfo
+// 0x78fe18), then a resource at +0x17a38 (index byte +0x18220, 0x150 each)
+// locked through the os interface (+0x220, unlocked +0x228). The VDEnc encoder
+// gets a zeroed stand-in whose resource locks to zeroed memory.
+constexpr uintptr_t iclDynamicCastSlot = 0x78a478, iclEncHevcType = 0x78fe18, standInSize = 0x18300, standInResource = 0x17a38,
+	statisticsSize = 4 << 20;
+uint8_t *standIn, *statistics;
+using DynamicCast = void *(*)(const void *, const void *, const void *, long);
+DynamicCast iclDynamicCast;
+void *encDynamicCast(const void *object, const void *from, const void *to, long hint) {
+	void *result = iclDynamicCast(object, from, to, hint);
+	return !result && object && reinterpret_cast<uintptr_t>(to) == iclBase + iclEncHevcType ? standIn : result;
+}
+using Lock = void *(*)(void *, void *, void *);
+using Unlock = int (*)(void *, void *);
+Lock iclLock;
+Unlock iclUnlock;
+void *encLock(void *os, void *resource, void *flags) {
+	return resource == standIn + standInResource ? statistics : iclLock(os, resource, flags);
+}
+int encUnlock(void *os, void *resource) { return resource == standIn + standInResource ? 0 : iclUnlock(os, resource); }
+
+void saveWords(const char *what, int n, const uint32_t *words, uint32_t count) {
+	char path[640] {};
+	confstr(_CS_DARWIN_USER_TEMP_DIR, path, sizeof(path));
+	snprintf(path + strlen(path), sizeof(path) - strlen(path), "ngva-%s-%02d.bin", what, n);
+	if (FILE *f = fopen(path, "wb")) {
+		fwrite(words, 4, count, f);
+		fclose(f);
+	}
+}
+
 long iclSubmit(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 	Submission sub {};
+	if (hevcEncoderClient()) {
+		auto *o = static_cast<uint8_t *>(os);
+		if (at<Lock>(o, 0x220) != encLock) {
+			if (!iclLock) iclLock = at<Lock>(o, 0x220), iclUnlock = at<Unlock>(o, 0x228);
+			at<Lock>(o, 0x220) = encLock;
+			at<Unlock>(o, 0x228) = encUnlock;
+		}
+		static int saved;
+		if (findSubmission(os, cmd, sub) && sub.words && saved < 60) {
+			saved++;
+			saveWords("encbatch", saved, sub.batch, sub.words);
+			if (sub.record) saveWords("encrecord", saved, sub.record, sub.length);
+		}
+		return iclSubmitOriginal(os, cmd, a2, a3, a4, a5);
+	}
 	static const bool dump = access("/Users/Shared/ngva-vp9-dump", F_OK) == 0;
 	static int dumps, logs;
 	if (findSubmission(os, cmd, sub) && sub.words) {
@@ -1024,24 +1083,84 @@ bool load() {
 	});
 	return driverCreate && driverDestroy;
 }
-#ifdef NGVA_TRACE
-using Any = long (*)(long, long, long, long, long, long);
-Any traced[16];
+// Bring-up trace of an accelerator table's 16 functions.
+using Traced = long (*)(long, long, long, long, long, long);
+Traced traced[16];
 template <int I> long trace(long a, long b, long c, long d, long e, long f) {
 	long r = traced[I](a, b, c, d, e, f);
-	syslog(LOG_NOTICE, "ngva: fn%d(%lx, %lx) -> %ld", I, a, b, r);
+	syslog(LOG_NOTICE, "ngva: fn%d(%lx, %lx, %lx) -> %ld", I, a, b, c, r);
 	return r;
 }
 template <int... I> void traceAll(uint8_t *table, std::integer_sequence<int, I...>) {
-	((traced[I] = *reinterpret_cast<Any *>(table + 8 + I * 8),
-	  *reinterpret_cast<Any *>(table + 8 + I * 8) = trace<I>), ...);
+	((traced[I] = *reinterpret_cast<Traced *>(table + 8 + I * 8),
+	  *reinterpret_cast<Traced *>(table + 8 + I * 8) = trace<I>), ...);
 }
-#endif
+
+// HEVC encode: the TGL driver has no HEVC encoder, AppleGVAHEVCEncoder asks
+// for the ICL one (Gen11), so its process gets the ICL driver itself.
+bool hevcEncoderClient() {
+	static const bool client = [] {
+		for (uint32_t i = 0; i < _dyld_image_count(); i++)
+			if (const char *name = _dyld_get_image_name(i); name && strstr(name, "/AppleGVAHEVCEncoder.bundle/")) return true;
+		return false;
+	}();
+	return client;
+}
+
+// Bring-up: no ICL command of the HEVC encoder reaches the GPU yet (Gen11
+// commands and kernels). iclSubmit saves each batch; its data buffers go to
+// the kernel empty, which only rotates them.
+using SetUsedBytes = int (*)(void *, uint32_t, uint32_t);
+using SubmitBuffers = int (*)(void *, uint32_t, void *, void *);
+constexpr uintptr_t iclSetUsedSlot = 0x78a0b0, iclSubmitSlot = 0x78a0b8;
+SetUsedBytes iclSetUsed;
+SubmitBuffers iclSubmitBuffers;
+uint32_t encUsed[8];
+int encSetUsed(void *context, uint32_t kind, uint32_t bytes) {
+	if (kind < 8) encUsed[kind] = bytes;
+	return iclSetUsed(context, kind, bytes);
+}
+int encSubmit(void *context, uint32_t a, void *b, void *c) {
+	for (uint32_t kind = 0; kind < 8; kind++)
+		if (encUsed[kind]) iclSetUsed(context, kind, 0);
+	memset(encUsed, 0, sizeof(encUsed));
+	return iclSubmitBuffers(context, a, b, c);
+}
+// Apple's ICL wrapper asks the codec factory (vtable slot 0x790368, CodecHal
+// settings {u32 codecFunction, u32 mode}) for ENC_PAK (8): the Gen11
+// EU-kernel encoder. VDEnc (ENC_VDENC_PAK, 0x20) is fixed-function and the one
+// a Gen12 port can carry.
+constexpr uintptr_t iclFactorySlot = 0x790368, iclFactory = 0x1583c0;
+using Factory = long (*)(void *, uint32_t *, void *, void *, void *);
+Factory iclFactoryOriginal;
+long encFactory(void *self, uint32_t *settings, void *a, void *b, void *c) {
+	if (settings && settings[1] == 0x16 && settings[0] == 8) {
+		settings[0] = 0x20;
+		syslog(LOG_NOTICE, "ngva: HEVC encoder: VDEnc");
+	}
+	return iclFactoryOriginal(self, settings, a, b, c);
+}
 } // namespace
 
 extern "C" __attribute__((visibility("default")))
 int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metadata) {
 	if (!load()) return 7;
+	if (hevcEncoderClient()) {
+		static const bool icl = loadIcl() &&
+			at<void *>(reinterpret_cast<uint8_t *>(iclBase), iclSubmitSlot) == dlsym(RTLD_DEFAULT, "IOAccelVideoContextSubmitDataBuffers") &&
+			at<void *>(reinterpret_cast<uint8_t *>(iclBase), iclSetUsedSlot) == dlsym(RTLD_DEFAULT, "IOAccelVideoContextSetDataBufferClassUsedBytes") &&
+			replacePointer<SetUsedBytes>(iclSetUsedSlot, encSetUsed, iclSetUsed, iclBase) &&
+			replacePointer<SubmitBuffers>(iclSubmitSlot, encSubmit, iclSubmitBuffers, iclBase) &&
+			at<uintptr_t>(reinterpret_cast<uint8_t *>(iclBase), iclFactorySlot) == iclBase + iclFactory &&
+			(standIn = static_cast<uint8_t *>(calloc(1, standInSize))) && (statistics = static_cast<uint8_t *>(calloc(1, statisticsSize))) &&
+			replacePointer<DynamicCast>(iclDynamicCastSlot, encDynamicCast, iclDynamicCast, iclBase) &&
+			replacePointer<Factory>(iclFactorySlot, encFactory, iclFactoryOriginal, iclBase);
+		if (!icl) return 7;
+		const int result = iclCreate(accelerator, input, metadata);
+		syslog(LOG_NOTICE, "ngva: HEVC encoder on the ICL VA driver (%d)", result);
+		if (!result && *accelerator) traceAll(static_cast<uint8_t *>(*accelerator), std::make_integer_sequence<int, 16>{});
+		return result;
+	}
 	int result = driverCreate(accelerator, input, metadata);
 	if (result || !*accelerator) return result;
 	auto *table = static_cast<uint8_t *>(*accelerator);
@@ -1087,9 +1206,6 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 			*entry = decode;
 		}
 	}
-#ifdef NGVA_TRACE
-	traceAll(table, std::make_integer_sequence<int, 16>{});
-#endif
 	if (twin) {
 		static std::once_flag once;
 		std::call_once(once, [&] {
@@ -1112,6 +1228,7 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 extern "C" __attribute__((visibility("default")))
 int AVD_DestroyAVDAccelerator(void *accelerator) {
 	if (!load()) return 5;
+	if (hevcEncoderClient()) return iclDestroy(accelerator);
 	void *description = nullptr, *twin = nullptr;
 	{
 		std::lock_guard<std::mutex> guard(lock);
