@@ -4048,11 +4048,17 @@ bool TglAccel::injectAcceleratorPersonality(const char *bundleId)
 	// V387: HEVC encode (opt-in -nghevcenc). AppleGVA registers its HEVC
 	// encoder only when IOGVAHEVCEncode is present (the Gen11 kext sets "2");
 	// IOGVAHEVCEncodeCapabilities is already in the TGL personality. The
-	// kext's HCP/HuC gate drops the batches until ngva marks them.
+	// encoder picks its VA driver by IOGVACodec (Gen7..Gen95, Gen11; the TGL
+	// personality's "Gen10" matches none) and looks in /Library/GPUBundles
+	// first, where AppleIntelICLGraphicsVADriver.bundle is the media adapter.
+	// The kext's HCP/HuC gate drops the batches until ngva marks them.
 	if (checkKernelArgument("-nghevcenc")) {
 		auto *hevcEncode = OSString::withCString("2");
-		const bool hevcEncodeReady = hevcEncode && dict->setObject("IOGVAHEVCEncode", hevcEncode);
+		auto *codec = OSString::withCString("Gen11");
+		const bool hevcEncodeReady = hevcEncode && codec && dict->setObject("IOGVAHEVCEncode", hevcEncode) &&
+			dict->setObject("IOGVACodec", codec);
 		OSSafeReleaseNULL(hevcEncode);
+		OSSafeReleaseNULL(codec);
 		if (!hevcEncodeReady) {
 			dict->release();
 			return false;
