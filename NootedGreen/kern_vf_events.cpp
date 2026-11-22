@@ -771,7 +771,7 @@ static uint32_t vfCaptureTimeoutFrames(mach_vm_address_t getter,
 				}
 			}
 		}
-		if (entry.submissionCoverage.gpuComplete(frame.observedStamp, frame.reportedHead, softwareBefore))
+		if (entry.submissionCoverage.gpuComplete(frame.observedStamp, frame.ringHead, softwareBefore))
 			frame.flags |= 16;
 	}
 	OSSynchronizeIO();

@@ -378,6 +378,9 @@ private:
 	mach_vm_address_t oVfSurfaceEventVectorGrow {};
 	mach_vm_address_t vfInterruptBridgeEnable {};
 	mach_vm_address_t vfInterruptBridgeDisable {};
+	mach_vm_address_t vfGarbageCollectorEnable {};
+	mach_vm_address_t vfGarbageCollectorDisable {};
+	bool vfGarbageCollectorEnabled {};
 	static bool stopGraphicsEngine(void *that);
 	static bool startGraphicsEngine(void *that);
 	mach_vm_address_t vfSchedulerInitFirmware {};

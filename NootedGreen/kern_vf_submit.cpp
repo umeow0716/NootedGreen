@@ -638,8 +638,11 @@ static bool vfContextKnownIdle(const VfGucContext &entry,
 	if (!contextImage || !stamps)
 		return false;
 	OSSynchronizeIO();
+	// V398: saved RING_HEAD (LRC state +0x14). PPHWSP +0x10 is what
+	// MI_REPORT_HEAD stores: the address of that command, tail-4 or tail-8,
+	// so it never equals the published tail and no context was ever idle.
 	const uint32_t observedHead = *reinterpret_cast<volatile uint32_t *>(
-		contextImage + 0x10);
+		contextImage + 0x1014);
 	const uint32_t observedStamp = *reinterpret_cast<volatile uint32_t *>(
 		stamps + static_cast<size_t>(entry.stampIndex) * 64U);
 	OSSynchronizeIO();

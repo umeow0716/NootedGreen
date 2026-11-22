@@ -915,6 +915,16 @@ bool TglAccel::processKext(KernelPatcher &patcher, size_t index, mach_vm_address
 			           "ngreen", "Cannot resolve VF IRQ lifecycle");
 			this->vfInterruptBridgeEnable = irqEnable;
 			this->vfInterruptBridgeDisable = irqDisable;
+			// V398: the replaced startGraphicsEngine must keep the native
+			// IGGarbageCollector lifecycle. IGGCObject::release only queues the
+			// last reference; collection (and so IGHardwareContext::free, GuC
+			// detach and IGAccelTask teardown) runs only while it is enabled.
+			KernelPatcher::SolveRequest gcLifecycle[] = {
+				{"__ZN18IGGarbageCollector6enableEv", this->vfGarbageCollectorEnable},
+				{"__ZN18IGGarbageCollector7disableEv", this->vfGarbageCollectorDisable},
+			};
+			PANIC_COND(!patcher.solveMultiple(index, gcLifecycle, address, size),
+			           "ngreen", "Cannot resolve VF garbage collector lifecycle");
 			if (gVfUsesMemoryIrq) {
 				mach_vm_address_t irqEnableRegs = 0, irqDisableRegs = 0;
 				KernelPatcher::SolveRequest irqBounds[] = {
@@ -3659,6 +3669,16 @@ bool TglAccel::startGraphicsEngine(void *that)
 	initEvent(eventMachine, reinterpret_cast<uint8_t *>(that) + 0x11A8);
 	initEvent(eventMachine, reinterpret_cast<uint8_t *>(that) + 0x11E8);
 	SYSLOG("ngreen", "V245: enabled VF bridge/IOAccelerator and initialized completion events");
+
+	// Native order: IGGarbageCollector::enable() follows the KMD context setup
+	// in the same routine. Without it every released IGHardwareContext stays
+	// queued, pinning its task, buffers and GuC registration forever.
+	auto *collector = getMember<void *>(that, 0x1258);
+	if (collector && callback->vfGarbageCollectorEnable && !callback->vfGarbageCollectorEnabled) {
+		reinterpret_cast<LifecycleMethod>(callback->vfGarbageCollectorEnable)(collector);
+		callback->vfGarbageCollectorEnabled = true;
+		SYSLOG("ngreen", "V398: enabled VF garbage collector");
+	}
 	return true;
 }
 
@@ -3688,6 +3708,11 @@ bool TglAccel::stopGraphicsEngine(void *that)
 		return false;
 	}
 	using LifecycleMethod = void (*)(void *);
+	auto *collector = getMember<void *>(that, 0x1258);
+	if (collector && callback->vfGarbageCollectorDisable && callback->vfGarbageCollectorEnabled) {
+		reinterpret_cast<LifecycleMethod>(callback->vfGarbageCollectorDisable)(collector);
+		callback->vfGarbageCollectorEnabled = false;
+	}
 	// Preserve the native order after any final VF DMA quiescence.  On
 	// TGL/ADL/RPL this also disables the VF-owned virtual-MMIO interrupt block;
 	// on MTL/ARL the routed bridge masks the memory-IRQ page.

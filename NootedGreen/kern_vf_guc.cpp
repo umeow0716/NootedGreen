@@ -1450,8 +1450,7 @@ static int vfStampTraceSysctl(struct sysctl_oid *oidp, void *, int, struct sysct
 		return error;
 	if (window == -1) {
 		// V397: context table census, to see whether contexts accumulate.
-		uint32_t states[16] {}, backed = 0, referenced = 0, redirected = 0, duplicates = 0, tasks = 0, refs[4] {}, hcs = 0;
-		static void *hcList[1024];
+		uint32_t states[16] {}, backed = 0, referenced = 0, redirected = 0, duplicates = 0, tasks = 0, refs[4] {};
 		static void *seenTasks[512];
 		const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 		for (uint32_t i = 0; i < gVfContextCapacity; i++) {
@@ -1461,8 +1460,6 @@ static int vfStampTraceSysctl(struct sysctl_oid *oidp, void *, int, struct sysct
 			referenced += e.refCount != 0;
 			if (e.contextBacking)
 				refs[e.refCount >= 3 ? 3 : e.refCount]++;
-			if (e.contextBacking && e.hardwareContext && hcs < arrsize(hcList))
-				hcList[hcs++] = e.hardwareContext;
 			redirected += e.stampRedirected;
 			if (e.contextBacking && e.task) {
 				bool known = false;
@@ -1476,19 +1473,39 @@ static int vfStampTraceSysctl(struct sysctl_oid *oidp, void *, int, struct sysct
 			for (uint32_t k = 0; k < i; k++)
 				duplicates += gVfStampRedirects[k] == gVfStampRedirects[i];
 		const uint32_t listed = gVfStampRedirectCount;
+		// V398: why contexts fail the KMD idle check used by the GC.
+		uint32_t why[8] {}, shown = 0, sample[6][10] {};
+		for (uint32_t i = 0; i < gVfContextCapacity && gVfStampGetter; i++) {
+			const auto &e = gVfContexts[i];
+			if (!e.contextBacking || !e.stampBacking)
+				continue;
+			const auto &cv = e.submissionCoverage;
+			auto *image = gVfStampGetter(e.contextBacking);
+			auto *stamps = gVfStampGetter(e.stampBacking);
+			const uint32_t h10 = image ? *reinterpret_cast<volatile uint32_t *>(image + 0x10) : 0;
+			const uint32_t h1014 = image ? *reinterpret_cast<volatile uint32_t *>(image + 0x1014) : 0;
+			const uint32_t shared = stamps ? *reinterpret_cast<volatile uint32_t *>(stamps + e.stampIndex * 64U) : 0;
+			uint32_t k = !cv.submitted ? 0 : cv.owner ? 1 : !cv.covered ? 2 :
+				static_cast<int32_t>(cv.coveredStamp - shared) > 0 ? 3 :
+				(h1014 & 0x1FFFFCU) != cv.coveredHead ? 4 : 5;
+			why[k]++;
+			if (k >= 2 && k <= 4 && shown < 6)
+			{
+				const uint32_t v[10] = {i, static_cast<uint32_t>(e.state), k, cv.coveredStamp, shared, cv.coveredHead, h10, h1014,
+				                        *reinterpret_cast<volatile uint32_t *>(image + 0x101C), cv.coveredTail};
+				memcpy(sample[shown++], v, sizeof(v));
+			}
+		}
 		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+		for (uint32_t i = 0; i < shown; i++)
+			SYSLOG("ngreen", "V398: id=%u state=%u why=%u cstamp=%u shared=%u chead=0x%x h10=0x%x h1014=0x%x t101c=0x%x ctail=0x%x",
+			       sample[i][0], sample[i][1], sample[i][2], sample[i][3], sample[i][4], sample[i][5], sample[i][6],
+			       sample[i][7], sample[i][8], sample[i][9]);
+		SYSLOG("ngreen", "V398: idle reasons unsubmitted=%u owner=%u uncovered=%u stamp=%u head=%u idle=%u", why[0], why[1],
+		       why[2], why[3], why[4], why[5]);
 		SYSLOG("ngreen", "V397: refcount 0:%u 1:%u 2:%u 3+:%u, attach re-refs %d, detach calls %d, idle all %d/%d kmd %d/%d", refs[0],
 		       refs[1], refs[2], refs[3], gVfAttachRefs, gVfDetachCalls, gVfIdleTrue[0], gVfIdleCalls[0], gVfIdleTrue[1],
 		       gVfIdleCalls[1]);
-		// Retain counts of the native hardware contexts still recorded (none of
-		// them was detached, so the objects are alive).
-		uint32_t rc[8] {};
-		for (uint32_t i = 0; i < hcs; i++) {
-			const int n = reinterpret_cast<OSObject *>(hcList[i])->getRetainCount();
-			rc[n < 0 ? 0 : n > 7 ? 7 : n]++;
-		}
-		SYSLOG("ngreen", "V397: native context retain counts 1:%u 2:%u 3:%u 4:%u 5:%u 6:%u 7+:%u (of %u)", rc[1], rc[2], rc[3], rc[4],
-		       rc[5], rc[6], rc[7], hcs);
 		SYSLOG("ngreen", "V397: contexts backed=%u referenced=%u tasks=%u redirected=%u list=%u dup=%u registered=%d deregistered=%d "
 		       "states empty=%u tomb=%u regng=%u reg=%u penen=%u en=%u pendis=%u dis=%u pendereg=%u",
 		       backed, referenced, tasks, redirected, listed, duplicates, gVfRegisteredTotal, gVfDeregisteredTotal,
