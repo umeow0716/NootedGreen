@@ -354,6 +354,7 @@ bool TglAccel::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	// GuC reset notification for the faulting context follows and is handled.
 	if (action == 0x6000U && length >= 2) {
 		SYSLOG("ngreen", "V331: GuC memory CAT error for context id=%u", message[2]);
+		vfDumpPpgttRanges("GuC memory CAT error", 2000);
 		return true;
 	}
 	if (!event.valid()) {

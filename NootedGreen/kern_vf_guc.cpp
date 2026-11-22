@@ -1432,8 +1432,6 @@ void vfMergeRedirectedStamps(bool dump) {
 			__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(own) : "memory");
 		c[live].shared = stamps && own ? reinterpret_cast<volatile uint32_t *>(stamps + entry.stampIndex * 64U) : nullptr;
 		c[live].done = own ? *own : 0;
-		c[live].busy = entry.submissionCoverage.covered &&
-			static_cast<int32_t>(entry.submissionCoverage.coveredStamp - c[live].done) > 0;
 		// V346: everything below this context's oldest pending stamp is done,
 		// whichever context it belonged to.
 		auto &pending = gVfContexts[id];
@@ -1442,6 +1440,14 @@ void vfMergeRedirectedStamps(bool dump) {
 			pending.pendingStampHead = (pending.pendingStampHead + 1) % kVfPendingStamps, pending.pendingStampCount--;
 		if (pending.pendingStampLost && static_cast<int32_t>(pending.pendingStampLostUpTo - c[live].done) <= 0)
 			pending.pendingStampLost = false;
+		// V390: a stamp is pending from the moment its store is redirected, which
+		// is before the submission is published to coverage. Coverage alone left
+		// that window unbounded: another context's newer stamp advanced the
+		// shared slot past this context's unexecuted work, the driver freed its
+		// resources and the engine faulted on them (CAT).
+		c[live].busy = pending.pendingStampCount || pending.pendingStampLost ||
+			(entry.submissionCoverage.covered &&
+			 static_cast<int32_t>(entry.submissionCoverage.coveredStamp - c[live].done) > 0);
 		c[live].limit = pending.pendingStampCount ? pending.pendingStamps[pending.pendingStampHead] - 1 : c[live].done;
 		c[live].covered = entry.submissionCoverage.coveredStamp;
 		c[live].head = image ? *reinterpret_cast<volatile uint32_t *>(image + 0x1014) : 0;
@@ -1654,6 +1660,8 @@ void vfSkipResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 			if (static_cast<int32_t>(newest - stamp) > 0)
 				stamp = newest;
 		}
+		if (entry.pendingStampLost && static_cast<int32_t>(entry.pendingStampLostUpTo - stamp) > 0)
+			stamp = entry.pendingStampLostUpTo;
 		if (static_cast<int32_t>(stamp - *target) > 0)
 			*target = stamp;
 		__asm__ volatile("clflush (%0)\n\tclflush (%1)\n\tmfence" :: "r"(ringHead), "r"(target) : "memory");

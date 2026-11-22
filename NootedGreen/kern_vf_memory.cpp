@@ -809,10 +809,10 @@ void vfRecordPpgttRange(uint32_t kind, const void *table, uint64_t start, uint64
 	gVfPpgttRanges[i] = {mach_absolute_time(), table, start, length, kind};
 }
 
-void vfDumpPpgttRanges(const char *reason)
+void vfDumpPpgttRanges(const char *reason, uint64_t windowMs)
 {
-	static volatile UInt32 dumped;
-	if (!OSCompareAndSwap(0, 1, &dumped))
+	static volatile SInt32 dumps;
+	if (OSIncrementAtomic(&dumps) >= 4)
 		return;
 	const uint64_t now = mach_absolute_time();
 	const uint32_t next = static_cast<uint32_t>(gVfPpgttRangeNext);
@@ -823,6 +823,8 @@ void vfDumpPpgttRanges(const char *reason)
 			continue;
 		uint64_t ns;
 		absolutetime_to_nanoseconds(now - r.time, &ns);
+		if (windowMs && ns / 1000000 > windowMs)
+			continue;
 		SYSLOG("ngreen", "V382: -%llu ms kind=%u table=%p %llx+%llx", ns / 1000000, r.kind, r.table, r.start, r.length);
 	}
 }
