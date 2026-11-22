@@ -14,6 +14,9 @@ Working on macOS Tahoe 26.7 (`25G229`) and 26.7.2 (`25G332`):
 
 - Metal (WindowServer compositing, Metal apps)
 - H.264 hardware decode and encode through VideoToolbox
+- HEVC hardware decode (Main, 8-bit) and encode (Main, I/P frames; no B
+  frames) through VideoToolbox
+- VP9 hardware decode (profiles 0 and 2, up to 4096 wide)
 - Looking Glass output at 1920x1080 144 Hz (separate `lg-macos` project)
 
 Known issues:
@@ -33,6 +36,8 @@ Known issues:
   `AppleIntelTGLGraphics.kext`, `AppleIntelTGLGraphicsMTLDriver.bundle`,
   `AppleIntelTGLGraphicsGLDriver.bundle`, `AppleIntelTGLGraphicsVADriver.bundle`,
   `AppleIntelTGLGraphicsVAME.bundle`, `AppleIntelGraphicsShared.bundle`
+- HEVC encode: no `AAPL,slot-name` device property on the iGPU (VideoToolbox
+  then treats it as a slotted GPU and the encoder refuses it).
 - Host: i915-sriov-dkms with VFs enabled. Without
   strongtz/i915-sriov-dkms#512 the PF logs DMAR faults at address 0 while the
   guest GPU is busy.
@@ -63,7 +68,8 @@ Typical set:
 |---|---|
 | `-ngreentglgfx` | Load the TGL accelerator kext without the framebuffer (the VF has no display engine). |
 | `ngreenSched=N` | Scheduler type. A VF always uses `4`. |
-| `-ngreenmediaadapter` | Point VideoToolbox at `NootedGreenTGLMediaAdapter.bundle`. |
+| `-ngreenmediaadapter` | Point VideoToolbox at `NootedGreenTGLMediaAdapter.bundle`. Also enables HEVC decode/encode and VP9 decode. |
+| `-ngnohevc`, `-ngnohevcenc`, `-ngnovp9` | Turn off HEVC decode, HEVC encode or VP9 decode. |
 | `-ngtglearly` | Load the TGL kext early in boot. |
 | `-ngiclva` | Use Tahoe's own `AppleIntelICLGraphicsVADriver` for VideoToolbox instead. H.264 hardware decode works; hardware encode does not yet. |
 | `-ngvadump` | Log the first few video decode batches. |

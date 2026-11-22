@@ -4031,10 +4031,18 @@ bool TglAccel::injectAcceleratorPersonality(const char *bundleId)
 		return false;
 	}
 
+	// HEVC decode/encode and VP9 decode run through the media adapter (ngva):
+	// on by default with -ngreenmediaadapter, off with -ngnohevc / -ngnohevcenc /
+	// -ngnovp9; -nghevc / -nghevcenc / -ngvp9 force them on.
+	const bool adapterCodecs = !checkKernelArgument("-ngiclva") && checkKernelArgument("-ngreenmediaadapter");
+	auto codecEnabled = [adapterCodecs](const char *on, const char *off) {
+		return checkKernelArgument(on) || (adapterCodecs && !checkKernelArgument(off));
+	};
+
 	// V383: the TGL personality predates the HEVC gate that AppleGVA reads
 	// before IOGVAHEVCDecodeCapabilities; shipping Gen9.5/Gen11 kexts set it
-	// to "2". HEVC decode is not working on the VF yet: opt-in with -nghevc.
-	if (checkKernelArgument("-nghevc")) {
+	// to "2".
+	if (codecEnabled("-nghevc", "-ngnohevc")) {
 		auto *hevcDecode = OSString::withCString("2");
 		const bool hevcReady = hevcDecode && dict->setObject("IOGVAHEVCDecode", hevcDecode);
 		OSSafeReleaseNULL(hevcDecode);
@@ -4045,14 +4053,14 @@ bool TglAccel::injectAcceleratorPersonality(const char *bundleId)
 		SYSLOG("ngreen", "V383: HEVC decode gate on");
 	}
 
-	// V387: HEVC encode (opt-in -nghevcenc). AppleGVA registers its HEVC
+	// V387: HEVC encode. AppleGVA registers its HEVC
 	// encoder only when IOGVAHEVCEncode is present (the Gen11 kext sets "2");
 	// IOGVAHEVCEncodeCapabilities is already in the TGL personality. The
 	// encoder picks its VA driver by IOGVACodec (Gen7..Gen95, Gen11; the TGL
 	// personality's "Gen10" matches none) and looks in /Library/GPUBundles
 	// first, where AppleIntelICLGraphicsVADriver.bundle is the media adapter.
 	// The kext's HCP/HuC gate drops the batches until ngva marks them.
-	if (checkKernelArgument("-nghevcenc")) {
+	if (codecEnabled("-nghevcenc", "-ngnohevcenc")) {
 		auto *hevcEncode = OSString::withCString("2");
 		auto *codec = OSString::withCString("Gen11");
 		const bool hevcEncodeReady = hevcEncode && codec && dict->setObject("IOGVAHEVCEncode", hevcEncode) &&
@@ -4066,11 +4074,11 @@ bool TglAccel::injectAcceleratorPersonality(const char *bundleId)
 		SYSLOG("ngreen", "V387: HEVC encode gate on");
 	}
 
-	// V385: VP9 decode (opt-in -ngvp9). ngva serves VP9 sessions with Tahoe's
+	// V385: VP9 decode. ngva serves VP9 sessions with Tahoe's
 	// ICL VA driver. AppleGVAVPXDecoder.bundle registers its vp09 decoder only
 	// when IOGVAXDecode is present (as on ICL); AppleGVA itself checks
 	// IOGVAVP9Decode. Profiles 0 (8-bit) and 2 (10-bit), 4:2:0.
-	if (checkKernelArgument("-ngvp9")) {
+	if (codecEnabled("-ngvp9", "-ngnovp9")) {
 		auto *vp9Decode = OSString::withCString("2");
 		auto *caps = OSDictionary::withCapacity(1);
 		auto *profiles = OSArray::withCapacity(2);

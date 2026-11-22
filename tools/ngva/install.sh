@@ -28,8 +28,7 @@ if ls kernels/*.gen12 >/dev/null 2>&1; then
 fi
 codesign -f -s - "$bundle/Contents/MacOS/AppleIntelTGLGraphicsVADriver"
 codesign -f -s - "$bundle"
-# AppleGVAHEVCEncoder loads the VA driver its IOGVACodec names (Gen11 with
-# -nghevcenc) from /Library/GPUBundles first: point that name at the adapter.
+# AppleGVAHEVCEncoder loads the VA driver its IOGVACodec names (Gen11) from /Library/GPUBundles first: point that name at the adapter.
 alias=/Library/GPUBundles/AppleIntelICLGraphicsVADriver.bundle
 rm -rf "$alias"
 mkdir -p "$alias/Contents/MacOS"
