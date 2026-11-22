@@ -1,6 +1,7 @@
 //  Copyright © 2026 Stezza @ inc. Licensed under the Thou Shalt Not Profit License version 1.0. See LICENSE for
 //  details.
 #include "kern_vf_internal.hpp"
+#include <sys/sysctl.h>
 
 constexpr uint32_t kGen11SoftScratch0 = 0x190240;
 constexpr uint32_t kGen11GucHostInterrupt = 0x1901f0;
@@ -338,6 +339,7 @@ IOSimpleLock *gVfContextLock = nullptr;
 VfGucContext *gVfContexts = nullptr;
 uint32_t gVfContextCapacity = 0;
 uint32_t gVfContextLifecycleLogs = 0;
+volatile SInt32 gVfRegisteredTotal, gVfDeregisteredTotal, gVfDetachCalls, gVfAttachRefs, gVfIdleCalls[2], gVfIdleTrue[2];
 NGVfTimeoutObservation::Reference gVfTimeoutReferences[NGVfTimeoutObservation::engineCount] {};
 
 constexpr uint32_t kVfContextEventTimeoutMs = 1000;
@@ -1395,6 +1397,7 @@ constexpr uint32_t kVfPrivateStampOffset = 0xF00;
 uint16_t gVfStampRedirects[kVfStampRedirectsMax];
 uint32_t gVfStampRedirectCount = 0;
 uint8_t *(*gVfStampGetter)(void *) = nullptr; // set with the first redirect
+static uint64_t (*gVfStampGpuGetter)(void *) = nullptr;
 
 VfSlowSubmitThread gVfSlowSubmitThreads[32];
 
@@ -1412,11 +1415,126 @@ void vfSlowMark(const char *n) {
 const char *const gVfSubmitProbeNames[][2] {{">pcb", "pcb"}, {">fifo", "fifo"}, {">coalesce", "coalesce"}};
 mach_vm_address_t gVfSubmitProbeOrg[arrsize(gVfSubmitProbeNames)] {};
 
-void vfMergeRedirectedStamps(bool dump) {
+// V393: stamp values seen in ring stores, per shared slot. A merge that
+// advances a slot over values no ring has stored yet completes stamps the
+// driver may already have handed out for work still queued in software.
+struct VfSeenStamps { volatile uint32_t *slot; uint64_t bits[64]; };
+static VfSeenStamps gVfSeenStamps[8];
+static uint64_t gVfGapCount, gVfAdvanceCount, gVfRedirectReleases;
+static struct { uint64_t serial; uint32_t from, to, unseen, first; uint64_t slot; } gVfLastGap;
+static VfSeenStamps *vfSeenFor(volatile uint32_t *slot) {
+	for (auto &t : gVfSeenStamps)
+		if (t.slot == slot)
+			return &t;
+	for (auto &t : gVfSeenStamps)
+		if (!t.slot) {
+			t.slot = slot;
+			return &t;
+		}
+	return nullptr;
+}
+
+// V394: trace of stamp bookkeeping (caller holds gVfContextLock), dumped on
+// demand through sysctl kern.ngreen_dump (value = window in ms) by a test that
+// just saw a command buffer complete before its GPU work.
+struct VfStampTrace { uint64_t time, slot; uint32_t a, b; uint16_t id, id2; uint8_t kind; };
+static VfStampTrace gVfStampTrace[4096];
+static uint32_t gVfStampTraceNext;
+static void vfTraceStamp(uint8_t kind, uint16_t id, uint16_t id2, uint64_t slot, uint32_t a, uint32_t b) {
+	gVfStampTrace[gVfStampTraceNext++ % arrsize(gVfStampTrace)] = {mach_absolute_time(), slot, a, b, id, id2, kind};
+}
+static int vfStampTraceSysctl(struct sysctl_oid *oidp, void *, int, struct sysctl_req *req) {
+	int window = 0;
+	int error = sysctl_handle_int(oidp, &window, 0, req);
+	if (error || !req->newptr || !gVfContextLock || !gVfContexts)
+		return error;
+	if (window == -1) {
+		// V397: context table census, to see whether contexts accumulate.
+		uint32_t states[16] {}, backed = 0, referenced = 0, redirected = 0, duplicates = 0, tasks = 0, refs[4] {}, hcs = 0;
+		static void *hcList[1024];
+		static void *seenTasks[512];
+		const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		for (uint32_t i = 0; i < gVfContextCapacity; i++) {
+			const auto &e = gVfContexts[i];
+			states[static_cast<uint32_t>(e.state) & 15]++;
+			backed += e.contextBacking != nullptr;
+			referenced += e.refCount != 0;
+			if (e.contextBacking)
+				refs[e.refCount >= 3 ? 3 : e.refCount]++;
+			if (e.contextBacking && e.hardwareContext && hcs < arrsize(hcList))
+				hcList[hcs++] = e.hardwareContext;
+			redirected += e.stampRedirected;
+			if (e.contextBacking && e.task) {
+				bool known = false;
+				for (uint32_t t = 0; t < tasks && !known; t++)
+					known = seenTasks[t] == e.task;
+				if (!known && tasks < arrsize(seenTasks))
+					seenTasks[tasks++] = e.task;
+			}
+		}
+		for (uint32_t i = 0; i < gVfStampRedirectCount; i++)
+			for (uint32_t k = 0; k < i; k++)
+				duplicates += gVfStampRedirects[k] == gVfStampRedirects[i];
+		const uint32_t listed = gVfStampRedirectCount;
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+		SYSLOG("ngreen", "V397: refcount 0:%u 1:%u 2:%u 3+:%u, attach re-refs %d, detach calls %d, idle all %d/%d kmd %d/%d", refs[0],
+		       refs[1], refs[2], refs[3], gVfAttachRefs, gVfDetachCalls, gVfIdleTrue[0], gVfIdleCalls[0], gVfIdleTrue[1],
+		       gVfIdleCalls[1]);
+		// Retain counts of the native hardware contexts still recorded (none of
+		// them was detached, so the objects are alive).
+		uint32_t rc[8] {};
+		for (uint32_t i = 0; i < hcs; i++) {
+			const int n = reinterpret_cast<OSObject *>(hcList[i])->getRetainCount();
+			rc[n < 0 ? 0 : n > 7 ? 7 : n]++;
+		}
+		SYSLOG("ngreen", "V397: native context retain counts 1:%u 2:%u 3:%u 4:%u 5:%u 6:%u 7+:%u (of %u)", rc[1], rc[2], rc[3], rc[4],
+		       rc[5], rc[6], rc[7], hcs);
+		SYSLOG("ngreen", "V397: contexts backed=%u referenced=%u tasks=%u redirected=%u list=%u dup=%u registered=%d deregistered=%d "
+		       "states empty=%u tomb=%u regng=%u reg=%u penen=%u en=%u pendis=%u dis=%u pendereg=%u",
+		       backed, referenced, tasks, redirected, listed, duplicates, gVfRegisteredTotal, gVfDeregisteredTotal,
+		       states[0], states[1], states[2], states[3], states[4], states[5], states[6], states[7], states[8]);
+		return 0;
+	}
+	if (window <= 0)
+		return error;
+	static VfStampTrace copy[arrsize(gVfStampTrace)];
+	static uint32_t dumps = 0;
+	if (dumps++ >= 8)
+		return 0;
+	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	const uint32_t next = gVfStampTraceNext;
+	for (uint32_t i = 0; i < arrsize(copy); i++)
+		copy[i] = gVfStampTrace[(next + i) % arrsize(copy)];
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+	const uint64_t now = mach_absolute_time();
+	uint32_t printed = 0;
+	SYSLOG("ngreen", "V394: dump #%u window %d ms (kind 1=advance from->to src bound, 2=record first..last n, 3=redirect fail, 4=reset skip)", dumps, window);
+	for (uint32_t i = 0; i < arrsize(copy) && printed < 600; i++) {
+		const auto &t = copy[i];
+		if (!t.kind)
+			continue;
+		uint64_t ns;
+		absolutetime_to_nanoseconds(now - t.time, &ns);
+		if (ns > static_cast<uint64_t>(window) * 1000000ULL)
+			continue;
+		printed++;
+		SYSLOG("ngreen", "V394: -%llu.%03llu ms k=%u id=%u id2=%u slot=%llx %x %x", ns / 1000000, ns / 1000 % 1000, t.kind, t.id, t.id2,
+		       t.slot, t.a, t.b);
+	}
+	return 0;
+}
+SYSCTL_PROC(_kern, OID_AUTO, ngreen_dump, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY, nullptr, 0, vfStampTraceSysctl, "I", "");
+void vfRegisterStampTraceSysctl() {
+	static bool done = false;
+	if (!done)
+		done = true, sysctl_register_oid(&sysctl__kern_ngreen_dump);
+}
+
+void vfMergeRedirectedStamps(bool dump, const char *why) {
 	auto getter = gVfStampGetter;
 	if (!getter || !gVfContextLock || !gVfContexts)
 		return;
-	static struct { volatile uint32_t *shared; uint32_t done; bool busy; uint32_t limit, covered, head, tail, state, before; } c[arrsize(gVfStampRedirects)];
+	static struct { volatile uint32_t *shared; uint32_t done; bool busy; uint32_t limit, covered, head, tail, state, before, pending, newest; bool lost; } c[arrsize(gVfStampRedirects)];
 	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	uint32_t live = 0;
 	for (uint32_t i = 0; i < gVfStampRedirectCount; i++) {
@@ -1454,6 +1572,10 @@ void vfMergeRedirectedStamps(bool dump) {
 		c[live].tail = image ? *reinterpret_cast<volatile uint32_t *>(image + 0x101C) : 0;
 		c[live].state = static_cast<uint32_t>(entry.state);
 		c[live].before = c[live].shared ? *c[live].shared : 0;
+		c[live].pending = pending.pendingStampCount;
+		c[live].newest = pending.pendingStampCount ?
+			pending.pendingStamps[(pending.pendingStampHead + pending.pendingStampCount - 1) % kVfPendingStamps] : 0;
+		c[live].lost = pending.pendingStampLost;
 		live++;
 	}
 	gVfStampRedirectCount = live;
@@ -1464,22 +1586,68 @@ void vfMergeRedirectedStamps(bool dump) {
 			first = c[k].shared != shared;
 		if (!first)
 			continue;
-		uint32_t newest = c[i].done, bound = 0;
+		uint32_t newest = c[i].done, bound = 0, src = i, boundBy = 0xFFFF;
 		bool bounded = false;
 		for (uint32_t k = i; k < live; k++) {
 			if (c[k].shared != shared)
 				continue;
 			if (static_cast<int32_t>(c[k].done - newest) > 0)
-				newest = c[k].done;
+				newest = c[k].done, src = k;
 			if (c[k].busy && (!bounded || static_cast<int32_t>(bound - c[k].limit) > 0))
-				bound = c[k].limit, bounded = true;
+				bound = c[k].limit, bounded = true, boundBy = k;
 		}
 		if (bounded && static_cast<int32_t>(newest - bound) > 0)
 			newest = bound;
-		if (static_cast<int32_t>(newest - *shared) > 0)
+		if (static_cast<int32_t>(newest - *shared) > 0) {
+			if (auto *seen = vfSeenFor(shared); seen && newest - *shared < 4096) {
+				uint32_t unseen = 0, first = 0;
+				for (uint32_t v = *shared + 1; v != newest + 1; v++) {
+					const uint32_t b = v & 4095;
+					if (!(seen->bits[b / 64] >> (b % 64) & 1) && !unseen++)
+						first = v;
+					seen->bits[b / 64] &= ~(1ULL << (b % 64));
+				}
+				gVfAdvanceCount++;
+				if (unseen)
+					gVfGapCount++, gVfLastGap = {gVfGapCount, *shared, newest, unseen, first,
+					                             reinterpret_cast<uint64_t>(shared)};
+			}
+			vfTraceStamp(1, gVfStampRedirects[src], boundBy == 0xFFFF ? 0xFFFF : gVfStampRedirects[boundBy],
+			             reinterpret_cast<uint64_t>(shared), *shared, newest);
 			*shared = newest;
+		}
+	}
+	// V395: release the redirect of an idle context whose stamps are all
+	// published (no pending store, empty ring, own stamp not ahead of the
+	// slot). A full table (128) left new contexts unredirected: their GPU
+	// wrote the shared slot directly while the merge wrote other contexts'
+	// values there, completing their command buffers before the GPU ran them.
+	// The next submission redirects the context again.
+	for (uint32_t i = 0; i < live; i++) {
+		auto &entry = gVfContexts[gVfStampRedirects[i]];
+		if (c[i].shared && !c[i].busy && !c[i].pending && !c[i].lost && !entry.stampRedirectInUse &&
+		    (c[i].head & 0x1FFFFCU) == (c[i].tail & 0x1FFFFCU) &&
+		    static_cast<int32_t>(c[i].done - *c[i].shared) <= 0)
+			vfEndStampRedirectLocked(entry), gVfRedirectReleases++;
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+	static uint64_t loggedGap = 0;
+	static uint32_t gapLogs = 0;
+	if (gVfLastGap.serial != loggedGap && gapLogs < 200) {
+		loggedGap = gVfLastGap.serial, gapLogs++;
+		SYSLOG("ngreen", "V393: gap #%llu/%llu advances: slot %llx %x->%x passes %u unstored stamps from %x", gVfLastGap.serial,
+		       gVfAdvanceCount, gVfLastGap.slot, gVfLastGap.from, gVfLastGap.to, gVfLastGap.unseen, gVfLastGap.first);
+	}
+	// V392: full stamp state at a memory CAT: did the shared slot pass a
+	// pending stamp of some context (another writer), or not (the driver freed
+	// without waiting for the slot)?
+	static uint32_t forced = 0;
+	if (why && forced++ < 3)
+		for (uint32_t i = 0; i < live; i++)
+			SYSLOG("ngreen", "V392: %s id=%u slot=%llx done=%x pending=%u [%x..%x] lost=%d covered=%x busy=%d shared %x->%x head=%x tail=%x state=%u",
+			       why, gVfStampRedirects[i], reinterpret_cast<uint64_t>(c[i].shared), c[i].done, c[i].pending, c[i].limit + 1,
+			       c[i].newest, c[i].lost, c[i].covered, c[i].busy, c[i].before, c[i].shared ? *c[i].shared : 0, c[i].head,
+			       c[i].tail, c[i].state);
 	// V345: who holds each shared slot back when an event times out.
 	static uint32_t dumps = 0;
 	if (dump && (++dumps <= 6 || (dumps % 8 == 0 && dumps < 512)))
@@ -1498,6 +1666,7 @@ void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, u
 	if (!getter || !getGpu || !ring || !words || (words & (words - 1)))
 		return;
 	gVfStampGetter = getter;
+	gVfStampGpuGetter = getGpu;
 	auto &entry = gVfContexts[id];
 	if (!entry.stampBacking || !entry.contextBacking)
 		return;
@@ -1507,8 +1676,30 @@ void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, u
 	auto *stamps = getter(entry.stampBacking);
 	if (!target || !image || !stamps)
 		return;
+	bool setupLog = false;
+	// V396: hold the redirect for the whole scan + record (see merge release).
+	struct InUse {
+		VfGucContext &entry;
+		~InUse() {
+			const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+			entry.stampRedirectInUse = false;
+			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+		}
+	} inUse {entry};
+	{
+		const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		entry.stampRedirectInUse = true;
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+	}
 	if (!entry.stampRedirected) {
 		const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		if (gVfStampRedirectCount >= kVfStampRedirectsMax) {
+			uint32_t kept = 0;
+			for (uint32_t r = 0; r < gVfStampRedirectCount; r++)
+				if (gVfContexts[gVfStampRedirects[r]].stampRedirected)
+					gVfStampRedirects[kept++] = gVfStampRedirects[r];
+			gVfStampRedirectCount = kept;
+		}
 		uint32_t pool = 0;
 		while (pool < kVfStampRedirectsMax && (gVfPendingStampPoolUsed[pool / 64] >> (pool % 64) & 1))
 			pool++;
@@ -1518,12 +1709,32 @@ void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, u
 			auto *slot = reinterpret_cast<volatile uint32_t *>(image + kVfPrivateStampOffset);
 			*slot = *reinterpret_cast<volatile uint32_t *>(stamps + entry.stampIndex * 64U);
 			__asm__ volatile("clflush (%0)\n\tmfence" :: "r"(slot) : "memory");
-			gVfStampRedirects[gVfStampRedirectCount++] = static_cast<uint16_t>(id);
+			// V397: a released context can still be listed (the list compacts
+			// lazily); list it once.
+			bool listed = false;
+			for (uint32_t r = 0; r < gVfStampRedirectCount && !listed; r++)
+				listed = gVfStampRedirects[r] == id;
+			if (!listed)
+				gVfStampRedirects[gVfStampRedirectCount++] = static_cast<uint16_t>(id);
 			entry.stampRedirected = true;
+			setupLog = true;
 		}
-		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
 		if (!entry.stampRedirected)
+			vfTraceStamp(3, static_cast<uint16_t>(id), static_cast<uint16_t>(gVfStampRedirectCount),
+			             reinterpret_cast<uint64_t>(stamps + entry.stampIndex * 64U), pool, 0);
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+		static uint32_t setupLogs = 0;
+		if (setupLog && setupLogs++ < 48)
+			SYSLOG("ngreen", "V395: id=%u class=%u redirected: task=%p stampBacking=%p index=%u cpu=%p gpu=%llx (redirects %u, released %llu)",
+			       id, entry.engineClass, entry.task, entry.stampBacking, entry.stampIndex, stamps + entry.stampIndex * 64U,
+			       target, gVfStampRedirectCount, gVfRedirectReleases);
+		if (!entry.stampRedirected) {
+			static uint32_t failLogs = 0;
+			if (failLogs++ < 16)
+				SYSLOG("ngreen", "V394: id=%u stamp redirect unavailable (redirects %u, pool %u): GPU writes the shared slot directly",
+				       id, gVfStampRedirectCount, pool);
 			return;
+		}
 	}
 	static uint32_t logs[8] {};
 	uint32_t values[104], count = 0; // the 512-dword scan holds at most 103 stores
@@ -1546,6 +1757,17 @@ void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, u
 			at(3) = 0;
 			values[count++] = at(4);
 			length = 6;
+		} else if ((((at(0) & 0xFF80C000U) == 0x13004000U || (at(0) & 0xFFC00000U) == 0x10000000U) &&
+		            (at(1) | (static_cast<uint64_t>(at(2)) << 32)) - (target - entry.stampIndex * 64U) < 0x1000) ||
+		           ((at(0) & 0xFFFF00FFU) == 0x7A000004U && ((at(1) >> 14) & 3) == 1 && !(at(1) & (1U << 24)) &&
+		            (at(2) | (static_cast<uint64_t>(at(3)) << 32)) - (target - entry.stampIndex * 64U) < 0x1000)) {
+			// V392: a stamp-page store this scan does not redirect (another slot,
+			// or MI_STORE_DATA_IMM): it advances a shared slot behind the merge.
+			static uint32_t strayLogs = 0;
+			if (strayLogs++ < 24)
+				SYSLOG("ngreen", "V392: id=%u class=%u unredirected stamp-page store %08x %08x %08x %08x (own slot %x)", id,
+				       entry.engineClass, at(0), at(1), at(2), at(3), entry.stampIndex);
+			continue;
 		} else if ((at(0) & 0xFFBF7FFFU) == 0x0E001002U && waitCount < arrsize(waits)) {
 			// MI_SEMAPHORE_WAIT, poll, SAD >= SDD, on a shared stamp slot.
 			const uint64_t address = at(2) | (static_cast<uint64_t>(at(3)) << 32);
@@ -1568,10 +1790,17 @@ void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, u
 		const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 		constexpr uint32_t capacity = kVfPendingStamps;
 		for (uint32_t k = 0; k < count; k++)
-			if (!entry.pendingStampLost && entry.pendingStampCount < capacity)
+			if (!entry.pendingStamps)
+				entry.pendingStampLost = true, entry.pendingStampLostUpTo = values[k];
+			else if (!entry.pendingStampLost && entry.pendingStampCount < capacity)
 				entry.pendingStamps[(entry.pendingStampHead + entry.pendingStampCount++) % capacity] = values[k];
 			else
 				entry.pendingStampLost = true, entry.pendingStampLostUpTo = values[k];
+		vfTraceStamp(2, static_cast<uint16_t>(id), static_cast<uint16_t>(count),
+		             reinterpret_cast<uint64_t>(stamps + entry.stampIndex * 64U), values[0], values[count - 1]);
+		if (auto *seen = vfSeenFor(reinterpret_cast<volatile uint32_t *>(stamps + entry.stampIndex * 64U)))
+			for (uint32_t k = 0; k < count; k++)
+				seen->bits[(values[k] & 4095) / 64] |= 1ULL << (values[k] & 63);
 		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
 	}
 	// V348: the shared slot only advances when the CPU merges, so a GPU waiting
@@ -1629,6 +1858,60 @@ void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, u
 	}
 }
 
+// V391: the reset context's unexecuted ring commands, and for each semaphore
+// wait the value its target currently holds (and whose stamp slot it is).
+void vfDumpResetWaits(uint32_t id, mach_vm_address_t getterAddress) {
+	static uint32_t dumps = 0;
+	auto getter = reinterpret_cast<uint8_t *(*)(void *)>(getterAddress);
+	if (!getter || !gVfContexts || id >= gVfContextCapacity || dumps >= 48)
+		return;
+	const auto &entry = gVfContexts[id];
+	auto *image = entry.contextBacking ? getter(entry.contextBacking) : nullptr;
+	auto *ring = entry.ringBacking ? reinterpret_cast<volatile uint32_t *>(getter(entry.ringBacking)) : nullptr;
+	const uint64_t ringSize = entry.ringBacking ? getMember<uint64_t>(entry.ringBacking, kVfMappedBufferLengthOffset) : 0;
+	const uint32_t words = static_cast<uint32_t>(ringSize / 4);
+	if (!image || !ring || !words || (words & (words - 1)) || ringSize > 0x200000)
+		return;
+	dumps++;
+	const uint32_t head = *reinterpret_cast<volatile uint32_t *>(image + 0x1014) & 0x1FFFFCU;
+	const uint32_t tail = *reinterpret_cast<volatile uint32_t *>(image + 0x101C) & 0x1FFFFCU;
+	const uint32_t count = ((tail - head) / 4) & (words - 1);
+	SYSLOG("ngreen", "V391: id=%u ring size %llx head %x tail %x own stamp %x", id, ringSize, head, tail,
+	       *reinterpret_cast<volatile uint32_t *>(image + kVfPrivateStampOffset));
+	const uint32_t first = head / 4;
+	for (uint32_t i = 0; i < count && i < 96; i += 8) {
+		auto at = [&](uint32_t k) { return ring[(first + i + k) & (words - 1)]; };
+		SYSLOG("ngreen", "V391: id=%u +%04x: %08x %08x %08x %08x %08x %08x %08x %08x", id, ((first + i) & (words - 1)) * 4,
+		       at(0), at(1), at(2), at(3), at(4), at(5), at(6), at(7));
+	}
+	auto *stamps = entry.stampBacking ? getter(entry.stampBacking) : nullptr;
+	for (uint32_t i = 0; i + 3 < count; i++) {
+		auto at = [&](uint32_t k) { return ring[(first + i + k) & (words - 1)]; };
+		if ((at(0) & 0xFF3F0000U) != 0x0E000000U)
+			continue;
+		const bool ggtt = at(0) & (1U << 22);
+		const uint32_t value = at(1);
+		const uint64_t address = at(2) | (static_cast<uint64_t>(at(3)) << 32);
+		long current = -1;
+		int owner = -1;
+		if (ggtt && (address & 0xFFF) == kVfPrivateStampOffset) {
+			for (uint32_t c = 0; c < gVfContextCapacity && owner < 0; c++)
+				if (gVfContexts[c].contextBacking && (gVfContexts[c].descriptorLo & ~0xFFFU) == (address & ~0xFFFULL))
+					if (auto *other = getter(gVfContexts[c].contextBacking))
+						owner = static_cast<int>(c), current = *reinterpret_cast<volatile uint32_t *>(other + kVfPrivateStampOffset);
+		} else if (!ggtt && stamps && entry.stampBacking) {
+			auto getGpu = gVfStampGpuGetter;
+			const uint64_t base = getGpu ? getGpu(entry.stampBacking) : 0;
+			if (base && address >= base && address < base + 0x1000)
+				current = *reinterpret_cast<volatile uint32_t *>(stamps + (address - base));
+		}
+		SYSLOG("ngreen", "V391: id=%u wait at +%04x %08x %s %llx >= %x: now %lx owner %d state %d", id,
+		       ((first + i) & (words - 1)) * 4, at(0), ggtt ? "ggtt" : "ppgtt", address, value, current, owner,
+		       owner >= 0 ? static_cast<int>(gVfContexts[owner].state) : -1);
+		i += 3;
+	}
+}
+
 // V330: after GuC resets a hung context nothing completes its submitted
 // stamps, so every wait on that context (some untimed: finishEvent during
 // teardown) blocks forever, and GuC replays the hung batch from the same head.
@@ -1662,6 +1945,7 @@ void vfSkipResetContext(uint32_t id, mach_vm_address_t getterAddress) {
 		}
 		if (entry.pendingStampLost && static_cast<int32_t>(entry.pendingStampLostUpTo - stamp) > 0)
 			stamp = entry.pendingStampLostUpTo;
+		vfTraceStamp(4, static_cast<uint16_t>(id), 0, reinterpret_cast<uint64_t>(target), *target, stamp);
 		if (static_cast<int32_t>(stamp - *target) > 0)
 			*target = stamp;
 		__asm__ volatile("clflush (%0)\n\tclflush (%1)\n\tmfence" :: "r"(ringHead), "r"(target) : "memory");

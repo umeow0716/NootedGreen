@@ -827,14 +827,22 @@ bool TglAccel::vfIsContextIdle(void *that, uint32_t contextId) {
 	(void)contextId;
 	// Legacy proxy ID cannot identify a single modern LRCA. All-idle is a
 	// conservative sufficient condition; never inspect unused proxy counters.
-	return vfKnownIdleSnapshot(callback ?
+	OSIncrementAtomic(&gVfIdleCalls[0]);
+	const bool idle = vfKnownIdleSnapshot(callback ?
 		callback->vfSharedMappedBufferGetVirtualAddress : 0);
+	if (idle)
+		OSIncrementAtomic(&gVfIdleTrue[0]);
+	return idle;
 }
 
 bool TglAccel::vfIsKmdContextIdle(void *that, const uint32_t *descriptor) {
 	(void)that;
-	return descriptor && vfKnownIdleSnapshot(callback ?
+	OSIncrementAtomic(&gVfIdleCalls[1]);
+	const bool idle = descriptor && vfKnownIdleSnapshot(callback ?
 		callback->vfSharedMappedBufferGetVirtualAddress : 0, descriptor);
+	if (idle)
+		OSIncrementAtomic(&gVfIdleTrue[1]);
+	return idle;
 }
 
 void TglAccel::vfTransferOwnership(void *that, const void *backing, int owner) {
@@ -1228,6 +1236,7 @@ bool TglAccel::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 					return false;
 				}
 				entry.refCount++;
+				OSIncrementAtomic(&gVfAttachRefs);
 				IOSimpleLockUnlockEnableInterrupt(gVfContextLock,
 				                                      interruptState);
 				return true;
@@ -1252,6 +1261,7 @@ bool TglAccel::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 					entry.enablePending = false;
 					entry.disablePending = false;
 					entry.task = task;
+					entry.hardwareContext = hardwareContext;
 					contextBacking->retain();
 					entry.contextBacking = contextBacking;
 					// V264: native context free releases ring/FIFO before descriptor
@@ -1359,6 +1369,7 @@ bool TglAccel::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		return false;
 	}
 
+	OSIncrementAtomic(&gVfRegisteredTotal);
 	if (gVfContextLifecycleLogs++ < 64) {
 		SYSLOG("ngreen", "V230: registered GuC context id=%u LRCA=%08x:%08x class=%u instance=%u",
 		       gucId, descriptorHi, descriptorLo, engineClass, engineInstance);
@@ -1417,6 +1428,7 @@ bool TglAccel::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 }
 
 void TglAccel::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
+	OSIncrementAtomic(&gVfDetachCalls);
 	// V263/V264: native context free already released ring/FIFO objects, but
 	// the direct GuC record pins ring, stamp and scratch DMA buffers. This hook precedes release
 	// of additional mapped backing, context image and task/stamps. Any unproven
@@ -1656,7 +1668,7 @@ void TglAccel::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		       gucId, disabled, deregistered, transportFence);
 		vfMarkProtocolFault("GuC context teardown timeout");
 		PANIC_COND(true, "ngreen", "VF context DMA retirement did not complete");
-	} else if (gVfContextLifecycleLogs++ < 64) {
+	} else if (OSIncrementAtomic(&gVfDeregisteredTotal), gVfContextLifecycleLogs++ < 64) {
 		SYSLOG("ngreen", "V230: deregistered GuC context id=%u LRCA=0x%08x",
 		       gucId, lrcaPage);
 	}

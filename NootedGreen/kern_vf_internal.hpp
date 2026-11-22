@@ -221,12 +221,16 @@ struct VfGucContext {
 	bool enablePending;
 	bool disablePending;
 	void *task;
+	void *hardwareContext; // V397 diagnostics only
 	OSObject *contextBacking;
 	OSObject *ringBacking;
 	OSObject *stampBacking;
 	OSObject *scratchBacking;
 	uint32_t stampIndex;
 	bool stampRedirected;
+	// V396: vfRedirectStamps is between redirect setup and recording this
+	// submission's pending stamps; the merge must not release the redirect.
+	bool stampRedirectInUse;
 	// V346: stamp values this context's redirected stores will write, oldest
 	// first. When full, recording stops until the newest unrecorded stamp is
 	// done, so the front stays exact. Storage comes from gVfPendingStampPool
@@ -580,11 +584,14 @@ uint64_t vfSubmitProbe(void *a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, 
 	return result;
 }
 
-void vfMergeRedirectedStamps(bool dump = false);
+void vfMergeRedirectedStamps(bool dump = false, const char *why = nullptr);
 
 void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to, uint8_t *(*getter)(void *), uint64_t (*getGpu)(void *));
 
 void vfSkipResetContext(uint32_t id, mach_vm_address_t getterAddress);
+void vfDumpResetWaits(uint32_t id, mach_vm_address_t getterAddress);
+void vfRegisterStampTraceSysctl();
+extern volatile SInt32 gVfRegisteredTotal, gVfDeregisteredTotal, gVfDetachCalls, gVfAttachRefs, gVfIdleCalls[2], gVfIdleTrue[2];
 
 uint64_t vfConsumeMemoryInterrupts();
 
