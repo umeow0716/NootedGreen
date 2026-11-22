@@ -800,11 +800,11 @@ void saveWords(const char *what, int n, const uint32_t *words, uint32_t count) {
 
 // HEVC encode batch -> Gen12 (hevcenc_gen12.hpp), rewritten in the command
 // buffer (MOS_COMMAND_BUFFER: base +0x148, write pointer +0x150, offset
-// +0x158, remaining bytes +0x15c) with its relocation record. Runs (kext marker
-// in dword 6, data buffers submitted) only with /Users/Shared/ngva-hevcenc-run;
-// otherwise the batches are saved to the temporary directory.
+// +0x158, remaining bytes +0x15c) with its relocation record, then marked for
+// the kext (dword 6). With /Users/Shared/ngva-hevcenc-dump nothing runs: the
+// batches are saved to the temporary directory and go to the kernel empty.
 bool hevcEncodeRun() {
-	static const bool run = access("/Users/Shared/ngva-hevcenc-run", F_OK) == 0;
+	static const bool run = access("/Users/Shared/ngva-hevcenc-dump", F_OK) != 0;
 	return run;
 }
 void hevcEncodeToGen12(void *cmd, const Submission &sub) {
@@ -820,7 +820,7 @@ void hevcEncodeToGen12(void *cmd, const Submission &sub) {
 	if (logs++ < 4)
 		syslog(LOG_NOTICE, "ngva: HEVC encode batch %u -> %zu dwords (%s), offset %d remaining %d: %s", sub.words, out.words, out.reason,
 		       at<int32_t>(c, 0x158), at<int32_t>(c, 0x15c), fits ? (hevcEncodeRun() ? "run" : "converted, dropped") : "dropped");
-	if (saved < 40) {
+	if (!hevcEncodeRun() && saved < 40) {
 		saved++;
 		saveWords("encbatch", saved, sub.batch, sub.words);
 		saveWords("encrecord", saved, sub.record, sub.length);
@@ -1122,26 +1122,6 @@ bool load() {
 	});
 	return driverCreate && driverDestroy;
 }
-// Bring-up trace of an accelerator table's 16 functions.
-using Traced = long (*)(long, long, long, long, long, long);
-Traced traced[16];
-template <int I> long trace(long a, long b, long c, long d, long e, long f) {
-	long r = traced[I](a, b, c, d, e, f);
-	syslog(LOG_NOTICE, "ngva: fn%d(%lx, %lx, %lx) -> %ld", I, a, b, c, r);
-	if ((I == 10 || I == 11) && b && c) {
-		const auto *x = reinterpret_cast<const uint32_t *>(b), *y = reinterpret_cast<const uint32_t *>(c);
-		syslog(LOG_NOTICE, "ngva: fn%d b %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x", I, x[0], x[1], x[2], x[3], x[4], x[5],
-		       x[6], x[7], x[8], x[9], x[10], x[11]);
-		syslog(LOG_NOTICE, "ngva: fn%d c %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x", I, y[0], y[1], y[2], y[3], y[4], y[5],
-		       y[6], y[7], y[8], y[9], y[10], y[11]);
-	}
-	return r;
-}
-template <int... I> void traceAll(uint8_t *table, std::integer_sequence<int, I...>) {
-	((traced[I] = *reinterpret_cast<Traced *>(table + 8 + I * 8),
-	  *reinterpret_cast<Traced *>(table + 8 + I * 8) = trace<I>), ...);
-}
-
 // HEVC encode: the TGL driver has no HEVC encoder, AppleGVAHEVCEncoder asks
 // for the ICL one (Gen11), so its process gets the ICL driver itself.
 bool hevcEncoderClient() {
@@ -1153,9 +1133,8 @@ bool hevcEncoderClient() {
 	return client;
 }
 
-// Bring-up: without /Users/Shared/ngva-hevcenc-run no command of the HEVC
-// encoder reaches the GPU; its data buffers go to the kernel empty, which only
-// rotates them.
+// Dump mode (hevcEncodeRun): no command of the HEVC encoder reaches the GPU;
+// its data buffers go to the kernel empty, which only rotates them.
 using SetUsedBytes = int (*)(void *, uint32_t, uint32_t);
 using SubmitBuffers = int (*)(void *, uint32_t, void *, void *);
 constexpr uintptr_t iclSetUsedSlot = 0x78a0b0, iclSubmitSlot = 0x78a0b8;
@@ -1187,18 +1166,35 @@ long encFactory(void *self, uint32_t *settings, void *a, void *b, void *c) {
 	}
 	return iclFactoryOriginal(self, settings, a, b, c);
 }
+// Apple added the plugin's frame-done callback (encode params +0xac8, copied to
+// encoder +0x588 => +0x1050) only to the end of CodechalEncHevcStateG11's slot 73
+// (0x140380). The VDEnc class's slot 73 (0x148510) never calls it, so the plugin's
+// waitForIntelENCLastSubmissionCompletion times out on every frame. Call it there.
+constexpr uintptr_t iclVdencSlot73 = 0x78fe40 + 73 * 8, iclVdencExecute = 0x148510, iclFrameDone = 0x1050;
+using Execute = int (*)(void *);
+Execute iclVdencExecuteOriginal;
+int encVdencExecute(void *encoder) {
+	const int result = iclVdencExecuteOriginal(encoder);
+	if (!result)
+		if (auto done = at<void (*)()>(static_cast<uint8_t *>(encoder), iclFrameDone)) done();
+	return result;
+}
 // AppleGVAHEVCEncoder asks Intel drivers for 32x32 CTBs: the requested size (session
 // storage +0x4778) defaults to 32 at each encodeFrame (plugin class slot
 // 0x33950) when 0, and every CTB count follows it. Ask for 64 first.
 struct Time { int64_t value; int32_t scale; uint32_t flags; int64_t epoch; };
 using EncodeFrame2 = int (*)(void *, void *, void *, Time, Time, void *, uint32_t *);
-constexpr uintptr_t pluginEncodeFrameSlot = 0x33950, pluginEncodeFrame = 0x5c08, pluginRequestedCtb = 0x4778;
+constexpr uintptr_t pluginEncodeFrameSlot = 0x33950, pluginEncodeFrame = 0x5c08, pluginRequestedCtb = 0x4778,
+	pluginAllowReordering = 0x81; // kVTCompressionPropertyKey_AllowFrameReordering
 EncodeFrame2 pluginEncode;
 int encEncodeFrame(void *encoder, void *token, void *image, Time pts, Time duration, void *properties, uint32_t *flags) {
 	static auto base = reinterpret_cast<void *(*)(void *)>(dlsym(RTLD_DEFAULT, "VTVideoEncoderGetCMBaseObject"));
 	static auto storage = reinterpret_cast<uint8_t *(*)(void *)>(dlsym(RTLD_DEFAULT, "CMBaseObjectGetDerivedStorage"));
-	if (auto *session = base && storage ? storage(base(encoder)) : nullptr; session && !at<uint32_t>(session, pluginRequestedCtb))
-		at<uint32_t>(session, pluginRequestedCtb) = 64;
+	if (auto *session = base && storage ? storage(base(encoder)) : nullptr) {
+		if (!at<uint32_t>(session, pluginRequestedCtb)) at<uint32_t>(session, pluginRequestedCtb) = 64;
+		// VDEnc has no backward references: no frame reordering (B frames).
+		at<uint8_t>(session, pluginAllowReordering) = 0;
+	}
 	return pluginEncode(encoder, token, image, pts, duration, properties, flags);
 }
 bool hookPlugin() {
@@ -1225,14 +1221,12 @@ int AVD_CreateAVDAccelerator(void **accelerator, const void *input, void *metada
 			at<uintptr_t>(reinterpret_cast<uint8_t *>(iclBase), iclFactorySlot) == iclBase + iclFactory &&
 			(standIn = static_cast<uint8_t *>(calloc(1, standInSize))) && (statistics = static_cast<uint8_t *>(calloc(1, statisticsSize))) &&
 			replacePointer<DynamicCast>(iclDynamicCastSlot, encDynamicCast, iclDynamicCast, iclBase) &&
-			replacePointer<Factory>(iclFactorySlot, encFactory, iclFactoryOriginal, iclBase) && hookPlugin();
+			replacePointer<Factory>(iclFactorySlot, encFactory, iclFactoryOriginal, iclBase) &&
+			at<uintptr_t>(reinterpret_cast<uint8_t *>(iclBase), iclVdencSlot73) == iclBase + iclVdencExecute &&
+			replacePointer<Execute>(iclVdencSlot73, encVdencExecute, iclVdencExecuteOriginal, iclBase) && hookPlugin();
 		if (!icl) return 7;
 		const int result = iclCreate(accelerator, input, metadata);
 		syslog(LOG_NOTICE, "ngva: HEVC encoder on the ICL VA driver (%d)", result);
-		if (!result && *accelerator) {
-			auto *table = static_cast<uint8_t *>(*accelerator);
-			traceAll(table, std::make_integer_sequence<int, 16>{});
-		}
 		return result;
 	}
 	int result = driverCreate(accelerator, input, metadata);

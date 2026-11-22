@@ -73,7 +73,7 @@ inline bool convert(const uint32_t *in, size_t words, const uint32_t *record, si
 	static uint32_t map[2048]; // callers serialize
 	struct Extra { uint32_t from, to, tmpl; bool replace; };
 	Extra extra[16];
-	uint32_t extras = 0, drop[4], drops = 0, streamInAt = 0, tileAt = 0;
+	uint32_t extras = 0, drop[16], drops = 0, streamInAt = 0, tileAt = 0;
 	uint32_t *out = o.batch;
 	size_t w = 0;
 	constexpr size_t cap = sizeof(o.batch) / 4;
@@ -97,7 +97,12 @@ inline bool convert(const uint32_t *in, size_t words, const uint32_t *record, si
 		auto zeros = [&](uint32_t count) { for (uint32_t k = 0; k < count; k++) put(0); };
 		if (h >> 29 == 0) {
 			const uint32_t op = h >> 23 & 0x3f;
-			copy();
+			// MI_COPY_MEM_MEM of the EU-kernel encoder's frame statistics (resource
+			// 0x20 -> status buffer): VDEnc never maps that resource.
+			if (op == 0x2e && n == 5 && drops + 2 <= 16) {
+				zeros(n);
+				drop[drops++] = static_cast<uint32_t>(i + 1), drop[drops++] = static_cast<uint32_t>(i + 3);
+			} else copy();
 			if (op == 0x0a) { end = true; break; }
 		} else switch (h) {
 		case 0x738a0001:

@@ -90,6 +90,8 @@ int main(int argc, char **argv)
       printf("bitrate %d\n", (int)VTSessionSetProperty(enc, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(atoi(getenv("VTDEC_BITRATE")))));
     if (getenv("VTDEC_HIGH") || getenv("VTDEC_MAIN"))
       printf("profile %d\n", (int)VTSessionSetProperty(enc, kVTCompressionPropertyKey_ProfileLevel, getenv("VTDEC_MAIN") ? kVTProfileLevel_H264_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel));
+    if (getenv("VTDEC_NOREORDER"))
+      VTSessionSetProperty(enc, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
     if (getenv("VTDEC_KEYINT"))
       VTSessionSetProperty(enc, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(atoi(getenv("VTDEC_KEYINT"))));
 
