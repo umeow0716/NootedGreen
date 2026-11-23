@@ -228,43 +228,6 @@ static void vfFlushStatusTargets(uint64_t root, volatile uint32_t *b, uint32_t r
 	}
 }
 
-// V374: opt-in Tahoe ICL VADriver; its Gen11 decode batches need these Gen12 fields.
-static void vfIclDecodeToGen12(volatile uint32_t *b, uint32_t room) {
-	if (b[0] == 0x13000082U && !b[1] && !b[2] && !b[3]) {
-		b[0] = 0x0E800000U;
-		b[1] = 0x03000200U;
-	}
-	for (uint32_t i = 0; i + 1 < room && b[i] != 0x05000000U;) {
-		const uint32_t d = b[i];
-		uint32_t n = 1;
-		if (d >> 29 == 0) {
-			const uint32_t op = (d >> 23) & 0x3F;
-			if (op == 0x20 || op == 0x24) {
-				b[i] = d | 0x00400000U;
-				n = (op == 0x20 ? (d & 0x3FF) : (d & 0xFF)) + 2;
-			} else if (op == 0x26) {
-				n = (d & 0x3F) + 2;
-			} else if (op == 0x1D) {
-				n = 2;
-			}
-		} else if (d >> 29 == 3) {
-			n = (d >> 16) == 0x6800 ? 1 : (d & 0xFFF) + 2;
-			if (d == 0x70020042U && i + 52 < room) {
-				b[i + 6] &= ~0x400U;
-				if (b[i + 13] == 0x4000U) b[i + 13] = 0x8000U;
-				if (b[i + 16] == 0x6000U) b[i + 16] = 0xC000U;
-				b[i + 51] = 0x1AU;
-			} else if (d == 0x70040008U && i + 4 < room && b[i + 4] == 0x2000U) {
-				b[i + 4] = 0x4000U;
-			}
-		}
-		i += n;
-	}
-	for (uint32_t i = 0; i < room; i += 16)
-		__asm__ volatile("clflush (%0)" :: "r"(&b[i]) : "memory");
-	__asm__ volatile("mfence" ::: "memory");
-}
-
 void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to) {
 	const uint32_t words = ringSize / 4;
 	if (!root || !ring || !words || (words & (words - 1)))
@@ -285,10 +248,10 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 			if (heads++ < 6)
 				SYSLOG("ngreen", "V299: video batch %llx: %08x %08x %08x %08x %08x %08x %08x %08x",
 				       static_cast<unsigned long long>(bb), b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
-			static uint32_t iclBatches = 0;
-			if (checkKernelArgument("-ngvadump") && b[5] != 0x05000000 && iclBatches++ < 3)
+			static uint32_t dumpedBatches = 0;
+			if (checkKernelArgument("-ngvadump") && b[5] != 0x05000000 && dumpedBatches++ < 3)
 				for (uint32_t k = 0; k + 7 < (PAGE_SIZE - (bb & 0xFFF)) / 4 && k < 512; k += 8) {
-					SYSLOG("ngreen", "V374: batch %llx +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", static_cast<unsigned long long>(bb),
+					SYSLOG("ngreen", "V299: batch %llx +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", static_cast<unsigned long long>(bb),
 					       k * 4, b[k], b[k + 1], b[k + 2], b[k + 3], b[k + 4], b[k + 5], b[k + 6], b[k + 7]);
 					bool end = false;
 					for (uint32_t e = k; e < k + 8; e++) end |= b[e] == 0x05000000;
@@ -368,8 +331,6 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 					break;
 				}
 			}
-			if (checkKernelArgument("-ngiclva") && b[5] != 0x05000000)
-				vfIclDecodeToGen12(b, (PAGE_SIZE - (bb & 0xFFF)) / 4);
 			if (b[0] == 0x13000083 && !b[1] && !b[2] && !b[3] && !b[4]) {
 				vfVdencToGen12(b, (PAGE_SIZE - (bb & 0xFFF)) / 4, bb);
 				// V309: the previous encode's MFC status block (byte count at +0x18), from memory.

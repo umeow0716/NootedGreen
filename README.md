@@ -71,7 +71,6 @@ Typical set:
 | `-ngreenmediaadapter` | Point VideoToolbox at `NootedGreenTGLMediaAdapter.bundle`. Also enables HEVC decode/encode and VP9 decode. |
 | `-ngnohevc`, `-ngnohevcenc`, `-ngnovp9` | Turn off HEVC decode, HEVC encode or VP9 decode. |
 | `-ngtglearly` | Load the TGL kext early in boot. |
-| `-ngiclva` | Use Tahoe's own `AppleIntelICLGraphicsVADriver` for VideoToolbox instead. H.264 hardware decode works; hardware encode does not yet. |
 | `-ngvadump` | Log the first few video decode batches. |
 | `-NGreenDebug` | Debug logging. |
 | `-ngreentglfb`, `-ngreentglwithgfx` | Physical GPU only: load the TGL framebuffer as well. A VF refuses these. |

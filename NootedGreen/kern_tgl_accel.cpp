@@ -1926,11 +1926,6 @@ IOReturn TglAccel::vfGetHwCaps(void *that, void *input, void *output,
 		       words[2]);
 		return kIOReturnUnsupported;
 	}
-	if (checkKernelArgument("-ngiclva")) {
-		words[2] = 0x8A528086U;
-		SYSLOG("ngreen", "V374: exposed ICL media hw-caps identity 8a528086");
-		return kIOReturnSuccess;
-	}
 	words[2] = kCanonicalTigerLakeIdentity;
 	SYSLOG("ngreen", "V340: exposed canonical TGL media hw-caps identity 9a408086 for exact VF 9a498086");
 	return kIOReturnSuccess;
@@ -4059,7 +4054,7 @@ bool TglAccel::injectAcceleratorPersonality(const char *bundleId)
 	// HEVC decode/encode and VP9 decode run through the media adapter (ngva):
 	// on by default with -ngreenmediaadapter, off with -ngnohevc / -ngnohevcenc /
 	// -ngnovp9; -nghevc / -nghevcenc / -ngvp9 force them on.
-	const bool adapterCodecs = !checkKernelArgument("-ngiclva") && checkKernelArgument("-ngreenmediaadapter");
+	const bool adapterCodecs = checkKernelArgument("-ngreenmediaadapter");
 	auto codecEnabled = [adapterCodecs](const char *on, const char *off) {
 		return checkKernelArgument(on) || (adapterCodecs && !checkKernelArgument(off));
 	};
@@ -4144,16 +4139,7 @@ bool TglAccel::injectAcceleratorPersonality(const char *bundleId)
 	// Opt-in changes only the data producer exposed to AppleGVA. The adapter
 	// delegates every execution callback to the hash-pinned signed TGL driver.
 	// This clone is already restricted to the admitted VF; PF is untouched.
-	if (checkKernelArgument("-ngiclva")) {
-		auto *iclVa = OSString::withCString("AppleIntelICLGraphicsVADriver");
-		const bool iclReady = iclVa && dict->setObject("IODVDBundleName", iclVa);
-		OSSafeReleaseNULL(iclVa);
-		if (!iclReady) {
-			dict->release();
-			return false;
-		}
-		SYSLOG("ngreen", "V374: selected Tahoe ICL VADriver");
-	} else if (checkKernelArgument("-ngreenmediaadapter")) {
+	if (checkKernelArgument("-ngreenmediaadapter")) {
 		auto *mediaAdapter = OSString::withCString("NootedGreenTGLMediaAdapter");
 		const bool adapterReady = mediaAdapter &&
 			dict->setObject("IODVDBundleName", mediaAdapter);
