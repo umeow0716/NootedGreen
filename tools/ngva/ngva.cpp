@@ -530,6 +530,10 @@ long submitDecode(void *os, void *cmd, void *a2, void *a3, void *a4, void *a5) {
 			       surfaces, starts, lastSet ? "set" : "missing", run ? "run" : "dropped");
 		return driverSubmit(os, cmd, a2, a3, a4, a5);
 	}
+	// The decoder's MFX_PIPE_MODE_SELECT sets Extended Stream-Out Enable (DW1
+	// bit 18) without a stream-out buffer, so the MFX writes to GPU address 0.
+	for (uint32_t i = 0; i + 1 < words; i++)
+		if (batch[i] == 0x70000003) const_cast<uint32_t *>(batch)[i + 1] &= ~0x40000U;
 	if (!record) return driverSubmit(os, cmd, a2, a3, a4, a5);
 	uint32_t *chroma = nullptr, fixed = 0, k = 3;
 	bool hasCr = false;

@@ -156,63 +156,6 @@ static void vfFlushGpuRange(uint64_t root, uint64_t va, uint64_t length) {
 	__asm__ volatile("mfence" ::: "memory");
 }
 
-// V301: the GPU reads the AVC bitstream without snooping; AppleGVA's copy of
-// it may still sit in CPU caches. Flush every MFD_AVC_BSD_OBJECT's slice data
-// (MFX_IND_OBJ_BASE_ADDR_STATE base + start, length) before submission.
-static void vfFlushDecodeBitstream(uint64_t root, volatile uint32_t *b, uint32_t room, uint64_t bb) {
-	uint64_t base = 0;
-	uint32_t attr = 0;
-	static uint32_t logs = 0;
-	for (uint32_t i = 0; i + 3 < room; i++) {
-		if (b[i] == 0x05000000)
-			break;
-		if (b[i] == 0x70000003U && (b[i + 1] & 0x40010U) == 0x40000U) {
-			// V312: decoder MFX_PIPE_MODE_SELECT has Extended Stream-Out Enable (bit 18) set
-			// with no stream-out buffer: the MFX writes to GPU address 0 (host DMAR faults).
-			b[i + 1] &= ~0x40000U;
-			__asm__ volatile("clflush (%0)" :: "r"(&b[i + 1]) : "memory");
-		} else if (b[i] == 0x70010004U && (b[i + 3] & 0xF8000000U) == 0x08000000U && i + 5 < room) {
-			// V303: AppleGVA's decoder MFX_SURFACE_STATE has format 0 (YCRCB_NORMAL),
-			// reserved bit 20 and a Y-tiled pitch one short of 128-byte aligned, and no
-			// Cr offset: program NV12 like media-driver (PLANAR_420_8, aligned pitch).
-			const uint32_t pitch = (((b[i + 3] >> 3) & 0x1FFFF) + 1 + 127) & ~127U;
-			const uint32_t dw3 = 0x48000000U | ((pitch - 1) << 3) | (b[i + 3] & 7);
-			if (logs < 8)
-				SYSLOG("ngreen", "V303: batch %llx MFX_SURFACE dw3 %08x -> %08x dw5 %08x -> %08x", static_cast<unsigned long long>(bb),
-				       b[i + 3], dw3, b[i + 5], b[i + 5] ? b[i + 5] : b[i + 4]);
-			b[i + 3] = dw3;
-			if (!b[i + 5]) b[i + 5] = b[i + 4];
-			__asm__ volatile("clflush (%0)" :: "r"(&b[i + 3]) : "memory");
-			__asm__ volatile("clflush (%0)" :: "r"(&b[i + 5]) : "memory");
-		} else if ((b[i] & 0xFFFF0000U) == 0x70030000U) {
-			base = b[i + 1] | (static_cast<uint64_t>(b[i + 2] & 0xFFFF) << 32);
-			attr = b[i + 3];
-		} else if ((b[i] & 0xFFFF0000U) == 0x71280000U && base) {
-			const uint32_t length = b[i + 1], start = b[i + 2] & 0x1FFFFFFF;
-			vfFlushGpuRange(root, base + start, length);
-			if (logs++ < 8)
-				SYSLOG("ngreen", "V301: batch %llx bitstream %llx+%x len %x attr %08x flushed", static_cast<unsigned long long>(bb),
-				       static_cast<unsigned long long>(base), start, length, attr);
-			// V302: the first decode batch in full, to diff against media-driver's.
-			for (uint32_t k = 0; logs == 1 && k < room; k += 8) {
-				SYSLOG("ngreen", "V302: +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", k * 4, b[k], k + 1 < room ? b[k + 1] : 0,
-				       k + 2 < room ? b[k + 2] : 0, k + 3 < room ? b[k + 3] : 0, k + 4 < room ? b[k + 4] : 0,
-				       k + 5 < room ? b[k + 5] : 0, k + 6 < room ? b[k + 6] : 0, k + 7 < room ? b[k + 7] : 0);
-				bool end = false;
-				for (uint32_t e = k; e < k + 8 && e < room; e++) end |= b[e] == 0x05000000;
-				if (end) break;
-			}
-			// First slice: each page's PTE and its first dwords as the CPU sees them.
-			for (uint32_t o = 0; logs == 1 && o < length && o < 0x10000; o += 0x1000) {
-				uint32_t d[4] {};
-				vfPpgttRead(root, base + start + o, d, 4);
-				SYSLOG("ngreen", "V301: +%05x pte %llx: %08x %08x %08x %08x", start + o,
-				       static_cast<unsigned long long>(vfPpgttLeaf(root, base + start + o)), d[0], d[1], d[2], d[3]);
-			}
-		}
-	}
-}
-
 // V307: AppleGVA reads MFX status (byte counts, completion markers) that MI_STORE_REGISTER_MEM and
 // MI_STORE_DATA_IMM write without snooping. The driver clears those slots right before submission,
 // so a dirty CPU line can hide or later overwrite the GPU's value (coded size 0). Write the lines
@@ -355,8 +298,6 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 				static uint32_t logs = 0;
 				if (logs++ < 4)
 					SYSLOG("ngreen", "V297: force wakeup in video batch %llx", static_cast<unsigned long long>(bb));
-			} else {
-				vfFlushDecodeBitstream(root, b, (PAGE_SIZE - (bb & 0xFFF)) / 4, bb);
 			}
 			vfFlushStatusTargets(root, b, (PAGE_SIZE - (bb & 0xFFF)) / 4);
 			map->release();
