@@ -355,7 +355,6 @@ bool TglAccel::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	if (action == 0x6000U && length >= 2) {
 		SYSLOG("ngreen", "V331: GuC memory CAT error for context id=%u", message[2]);
 		vfDumpPpgttRanges("GuC memory CAT error", 2000);
-		vfMergeRedirectedStamps(false, "CAT");
 		return true;
 	}
 	if (!event.valid()) {
@@ -404,7 +403,6 @@ bool TglAccel::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		// the other contexts running.
 		if (event.kind == NGVfGuCEvent::Kind::ContextReset) {
 			vfDumpResetContext(payload0, callback->vfSharedMappedBufferGetVirtualAddress);
-			vfDumpResetWaits(payload0, callback->vfSharedMappedBufferGetVirtualAddress);
 			vfSkipResetContext(payload0, callback->vfSharedMappedBufferGetVirtualAddress);
 			return true;
 		}

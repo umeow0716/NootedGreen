@@ -117,7 +117,6 @@ TglAccel *TglAccel::callback = nullptr;
 
 void TglAccel::init() {
 	callback = this;
-	vfRegisterStampTraceSysctl();
 	const bool tglRequested = checkKernelArgument("-ngreentglfb") ||
 		checkKernelArgument("-ngreentglwithgfx") ||
 		checkKernelArgument("-ngreentglgfx");

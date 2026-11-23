@@ -221,7 +221,6 @@ struct VfGucContext {
 	bool enablePending;
 	bool disablePending;
 	void *task;
-	void *hardwareContext; // V397 diagnostics only
 	OSObject *contextBacking;
 	OSObject *ringBacking;
 	OSObject *stampBacking;
@@ -584,14 +583,11 @@ uint64_t vfSubmitProbe(void *a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, 
 	return result;
 }
 
-void vfMergeRedirectedStamps(bool dump = false, const char *why = nullptr);
+void vfMergeRedirectedStamps(bool dump = false);
 
 void vfRedirectStamps(uint32_t id, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to, uint8_t *(*getter)(void *), uint64_t (*getGpu)(void *));
 
 void vfSkipResetContext(uint32_t id, mach_vm_address_t getterAddress);
-void vfDumpResetWaits(uint32_t id, mach_vm_address_t getterAddress);
-void vfRegisterStampTraceSysctl();
-extern volatile SInt32 gVfRegisteredTotal, gVfDeregisteredTotal, gVfDetachCalls, gVfAttachRefs, gVfIdleCalls[2], gVfIdleTrue[2];
 
 uint64_t vfConsumeMemoryInterrupts();
 
