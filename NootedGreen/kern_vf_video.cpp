@@ -49,128 +49,6 @@ bool vfPpgttRead(uint64_t root, uint64_t va, uint32_t *out, uint32_t count) {
 	return true;
 }
 
-// V297: Apple's H.264 PAK batches (VCS) start with an empty MI_FLUSH_DW and no
-// MI_FORCE_WAKEUP; with VDBOX power gating the MFX never takes the state
-// commands. Turn that flush into MI_FORCE_WAKEUP(MFX power well) + MI_NOOPs.
-// V300: Apple's AVC VDEnc emits Gen9 (KBL) VDENC commands. Rewrite the batch
-// in place with NgreenAvcGen12::produce (Gen12 lengths, MFX_WAITs, surface
-// formats, MOCS and MFC status registers), when the result fits the page.
-static void vfVdencToGen12(volatile uint32_t *b, uint32_t room, uint64_t bb) {
-	static uint32_t in[1024], out[1536];
-	uint32_t end = 0, width = 0, height = 0;
-	for (uint32_t i = 0; i < room && i < 1024; i++) {
-		in[i] = b[i];
-		if (in[i] == 0x05000000) { end = i; break; }
-	}
-	for (uint32_t i = 0; i + 2 < end; i++)
-		if (in[i] == 0x70810004) { width = ((in[i + 2] >> 4) & 0x3FFF) + 1; height = (in[i + 2] >> 18) + 1; break; }
-	if (!end || !width) {
-		static uint32_t skips = 0;
-		if (skips++ < 16)
-			SYSLOG("ngreen", "V300: video batch %llx not converted: %s (room %u dwords)", static_cast<unsigned long long>(bb),
-			       end ? "no VDENC_SRC" : "no BB_END in page", room);
-		return;
-	}
-	const auto r = NgreenAvcGen12::produce(in, end, width, height, out, 1536);
-	static uint32_t logs = 0, failures = 0;
-	if (!r.ok || r.words + 1 > room) {
-		if (failures++ < 32)
-			SYSLOG("ngreen", "V300: video batch %llx %ux%u not converted: %s", static_cast<unsigned long long>(bb), width, height, r.reason);
-		// The first rejected batch in full, to extend the profile offline.
-		for (uint32_t i = 0; failures == 1 && i < end; i += 8)
-			SYSLOG("ngreen", "V300: rejected +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", i * 4, in[i], in[i + 1], in[i + 2],
-			       in[i + 3], in[i + 4], in[i + 5], in[i + 6], in[i + 7]);
-		return;
-	}
-	// Apple leaves the MFX stream-out (DW10), MB status (DW52) and slice size
-	// stream-out (DW65) addresses 0, but Gen12 VDEnc writes them (Intel points
-	// them at its PAK statistics buffers): a page fault at 0. Use the unused
-	// VDEnc stream-in buffer (stream-in is disabled) as their scratch.
-	uint32_t mfxBuf = 0, streamIn = 0, streamInHigh = 0;
-	for (uint32_t k = 0; k < r.words; k++) {
-		if (out[k] == 0x70020042 && !mfxBuf) mfxBuf = k;
-		if (out[k] == 0x70840045 && k + 14 < r.words) { streamIn = out[k + 13]; streamInHigh = out[k + 14]; break; }
-	}
-	if (mfxBuf && streamIn) {
-		static const uint8_t slots[] = {10, 52, 65};
-		static const uint32_t offsets[] = {0x10000, 0x20000, 0};
-		for (uint32_t s = 0; s < 3; s++) {
-			uint32_t *dw = &out[mfxBuf + slots[s]];
-			if (!dw[0] && !dw[1]) { dw[0] = streamIn + offsets[s]; dw[1] = streamInHigh; }
-		}
-	}
-	// V304: log PAK-BSE (bitstream output) buffer sizes as they change.
-	for (uint32_t k = 0; k + 25 < r.words; k++) {
-		if (out[k] != 0x70030018) continue;
-		static uint32_t lastSize = 0, sizeLogs = 0;
-		const uint32_t size = out[k + 24] - out[k + 21];
-		if (size != lastSize && sizeLogs++ < 16)
-			SYSLOG("ngreen", "V304: video batch %llx %ux%u PAK-BSE %08x size %x", static_cast<unsigned long long>(bb), width, height, out[k + 21], size);
-		lastSize = size;
-		break;
-	}
-	// Gen12 VDENC_IMG_STATE takes the frame QP in DW14 (KBL had no such field,
-	// Apple leaves it 0): VDEnc then quantizes at QP 0 and PAK codes mb_qp_delta
-	// back to the slice QP, so rate control never takes effect. Use the first
-	// MFX_AVC_SLICE_STATE's slice QP like media-driver.
-	for (uint32_t k = 0, image = 0; k + 14 < r.words; k++) {
-		if (out[k] == 0x70850021) image = k;
-		if (out[k] == 0x71030009 && image) { out[image + 14] = (out[image + 14] & ~0xFFU) | ((out[k + 3] >> 16) & 0x3F); break; }
-	}
-	// MFX_AVC_IMG_STATE DW4 from Apple has MbaffFrameFlag and ChromaFormatIdc 3
-	// set; media-driver Gen12 programs frame-only 4:2:0 (0x159c for this case).
-	for (uint32_t k = 0; k + 4 < r.words; k++)
-		if (out[k] == 0x71000013) {
-			out[k + 4] = (out[k + 4] & ~0xC02U) | 0x400U;
-			// DW6: Apple caps inter MBs at the intra limit (0xa8c bits); media-driver
-			// leaves InterMbMaxSz at 0xfff. Busy inter MBs past the cap fail the frame.
-			out[k + 6] = (out[k + 6] & 0xFFFFU) | 0x0FFF0000U;
-			break;
-		}
-	for (uint32_t k = 0; k < r.words; k++)
-		b[k] = out[k];
-	b[r.words] = 0x05000000;
-	for (uint32_t k = 0; k <= r.words; k += 16)
-		__asm__ volatile("clflush (%0)" :: "r"(&b[k]) : "memory");
-	__asm__ volatile("clflush (%0)" :: "r"(&b[r.words]) : "memory");
-	__asm__ volatile("mfence" ::: "memory");
-	if (logs++ < 4)
-		SYSLOG("ngreen", "V300: video batch %llx %ux%u VDEnc to Gen12, %u -> %u dwords", static_cast<unsigned long long>(bb), width, height, end, static_cast<uint32_t>(r.words));
-}
-
-// Write back CPU caches over a GPU virtual range of a 4-level PPGTT.
-static void vfFlushGpuRange(uint64_t root, uint64_t va, uint64_t length) {
-	for (uint64_t at = va & ~63ULL, end = va + length; at < end;) {
-		const uint64_t leaf = vfPpgttLeaf(root, at), next = (at | 0xFFF) + 1;
-		auto *desc = leaf ? IOMemoryDescriptor::withPhysicalAddress(leaf & 0x7FFFFFF000ULL, PAGE_SIZE, kIODirectionInOut) : nullptr;
-		auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere) : nullptr;
-		if (map) {
-			const auto page = map->getVirtualAddress();
-			for (; at < next && at < end; at += 64)
-				__asm__ volatile("clflush (%0)" :: "r"(page + (at & 0xFFF)) : "memory");
-			map->release();
-		}
-		OSSafeReleaseNULL(desc);
-		at = next;
-	}
-	__asm__ volatile("mfence" ::: "memory");
-}
-
-// V307: AppleGVA reads MFX status (byte counts, completion markers) that MI_STORE_REGISTER_MEM and
-// MI_STORE_DATA_IMM write without snooping. The driver clears those slots right before submission,
-// so a dirty CPU line can hide or later overwrite the GPU's value (coded size 0). Write the lines
-// back and drop them now, so the read after completion comes from memory.
-static void vfFlushStatusTargets(uint64_t root, volatile uint32_t *b, uint32_t room) {
-	for (uint32_t i = 0; i + 3 < room && b[i] != 0x05000000; i++) {
-		const uint32_t op = b[i] >> 23;
-		if (b[i] >> 29 == 0 && (op == 0x24 || op == 0x20) && (b[i] & 0xFF) <= 3) {
-			const uint64_t at = b[i + 2 - (op == 0x20)] | (static_cast<uint64_t>(b[i + 3 - (op == 0x20)] & 0xFFFF) << 32);
-			if (at && !(b[i] & (1U << 22))) vfFlushGpuRange(root, at, 8); // PPGTT targets only
-			i += (b[i] & 0xFF) + 1;
-		}
-	}
-}
-
 void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize, uint32_t from, uint32_t to) {
 	const uint32_t words = ringSize / 4;
 	if (!root || !ring || !words || (words & (words - 1)))
@@ -186,11 +64,6 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 		auto *map = desc ? desc->createMappingInTask(kernel_task, 0, kIOMapAnywhere) : nullptr;
 		if (map) {
 			auto *b = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress() + (bb & 0xFFF));
-			// V299: the first dwords of the first video batches.
-			static uint32_t heads = 0;
-			if (heads++ < 6)
-				SYSLOG("ngreen", "V299: video batch %llx: %08x %08x %08x %08x %08x %08x %08x %08x",
-				       static_cast<unsigned long long>(bb), b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
 			static uint32_t dumpedBatches = 0;
 			if (checkKernelArgument("-ngvadump") && b[5] != 0x05000000 && dumpedBatches++ < 3)
 				for (uint32_t k = 0; k + 7 < (PAGE_SIZE - (bb & 0xFFF)) / 4 && k < 512; k += 8) {
@@ -214,57 +87,6 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 					if (marked) {
 						if (runs++ < 4)
 							SYSLOG("ngreen", "V383: HEVC batch %llx marked by ngva", static_cast<unsigned long long>(bb));
-						// V384: the slice commands of the first HEVC frames (second-level batch).
-						static uint32_t slices = 0;
-						for (uint32_t s = k; s + 2 < room && b[s] != 0x05000000 && slices < 3; s++) {
-							if (b[s] != 0x18C00101)
-								continue;
-							slices++;
-							const uint64_t sb = b[s + 1] | (static_cast<uint64_t>(b[s + 2] & 0xFFFF) << 32);
-							uint32_t w[48] {};
-							vfFlushGpuRange(root, sb, sizeof(w));
-							if (vfPpgttRead(root, sb, w, 48))
-								for (uint32_t r = 0; r < 48; r += 8)
-									SYSLOG("ngreen", "V384: slice batch %llx +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", static_cast<unsigned long long>(sb),
-									       r * 4, w[r], w[r + 1], w[r + 2], w[r + 3], w[r + 4], w[r + 5], w[r + 6], w[r + 7]);
-							break;
-						}
-						// V386: VP9 bitstream head and probability buffer (PIPE_BUF_ADDR
-						// dw83) as the engine reads them, for the first frames of each new
-						// bitstream buffer.
-						static uint32_t vp9Dumps = 0, vp9Frame = 0;
-						static uint64_t vp9Bitstream = 0;
-						uint32_t pba = 0, ind = 0;
-						bool vp9 = false;
-						for (uint32_t s = k; vp9Dumps < 6 && s < room && b[s] != 0x05000000; s++) {
-							if (b[s] == 0x73820077) pba = s;
-							else if (b[s] == 0x7383001B) ind = s;
-							else if (b[s] == 0x73B0000A) vp9 = true;
-						}
-						const uint64_t bitstream = ind && ind + 3 < room ? b[ind + 1] | (static_cast<uint64_t>(b[ind + 2] & 0xFFFF) << 32) : 0;
-						if (vp9 && bitstream != vp9Bitstream) vp9Frame = 0;
-						if (vp9 && pba && bitstream && (bitstream != vp9Bitstream || ++vp9Frame == 3) && pba + 85 < room) {
-							vp9Dumps++;
-							vp9Bitstream = bitstream;
-							static uint32_t w[512];
-							const struct { const char *what; uint64_t va; uint32_t count; } dumps[] = {
-								{"bitstream", b[ind + 1] | (static_cast<uint64_t>(b[ind + 2] & 0xFFFF) << 32), 16},
-								{"probabilities", b[pba + 83] | (static_cast<uint64_t>(b[pba + 84] & 0xFFFF) << 32), 512}};
-							for (const auto &d : dumps) {
-								uint64_t chain[4] {};
-								vfPpgttLeaf(root, d.va, chain);
-								SYSLOG("ngreen", "V386: VP9 %s %llx entries %llx %llx %llx %llx", d.what, static_cast<unsigned long long>(d.va),
-								       chain[0], chain[1], chain[2], chain[3]);
-								if (!vfPpgttRead(root, d.va, w, d.count)) {
-									SYSLOG("ngreen", "V386: VP9 %s %llx unmapped", d.what, static_cast<unsigned long long>(d.va));
-									continue;
-								}
-								for (uint32_t r = 0; r < d.count; r += 8)
-									SYSLOG("ngreen", "V386: VP9 %s %llx +%03x: %08x %08x %08x %08x %08x %08x %08x %08x", d.what,
-									       static_cast<unsigned long long>(d.va), r * 4, w[r], w[r + 1], w[r + 2], w[r + 3], w[r + 4], w[r + 5],
-									       w[r + 6], w[r + 7]);
-							}
-						}
 						break;
 					}
 					if (drops++ < 8)
@@ -274,32 +96,6 @@ void vfWakeVideoBatch(uint64_t root, volatile uint32_t *ring, uint32_t ringSize,
 					break;
 				}
 			}
-			if (b[0] == 0x13000083 && !b[1] && !b[2] && !b[3] && !b[4]) {
-				vfVdencToGen12(b, (PAGE_SIZE - (bb & 0xFFF)) / 4, bb);
-				// V309: the previous encode's MFC status block (byte count at +0x18), from memory.
-				static uint64_t previousStatus = 0;
-				static uint32_t statusLogs = 0, encodes = 0;
-				if (previousStatus) {
-					uint32_t st[12] {};
-					vfFlushGpuRange(root, previousStatus, 0x30);
-					if (vfPpgttRead(root, previousStatus, st, 12) && (!st[6] || (encodes & 127) == 0) && statusLogs++ < 24)
-						SYSLOG("ngreen", "V309: encode %u status %llx: %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x", encodes,
-						       static_cast<unsigned long long>(previousStatus), st[0], st[1], st[2], st[3], st[4], st[5], st[6], st[7],
-						       st[8], st[9], st[10], st[11]);
-				}
-				encodes++;
-				for (uint32_t i = 0; i + 3 < (PAGE_SIZE - (bb & 0xFFF)) / 4 && b[i] != 0x05000000; i++)
-					if ((b[i] >> 23) == 0x24 && b[i + 1] == 0x8a0) { previousStatus = (b[i + 2] | (static_cast<uint64_t>(b[i + 3] & 0xFFFF) << 32)) - 0x18; break; }
-				b[0] = 0x0E800000; // MI_FORCE_WAKEUP
-				b[1] = 0x03000200; // MFX power well on, HEVC off (masks bits 9, 8), as media-driver G12
-				for (uint32_t k = 0; k < 2; k++)
-					__asm__ volatile("clflush (%0)" :: "r"(&b[k]) : "memory");
-				__asm__ volatile("mfence" ::: "memory");
-				static uint32_t logs = 0;
-				if (logs++ < 4)
-					SYSLOG("ngreen", "V297: force wakeup in video batch %llx", static_cast<unsigned long long>(bb));
-			}
-			vfFlushStatusTargets(root, b, (PAGE_SIZE - (bb & 0xFFF)) / 4);
 			map->release();
 		}
 		OSSafeReleaseNULL(desc);

@@ -377,7 +377,6 @@ int finishFence(void *a, void *b, void *c, void *d, void *e, void *f) {
 // &sideband dwords) reserves room for the larger batch; the builder (+0x60:
 // encoder, frame, command buffer) writes the batch at command buffer +0x70
 // and the token at +0x78, advancing both as cursors (+0x20: reserved end).
-// /Users/Shared/ngva-kext-vdenc leaves the conversion to the kext (V300).
 constexpr uint32_t kVdencHeadroom = 256, kTokenScratch = 0x1e8 / 4, kRecordWords = 320;
 using SizeFrame = long (*)(void *, void *, uint32_t *, uint32_t *, void *, void *);
 using BuildBatch = long (*)(void *, void *, void *, void *, void *, void *);
@@ -1104,7 +1103,7 @@ bool load() {
 		if (driverBase) {
 			if (auto *contents = strstr(path, "/Contents/MacOS/")) *contents = 0;
 			replaceKernels(path);
-			userVdenc = access("/Users/Shared/ngva-kext-vdenc", F_OK) != 0;
+			userVdenc = true;
 			driverSubmit = reinterpret_cast<Submit>(driverBase + 0x2c13f);
 			Submit unused = nullptr;
 			if (!replacePointer<Submit>(0x75f000, submitDecode, unused))
